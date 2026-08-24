@@ -24,6 +24,7 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
     SocMemoryReviewEffect,
+    SocMemoryRevisionIssueType,
     SocMemoryRevisionProposal,
     SocMemoryRevisionProposalStatus,
     SocMemoryRevisionReviewDecision,
@@ -41,16 +42,43 @@ class FakeRequest:
         *,
         authenticated: bool = True,
         system_role: str = "user",
+        idempotency_key: str | None = None,
     ) -> None:
         self.headers: dict[str, str] = {
             "x-soc-actor-id": "spoofed-user",
             "x-soc-surface": "web",
             "x-trace-id": "soc-memory-router-test",
         }
+        if idempotency_key is not None:
+            self.headers["idempotency-key"] = idempotency_key
         self.state = SimpleNamespace()
         if authenticated:
             self.state.auth_source = "session"
             self.state.user = SimpleNamespace(id="soc-web-test", system_role=system_role)
+
+
+class FakeRunPromotionService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object]] = []
+
+    def promote_run_to_memory(self, command: object, *, context: object) -> object:
+        self.calls.append((command, context))
+        return SimpleNamespace(
+            run_id=getattr(command, "run_id"),
+            alert_id="ALT-PROMOTION-1",
+        )
+
+
+class FakeMemoryRevisionService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object]] = []
+
+    def propose_revision_candidate(self, command: object, *, context: object) -> object:
+        self.calls.append((command, context))
+        return SimpleNamespace(
+            candidate=SimpleNamespace(candidate_id="MC-REVISION-1"),
+            predecessor_record=SimpleNamespace(memory_id=getattr(command, "memory_id")),
+        )
 
 
 def test_soc_memory_api_lists_candidates_by_review_filters() -> None:
@@ -96,6 +124,98 @@ def test_soc_memory_api_returns_404_for_missing_candidate() -> None:
         soc_memory.get_memory_candidate("MC-MISSING", service=service)
 
     assert exc_info.value.status_code == 404
+
+
+def test_soc_memory_api_promotes_completed_run_with_authenticated_context() -> None:
+    service = FakeRunPromotionService()
+
+    result = soc_memory.promote_run_to_memory_candidate(
+        "RUN-PROMOTION-1",
+        soc_memory.MemoryRunPromotionRequest(),
+        request=FakeRequest(idempotency_key="memory-run-promotion:1"),
+        service=service,
+    )
+
+    assert result.run_id == "RUN-PROMOTION-1"
+    command, context = service.calls[0]
+    assert command.note is None
+    assert command.metadata == {"source": "soc_web_run_promotion"}
+    assert context.idempotency_key == "memory-run-promotion:1"
+    assert context.actor.actor_id == "soc-web-test"
+    assert context.actor.roles == ["soc_analyst"]
+
+
+def test_soc_memory_api_requires_idempotency_key_for_run_promotion() -> None:
+    service = FakeRunPromotionService()
+
+    with pytest.raises(HTTPException) as exc_info:
+        soc_memory.promote_run_to_memory_candidate(
+            "RUN-PROMOTION-1",
+            soc_memory.MemoryRunPromotionRequest(
+                reason="运营确认该告警包含值得复用的业务事实，应进入 Memory 专家审核。",
+            ),
+            request=FakeRequest(),
+            service=service,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert service.calls == []
+
+
+def test_soc_memory_api_maps_legacy_promotion_reason_to_optional_note() -> None:
+    request = soc_memory.MemoryRunPromotionRequest(
+        reason="旧客户端仍可把已有说明作为可选备注发送。",
+    )
+
+    assert request.note == "旧客户端仍可把已有说明作为可选备注发送。"
+
+
+def test_soc_memory_api_creates_revision_candidate_from_exact_run() -> None:
+    service = FakeMemoryRevisionService()
+
+    result = soc_memory.create_memory_revision_candidate(
+        "MEM-WRONG-1",
+        soc_memory.MemoryRevisionCandidateCreateRequest(
+            expected_record_version=3,
+            source_run_id="RUN-WRONG-1",
+            issue_type=SocMemoryRevisionIssueType.INCORRECT_CONCLUSION,
+            reason="当前告警证明旧 Memory 的误报结论错误，需要暂停并重新审核。",
+        ),
+        request=FakeRequest(
+            system_role="admin",
+            idempotency_key="memory-revision:create:router:1",
+        ),
+        service=service,
+    )
+
+    command, context = service.calls[0]
+    assert result.candidate.candidate_id == "MC-REVISION-1"
+    assert command.memory_id == "MEM-WRONG-1"
+    assert command.expected_record_version == 3
+    assert command.source_run_id == "RUN-WRONG-1"
+    assert command.issue_type is SocMemoryRevisionIssueType.INCORRECT_CONCLUSION
+    assert context.idempotency_key == "memory-revision:create:router:1"
+    assert "soc_admin" in context.actor.roles
+
+
+def test_soc_memory_api_requires_idempotency_key_for_revision_candidate() -> None:
+    service = FakeMemoryRevisionService()
+
+    with pytest.raises(HTTPException) as exc_info:
+        soc_memory.create_memory_revision_candidate(
+            "MEM-WRONG-1",
+            soc_memory.MemoryRevisionCandidateCreateRequest(
+                expected_record_version=3,
+                source_run_id="RUN-WRONG-1",
+                issue_type=SocMemoryRevisionIssueType.APPLICABILITY_TOO_BROAD,
+                reason="旧 Memory 的适用范围过宽，需要缩小精确匹配边界。",
+            ),
+            request=FakeRequest(system_role="admin"),
+            service=service,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert service.calls == []
 
 
 def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:

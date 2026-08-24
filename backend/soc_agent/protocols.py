@@ -246,6 +246,13 @@ class AlertRepository(Protocol):
 
     def list_runs(self, *, limit: int = 50) -> list[AnalysisRun]: ...
 
+    def list_runs_by_alert_id(
+        self,
+        alert_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[AnalysisRun]: ...
+
     def claim_run_recovery(
         self,
         run: AnalysisRun,
@@ -561,6 +568,11 @@ class MemoryCandidateRepository(Protocol):
         source_ids: Sequence[str],
     ) -> list[SocMemoryCandidate]: ...
 
+    def find_memory_candidates_by_lineage_keys(
+        self,
+        lineage_keys: Sequence[str],
+    ) -> list[SocMemoryCandidate]: ...
+
 
 class MemoryBusinessLessonDrafter(Protocol):
     """Advisory generator for one non-persisted candidate lesson draft."""
@@ -604,6 +616,7 @@ class MemoryPatternObservationRepository(Protocol):
         environment: str | None = None,
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
+        alert_id: str | None = None,
         limit: int = 500,
         offset: int = 0,
     ) -> list[MemoryPatternObservation]: ...

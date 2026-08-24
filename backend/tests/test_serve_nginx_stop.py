@@ -90,6 +90,13 @@ def test_repo_nginx_pid_accepts_macos_rewritten_worker_after_repo_check(tmp_path
     )
 
 
+def test_local_nginx_commands_override_compiled_error_log() -> None:
+    content = SERVE_SH.read_text(encoding="utf-8")
+
+    assert 'nginx -e "$REPO_ROOT/logs/nginx-error.log"' in content
+    assert "nginx -e '$REPO_ROOT/logs/nginx-error.log'" in content
+
+
 @pytest.mark.parametrize(
     ("command", "args", "deerflow_pid"),
     [

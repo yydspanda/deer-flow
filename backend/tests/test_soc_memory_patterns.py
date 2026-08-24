@@ -19,6 +19,7 @@ from soc_agent.contracts import (
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
+    Decision,
     DetectionRuleRef,
     EntrySurface,
     EvidenceItem,
@@ -32,6 +33,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
+    SocMemoryRunPromotionCommand,
     TriageActivityStage,
     TriageScenarioAssessment,
     TriageScenarioOrigin,
@@ -40,6 +42,7 @@ from soc_agent.contracts import (
 from soc_agent.core import (
     SocDaemonService,
     SocMemoryPatternService,
+    SocReviewService,
     SocServiceConflictError,
 )
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
@@ -225,6 +228,93 @@ def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
     assert replay.supersession_mode == "manual_only"
 
 
+def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate() -> None:
+    class _RunRepository:
+        def __init__(self) -> None:
+            self.runs: dict[str, AnalysisRun] = {}
+
+        def save_run(self, run: AnalysisRun) -> None:
+            self.runs[run.run_id] = run
+
+        def get_run(self, run_id: str) -> AnalysisRun | None:
+            return self.runs.get(run_id)
+
+    repository = InMemoryMemoryPatternRepository()
+    run_repository = _RunRepository()
+    pattern_service = _service(repository, threshold=3)
+    runs = [
+        run.model_copy(
+            update={
+                "decision": Decision(
+                    verdict=run.analysis.verdict,
+                    confidence=run.analysis.confidence,
+                    suggested_action=run.analysis.recommended_action,
+                    needs_review=True,
+                    reason=run.analysis.reason,
+                )
+            }
+        )
+        for run in (_run(1), _run(2), _run(3))
+    ]
+    for run in runs:
+        run_repository.save_run(run)
+
+    _observe(pattern_service, runs[0], transport_ref="batch:manual:1")
+    second = _observe(
+        pattern_service,
+        runs[1],
+        transport_ref="batch:manual:2",
+    )
+    promoted = SocReviewService(
+        repository=run_repository,
+        memory_candidate_repository=repository,
+        memory_pattern_observation_repository=repository,
+    ).promote_run_to_memory(
+        SocMemoryRunPromotionCommand(
+            run_id=runs[1].run_id,
+        ),
+        context=ServiceRequestContext(
+            actor=ActorContext(
+                actor_id="analyst-1",
+                actor_type=ActorType.USER,
+                surface=EntrySurface.TEST,
+                roles=["soc_analyst"],
+            )
+        ),
+    )
+    manual_candidate = promoted.memory_candidate
+    assert manual_candidate is not None
+    assert manual_candidate.metadata["lineage_key"] == second.observation.lineage_key
+    assert manual_candidate.metadata["support_count_at_creation"] == 2
+    assert manual_candidate.metadata["observation_ids"] == [
+        item.observation_id
+        for item in repository.list_memory_pattern_observations(
+            aggregation_key=second.observation.aggregation_key,
+        )
+    ]
+
+    third = _observe(
+        pattern_service,
+        runs[2],
+        transport_ref="batch:manual:3",
+    )
+
+    assert third.threshold_met is True
+    assert third.candidate_created is False
+    assert third.candidate_frozen is True
+    assert third.candidate_coverage == "lineage_governance"
+    assert third.candidate == manual_candidate
+    assert "manual" in third.note.lower()
+    assert repository.find_memory_candidate_by_source_id(f"memory_pattern:{third.observation.aggregation_key}") is None
+    assert repository.list_memory_candidates() == [manual_candidate]
+
+    replay = pattern_service.replay(third.observation.aggregation_key)
+    assert replay.candidate_id == manual_candidate.candidate_id
+    assert replay.candidate_coverage == "lineage_governance"
+    assert replay.candidate_snapshot_observation_ids == manual_candidate.metadata["observation_ids"]
+    assert replay.added_observation_ids == [third.observation.observation_id]
+
+
 def test_primary_scenario_generalizes_without_rule_code() -> None:
     repository = InMemoryMemoryPatternRepository()
     service = _service(repository, threshold=2)
@@ -393,6 +483,19 @@ def test_fixed_window_uses_source_event_time_not_runtime_start_time() -> None:
     assert second.observation.metadata["window_time_source"] == "canonical_alert.event.event_time"
 
 
+def test_generic_profile_default_window_remains_one_day() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = SocMemoryPatternService(
+        repository=repository,
+        candidate_repository=repository,
+    )
+
+    result = _observe(service, _run(1), transport_ref="batch:generic-window")
+
+    assert result.observation.window_end - result.observation.window_start == timedelta(days=1)
+    assert result.observation.aggregation_policy.window_seconds == 86_400
+
+
 def test_missing_source_event_time_is_ineligible() -> None:
     repository = InMemoryMemoryPatternRepository()
     service = _service(repository)
@@ -470,8 +573,8 @@ def test_pattern_idempotency_identity_changes_with_profile_contract() -> None:
     class _UpgradedGenericProfile(GenericSocMemoryProfile):
         identity = SocMemoryProfileIdentity(
             profile_id="soc.generic",
-            profile_version="2",
-            feature_schema_version="soc.memory_features.generic.v2",
+            profile_version="3",
+            feature_schema_version="soc.memory_features.generic.v3",
         )
 
     run = _run(1)
@@ -501,16 +604,16 @@ def test_pattern_idempotency_identity_changes_with_profile_contract() -> None:
 
     assert original.idempotency_key == original_retry.idempotency_key
     assert original.idempotency_key != upgraded.idempotency_key
-    assert original.feature_schema_version == "soc.memory_features.generic.v1"
-    assert upgraded.feature_schema_version == "soc.memory_features.generic.v2"
+    assert original.feature_schema_version == "soc.memory_features.generic.v2"
+    assert upgraded.feature_schema_version == "soc.memory_features.generic.v3"
 
 
 def test_profile_upgrade_supersedes_same_alert_pending_candidate() -> None:
     class _UpgradedGenericProfile(GenericSocMemoryProfile):
         identity = SocMemoryProfileIdentity(
             profile_id="soc.generic",
-            profile_version="2",
-            feature_schema_version="soc.memory_features.generic.v2",
+            profile_version="3",
+            feature_schema_version="soc.memory_features.generic.v3",
         )
 
     repository = InMemoryMemoryPatternRepository()

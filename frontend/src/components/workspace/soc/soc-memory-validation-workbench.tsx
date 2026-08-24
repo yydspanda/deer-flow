@@ -221,7 +221,7 @@ function CandidateBand({ state }: { state: SocMemoryWorkbenchState }) {
               href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(candidate.candidate_id)}`}
             >
               <ShieldCheckIcon className="size-4" />
-              审核 Candidate
+              审核并决定
               <ExternalLinkIcon className="size-3.5" />
             </Link>
           </Button>

@@ -26,6 +26,7 @@ from soc_agent.contracts import (  # noqa: E402
 )
 from soc_agent.application import build_soc_memory_profile_registry  # noqa: E402
 from soc_agent.core import SocMemoryPatternService  # noqa: E402
+from soc_agent.integrations.pingan.memory import PingAnSocMemoryProfile  # noqa: E402
 from soc_agent.memory import (  # noqa: E402
     InMemoryMemoryPatternRepository,
     MemoryPatternIneligibleError,
@@ -173,7 +174,11 @@ def main() -> int:
     parser.add_argument("--input-items", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--environment", default="validation")
-    parser.add_argument("--window-seconds", type=int, default=86_400)
+    parser.add_argument(
+        "--window-seconds",
+        type=int,
+        default=PingAnSocMemoryProfile.identity.aggregation_window_seconds,
+    )
     parser.add_argument("--minimum-support", type=int, default=5)
     parser.add_argument("--minimum-distinct-sources", type=int, default=5)
     parser.add_argument("--minimum-conclusive-support", type=int, default=5)

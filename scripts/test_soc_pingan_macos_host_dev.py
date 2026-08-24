@@ -9,12 +9,17 @@ from scripts.soc_pingan_macos_host_dev import (
     HostDevError,
     _validate_locked_requirements,
     build_install_commands,
+    build_nginx_test_command,
     build_start_command,
     build_start_environment,
+    discover_private_lan_ipv4s,
     expected_pnpm_version,
     is_public_npm_registry,
+    normalize_allowed_origins,
     normalize_internal_npm_registry,
+    parse_args,
     parse_version,
+    resolve_start_allowed_origins,
 )
 
 
@@ -137,3 +142,128 @@ def test_start_plan_skips_install_and_disables_network_side_effects() -> None:
     assert environment["NEXT_TELEMETRY_DISABLED"] == "1"
     assert environment["DO_NOT_TRACK"] == "1"
     assert environment["UV_OFFLINE"] == "1"
+
+
+def test_start_plan_applies_explicit_lan_origin_after_private_env() -> None:
+    command = build_start_command(daemon=True)
+    environment = build_start_environment(
+        {"PATH": "/usr/bin"},
+        allowed_origins=("10.19.68.62", "http://soc-dev.internal:2026"),
+    )
+
+    assert "source" in command[2]
+    assert "SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE" in command[2]
+    assert command[2].index("source") < command[2].index(
+        "export DEER_FLOW_DEV_ALLOWED_ORIGINS"
+    )
+    assert environment["SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"] == (
+        "10.19.68.62,http://soc-dev.internal:2026"
+    )
+
+
+def test_start_plan_without_lan_origin_does_not_override_private_env() -> None:
+    environment = build_start_environment(
+        {
+            "PATH": "/usr/bin",
+            "SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE": "stale.example",
+        }
+    )
+
+    assert "SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE" not in environment
+
+
+def test_local_only_forces_private_env_lan_origins_off() -> None:
+    environment = build_start_environment(
+        {"PATH": "/usr/bin"},
+        force_allowed_origins_override=True,
+    )
+
+    assert environment["SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"] == ""
+
+
+def test_default_lan_origins_use_private_default_interface_address() -> None:
+    outputs = {
+        ("route", "-n", "get", "default"): "interface: en0\n",
+        ("ipconfig", "getifaddr", "en0"): "10.19.68.62\n",
+        ("ifconfig", "en0"): "inet 10.19.68.62 netmask 0xffffff00\n",
+        ("ipconfig", "getifaddr", "en1"): "8.8.8.8\n",
+        ("ifconfig", "en1"): "inet 127.0.0.1 netmask 0xff000000\n",
+    }
+
+    discovered = discover_private_lan_ipv4s(lambda command: outputs.get(command))
+    resolved = resolve_start_allowed_origins(
+        ("soc-dev.internal",),
+        local_only=False,
+        discovered_lan_origins=discovered,
+    )
+
+    assert discovered == ("10.19.68.62",)
+    assert resolved == ("10.19.68.62", "soc-dev.internal")
+
+
+def test_default_lan_start_fails_closed_when_no_private_address_exists() -> None:
+    with pytest.raises(HostDevError, match="cannot detect a private LAN IPv4"):
+        resolve_start_allowed_origins(
+            (),
+            local_only=False,
+            discovered_lan_origins=(),
+        )
+
+
+def test_local_only_rejects_explicit_lan_origin() -> None:
+    with pytest.raises(HostDevError, match="cannot be combined"):
+        resolve_start_allowed_origins(
+            ("10.19.68.62",),
+            local_only=True,
+            discovered_lan_origins=(),
+        )
+
+
+def test_allowed_origins_are_trimmed_deduplicated_and_accept_comma_lists() -> None:
+    assert normalize_allowed_origins(
+        (" 10.19.68.62 ", "10.19.68.62,http://soc-dev.internal:2026")
+    ) == ("10.19.68.62", "http://soc-dev.internal:2026")
+
+
+def test_allowed_origins_reject_control_characters() -> None:
+    with pytest.raises(HostDevError, match="control character"):
+        normalize_allowed_origins(("10.19.68.62\nMALICIOUS=1",))
+
+
+def test_start_cli_accepts_repeated_allowed_origins() -> None:
+    args = parse_args(
+        [
+            "start",
+            "--daemon",
+            "--allowed-origin",
+            "10.19.68.62",
+            "--allowed-origin",
+            "soc-dev.internal",
+        ]
+    )
+
+    assert args.daemon is True
+    assert args.allowed_origin == ["10.19.68.62", "soc-dev.internal"]
+    assert args.local_only is False
+
+
+def test_start_cli_accepts_local_only() -> None:
+    args = parse_args(["start", "--daemon", "--local-only"])
+
+    assert args.daemon is True
+    assert args.local_only is True
+
+
+def test_nginx_check_overrides_homebrew_compiled_error_log(tmp_path: Path) -> None:
+    command = build_nginx_test_command(root=tmp_path)
+
+    assert command == [
+        "nginx",
+        "-t",
+        "-e",
+        str(tmp_path / "logs" / "nginx-error.log"),
+        "-c",
+        str(tmp_path / "docker" / "nginx" / "nginx.local.conf"),
+        "-p",
+        str(tmp_path),
+    ]

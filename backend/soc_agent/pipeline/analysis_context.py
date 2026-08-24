@@ -344,29 +344,72 @@ def _analysis_coverage_context(request: LLMAnalysisRequest) -> dict[str, Any]:
     omission_reason_counts: dict[str, int] = {}
     for omission in coverage.omissions:
         omission_reason_counts[omission.reason] = omission_reason_counts.get(omission.reason, 0) + 1
+
+    schema_status_counts = {
+        "recognized": 0,
+        "degraded": 0,
+        "unsupported": 0,
+    }
+    for item in coverage.message_schemas:
+        status = item.status.value
+        if status in schema_status_counts:
+            schema_status_counts[status] += 1
+
+    high_value_gap_count = len(coverage.high_value_gaps)
+    schema_warning_count = schema_status_counts["degraded"] + schema_status_counts["unsupported"]
+    if high_value_gap_count:
+        readiness_status = "degraded_by_high_value_gap"
+        readiness_summary = "存在未投影的高价值证据，结论应显式保留该证据缺口。"
+    elif schema_warning_count:
+        readiness_status = "usable_with_schema_warnings"
+        readiness_summary = "当前证据可用于研判，但部分 Message 解析不完整或缺少受支持的解析器。"
+    else:
+        readiness_status = "ready"
+        readiness_summary = "当前主要证据已进入模型上下文；常规预算省略不代表关键证据缺失。"
+
     return {
-        "message_schemas": [
+        "analysis_readiness": {
+            "status": readiness_status,
+            "summary": readiness_summary,
+            "high_value_gap_count": high_value_gap_count,
+        },
+        "message_parsing": {
+            "message_count": len(coverage.message_schemas),
+            "recognized_count": schema_status_counts["recognized"],
+            "degraded_count": schema_status_counts["degraded"],
+            "unsupported_count": schema_status_counts["unsupported"],
+            "parsers": [
+                {
+                    "parser": item.parser_name or "unavailable",
+                    "status": item.status,
+                    "parsed_field_count": item.field_count,
+                    "warning_count": len(item.warnings),
+                }
+                for item in coverage.message_schemas
+            ],
+        },
+        "model_projection": {
+            "visible_field_count": coverage.counts.get("llm_projected_count", 0),
+            "documented_omission_count": len(coverage.omissions),
+            "sanitized_field_count": coverage.counts.get("llm_sanitized_count", 0),
+            "encoded_span_compaction_count": len(coverage.llm_compacted_encoded_paths),
+            "bounded_evidence_with_omissions_count": len(coverage.llm_truncated_evidence_paths),
+        },
+        "documented_omissions": [
             {
-                "parser_name": item.parser_name,
-                "parser_version": item.parser_version,
-                "schema_fingerprint": item.schema_fingerprint,
-                "status": item.status,
-                "field_count": item.field_count,
-                "warning_count": len(item.warnings),
+                "reason": reason,
+                "count": count,
             }
-            for item in coverage.message_schemas
+            for reason, count in sorted(omission_reason_counts.items())
         ],
-        "counts": coverage.counts,
-        "omission_reason_counts": omission_reason_counts,
         "high_value_gaps": [
             {
                 "expected_target": item.expected_target,
                 "reason": item.reason,
+                "importance": item.importance,
             }
             for item in coverage.high_value_gaps
         ],
-        "truncated_evidence_count": len(coverage.llm_truncated_evidence_paths),
-        "compacted_encoded_count": len(coverage.llm_compacted_encoded_paths),
     }
 
 
@@ -417,17 +460,50 @@ def _project_evidence_compaction(
 def _project_bounded_evidence(
     evidence: BoundedAnalysisEvidence,
 ) -> dict[str, Any]:
-    projected = evidence.model_dump(mode="json", exclude_none=True)
-    projected.pop("encoded_span_omissions", None)
-    omission_reasons = projected.pop("omission_reasons", {})
+    try:
+        content: Any = json.loads(evidence.content)
+        content_format = "json"
+    except json.JSONDecodeError:
+        content = evidence.content
+        content_format = "text"
+
     omission_reason_counts: dict[str, int] = {}
-    for reason in omission_reasons.values():
+    for reason in evidence.omission_reasons.values():
         omission_reason_counts[reason] = omission_reason_counts.get(reason, 0) + 1
-    projected["projected_field_count"] = len(projected.pop("projected_field_paths", []))
-    projected["sanitized_field_count"] = len(projected.pop("sanitized_field_paths", []))
-    projected["omitted_field_count"] = len(projected.pop("omitted_field_paths", []))
-    projected["omission_reason_counts"] = omission_reason_counts
-    return projected
+
+    if evidence.omitted_field_paths:
+        projection_status = "bounded_with_documented_omissions"
+    elif evidence.sanitized_field_paths:
+        projection_status = "bounded_with_sanitization"
+    elif evidence.encoded_span_omissions:
+        projection_status = "complete_with_encoded_compaction"
+    else:
+        projection_status = "complete_within_budget"
+
+    return {
+        "source_path": evidence.source_path,
+        "layer": evidence.layer,
+        "trust_level": evidence.trust_level,
+        "sensitive_evidence_mode": evidence.sensitive_evidence_mode,
+        "parser": evidence.parser_name,
+        "content_format": content_format,
+        "content": content,
+        "projection": {
+            "status": projection_status,
+            "original_character_count": evidence.original_length,
+            "visible_field_count": len(evidence.projected_field_paths),
+            "sanitized_field_count": len(evidence.sanitized_field_paths),
+            "omitted_field_count": len(evidence.omitted_field_paths),
+            "encoded_span_compaction_count": len(evidence.encoded_span_omissions),
+            "omission_reasons": [
+                {
+                    "reason": reason,
+                    "count": count,
+                }
+                for reason, count in sorted(omission_reason_counts.items())
+            ],
+        },
+    }
 
 
 def _bound_projection(value: Any, *, depth: int = 0) -> Any:

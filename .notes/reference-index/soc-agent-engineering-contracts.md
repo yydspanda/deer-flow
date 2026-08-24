@@ -789,6 +789,9 @@ Tenant disposition policy / 租户级处置策略约束：
   advisor mode/Skill path/model。只配置 path 但未显式 enable 必须 fail startup；advisor 只在 deterministic
   no-match 后执行。其 strict output 必须引用 exact `E-*`，可选引用现有 `R-*` 和 `S/A/M/C/T-*`，并保存
   model/Prompt/Skill/response hash；调用、schema 或引用校验失败固定持久化 fail-closed no-match。
+- 一个 `SocAnalysisService` 实例内的 confirmed Memory、tenant policy 和 automation observer 必须共享同一
+  server-owned runtime environment。普通入口继续严格校验进程级环境变量一致；显式隔离的 DEV/eval service
+  可由 composition root 注入实例级 `runtime_environment`，但必须同时覆盖这三层，禁止只改 Memory scope。
 - PingAn v2 位于 `integrations/pingan/policies/tenant-disposition-v2.json`，组合策略位于
   `integrations/pingan/policy_skills/disposition/SKILL.md`。generic evaluator 不得 import PingAn module 或
   出现 PingAn 字段、网段、规则码、主机模式；application composition 只可在显式 PingAn provider 开关打开
@@ -826,9 +829,22 @@ SOC memory tracking 约束：
 - TUI/Web/Kafka/Lead Agent/domain handler/external disposition sync 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
 - 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
 - 当前已实现 DB-first candidate persistence、confirmed-memory boundary、governed retrieval activation 和 retrieval policy MVP：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；`SocMemoryService.list_candidates()` / `get_candidate()` 是 API/CLI/Web/TUI/Lead Agent 查询候选记忆的 service 边界；`SocMemoryService.review_candidate()` 是 confirm/reject/deprecate/expire 的唯一候选状态机边界；`SocMemoryService.set_retrieval_activation()` 是 confirmed record retrieval enable/disable 的唯一状态迁移边界；`SocMemoryService.find_relevant_records(SocMemoryQuery)` 是 confirmed memory 检索的唯一 service 边界。
+- 用户从一次实际 Memory 命中的告警发现经验错误时，只能调用 `SocMemoryService.propose_revision_candidate()` / `POST /api/soc/memory/records/{memory_id}/revision-candidates`。命令必须携带当前 `expected_record_version`、实际 `source_run_id`、typed issue、充分理由、可信 actor 和幂等键；Service 必须核验该 run 的持久化 `SocMemoryUseRecord` 及使用时的 content/facet hash。核验通过后，在一个 mutation transaction 中 CAS 暂停旧 record retrieval、创建带 immutable predecessor/use lineage 的 `memory_revision` pending candidate，并写 mutation audit；不得由 React、router 或 repository 直接覆盖旧 Lesson。同一 Memory 同时只允许一个 open revision；命中 `revision_pending=true` 的第二次创建必须 conflict。
+- `issue_type=applicability_too_broad` 必须额外从 `AlertRepository` 加载该 exact source run，通过当前解析出的 `SocMemoryProfile` 重新投影 facets 并构建 applicability；不得复制 predecessor 的过宽 scope。Run 缺失、alert/use lineage 不一致或 canonical facets 不足以形成 scope 时，整个 mutation fail closed。新 scope/profile identity 必须冻结在 revision candidate，是否授予 future-match directive 仍由后续人工审核决定。
+- 修订候选继续复用普通 Candidate 的 Business Lesson、applicability 和人工确认流程。修订开放期间，旧 record 必须保留 `revision_pending=true`，`SocMemoryService.set_retrieval_activation(ENABLE)` 必须拒绝重新启用。确认后创建新的 `SocMemoryRecord`，并将旧 record 标记 `deprecated`、旧 candidate 标记 `superseded`，保存前后 Memory/Candidate ID、版本、actor、reason 和时间；旧内容保持原样。新 record 是否启用 retrieval 仍是独立治理动作。修订候选被 reject/expire 时必须以 CAS 结束 pending 标记但保持旧 retrieval 关闭，之后只能由显式 activation mutation 恢复；被 reject 的修订候选不得以 stale lineage reopen，必须从后续一次持久化的精确 Memory use 新建修订。
 - 候选记忆来源桥接固定在 `soc_agent.memory.sources.SocMemoryCandidateSourceBridge`：新增来源必须先构造 `SocMemoryCandidateCreateCommand`，再经 `SocMemoryService.propose_candidate()` 写入，不得在 Web/TUI/Kafka/Lead Agent/domain handler 内直接拼 repository row。
 - `SocReviewService.correct()` 是 correction、Memory outcome feedback 和可选 candidate promotion 的 service 边界。普通 correction 默认 `observed_only`；只有 typed `promote_to_memory=true` 通过 Admission 后才把 candidate id 回写到 `CorrectionRecord`、audit 和 event。外部反馈复用 correction 链路但不携带 promotion，不能逐事件创建 candidate。
 - `SocReviewService.add_note()` 是 ReviewQueue review note -> pending memory candidate 的 service 边界；`soc review note`、Web/TUI note action 和后续 Lead Agent/Kafka note source 都必须通过它或同级 service 方法进入 `SocMemoryCandidateSourceBridge`，不得直接写 `soc_memory_candidates`。Review note source type 固定为 `review_note`，幂等键必须至少覆盖 queue/run/alert/note，并可附加 scenario/domain/finding refs。
+- `SocReviewService.promote_run_to_memory()` 是“已完成研判 -> 人工提炼候选”的唯一 service 边界；
+  Gateway 固定使用 `POST /api/soc/memory/runs/{run_id}/promote`，要求可信登录身份、
+  `soc_analyst|soc_admin` 和 `Idempotency-Key`。显式操作及精确 run/alert lineage 是 promotion signal；
+  `note` 为可选审核提示，不是准入、授权或最终业务判断字段。历史客户端的 `reason` 仅作为 `note` 兼容别名。
+  该入口只绕过自动 Pattern 的 support/distinct-source 门槛，不绕过 `MemoryAdmissionService`、候选审核、
+  Business Lesson 和 retrieval activation；输出固定为 `manual_note` 来源的 `pending_review` candidate，
+  不得修改当前 run decision、ReviewQueue、confirmed Memory、tenant policy 或 action authority。同一
+  run/alert 的 Candidate identity 必须稳定，补充备注或重复点击复用既有审核任务，不得制造重复候选。
+  最终 verdict、business fact、applicability、handling guidance 和 governance reason 只能在 Candidate 审核
+  边界填写。无可选备注时，mutation audit 必须用系统操作描述记录 actor/time/run/action，不得伪造业务理由。
 - 分析师采纳 Lead Agent 结论必须是显式 human mutation，不是模型回调或 assistant message 自动写入。当前
   `ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION` 要求 queue、thread、message 和 acceptance reason，保留
   actor surface，并仍生成 `pending_review` 的 `review_note` source；非 Lead Agent TUI 不得暴露采纳命令。
@@ -1538,8 +1554,10 @@ normalizers/hids.py
 - accepted repair 进入 bounded analysis 时，原字段 replacement reason 必须标为
   `replaced_by_repaired_projection`；rejected/error repair 标为 `sanitized_string_fallback`。repair 结果
   只进入 repaired paths，不得进入 decoded paths。
-- Prompt Builder 不得原样 dump 完整 coverage path 清单。模型只接收 parser status/fingerprint、计数、
-  omission reason 汇总、high-value target/reason 和 truncation 数量；完整 vendor paths 只用于审计。
+- Prompt Builder 不得原样 dump 完整 coverage path 清单。模型只接收业务化的 analysis readiness、parser
+  status/字段计数、documented omission 汇总、high-value target/reason 和 bounded projection 数量；schema
+  fingerprint、parser version 和完整 vendor paths 只用于 Runtime 审计。结构化 evidence 在模型投影中必须
+  保持 JSON object/array，不得再次编码成需要模型自行反转义的字符串。
 - 结构化 JSON evidence 不允许按字符直接截断后伪装成 JSON。投影器应按 leaf/子树选择并重新序列化，
   在总预算内跨 primary/supplementary observations 优先保留高价值字段；所有省略必须有精确 path/reason。
 - high-value gap 规则必须通过 `EvidenceFieldImportanceRule` / `EvidenceFieldImportanceRegistry` 声明。
@@ -1685,14 +1703,14 @@ normalizers/hids.py
   replay；精确别名恢复属于 hydration，不计 repair，未知别名不得模糊匹配。
 - `reference_catalogs.role_entities` 只暴露 Runtime 已类型化的 canonical/extracted 实体；raw vendor
   字段名、端口、计数器、时间戳和事件 ID 仍只是普通证据，不能因为名字像实体就成为角色目标。
-- `soc-analysis-v34` 将稳定的信任、分析方法和引用规则放在 system message；bounded alert context 位于
+- `soc-analysis-v35` 将稳定的信任、分析方法和引用规则放在 system message；bounded alert context 位于
   user message 前部，任务、精确响应结构和 final checklist 位于尾部。scenario/direction/role 使用精确
   key 契约，角色只能把 `reference_catalogs.role_entities` 中选中项的 `evidence_ref` 复制为
   `entity_ref`。Prompt Builder 按 `conflicted -> typed network evidence/network source -> non-network` 选择且只注入一个完整、
   机器校验的 synthetic Golden Demo，并把 `prompt_example_id` 写入 trace；示例专用 `EX-*` 绝不能进入
   模型输出，示例 verdict/scenario/direction/role/confidence/action 也只能用于 shape guidance，不得复制为
   当前结论。不得使用缺少必填字段的片段式伪 few-shot，也不得把全部 Demo 常驻每次调用。
-- `soc-analysis-v34` / `soc-analysis-json-parser-v24` 只允许有日志、无安全语义的机械恢复；仅当完整字段
+- `soc-analysis-v35` / `soc-analysis-json-parser-v24` 只允许有日志、无安全语义的机械恢复；仅当完整字段
   集合可无歧义判定为紧凑模型输出时，允许恢复缺失的顶层 `soc.analysis_model_output.v4` 版本。允许把
   严格十进制 confidence 字符串转为数值；core/optional 引用只能按冻结目录过滤、去重并保持原顺序截到
   契约上限 20；可用显式 `scenario_key` 补缺失展示名；可用同一可选对象已有字段生成缺失 rationale，
@@ -1989,6 +2007,20 @@ retrying
 独立 transport 如果需要扁平 trace，可以投影 `run_id/alert_id`，但不得反向扩散到内部 step contract。
 当前固定 runner 主要产生 `running -> success|failed` step；`pending/skipped/retrying` 是受支持的扩展
 状态，不是每次运行必经状态。
+
+开发期执行监控必须从持久化 `AnalysisRun.steps`、active provider request journal 和后续 Pattern
+Observation 写入状态构造只读投影。前端只轮询当前选中且正在运行的 alert-scoped 轻量 endpoint，不得轮询
+全量语料 state，也不得在浏览器推测 phase。投影可包含 step/phase 状态、起止时间、耗时、warning/error
+摘要、模型名、token、Schema/Grounding 计数、Decision 和 Observation/Candidate ID；不得返回原始 payload、
+Evidence/Context 内容、Prompt、模型原文、Provider response 或 secret。
+
+完整 DEV 审计不得扩大上述轮询契约，而使用独立、显式加载、认证 `soc_admin` 且受
+`SOC_DEV_CORPUS_WORKBENCH_ENABLED` 与隔离 SQLite 约束的 audit endpoint。其只读 bundle 按固定顺序投影
+Run manifest、原始输入、canonical normalization、实体、事实、bounded LLM request、结构化模型结果、
+quality/grounding/materiality、Decision lineage 和 Pattern/Memory write；可包含完整持久化业务证据与模型
+上下文，但不得读取环境变量/credential、重新调用 Adapter/Runtime/LLM、修改状态或作为 STG/生产证据。
+新 run 必须持久化 normalize step 当时产生的 exact `AlertInput`；旧 run 缺失时只能标记 partial 并显示
+frozen `LLMAnalysisRequest` 的 canonical projection，不得用新版本 Adapter 在读取时静默重算历史结果。
 
 ## 六、数据模型边界
 
@@ -2400,7 +2432,7 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
-当前 `soc-analysis-v34` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费
+当前 `soc-analysis-v35` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费
 `LLMAnalysisRequest.v6` 和受控 context catalogs，输出 compact `soc.analysis_model_output.v4`；Runtime
 将其 hydration 为 `AnalysisResult.v4`，再依次经过 schema/domain validation、evidence grounding、
 analysis materiality 和 Decision Policy v7。模型不能决定后续状态或动作权限。
@@ -2674,6 +2706,9 @@ tool permission denial rate
   split-brain。审核者可通过
   `record_applicability` 将候选已有的 canonical optional facet 收紧为 required facet；不得新增候选中
   不存在的值，也不得把 vendor raw field 名写入通用 Runtime contract。
+  人工可读的 applicability 文案必须使用本地化标签并同时保留原 facet key/value，例如
+  `必须匹配「行为强度（behavior_strength）」：强特征（strong）`；机器判断始终读取 typed
+  `SocMemoryApplicabilitySpec`，历史英文文案只能在 UI read projection 中转换，禁止回写改造旧记录。
 - `SocMemoryRecord.business_lesson` 存入已有 JSON `record_payload`，不新增平行表或迁移；旧的无 Lesson
   record 仍可作为非权威上下文读取，但新决策型确认必须经过上述边界。`M-*` 投影继续读取同一 record，
   并记录 Lesson schema provenance；评测 fixture 可以提供人工真值输入，但不能绕过生产服务来证明
@@ -2809,6 +2844,9 @@ tool permission denial rate
   creates `SocMemoryRevisionProposal`. When the active directive targets benign/false-positive but final high-trust
   truth is risk, the disable-only `soc_memory_safety_monitor` must disable retrieval immediately; it cannot enable a
   record. Revision/deprecation remains a reviewer action. Memory still never grants action authority.
+- Explicit run promotion and correction must resolve the current `SocMemoryProfile`, project the exact persisted
+  `AnalysisRun`, and call the Profile applicability builder. A persisted Pattern environment is server-owned and
+  must override caller-supplied metadata. Manual entry must not silently fall back to broad generic facets.
 - 普通 `ReviewNoteCommand` 的显式提升只能使用类型化 `promote_to_memory=true`；不得从自由格式
   metadata 暗示提升。Lead Agent acceptance 的“足够理由”必须检查人工 `acceptance_reason`，不得用
   模型回复正文长度代替人工判断。
@@ -2817,19 +2855,25 @@ tool permission denial rate
   均可缺失；generic Memory Kernel 不得规定一个所有厂商必填的多维联合硬键。Tenant Profile 可以基于
   已存在的 canonical facets 定义版本化 compound cohort/applicability，但必须保留 ruleless fallback 和
   context-only/decision-authority 边界。
-- PingAn Profile v4 把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
+- PingAn Profile v6（feature schema v5）把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
   `detection_key`，但该 key 只表示规则大类，不得单独复制历史 verdict。Profile 必须从 canonical
   rule name 生成版本化 `detection_signature`；不得用 `alert_id/run_id` 合成任一检测身份。
   `detection_key`、`detection_signature` 与 deterministic `behavior_fingerprint` 同时存在时，必须使用三者的
   compound signature 隔离 cohort；同 key、不同 detector name 或 behavior、相反结论必须形成独立候选。
   detection-only cohort 只能产生 rule-context `REVIEW_HINT`，service 必须拒绝其 future-match directive；
   behavior-only cohort 仍可服务没有稳定规则身份的告警。二者都缺失时 observation 不准入。
-- PingAn Profile v4 必须从 canonical typed entities 生成 core/detail 两层 behavior component。Core 可包含
+- Generic Profile v2 / feature schema v2 可从 canonical destination transport/port 投影 `network_service`，
+  并从 bounded current-alert evidence 提取标准 CVE 为 `vulnerability_id`；不得把 source/destination IP 或
+  ephemeral source port 编入 behavior fingerprint。Pattern signature 必须冻结有界 facet 白名单，不能因新
+  facet 超过 `MemoryPatternSignature` 的 20-group contract。
+- PingAn Profile v6（feature schema v5）必须从 canonical typed entities 生成 core/detail 两层 behavior component。Core 可包含
   process image/path、稳定 command module/switch 名、parent service 和 typed target class；detail 可保留
-  `target_file:SAM|SYSTEM` 等精确观察。`IP/host/account`、alert/run lineage 和 ClassId 等随机参数不得进入
+  `target_file:SAM|SYSTEM` 等精确观察；network service、CVE 和版本化 `attack_behavior_family` 可参与
+  同类拆分。`IP/host/account`、alert/run lineage 和 ClassId 等随机参数不得进入
   fingerprint。平铺 EDR `str_suspicious_file` 必须先由 PingAn Adapter 转成带 provenance 的
-  `endpoint_action_target`，Profile 不得读取供应商原始别名。Profile 必须把 `protocol:*`、`http_method:*`
-  和 generic `scenario:web_attack` 标记为 weak behavior；其他当前 reviewed component 投影为 strong。决策型 compound applicability 必须精确匹配
+  `endpoint_action_target`，Profile 不得读取供应商原始别名。Profile 必须把 `protocol:*`、`http_method:*`、
+  `network_service:*`、来源 classification family 和 generic `scenario:web_attack` 标记为 weak behavior；
+  CVE、MITRE、process 和其他当前 reviewed component 才可投影为 strong。决策型 compound applicability 必须精确匹配
   environment、detection key、detection signature、behavior fingerprint 和 `behavior_strength=strong`。
   weak-only compound 最多产生 rule-context candidate，不能附加 future-match directive。
 - `SocMemoryApplicabilitySpec` 可声明严格受限的 context-only lane：compound record 的 exact
@@ -2838,6 +2882,10 @@ tool permission denial rate
   weak-only overlap 不得召回。该投影必须显式标记
   `context_only_allowed=true`，在 token 排序中晚于 exact match，并且不得应用
   `SocMemoryDecisionDirective`。没有 component overlap 的同-rule 记录仍为 not applicable。
+- Before accepting either exact or context-only applicability, the resolved tenant Profile may reject substantive
+  canonical scope conflicts such as different network service, CVE, or attack-behavior family. Compatibility with
+  older records may derive these scopes from canonical `behavior_component*` prefixes, but never from tenant raw
+  aliases. A same-rule cross-behavior record rejected here must count as `skipped_not_applicable`.
 - 没有 typed applicability 的 legacy record 最多作为 bounded `M-*` 背景存在，即使历史上携带 directive
   也不得改判。确定性 Memory Decision 必须同时满足 record `decision_impact=detection_decision`、typed
   applicability 和当前 projection `status=applicable`；客户端 metadata 不能恢复该权限。
@@ -2845,10 +2893,12 @@ tool permission denial rate
   或把候选 optional facet 提升为 required；不得移除强锚点、切换 profile/feature schema、降低阈值、
   扩大值域或扩大 context-only missing/similarity 集。生成或显式提交的 directive 必须包含最终所有
   required facet keys。
-- Profile/feature schema 升级必须 fail closed。PingAn v2/v3 typed records 不得被 v4 query 静默解释、迁移或
+- Profile/feature schema 升级必须 fail closed。PingAn v2-v5 typed records 不得被 v6 query 静默解释、迁移或
   继承 directive；必须重新聚合、审核和激活。Profile 投影若同一 IP 同时存在于 generic `entity=ip:*` 与
   typed `role_entity`，只移除重复 generic facet；不得把 IP 变成 required facet，跨 IP 行为泛化必须保留。
-- Memory 的 24h fixed window 只定义重复 observation 的候选聚合范围，不是 Memory 生命周期。当前
+- Memory 的 fixed window 只定义重复 observation 的候选聚合范围，不是 Memory 生命周期。Generic Profile
+  默认 24h；tenant profile 可声明版本化 bounded default，PingAn Profile v6 默认 30d。显式 operator/eval
+  policy 可覆盖 Profile 默认值，但必须冻结进 observation；Profile 变更不得静默重写旧窗口。当前
   `window_start/window_end` 只保存在 source metadata；pattern candidate 的 90 天治理有效期从候选生成
   时开始，人工确认后 repeated-pattern record 再从确认时间获得独立的 90 天有效期，review interval
   默认 30 天。确认时 retrieval activation 另有显式截止时间和复审周期，且不能超出 record validity。
@@ -2861,9 +2911,13 @@ tool permission denial rate
   必须 fail closed。
 - 正式 Memory Center 的一级对象是跨 fixed window 稳定的 `lineage_key` Pattern，不是
   `aggregation_key` cohort。列表/搜索/详情必须由 Repository + Core Service 生成：分别显示 lineage
-  observation 总数、distinct source 数、24h window 数、candidate 冻结快照数和后续 reinforcement 数。
+  observation 总数、distinct source 数、Profile fixed-window 数、candidate 冻结快照数和后续 reinforcement 数。
   例如同一 Sliver 模式跨窗口形成 `6 + 1 + 1` 时，运营视图必须显示 1 个 Pattern、8 条 observation、
   3 个 window；原始 observation 和 window lineage 仍完整保留用于 replay/audit。
+- 人工提前提炼不得成为 Memory Center 之外的孤立治理对象。若 source run 已存在 Pattern observation，
+  新 Candidate 必须持久化该 observation 的 stable lineage；对旧 Candidate，Repository read model 只允许按
+  exact `source_run_id`、alert、tenant、Profile/schema 和 environment 兼容性做只读补链。禁止用 rule code、
+  文本或相似度猜测 lineage；补链不得修改 observation/candidate/record，也不得增加 support/distinct-source 数。
 - Memory Center 默认查询必须在 Repository 层排除 `terminal_history` candidate-only lineage，并返回当前
   筛选条件下的历史数量；显式 `include_terminal_history=true` 才参与列表分页。禁止先分页再由 React
   隐藏历史项，否则历史数据会挤占活跃 Pattern 页面。历史详情仍可通过稳定 lineage 直接审计。

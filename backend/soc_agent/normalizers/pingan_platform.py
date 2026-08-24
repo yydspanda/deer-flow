@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -269,8 +269,24 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
 def _pingan_event_datetime(value: str | None) -> tuple[str | datetime | None, bool]:
     if value is None:
         return None, False
+    normalized = value.strip()
+    epoch_scale = {
+        10: 1,
+        13: 1_000,
+        16: 1_000_000,
+        19: 1_000_000_000,
+    }.get(len(normalized))
+    if epoch_scale is not None and normalized.isdigit():
+        raw_value = int(normalized)
+        seconds, remainder = divmod(raw_value, epoch_scale)
+        try:
+            parsed = datetime.fromtimestamp(seconds, UTC) + timedelta(microseconds=(remainder * 1_000_000) // epoch_scale)
+        except (OverflowError, OSError, ValueError):
+            pass
+        else:
+            return parsed, False
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
         return value, False
     if parsed.tzinfo is not None and parsed.utcoffset() is not None:

@@ -6,6 +6,7 @@ function corpusState(processed = false) {
   const candidateAlert = {
     alert_id: "1984426",
     source_index: 0,
+    sequence_number: 1,
     observed_at: "2026-04-27T18:04:42+08:00",
     topic: "edr",
     source_type: "edr",
@@ -34,10 +35,11 @@ function corpusState(processed = false) {
     window_end: "2026-04-28T00:00:00Z",
     workflow_state: processed ? "completed" : "ready",
     can_process: !processed,
+    blocked_by_alert_id: null,
     run_id: processed ? "RUN-CORPUS-1" : null,
     analysis_status: processed ? "success" : null,
     model_name: processed ? "fixture-model" : null,
-    prompt_version: processed ? "soc-analysis-v34" : null,
+    prompt_version: processed ? "soc-analysis-v35" : null,
     total_duration_ms: processed ? 1200 : null,
     output_quality: processed ? "accepted" : null,
     failure_kind: null,
@@ -57,8 +59,10 @@ function corpusState(processed = false) {
     pattern_distinct_source_count: processed ? 1 : null,
     pattern_quality_gate_passed: processed ? false : null,
     pattern_consistency_ratio: processed ? 1 : null,
-    candidate_id: null,
-    candidate_status: null,
+    candidate_id: null as string | null,
+    candidate_status: null as string | null,
+    manual_candidate_id: null,
+    manual_candidate_status: null,
     memory_id: processed ? "MEM-GALAXY" : null,
     memory_status: processed ? "confirmed" : null,
     memory_contexts: processed
@@ -99,11 +103,28 @@ function corpusState(processed = false) {
           },
         ]
       : [],
+    operational_label_available: true,
+    operational_label_revealed: processed,
+    operational_label: processed ? "忽略" : null,
+    operational_label_observed_at: processed
+      ? "2026-04-28T09:00:00+08:00"
+      : null,
+    operational_label_method: processed ? "exported_triage_result" : null,
+    operational_label_reason: processed ? "已确认更新部署行为" : null,
+    operational_label_status: processed ? "已忽略" : null,
+    label_temporal_status: "valid",
+    base_operational_projection: processed ? "transfer" : "undetermined",
+    effective_operational_projection: processed ? "ignore" : "undetermined",
+    base_label_comparison: processed ? "mismatched" : "not_run",
+    effective_label_comparison: processed ? "matched" : "not_run",
+    base_projection_basis: processed ? "verdict:suspicious" : null,
+    effective_projection_basis: processed ? "verdict:false_positive" : null,
   };
   const weakAlert = {
     ...candidateAlert,
     alert_id: "1965449",
     source_index: 1,
+    sequence_number: 2,
     rule_code: "RPAADM_WEAK",
     rule_name: "Weak single alert",
     detection_key: "ptp-nids:rule_code:rpaadm_weak",
@@ -145,9 +166,23 @@ function corpusState(processed = false) {
     memory_directive_applied: false,
     memory_effect: null,
     decision_stages: [],
+    operational_label_available: false,
+    operational_label_revealed: false,
+    operational_label: null,
+    operational_label_observed_at: null,
+    operational_label_method: null,
+    operational_label_reason: null,
+    operational_label_status: null,
+    label_temporal_status: "unlabeled",
+    base_operational_projection: "undetermined",
+    effective_operational_projection: "undetermined",
+    base_label_comparison: "unlabeled",
+    effective_label_comparison: "unlabeled",
+    base_projection_basis: null,
+    effective_projection_basis: null,
   };
   return {
-    schema_version: "soc.corpus_dev_workbench.v1",
+    schema_version: "soc.corpus_dev_workbench.v2",
     safety: {
       environment: "dev",
       database_backend: "sqlite",
@@ -157,11 +192,25 @@ function corpusState(processed = false) {
       internal_providers: "off_or_mock",
       tenant_policy: "disabled",
       external_action_execution: false,
+      memory_scope: "dev-corpus-eval",
+      pattern_window_days: 30,
+      replay_order: "canonical_event_time_asc_within_memory_group",
+      label_visibility: "hidden_until_runtime_decision",
     },
     source: {
-      file_name: "full_alert_2026_month_forth_sample_200.pkl",
+      file_name: "full_alert_dams_labeled_merged.pkl",
       sha256: "b".repeat(64),
-      alert_count: 210,
+      alert_count: 4343,
+      labeled_alert_count: 3566,
+      unlabeled_alert_count: 777,
+      first_event_time: "2026-04-01T00:00:00+08:00",
+      last_event_time: "2026-08-18T23:59:59+08:00",
+      sort_order: "canonical_event_time_asc_alert_id_asc",
+      index_file_name: "full_alert_dams_labeled_merged.workbench-index.json",
+      index_sha256: "c".repeat(64),
+      payload_store_file_name:
+        "full_alert_dams_labeled_merged.workbench-payloads.sqlite",
+      payload_store_sha256: "d".repeat(64),
     },
     model: {
       mode: "llm",
@@ -171,7 +220,7 @@ function corpusState(processed = false) {
       role_verifier_model_name: null,
     },
     readiness: {
-      total_alert_count: 210,
+      total_alert_count: 4343,
       fingerprint_coverage_count: 189,
       decision_eligible_alert_count: 111,
       recurrent_group_count: 21,
@@ -181,6 +230,22 @@ function corpusState(processed = false) {
       processed_count: processed ? 1 : 0,
       failed_count: 0,
       memory_hit_alert_count: processed ? 1 : 0,
+    },
+    evaluation: {
+      label_kind: "operational_disposition",
+      label_counts: { 忽略: 2798, 转交: 768 },
+      temporally_valid_label_count: 3566,
+      temporally_invalid_label_count: 0,
+      unlabeled_count: 777,
+      processed_labeled_count: processed ? 1 : 0,
+      base_matched_count: 0,
+      base_mismatched_count: processed ? 1 : 0,
+      base_unscored_count: 0,
+      base_match_rate: processed ? 0 : null,
+      effective_matched_count: processed ? 1 : 0,
+      effective_mismatched_count: 0,
+      effective_unscored_count: 0,
+      effective_match_rate: processed ? 1 : null,
     },
     groups: [
       {
@@ -204,17 +269,295 @@ function corpusState(processed = false) {
   };
 }
 
+function activeMemoryRecord() {
+  return {
+    schema_version: "soc.memory_record.v1",
+    memory_id: "MEM-GALAXY",
+    version: 2,
+    memory_type: "benign_pattern",
+    target_artifact: "tenant_memory",
+    status: "confirmed",
+    tenant_scope: "pingan",
+    tenant_id: "pingan",
+    source_candidate_id: "MC-GALAXY",
+    source: {
+      source_type: "repeated_pattern",
+      source_id: "pattern:galaxy",
+      run_id: "RUN-CONSTRUCTION",
+      alert_id: "1984400",
+      metadata: {},
+    },
+    summary: "Windows 更新部署正常行为",
+    content: "相同规则和强行为指纹下可复用已审核误报结论。",
+    business_lesson: {
+      schema_version: "soc.memory_business_lesson.v1",
+      conclusion: "该行为属于已确认的 Windows 更新部署活动。",
+      business_rationale: ["运营人员已核对更新任务。"],
+      applicability_conditions: ["必须命中相同规则和强行为指纹。"],
+      generalization_boundaries: ["不同进程链不能复用。"],
+      invalidation_conditions: ["出现新的攻击证据时失效。"],
+      handling_guidance: ["精确匹配时复用误报结论。"],
+    },
+    facets: {
+      detection_key: ["leagsoft-edr:rule_code:rpaadm_002010"],
+      behavior_fingerprint: ["behavior:galaxy:v1"],
+    },
+    applicability: null,
+    evidence_refs: ["memory_pattern:galaxy"],
+    validity: {
+      valid_from: "2026-08-01T00:00:00Z",
+      valid_until: "2026-10-30T00:00:00Z",
+      review_after_days: 30,
+      notes: "Reviewed fixture.",
+    },
+    confidence: 0.95,
+    decision_impact: "detection_decision",
+    decision_directive: null,
+    content_hash: `sha256:${"a".repeat(64)}`,
+    facets_hash: `sha256:${"b".repeat(64)}`,
+    retrieval_enabled: true,
+    retrieval_policy_version: "soc.memory_retrieval_activation_policy.v1",
+    retrieval_valid_until: "2026-10-01T00:00:00Z",
+    retrieval_review_due_at: "2026-09-01T00:00:00Z",
+    retrieval_updated_by: null,
+    retrieval_updated_at: "2026-08-01T00:00:00Z",
+    retrieval_reason: "Reviewed fixture activation.",
+    created_by: {
+      actor_id: "fixture-reviewer",
+      actor_type: "user",
+      surface: "web",
+      roles: ["soc_memory_reviewer"],
+      auth_source: "session",
+    },
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    labels: ["confirmed-memory", "retrieval-enabled"],
+    metadata: {},
+  };
+}
+
+function corpusExecution(processed = false) {
+  const phase = (
+    key: string,
+    label: string,
+    status: "pending" | "running" | "success",
+  ) => ({
+    phase: key,
+    label,
+    status,
+    summary:
+      status === "success"
+        ? `${label} 已完成`
+        : status === "running"
+          ? `${label} 正在执行`
+          : "等待上游阶段完成",
+    duration_ms: status === "success" ? 100 : null,
+    metrics: key === "reasoning" && processed ? { total_tokens: 1280 } : {},
+    steps:
+      status === "success"
+        ? [
+            {
+              step_name: key,
+              label,
+              status: "success",
+              duration_ms: 100,
+              warning_count: 0,
+            },
+          ]
+        : [],
+  });
+  return {
+    schema_version: "soc.corpus_dev_execution.v1",
+    alert_id: "1984426",
+    status: processed ? "completed" : "not_started",
+    current_phase: null,
+    run_id: processed ? "RUN-CORPUS-1" : null,
+    run_status: processed ? "success" : null,
+    elapsed_ms: processed ? 1200 : null,
+    total_duration_ms: processed ? 1200 : null,
+    model_name: processed ? "fixture-model" : null,
+    provider_attempt_count: processed ? 1 : 0,
+    observation_id: processed ? "MPO-CORPUS-1" : null,
+    phases: [
+      phase(
+        "normalize",
+        "归一化 / Normalize",
+        processed ? "success" : "pending",
+      ),
+      phase(
+        "facts",
+        "实体与事实 / Entities & Facts",
+        processed ? "success" : "pending",
+      ),
+      phase(
+        "context",
+        "上下文与 Skills / Context & Skills",
+        processed ? "success" : "pending",
+      ),
+      phase(
+        "reasoning",
+        "模型研判 / LLM Analysis",
+        processed ? "success" : "pending",
+      ),
+      phase(
+        "validation",
+        "结果校验 / Validate",
+        processed ? "success" : "pending",
+      ),
+      phase(
+        "decision",
+        "决策生成 / Decision",
+        processed ? "success" : "pending",
+      ),
+      phase(
+        "memory",
+        "模式与记忆 / Pattern & Memory",
+        processed ? "success" : "pending",
+      ),
+    ],
+  };
+}
+
+function corpusAudit() {
+  const artifact = (
+    sequence: number,
+    artifactId: string,
+    fileName: string,
+    title: string,
+    payload: Record<string, unknown>,
+  ) => ({
+    sequence,
+    artifact_id: artifactId,
+    file_name: fileName,
+    phase: artifactId,
+    title,
+    description: `${title} 的持久化审计产物`,
+    status: "available",
+    source: "persisted_run",
+    metrics: { fields: Object.keys(payload).length },
+    review_guide: ["核对该阶段字段和来源路径。"],
+    payload,
+  });
+  return {
+    schema_version: "soc.corpus_dev_audit_bundle.v1",
+    alert_id: "1984426",
+    run_id: "RUN-CORPUS-1",
+    generated_at: "2026-08-20T08:00:00Z",
+    pipeline_version: "soc-runtime-v8",
+    model_name: "fixture-model",
+    prompt_version: "soc-analysis-v4",
+    input_hash: "b".repeat(64),
+    safety: {
+      dev_only: true,
+      admin_only: true,
+      contains_raw_alert_data: true,
+      contains_model_context: true,
+      reexecutes_runtime: false,
+      mutates_state: false,
+    },
+    execution: corpusExecution(true),
+    artifacts: [
+      artifact(
+        1,
+        "run-manifest",
+        "01-run-manifest.json",
+        "运行清单 / Run Manifest",
+        { run_id: "RUN-CORPUS-1", status: "success" },
+      ),
+      artifact(
+        2,
+        "source-input",
+        "02-source-input.json",
+        "原始输入 / Source Input",
+        {
+          input_payload: {
+            alert: { hitLog: [{ zeusRawLogs: [{ message: "raw-message" }] }] },
+          },
+        },
+      ),
+      artifact(
+        6,
+        "bounded-analysis-input",
+        "06-bounded-analysis-input.json",
+        "模型输入与 Skills / Bounded Analysis Input",
+        {
+          projection_lineage: {
+            status: "exact_for_prompt_version",
+            run_prompt_version: "soc-analysis-v35",
+            builder_prompt_version: "soc-analysis-v35",
+            exact: true,
+          },
+          model_visible_context: {
+            alert_id: "1984426",
+            evidence: {
+              coverage: {
+                analysis_readiness: {
+                  status: "ready",
+                  summary: "当前主要证据已进入模型上下文。",
+                },
+              },
+            },
+          },
+          runtime_request_audit: {
+            alert_id: "1984426",
+            primary_evidence: {
+              source_path: "alert.hitLog[0].zeusRawLogs[0].message",
+              projected_field_paths: ["message#parsed.source_ip"],
+            },
+          },
+        },
+      ),
+    ],
+  };
+}
+
+function corpusStateWithPatternCandidate() {
+  const state = corpusState(true);
+  const candidateAlert = state.alerts[0]!;
+  return {
+    ...state,
+    readiness: {
+      ...state.readiness,
+      memory_hit_alert_count: 0,
+    },
+    alerts: [
+      {
+        ...candidateAlert,
+        candidate_id: "MC-PATTERN-1",
+        candidate_status: "pending_review",
+        memory_id: null,
+        memory_status: null,
+        memory_contexts: [],
+        memory_directive_applied: false,
+        memory_effect: null,
+      },
+      state.alerts[1]!,
+    ],
+  };
+}
+
 test("filters the corpus by Memory readiness and runs one alert", async ({
   page,
 }) => {
   mockLangGraphAPI(page, { threads: [] });
   let current = corpusState();
+  let promotionRequestBody: unknown;
   await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    if (route.request().url().endsWith("/audit")) {
+      await route.fulfill({ json: corpusAudit() });
+      return;
+    }
+    if (route.request().url().endsWith("/execution")) {
+      await route.fulfill({
+        json: corpusExecution(current.readiness.processed_count > 0),
+      });
+      return;
+    }
     if (route.request().method() === "POST") {
       current = corpusState(true);
       await route.fulfill({
         json: {
-          schema_version: "soc.corpus_dev_workbench_process.v1",
+          schema_version: "soc.corpus_dev_workbench_process.v2",
           alert_id: "1984426",
           run_id: "RUN-CORPUS-1",
           observation_id: "MPO-CORPUS-1",
@@ -225,6 +568,21 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
       return;
     }
     await route.fulfill({ json: current });
+  });
+  await page.route("**/api/soc/memory/runs/*/promote", async (route) => {
+    promotionRequestBody = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        schema_version: "soc.memory_run_promotion_result.v1",
+        run_id: "RUN-CORPUS-1",
+        alert_id: "1984426",
+        memory_candidate: { candidate_id: "MC-MANUAL-1" },
+        memory_admission: {
+          status: "admitted",
+          reason_codes: ["explicit_promotion_requested"],
+        },
+      },
+    });
   });
 
   await page.goto("/workspace/soc/corpus-validation");
@@ -252,20 +610,210 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(page.getByRole("link", { name: "GalaxyLab 闭环" })).toHaveCount(
     0,
   );
-  await expect(page.getByText("210 条", { exact: true })).toBeVisible();
+  await expect(page.getByText("4343 条", { exact: true })).toBeVisible();
   await expect(
     page.getByText("GalaxyLab_T1003-SAM-Dumping").first(),
   ).toBeVisible();
-  await expect(page.getByText("Weak single alert")).toHaveCount(0);
+  await expect(page.getByText("Weak single alert")).toBeVisible();
+  await expect(page.getByText("Runtime 运行后揭示")).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(currentNavigationLink).toBeInViewport({ ratio: 1 });
   await page.setViewportSize({ width: 1280, height: 720 });
 
+  const corpusSearch = page.getByPlaceholder("Alert ID / Rule / Host / IP");
+  await corpusSearch.fill("1984426");
+  await page.reload();
+  await expect(corpusSearch).toHaveValue("1984426");
   await page.getByRole("button", { name: "运行", exact: true }).click();
 
+  await expect(page.getByLabel("当前安全结论")).toContainText(
+    "误报 / False Positive",
+  );
   await expect(page.getByText("Memory 已应用", { exact: true })).toBeVisible();
   await expect(page.getByText("Windows 更新部署正常行为")).toBeVisible();
   await expect(page.getByText("可疑", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("误报", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("历史处置依据：")).toBeVisible();
+  await expect(page.getByText("已确认更新部署行为")).toBeVisible();
+  await expect(page.getByText("一致", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
+  ).toBeInViewport();
+  await expect(page.getByText(/总 Token:/)).toBeVisible();
+
+  await page.getByRole("button", { name: "打开完整审计" }).click();
+  await expect(
+    page.getByRole("heading", { name: "全链路审计 / Full Audit" }),
+  ).toBeVisible();
+  await expect(page.getByText("01-run-manifest.json").first()).toBeVisible();
+  await page.getByRole("button", { name: /原始输入 \/ Source Input/ }).click();
+  const jsonSearch = page.getByLabel("搜索 JSON");
+  await jsonSearch.fill("zeusRawLogs");
+  await expect(page.getByText("1 / 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("核对该阶段字段和来源路径。")).toBeVisible();
+  await expect(page.getByRole("radio", { name: "格式化" })).toBeChecked();
+  await expect(page.getByLabel("切换长行换行")).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: /模型输入与 Skills \/ Bounded Analysis Input/,
+    })
+    .click();
+  await expect(page.getByRole("tab", { name: "模型实际可见" })).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: "Runtime 审计契约" }),
+  ).toBeVisible();
+  await page.getByLabel("搜索 JSON").fill("analysis_readiness");
+  await expect(page.getByText("1 / 1", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Runtime 审计契约" }).click();
+  await page.getByLabel("搜索 JSON").fill("projected_field_paths");
+  await expect(page.getByText("1 / 1", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const auditRegion = page.getByRole("region", {
+    name: "SOC DEV 全链路审计",
+  });
+  await auditRegion.scrollIntoViewIfNeeded();
+  await expect(auditRegion).toBeVisible();
+  await expect(
+    auditRegion.getByRole("navigation", { name: "审计阶段产物" }),
+  ).toBeVisible();
+  await expect(auditRegion.getByLabel("搜索 JSON")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.getByRole("button", { name: "提炼 Candidate" }).click();
+  await expect(page.getByLabel("补充说明（可选）")).toBeVisible();
+  await page.getByRole("button", { name: "确认提前提炼" }).click();
+  await expect(
+    page.getByText("已创建待审 Candidate MC-MANUAL-1"),
+  ).toBeVisible();
+  expect(promotionRequestBody).toEqual({});
+});
+
+test("announces a newly generated Pattern Candidate in the current alert", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  let current = corpusState();
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    if (route.request().url().endsWith("/execution")) {
+      await route.fulfill({
+        json: corpusExecution(current.readiness.processed_count > 0),
+      });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      current = corpusStateWithPatternCandidate();
+      await route.fulfill({
+        json: {
+          schema_version: "soc.corpus_dev_workbench_process.v2",
+          alert_id: "1984426",
+          run_id: "RUN-CORPUS-1",
+          observation_id: "MPO-CORPUS-1",
+          idempotent: false,
+          state: current,
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: current });
+  });
+
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByPlaceholder("Alert ID / Rule / Host / IP").fill("1984426");
+  await page.getByRole("button", { name: "运行", exact: true }).click();
+
+  await expect(
+    page.getByText("同类模式候选 MC-PATTERN-1", { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "立即审核" })).toHaveAttribute(
+    "href",
+    "/workspace/soc/review/memory-candidates/MC-PATTERN-1",
+  );
+  await expect(page.getByRole("link", { name: "审核并决定" })).toHaveCount(0);
+  await expect(page.getByText("Memory Candidate 已生成").first()).toBeVisible();
+});
+
+test("opens a used Memory correction and creates a governed revision candidate", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    if (route.request().url().endsWith("/execution")) {
+      await route.fulfill({ json: corpusExecution(true) });
+      return;
+    }
+    await route.fulfill({ json: corpusState(true) });
+  });
+  let revisionRequest: Record<string, unknown> | null = null;
+  await page.route("**/api/soc/memory/records/MEM-GALAXY**", async (route) => {
+    if (route.request().method() === "POST") {
+      revisionRequest = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      await route.fulfill({
+        json: {
+          schema_version: "soc.memory_revision_candidate_create_result.v1",
+          candidate: { candidate_id: "MC-REVISION-1" },
+          predecessor_record: {
+            ...activeMemoryRecord(),
+            version: 3,
+            retrieval_enabled: false,
+          },
+          previous_record_version: 2,
+          previous_retrieval_enabled: true,
+          audit_id: "SMA-REVISION-1",
+          created_at: "2026-08-21T08:00:00Z",
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: activeMemoryRecord() });
+  });
+
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByRole("switch", { name: "仅显示未运行告警" }).click();
+  await page.getByPlaceholder("Alert ID / Rule / Host / IP").fill("1984426");
+  await page.getByRole("link", { name: "纠正此 Memory" }).click();
+  await expect(page).toHaveURL(
+    /\/workspace\/soc\/memory\/records\/MEM-GALAXY\/revise\?run_id=RUN-CORPUS-1/,
+  );
+  await expect(
+    page.getByRole("heading", { name: "纠正 Memory" }),
+  ).toBeVisible();
+  await expect(page.getByText("RUN-CORPUS-1", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("radio", { name: "范围过宽" })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <=
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(true);
+
+  await page.getByRole("radio", { name: "范围过宽" }).click();
+  await page
+    .getByLabel("2. 说明本次发现的业务事实或反证")
+    .fill(
+      "本次告警的进程链与旧经验不同，旧 Memory 的适用范围过宽，需要重新收窄。",
+    );
+  await page
+    .getByRole("button", { name: "暂停旧 Memory 并创建修订候选" })
+    .click();
+
+  await expect.poll(() => revisionRequest).not.toBeNull();
+  expect(revisionRequest).toEqual({
+    expected_record_version: 2,
+    source_run_id: "RUN-CORPUS-1",
+    issue_type: "applicability_too_broad",
+    reason:
+      "本次告警的进程链与旧经验不同，旧 Memory 的适用范围过宽，需要重新收窄。",
+  });
+  await expect(page).toHaveURL(
+    "/workspace/soc/review/memory-candidates/MC-REVISION-1",
+  );
 });

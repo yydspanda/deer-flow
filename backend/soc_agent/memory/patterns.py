@@ -26,6 +26,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.memory.candidates import InMemoryMemoryCandidateRepository
 from soc_agent.memory.facets import reusable_facet_values
+from soc_agent.memory.lineage import project_memory_candidates_to_pattern_lineages
 from soc_agent.memory.profiles import GenericSocMemoryProfile, SocMemoryProfile
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.utils.hashing import stable_hash
@@ -108,6 +109,7 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         environment: str | None = None,
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
+        alert_id: str | None = None,
         limit: int = 500,
         offset: int = 0,
     ) -> list[MemoryPatternObservation]:
@@ -124,6 +126,8 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
             observations = [item for item in observations if item.data_class is data_class]
         if source_type is not None:
             observations = [item for item in observations if item.source.source_type is source_type]
+        if alert_id is not None:
+            observations = [item for item in observations if item.source.alert_id == alert_id]
         return sorted(
             observations,
             key=lambda item: (item.source.observed_at, item.observation_id),
@@ -231,12 +235,10 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         lineage_keys: Iterable[str],
     ) -> list[SocMemoryCandidate]:
         selected = set(lineage_keys)
-        aggregation_keys = {item.aggregation_key for item in self._pattern_observations.values() if item.lineage_key in selected}
-        source_ids = {f"memory_pattern:{item}" for item in aggregation_keys}
-        return sorted(
-            (item for item in self._candidates.values() if item.source.source_id in source_ids),
-            key=lambda item: (item.created_at, item.candidate_id),
-            reverse=True,
+        observations = [item for item in self._pattern_observations.values() if item.lineage_key in selected]
+        return project_memory_candidates_to_pattern_lineages(
+            self._candidates.values(),
+            observations,
         )
 
 

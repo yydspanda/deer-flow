@@ -555,6 +555,33 @@ export interface SocMemoryBusinessLessonDraftRequest {
   promoted_facet_keys?: string[];
 }
 
+export type SocMemoryRevisionIssueType =
+  | "incorrect_conclusion"
+  | "applicability_too_broad"
+  | "lesson_incomplete";
+
+export interface SocMemoryRevisionLineage {
+  schema_version: "soc.memory_revision_lineage.v1";
+  predecessor_memory_id: string;
+  predecessor_memory_version: number;
+  predecessor_content_hash: string;
+  predecessor_facets_hash: string;
+  suspended_record_version: number;
+  source_memory_use_id: string;
+  source_run_id: string;
+  source_alert_id: string;
+  issue_type: SocMemoryRevisionIssueType;
+  reason: string;
+  requested_at: string;
+}
+
+export interface SocMemoryRevisionCandidateCreateRequest {
+  expected_record_version: number;
+  source_run_id: string;
+  issue_type: SocMemoryRevisionIssueType;
+  reason: string;
+}
+
 export interface SocMemoryCandidate {
   schema_version: string;
   candidate_id: string;
@@ -583,6 +610,7 @@ export interface SocMemoryCandidate {
   superseded_at?: string | null;
   supersession_reason?: string | null;
   labels: string[];
+  revision_lineage?: SocMemoryRevisionLineage | null;
   metadata: Record<string, unknown>;
   proposed_by?: SocActorContext | null;
   created_at: string;
@@ -629,8 +657,22 @@ export interface SocMemoryRecord {
   deprecated_by?: SocActorContext | null;
   deprecated_at?: string | null;
   deprecation_reason?: string | null;
+  revision_lineage?: SocMemoryRevisionLineage | null;
+  superseded_by_memory_id?: string | null;
+  superseded_at?: string | null;
+  supersession_reason?: string | null;
   labels: string[];
   metadata: Record<string, unknown>;
+}
+
+export interface SocMemoryRevisionCandidateCreateResult {
+  schema_version: "soc.memory_revision_candidate_create_result.v1";
+  candidate: SocMemoryCandidate;
+  predecessor_record: SocMemoryRecord;
+  previous_record_version: number;
+  previous_retrieval_enabled: boolean;
+  audit_id?: string | null;
+  created_at: string;
 }
 
 export interface SocMemoryRecordListResponse {
@@ -948,6 +990,23 @@ export type SocCorpusWorkbenchReadiness =
   | "context_only_singleton"
   | "fingerprint_missing";
 
+export type SocCorpusOperationalLabel = "忽略" | "转交";
+export type SocCorpusProjectedDisposition =
+  | "ignore"
+  | "transfer"
+  | "undetermined";
+export type SocCorpusComparisonStatus =
+  | "matched"
+  | "mismatched"
+  | "unscored"
+  | "not_run"
+  | "unlabeled";
+export type SocCorpusLabelTemporalStatus =
+  | "valid"
+  | "label_time_missing"
+  | "label_precedes_alert"
+  | "unlabeled";
+
 export interface SocCorpusWorkbenchMemoryContext {
   context_ref: string;
   label: string;
@@ -967,9 +1026,105 @@ export interface SocCorpusWorkbenchDecisionStage {
   summary: string;
 }
 
+export type SocCorpusExecutionStatus =
+  | "not_started"
+  | "running"
+  | "analysis_complete"
+  | "completed"
+  | "failed";
+
+export type SocCorpusExecutionPhaseStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "skipped";
+
+export interface SocCorpusWorkbenchExecutionStep {
+  step_name: string;
+  label: string;
+  status: SocCorpusExecutionPhaseStatus;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  warning_count: number;
+  error?: string | null;
+}
+
+export interface SocCorpusWorkbenchExecutionPhase {
+  phase: string;
+  label: string;
+  status: SocCorpusExecutionPhaseStatus;
+  summary: string;
+  duration_ms?: number | null;
+  metrics: Record<string, string | number | boolean>;
+  steps: SocCorpusWorkbenchExecutionStep[];
+}
+
+export interface SocCorpusWorkbenchExecution {
+  schema_version: "soc.corpus_dev_execution.v1";
+  alert_id: string;
+  status: SocCorpusExecutionStatus;
+  current_phase?: string | null;
+  run_id?: string | null;
+  run_status?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  elapsed_ms?: number | null;
+  total_duration_ms?: number | null;
+  model_name?: string | null;
+  provider_purpose?: string | null;
+  provider_attempt_count: number;
+  observation_id?: string | null;
+  aggregation_key?: string | null;
+  candidate_id?: string | null;
+  phases: SocCorpusWorkbenchExecutionPhase[];
+}
+
+export type SocCorpusWorkbenchAuditArtifactStatus =
+  | "available"
+  | "partial"
+  | "unavailable";
+
+export interface SocCorpusWorkbenchAuditArtifact {
+  sequence: number;
+  artifact_id: string;
+  file_name: string;
+  phase: string;
+  title: string;
+  description: string;
+  status: SocCorpusWorkbenchAuditArtifactStatus;
+  source: "persisted_run" | "persisted_downstream" | "read_model_projection";
+  metrics: Record<string, string | number | boolean>;
+  review_guide: string[];
+  payload: Record<string, unknown>;
+}
+
+export interface SocCorpusWorkbenchAuditBundle {
+  schema_version: "soc.corpus_dev_audit_bundle.v1";
+  alert_id: string;
+  run_id: string;
+  generated_at: string;
+  pipeline_version: string;
+  model_name: string;
+  prompt_version: string;
+  input_hash?: string | null;
+  safety: {
+    dev_only: true;
+    admin_only: true;
+    contains_raw_alert_data: true;
+    contains_model_context: true;
+    reexecutes_runtime: false;
+    mutates_state: false;
+  };
+  execution: SocCorpusWorkbenchExecution;
+  artifacts: SocCorpusWorkbenchAuditArtifact[];
+}
+
 export interface SocCorpusWorkbenchAlert {
   alert_id: string;
   source_index: number;
+  sequence_number: number;
   observed_at: string;
   topic?: string | null;
   source_type: string;
@@ -995,6 +1150,7 @@ export interface SocCorpusWorkbenchAlert {
   window_end: string;
   workflow_state: "ready" | "analysis_only" | "completed" | "failed";
   can_process: boolean;
+  blocked_by_alert_id?: string | null;
   run_id?: string | null;
   analysis_status?: string | null;
   model_name?: string | null;
@@ -1020,12 +1176,28 @@ export interface SocCorpusWorkbenchAlert {
   pattern_consistency_ratio?: number | null;
   candidate_id?: string | null;
   candidate_status?: string | null;
+  manual_candidate_id?: string | null;
+  manual_candidate_status?: string | null;
   memory_id?: string | null;
   memory_status?: string | null;
   memory_contexts: SocCorpusWorkbenchMemoryContext[];
   memory_directive_applied: boolean;
   memory_effect?: string | null;
   decision_stages: SocCorpusWorkbenchDecisionStage[];
+  operational_label_available: boolean;
+  operational_label_revealed: boolean;
+  operational_label?: SocCorpusOperationalLabel | null;
+  operational_label_observed_at?: string | null;
+  operational_label_method?: string | null;
+  operational_label_reason?: string | null;
+  operational_label_status?: string | null;
+  label_temporal_status: SocCorpusLabelTemporalStatus;
+  base_operational_projection: SocCorpusProjectedDisposition;
+  effective_operational_projection: SocCorpusProjectedDisposition;
+  base_label_comparison: SocCorpusComparisonStatus;
+  effective_label_comparison: SocCorpusComparisonStatus;
+  base_projection_basis?: string | null;
+  effective_projection_basis?: string | null;
 }
 
 export interface SocCorpusWorkbenchGroup {
@@ -1046,7 +1218,7 @@ export interface SocCorpusWorkbenchGroup {
 }
 
 export interface SocCorpusWorkbenchState {
-  schema_version: "soc.corpus_dev_workbench.v1";
+  schema_version: "soc.corpus_dev_workbench.v2";
   safety: {
     environment: "dev";
     database_backend: "sqlite";
@@ -1056,11 +1228,24 @@ export interface SocCorpusWorkbenchState {
     internal_providers: "off_or_mock";
     tenant_policy: "disabled";
     external_action_execution: false;
+    memory_scope: string;
+    pattern_window_days: number;
+    replay_order: "canonical_event_time_asc_within_memory_group";
+    label_visibility: "hidden_until_runtime_decision";
   };
   source: {
     file_name: string;
     sha256: string;
     alert_count: number;
+    labeled_alert_count: number;
+    unlabeled_alert_count: number;
+    first_event_time: string;
+    last_event_time: string;
+    sort_order: "canonical_event_time_asc_alert_id_asc";
+    index_file_name?: string | null;
+    index_sha256?: string | null;
+    payload_store_file_name?: string | null;
+    payload_store_sha256?: string | null;
   };
   model: {
     mode: string;
@@ -1081,17 +1266,46 @@ export interface SocCorpusWorkbenchState {
     failed_count: number;
     memory_hit_alert_count: number;
   };
+  evaluation: {
+    label_kind: "operational_disposition";
+    label_counts: Record<string, number>;
+    temporally_valid_label_count: number;
+    temporally_invalid_label_count: number;
+    unlabeled_count: number;
+    processed_labeled_count: number;
+    base_matched_count: number;
+    base_mismatched_count: number;
+    base_unscored_count: number;
+    base_match_rate?: number | null;
+    effective_matched_count: number;
+    effective_mismatched_count: number;
+    effective_unscored_count: number;
+    effective_match_rate?: number | null;
+  };
   groups: SocCorpusWorkbenchGroup[];
   alerts: SocCorpusWorkbenchAlert[];
 }
 
 export interface SocCorpusWorkbenchProcessResult {
-  schema_version: "soc.corpus_dev_workbench_process.v1";
+  schema_version: "soc.corpus_dev_workbench_process.v2";
   alert_id: string;
   run_id?: string | null;
   observation_id?: string | null;
   idempotent: boolean;
   state: SocCorpusWorkbenchState;
+}
+
+export interface SocMemoryRunPromotionRequest {
+  note?: string;
+  confidence?: number;
+}
+
+export interface SocMemoryRunPromotionResult {
+  schema_version: "soc.memory_run_promotion_result.v1";
+  run_id: string;
+  alert_id: string;
+  memory_candidate?: SocMemoryCandidate | null;
+  memory_admission: SocMemoryAdmissionDecision;
 }
 
 export interface SocMemoryRetrievalActivationRequest {

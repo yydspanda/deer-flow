@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -14,7 +15,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 
@@ -327,24 +328,53 @@ def validate_runtime_files() -> None:
         ROOT / "temp" / "scgi_temp",
     ):
         path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "nginx",
-            "-t",
-            "-c",
-            str(LOCAL_NGINX_CONFIG),
-            "-p",
-            str(ROOT),
-        ],
-        check=True,
-    )
+    subprocess.run(build_nginx_test_command(), check=True)
 
 
-def start_runtime(*, python_executable: str, daemon: bool) -> None:
+def build_nginx_test_command(*, root: Path = ROOT) -> list[str]:
+    """Build a non-root nginx config check independent of compiled paths."""
+    return [
+        "nginx",
+        "-t",
+        "-e",
+        str(root / "logs" / "nginx-error.log"),
+        "-c",
+        str(root / "docker" / "nginx" / "nginx.local.conf"),
+        "-p",
+        str(root),
+    ]
+
+
+def start_runtime(
+    *,
+    python_executable: str,
+    daemon: bool,
+    allowed_origins: tuple[str, ...] = (),
+    local_only: bool = False,
+) -> None:
     inspect_host(python_executable=python_executable)
     validate_runtime_files()
+    resolved_origins = resolve_start_allowed_origins(
+        allowed_origins,
+        local_only=local_only,
+    )
+    if resolved_origins:
+        print("PingAn SOC LAN DEV access enabled:", flush=True)
+        for origin in resolved_origins:
+            print(f"  http://{_origin_host(origin)}:2026", flush=True)
+        print(
+            "Keep authentication enabled and allow nginx through the macOS firewall.",
+            flush=True,
+        )
     command = build_start_command(daemon=daemon)
-    os.execve(command[0], command, build_start_environment())
+    os.execve(
+        command[0],
+        command,
+        build_start_environment(
+            allowed_origins=resolved_origins,
+            force_allowed_origins_override=True,
+        ),
+    )
 
 
 def build_start_command(*, daemon: bool) -> list[str]:
@@ -352,6 +382,9 @@ def build_start_command(*, daemon: bool) -> list[str]:
         "/bin/bash",
         "-c",
         'set -a; source "$SOC_HOST_DEV_ROOT/.env.soc-dev.local"; set +a; '
+        'if [[ "${SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE+x}" == x ]]; then '
+        'export DEER_FLOW_DEV_ALLOWED_ORIGINS="$SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"; '
+        "fi; "
         'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" --dev --skip-install "$@"',
         "soc-pingan-macos-host-dev",
     ]
@@ -362,6 +395,9 @@ def build_start_command(*, daemon: bool) -> list[str]:
 
 def build_start_environment(
     base: dict[str, str] | None = None,
+    *,
+    allowed_origins: tuple[str, ...] = (),
+    force_allowed_origins_override: bool = False,
 ) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     env.update(
@@ -373,7 +409,115 @@ def build_start_environment(
             "UV_OFFLINE": "1",
         }
     )
+    normalized_origins = normalize_allowed_origins(allowed_origins)
+    if normalized_origins or force_allowed_origins_override:
+        env["SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"] = ",".join(normalized_origins)
+    else:
+        env.pop("SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE", None)
     return env
+
+
+def resolve_start_allowed_origins(
+    allowed_origins: tuple[str, ...],
+    *,
+    local_only: bool,
+    discovered_lan_origins: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    """Resolve the exact DEV hosts Next.js may serve on the internal LAN."""
+
+    if local_only:
+        if normalize_allowed_origins(allowed_origins):
+            raise HostDevError("--local-only cannot be combined with --allowed-origin")
+        return ()
+    discovered = (
+        discover_private_lan_ipv4s()
+        if discovered_lan_origins is None
+        else discovered_lan_origins
+    )
+    resolved = normalize_allowed_origins((*discovered, *allowed_origins))
+    if not resolved:
+        raise HostDevError(
+            "cannot detect a private LAN IPv4; use --allowed-origin HOST or "
+            "--local-only"
+        )
+    return resolved
+
+
+def discover_private_lan_ipv4s(
+    command_output: Callable[[tuple[str, ...]], str | None] | None = None,
+) -> tuple[str, ...]:
+    """Discover private IPv4 addresses on the macOS default/en* interfaces."""
+
+    output = command_output or _optional_command_output
+    route_output = output(("route", "-n", "get", "default")) or ""
+    route_match = re.search(r"^\s*interface:\s*(\S+)\s*$", route_output, re.MULTILINE)
+    interfaces = [route_match.group(1)] if route_match is not None else []
+    interfaces.extend(("en0", "en1"))
+
+    addresses: list[str] = []
+    for interface in dict.fromkeys(interfaces):
+        direct = output(("ipconfig", "getifaddr", interface))
+        candidates = [direct.strip()] if direct and direct.strip() else []
+        interface_output = output(("ifconfig", interface)) or ""
+        candidates.extend(
+            re.findall(
+                r"^\s*inet\s+(\d+(?:\.\d+){3})\b", interface_output, re.MULTILINE
+            )
+        )
+        for candidate in candidates:
+            if _is_private_lan_ipv4(candidate) and candidate not in addresses:
+                addresses.append(candidate)
+    return tuple(addresses)
+
+
+def _optional_command_output(command: tuple[str, ...]) -> str | None:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def _is_private_lan_ipv4(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return bool(
+        address.version == 4
+        and address.is_private
+        and not address.is_loopback
+        and not address.is_link_local
+        and not address.is_unspecified
+    )
+
+
+def _origin_host(value: str) -> str:
+    parsed = urlparse(value if "://" in value else f"http://{value}")
+    return parsed.hostname or value
+
+
+def normalize_allowed_origins(values: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate explicit LAN DEV origins before forwarding them to Next.js."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        for raw_entry in raw_value.split(","):
+            entry = raw_entry.strip()
+            if not entry:
+                continue
+            if any(character in entry for character in ("\r", "\n", "\x00")):
+                raise HostDevError("allowed DEV origin contains a control character")
+            if entry in seen:
+                continue
+            seen.add(entry)
+            normalized.append(entry)
+    return tuple(normalized)
 
 
 def stop_runtime() -> None:
@@ -475,6 +619,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "start", help="start native DEV without dependency sync"
     )
     start.add_argument("--daemon", action="store_true")
+    start.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=[],
+        metavar="HOST_OR_URL",
+        help=(
+            "allow one LAN host or URL to load Next.js DEV assets/HMR; repeat for "
+            "multiple hosts"
+        ),
+    )
+    start.add_argument(
+        "--local-only",
+        action="store_true",
+        help="disable automatic trusted-LAN access and bind browser use to localhost",
+    )
     subparsers.add_parser("stop", help="stop native DEV services")
     return parser.parse_args(argv)
 
@@ -487,7 +646,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "install":
             result = install_dependencies(python_executable=args.python)
         elif args.action == "start":
-            start_runtime(python_executable=args.python, daemon=args.daemon)
+            start_runtime(
+                python_executable=args.python,
+                daemon=args.daemon,
+                allowed_origins=tuple(args.allowed_origin),
+                local_only=args.local_only,
+            )
             return 0
         else:
             stop_runtime()

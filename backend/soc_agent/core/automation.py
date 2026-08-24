@@ -386,7 +386,11 @@ class SocAutomationService:
     ) -> list[tuple[SocMemoryRecord, SocAutomationContributorRef]]:
         if self._memory_repository is None or run.llm_analysis_request is None:
             return []
-        eligible: list[tuple[SocMemoryRecord, SocAutomationContributorRef]] = []
+        eligible_by_memory: dict[
+            tuple[str, int],
+            tuple[SocMemoryRecord, SocAutomationContributorRef],
+        ] = {}
+        rank_by_memory: dict[tuple[str, int], tuple[float, str]] = {}
         for item in run.llm_analysis_request.context_catalog:
             if item.kind is not AnalysisContextReferenceKind.CONFIRMED_MEMORY:
                 continue
@@ -418,21 +422,24 @@ class SocAutomationService:
                 matched_facets = {}
             if any(key not in matched_facets or not matched_facets[key] for key in directive.required_facet_keys):
                 continue
-            eligible.append(
-                (
-                    record,
-                    SocAutomationContributorRef(
-                        kind=SocAutomationContributorKind.CONFIRMED_MEMORY,
-                        role=(SocAutomationContributorRole.OVERRIDES if directive.effect is SocMemoryDecisionEffect.OVERRIDE else SocAutomationContributorRole.SUPPORTS),
-                        ref_id=item.context_ref,
-                        version=str(record.version),
-                        content_hash=record.content_hash,
-                        score=float(score),
-                        detail=directive.rationale,
-                    ),
-                )
+            identity = (record.memory_id, record.version)
+            rank = (-float(score), item.context_ref)
+            if identity in rank_by_memory and rank >= rank_by_memory[identity]:
+                continue
+            rank_by_memory[identity] = rank
+            eligible_by_memory[identity] = (
+                record,
+                SocAutomationContributorRef(
+                    kind=SocAutomationContributorKind.CONFIRMED_MEMORY,
+                    role=(SocAutomationContributorRole.OVERRIDES if directive.effect is SocMemoryDecisionEffect.OVERRIDE else SocAutomationContributorRole.SUPPORTS),
+                    ref_id=item.context_ref,
+                    version=str(record.version),
+                    content_hash=record.content_hash,
+                    score=float(score),
+                    detail=directive.rationale,
+                ),
             )
-        return eligible
+        return list(eligible_by_memory.values())
 
     def _tenant_policy_outcome(
         self,

@@ -453,16 +453,18 @@ def _fixture() -> MemoryHeldOutEvalFixture:
         shell_record.memory_id: MemoryEvalRelationship.UNRELATED,
         web_record.memory_id: MemoryEvalRelationship.UNRELATED,
     }
+    profile_identity = shell_record.applicability
+    assert profile_identity is not None
     return MemoryHeldOutEvalFixture(
-        fixture_set_id="pingan-memory-profile-v4-simulation",
+        fixture_set_id="pingan-memory-profile-v6-simulation",
         description=("Simulation-only exact, context-only, and different-service rejection Memory evaluation."),
         data_class=SocEvaluationDataClass.SIMULATION,
         mocked=True,
         tenant_id="pingan",
         environment="prd",
-        memory_profile_id="pingan.soc",
-        memory_profile_version="4",
-        memory_feature_schema_version="pingan.soc.memory_features.v4",
+        memory_profile_id=profile_identity.profile_id,
+        memory_profile_version=profile_identity.profile_version,
+        memory_feature_schema_version=(profile_identity.feature_schema_version),
         evaluated_at=_NOW,
         source_refs=["backend/tests/test_soc_memory_eval.py"],
         records=[
@@ -581,7 +583,7 @@ def test_default_memory_eval_fixture_is_the_reviewed_simulation_baseline() -> No
 
     report = run_memory_eval(fixture)
 
-    assert fixture.fixture_set_id == "pingan-memory-profile-v4-simulation"
+    assert fixture.fixture_set_id == "pingan-memory-profile-v6-simulation"
     assert fixture.data_class is SocEvaluationDataClass.SIMULATION
     shell_record = fixture.records[0].record
     assert "平安内部 AskBob LLM 服务调用" in shell_record.content

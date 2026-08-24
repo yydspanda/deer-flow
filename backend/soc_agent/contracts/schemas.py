@@ -351,6 +351,12 @@ class SocMemoryRetrievalActivationAction(StrEnum):
     DISABLE = "disable"
 
 
+class SocMemoryRevisionIssueType(StrEnum):
+    INCORRECT_CONCLUSION = "incorrect_conclusion"
+    APPLICABILITY_TOO_BROAD = "applicability_too_broad"
+    LESSON_INCOMPLETE = "lesson_incomplete"
+
+
 SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION = "soc.memory_retrieval_activation_policy.v1"
 
 
@@ -727,6 +733,7 @@ class SocMemoryCandidateSourceType(StrEnum):
     MANUAL_NOTE = "manual_note"
     REVIEW_NOTE = "review_note"
     REPEATED_PATTERN = "repeated_pattern"
+    MEMORY_REVISION = "memory_revision"
     EVAL_FIXTURE = "eval_fixture"
 
 
@@ -1809,6 +1816,33 @@ class SocMemoryCandidateValidity(BaseModel):
         return self
 
 
+class SocMemoryRevisionLineage(BaseModel):
+    """Immutable predecessor and source-run identity for one Memory revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_revision_lineage.v1"] = "soc.memory_revision_lineage.v1"
+    predecessor_memory_id: str = Field(min_length=1, max_length=64)
+    predecessor_memory_version: int = Field(ge=1)
+    predecessor_content_hash: str = Field(min_length=1, max_length=128)
+    predecessor_facets_hash: str = Field(min_length=1, max_length=128)
+    suspended_record_version: int = Field(ge=1)
+    source_memory_use_id: str = Field(min_length=1, max_length=64)
+    source_run_id: str = Field(min_length=1, max_length=64)
+    source_alert_id: str = Field(min_length=1, max_length=128)
+    issue_type: SocMemoryRevisionIssueType
+    reason: str = Field(min_length=10, max_length=4000)
+    requested_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_revision_reason(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 10:
+            raise ValueError("memory revision reason must be substantive")
+        return normalized
+
+
 class SocMemoryCandidateCreateCommand(BaseModel):
     """Command to propose candidate SOC knowledge without confirming it."""
 
@@ -1828,7 +1862,29 @@ class SocMemoryCandidateCreateCommand(BaseModel):
     decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.NONE
     review_owner: str | None = None
     labels: list[str] = Field(default_factory=list)
+    revision_lineage: SocMemoryRevisionLineage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocMemoryRevisionCandidateCreateCommand(BaseModel):
+    """Create a governed successor candidate from one exact Memory use."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_revision_candidate_create_command.v1"] = "soc.memory_revision_candidate_create_command.v1"
+    memory_id: str = Field(min_length=1, max_length=64)
+    expected_record_version: int = Field(ge=1)
+    source_run_id: str = Field(min_length=1, max_length=64)
+    issue_type: SocMemoryRevisionIssueType
+    reason: str = Field(min_length=10, max_length=4000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_revision_candidate_reason(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 10:
+            raise ValueError("memory revision reason must be substantive")
+        return normalized
 
 
 class MemoryAdmissionDecision(BaseModel):
@@ -1932,6 +1988,7 @@ class SocMemoryCandidate(BaseModel):
     superseded_at: datetime | None = None
     supersession_reason: str | None = Field(default=None, max_length=2000)
     labels: list[str] = Field(default_factory=list)
+    revision_lineage: SocMemoryRevisionLineage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     proposed_by: ActorContext | None = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -2001,8 +2058,26 @@ class SocMemoryRecord(BaseModel):
     deprecated_by: ActorContext | None = None
     deprecated_at: datetime | None = None
     deprecation_reason: str | None = None
+    revision_lineage: SocMemoryRevisionLineage | None = None
+    superseded_by_memory_id: str | None = Field(default=None, max_length=64)
+    superseded_at: datetime | None = None
+    supersession_reason: str | None = Field(default=None, max_length=2000)
     labels: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocMemoryRevisionCandidateCreateResult(BaseModel):
+    """Auditable suspension and successor-candidate creation result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_revision_candidate_create_result.v1"] = "soc.memory_revision_candidate_create_result.v1"
+    candidate: SocMemoryCandidate
+    predecessor_record: SocMemoryRecord
+    previous_record_version: int = Field(ge=1)
+    previous_retrieval_enabled: bool
+    audit_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class SocMemoryRetrievalActivationCommand(BaseModel):
@@ -4586,6 +4661,37 @@ class ReviewNoteResult(BaseModel):
     memory_admission: MemoryAdmissionDecision | None = None
 
 
+class SocMemoryRunPromotionCommand(BaseModel):
+    """Explicit analyst request to promote one completed run for Memory review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=12_000)
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("note")
+    @classmethod
+    def normalize_promotion_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        return normalized or None
+
+
+class SocMemoryRunPromotionResult(BaseModel):
+    """Auditable result of a manual run-to-candidate admission attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_run_promotion_result.v1"] = "soc.memory_run_promotion_result.v1"
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    memory_candidate: SocMemoryCandidate | None = None
+    memory_admission: MemoryAdmissionDecision
+
+
 class PipelineStepTrace(BaseModel):
     step_name: str
     status: PipelineStepStatus
@@ -4823,6 +4929,7 @@ class AnalysisRun(BaseModel):
     ended_at: datetime | None = None
     total_duration_ms: int | None = Field(default=None, ge=0)
     steps: list[PipelineStepTrace] = Field(default_factory=list)
+    normalized_alert: AlertInput | None = None
     entities: ExtractedEntities | None = None
     normalization_report: NormalizationReport | None = None
     normalization_monitoring_result: NormalizationMonitoringResult | None = None

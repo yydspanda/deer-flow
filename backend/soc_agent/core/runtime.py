@@ -144,6 +144,7 @@ def analyze_alert(
     try:
         alert = _run_step(run, "normalize", payload, _normalize_alert)
         run.alert_id = alert.alert_id
+        run.normalized_alert = alert
         run.normalization_report = _normalization_report(alert)
         entities = _run_step(run, "entity_extract", alert, extract_entities)
         run.entities = entities

@@ -203,6 +203,9 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
     page.getByRole("heading", { name: "SOC Memory Center" }),
   ).toBeVisible();
   await expect(
+    page.getByRole("link", { name: /审核 Memory Candidate/ }),
+  ).toHaveAttribute("data-variant", "default");
+  await expect(
     page.getByText("Sliver 远控木马心跳重复模式").first(),
   ).toBeVisible();
   await expect(
@@ -221,14 +224,14 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
   ).toBeVisible();
   await expect(page.getByText("GalaxyLab Cohort")).toHaveCount(0);
   await expect(
-    page.getByRole("link", { name: "查看治理详情" }),
+    page.getByRole("link", { name: "查看治理记录" }),
   ).toHaveAttribute(
     "href",
     "/workspace/soc/review/memory-candidates/MC-93413A392B09",
   );
   await expect(
-    page.getByRole("link", { name: "GalaxyLab 闭环" }),
-  ).toHaveAttribute("href", "/workspace/soc/dev/memory-validation/galaxylab");
+    page.getByRole("link", { name: "查看治理记录" }),
+  ).toHaveAttribute("data-variant", "secondary");
   expect(detailRequests).toHaveLength(1);
   expect(detailRequests[0]?.searchParams.get("include_observations")).toBe(
     "false",

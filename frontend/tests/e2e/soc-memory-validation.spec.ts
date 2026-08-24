@@ -40,7 +40,7 @@ function alert(index: number, processed: boolean) {
     run_id: processed ? "RUN-MEMORY-DEV-001" : null,
     analysis_status: processed ? "needs_review" : null,
     model_name: processed ? "fixture-model" : null,
-    prompt_version: processed ? "soc-analysis-v34" : null,
+    prompt_version: processed ? "soc-analysis-v35" : null,
     total_duration_ms: processed ? 1240 : null,
     output_quality: processed ? "accepted" : null,
     base_verdict: processed ? "suspicious" : null,
@@ -255,9 +255,7 @@ test("links a queue-less Pattern Candidate to standalone memory review", async (
   await expect(
     page.getByText("MC-206BBCE75A96", { exact: false }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: /审核 Candidate/ }),
-  ).toHaveAttribute(
+  await expect(page.getByRole("link", { name: /审核并决定/ })).toHaveAttribute(
     "href",
     "/workspace/soc/review/memory-candidates/MC-206BBCE75A96",
   );

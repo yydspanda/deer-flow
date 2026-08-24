@@ -46,7 +46,7 @@ from soc_agent.memory import (
 )
 from soc_agent.utils.hashing import stable_hash
 
-DEFAULT_MEMORY_EVAL_FIXTURE = Path(__file__).resolve().parents[2] / "samples/eval/memory/pingan_profile_v4_simulation_v1.json"
+DEFAULT_MEMORY_EVAL_FIXTURE = Path(__file__).resolve().parents[2] / "samples/eval/memory/pingan_profile_v6_simulation_v1.json"
 
 
 class MemoryEvalRelationship(StrEnum):
@@ -590,6 +590,7 @@ def run_memory_eval(fixture: MemoryHeldOutEvalFixture) -> MemoryHeldOutEvalRepor
         memory_repository.save_memory_record(item.record)
     memory_service = SocMemoryService(
         record_repository=memory_repository,
+        profile_registry=registry,
         now_provider=lambda: fixture.evaluated_at,
     )
     automation_repository = InMemorySocAutomationRepository()

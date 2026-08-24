@@ -17,6 +17,11 @@ from soc_agent.memory.lessons import (
     render_memory_business_lesson,
     resolve_memory_business_lesson,
 )
+from soc_agent.memory.lineage import (
+    memory_candidate_lineage_key,
+    memory_pattern_lineage_metadata,
+    project_memory_candidates_to_pattern_lineages,
+)
 from soc_agent.memory.patterns import (
     InMemoryMemoryPatternRepository,
     MemoryPatternIneligibleError,
@@ -43,6 +48,7 @@ from soc_agent.memory.sources import (
     memory_candidate_command_from_correction,
     memory_candidate_command_from_domain_finding,
     memory_candidate_command_from_review_note,
+    memory_candidate_command_from_run_promotion,
 )
 
 __all__ = [
@@ -66,13 +72,17 @@ __all__ = [
     "memory_candidate_command_from_correction",
     "memory_candidate_command_from_domain_finding",
     "memory_candidate_command_from_review_note",
+    "memory_candidate_command_from_run_promotion",
     "memory_facets_from_analysis_request",
     "memory_facets_from_analysis_run",
     "memory_lesson_applicability_conditions",
     "memory_lesson_invalidation_conditions",
+    "memory_candidate_lineage_key",
+    "memory_pattern_lineage_metadata",
     "promote_memory_applicability_facets",
     "memory_query_from_analysis_request",
     "memory_pattern_command_from_run",
+    "project_memory_candidates_to_pattern_lineages",
     "merge_memory_facets",
     "render_memory_business_lesson",
     "resolve_memory_business_lesson",

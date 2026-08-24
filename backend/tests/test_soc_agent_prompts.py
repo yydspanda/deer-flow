@@ -49,7 +49,7 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert "Alert admission is a trusted scoped fact" in prompt.system
     assert "Do not require another source to prove that the detection hit occurred" in prompt.system
     assert "Missing duplicate SYN, flow, PCAP, CMDB, endpoint, or tool corroboration" in prompt.system
-    assert "routine bounded omission is not automatically material" in prompt.system
+    assert "documented routine omission is not automatically material" in prompt.system
     assert "Always give the best current verdict when optional enrichment is missing" in prompt.system
     assert "Do not copy evidence paths or values" in prompt.system
     assert "evidence" not in prompt.response_schema
@@ -190,11 +190,39 @@ def test_analysis_prompt_projects_only_selected_low_trust_structured_fallback() 
     primary = prompt.context["evidence"]["primary_evidence"]
     assert primary["layer"] == "raw_structured"
     assert primary["source_path"] == "alert.hitLog[0].zeusRawLogs[0]"
+    assert primary["content_format"] == "json"
+    assert isinstance(primary["content"], dict)
+    assert primary["projection"]["status"] == "complete_within_budget"
+    assert primary["projection"]["visible_field_count"] > 0
     assert "process__cmd_line" in primary["content"]
     assert "finding__desc" in primary["content"]
     assert "relatedAlertList" not in primary["content"]
     assert "hitLog" not in primary["content"]
     assert "zeusRawLogs" in user_prompt
+
+
+def test_analysis_prompt_exposes_readable_model_coverage_without_audit_paths() -> None:
+    prompt = build_analysis_prompt(_analysis_request("pingan_legacy_hids.json"))
+
+    coverage = prompt.context["evidence"]["coverage"]
+    assert coverage["analysis_readiness"] == {
+        "status": "ready",
+        "summary": "当前主要证据已进入模型上下文；常规预算省略不代表关键证据缺失。",
+        "high_value_gap_count": 0,
+    }
+    assert coverage["message_parsing"]["recognized_count"] == 1
+    assert coverage["message_parsing"]["parsers"][0] == {
+        "parser": "pingan_loose_kv",
+        "status": "recognized",
+        "parsed_field_count": 6,
+        "warning_count": 0,
+    }
+    assert coverage["model_projection"]["visible_field_count"] == 6
+    serialized = json.dumps(prompt.context, ensure_ascii=False)
+    assert "schema_fingerprint" not in serialized
+    assert "projected_field_paths" not in serialized
+    assert "omitted_field_paths" not in serialized
+    assert '"content": {' in prompt.user
 
 
 def test_analysis_prompt_handles_missing_evidence_policy() -> None:

@@ -26,6 +26,27 @@ from soc_agent.memory.facets import (
 )
 from soc_agent.utils.hashing import stable_hash
 
+_GENERIC_PATTERN_FACET_KEYS = (
+    "source_type",
+    "source_system",
+    "product",
+    "detection_key",
+    "rule_code",
+    "rule_name",
+    "category",
+    "severity",
+    "environment",
+    "entity",
+    "conflict_type",
+    "skill",
+    "scenario_key",
+    "role_entity",
+    "network_service",
+    "vulnerability_id",
+    "behavior_component",
+    "behavior_fingerprint",
+)
+
 
 @dataclass(frozen=True)
 class SocMemoryProfileIdentity:
@@ -34,6 +55,11 @@ class SocMemoryProfileIdentity:
     profile_id: str
     profile_version: str
     feature_schema_version: str
+    aggregation_window_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.aggregation_window_seconds is not None and not (300 <= self.aggregation_window_seconds <= 2_592_000):
+            raise ValueError("SOC memory profile aggregation window must be between 5 minutes and 30 days")
 
 
 class SocMemoryProfile(Protocol):
@@ -76,14 +102,21 @@ class SocMemoryProfile(Protocol):
         strong_anchor_facets: dict[str, list[str]],
     ) -> SocMemoryApplicabilitySpec | None: ...
 
+    def retrieval_conflict_reasons(
+        self,
+        *,
+        record_facets: dict[str, list[str]],
+        query_facets: dict[str, list[str]],
+    ) -> list[str]: ...
+
 
 class GenericSocMemoryProfile:
     """Portable fallback with conservative, vendor-neutral semantics."""
 
     identity = SocMemoryProfileIdentity(
         profile_id="soc.generic",
-        profile_version="1",
-        feature_schema_version="soc.memory_features.generic.v1",
+        profile_version="2",
+        feature_schema_version="soc.memory_features.generic.v2",
     )
 
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
@@ -110,13 +143,14 @@ class GenericSocMemoryProfile:
         request = run.llm_analysis_request
         if request is None:
             raise ValueError("bounded analysis request is required")
+        signature_facets = _generic_pattern_facets(facets)
         if request.detection.detection_key:
             return MemoryPatternSignature(
                 dimension=MemoryPatternDimension.DETECTION,
                 value=_normalize_pattern_value(request.detection.detection_key),
                 label=request.detection.rule_name or request.detection.detection_key,
                 origin="canonical_detection",
-                facets=facets,
+                facets=signature_facets,
             )
         behavior = facets.get("behavior_fingerprint", [])
         if behavior:
@@ -125,7 +159,7 @@ class GenericSocMemoryProfile:
                 value=_normalize_pattern_value(behavior[0]),
                 label="Canonical behavior fingerprint",
                 origin=self.identity.feature_schema_version,
-                facets=facets,
+                facets=signature_facets,
             )
         primary = next(
             (item for item in (run.analysis.scenario_assessments if run.analysis else []) if item.is_primary),
@@ -137,11 +171,13 @@ class GenericSocMemoryProfile:
                 value=_normalize_pattern_value(primary.scenario_key or primary.scenario_name),
                 label=primary.scenario_name,
                 origin=f"analysis:{primary.origin.value}",
-                facets={
-                    **facets,
-                    "scenario_origin": [primary.origin.value],
-                    "activity_stage": [primary.activity_stage.value],
-                },
+                facets=_generic_pattern_facets(
+                    facets,
+                    extras={
+                        "scenario_origin": [primary.origin.value],
+                        "activity_stage": [primary.activity_stage.value],
+                    },
+                ),
             )
         if request.classification.category:
             return MemoryPatternSignature(
@@ -149,7 +185,7 @@ class GenericSocMemoryProfile:
                 value=_normalize_pattern_value(request.classification.category),
                 label=request.classification.category,
                 origin="canonical_category",
-                facets=facets,
+                facets=signature_facets,
             )
         raise ValueError("Runtime result has no detection, behavior, primary scenario, or category")
 
@@ -215,6 +251,16 @@ class GenericSocMemoryProfile:
             minimum_strong_anchor_matches=1,
         )
 
+    def retrieval_conflict_reasons(
+        self,
+        *,
+        record_facets: dict[str, list[str]],
+        query_facets: dict[str, list[str]],
+    ) -> list[str]:
+        """Leave tenant-specific semantic exclusions to a registered profile."""
+
+        return []
+
 
 class SocMemoryProfileRegistry:
     """Resolve one server-owned profile; caller input cannot select it."""
@@ -257,6 +303,18 @@ def _normalize_pattern_value(value: str) -> str:
     if len(normalized) <= 256:
         return normalized
     return f"sha256:{stable_hash(normalized)}"
+
+
+def _generic_pattern_facets(
+    facets: dict[str, list[str]],
+    *,
+    extras: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    projected = {key: list(facets[key]) for key in _GENERIC_PATTERN_FACET_KEYS if facets.get(key)}
+    for key, values in (extras or {}).items():
+        if values and len(projected) < 20:
+            projected[key] = list(values)
+    return projected
 
 
 def _first_facet_group(

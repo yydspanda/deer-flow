@@ -2576,7 +2576,11 @@ def _memory_search(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
         query = _memory_query_from_args(args)
-        result = SocMemoryService(candidate_repository=repository, record_repository=repository).find_relevant_records(query)
+        result = SocMemoryService(
+            candidate_repository=repository,
+            record_repository=repository,
+            profile_registry=build_soc_memory_profile_registry(),
+        ).find_relevant_records(query)
         if args.baseline_json:
             baseline = _load_memory_retrieval_result(args.baseline_json)
             result = result.model_copy(update={"replay_diff": build_memory_retrieval_diff(baseline, result)})

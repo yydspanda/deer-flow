@@ -15,6 +15,8 @@ def _command(
     *,
     source_type: SocMemoryCandidateSourceType,
     source_metadata: dict | None = None,
+    source_run_id: str | None = None,
+    source_alert_id: str | None = None,
     metadata: dict | None = None,
     facets: dict[str, list[str]] | None = None,
 ) -> SocMemoryCandidateCreateCommand:
@@ -26,6 +28,8 @@ def _command(
         source=SocMemoryCandidateSource(
             source_type=source_type,
             source_id="SRC-ADMISSION-1",
+            run_id=source_run_id,
+            alert_id=source_alert_id,
             metadata=source_metadata or {},
         ),
         evidence_refs=["review:SRC-ADMISSION-1"],
@@ -71,6 +75,26 @@ def test_explicitly_promoted_correction_with_reason_and_anchor_is_admitted() -> 
     assert decision.status.value == "admitted"
     assert decision.quality_score == 1.0
     assert "explicit_promotion_requested" in {reason.value for reason in decision.reason_codes}
+
+
+def test_explicit_run_promotion_action_does_not_require_a_free_text_reason() -> None:
+    decision = MemoryAdmissionService().evaluate(
+        _command(
+            source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
+            source_metadata={
+                "promote_to_memory": True,
+                "promotion_action": "run_to_candidate",
+                "note_length": 0,
+            },
+            source_run_id="RUN-ADMISSION-1",
+            source_alert_id="ALERT-ADMISSION-1",
+            facets={"detection_key": ["nids:reverse-shell"]},
+        )
+    )
+
+    assert decision.status.value == "admitted"
+    assert "explicit_promotion_requested" in {reason.value for reason in decision.reason_codes}
+    assert "weak_or_missing_reason" not in {reason.value for reason in decision.reason_codes}
 
 
 def test_confirmation_only_does_not_create_one_candidate_per_alert() -> None:

@@ -1,0 +1,1466 @@
+{
+  "schema_version": "soc.memory_heldout_eval_fixture.v1",
+  "fixture_set_id": "pingan-memory-profile-v6-simulation",
+  "description": "Simulation-only exact, context-only, and different-service rejection Memory evaluation.",
+  "data_class": "simulation",
+  "mocked": true,
+  "tenant_id": "pingan",
+  "environment": "prd",
+  "memory_profile_id": "pingan.soc",
+  "memory_profile_version": "6",
+  "memory_feature_schema_version": "pingan.soc.memory_features.v5",
+  "evaluated_at": "2026-08-16T08:00:00Z",
+  "source_refs": [
+    "backend/tests/test_soc_memory_eval.py"
+  ],
+  "records": [
+    {
+      "record": {
+        "schema_version": "soc.memory_record.v1",
+        "memory_id": "MEM-SHELL-0001",
+        "version": 1,
+        "memory_type": "detection_lesson",
+        "target_artifact": "tenant_memory",
+        "status": "confirmed",
+        "tenant_scope": "pingan",
+        "tenant_id": "pingan",
+        "source_candidate_id": "MC-MEM-SHELL-0001",
+        "source": {
+          "source_type": "eval_fixture",
+          "source_surface": null,
+          "source_id": "fixture:MEM-SHELL-0001",
+          "source_doc": null,
+          "source_section": null,
+          "capability_card_id": null,
+          "run_id": null,
+          "alert_id": "TRAIN-SHELL",
+          "queue_id": null,
+          "thread_id": null,
+          "message_id": null,
+          "correction_id": null,
+          "eval_sample_id": null,
+          "metadata": {
+            "source_alert_ids": [
+              "TRAIN-SHELL"
+            ]
+          }
+        },
+        "summary": "该模式是平安内部 AskBob LLM 服务调用，不是真实反弹 Shell。",
+        "content": "结论 / Conclusion:\n- 该模式是平安内部 AskBob LLM 服务调用，不是真实反弹 Shell。\n业务依据 / Business rationale:\n- canonical URL 为 https://paic.com.cn/pws/askbob-gpt，并命中经审核的内部系统知识；检测规则真实触发，但该业务通信不代表主机被控。\n适用条件 / Applicability:\n- PRD 环境、相同 rule_code 与检测器签名、相同强行为指纹，并且当前告警包含完全一致的 AskBob canonical URL 实体。\n泛化边界 / Generalization boundaries:\n- 源和目的 IP 可以变化，IP 不是该业务服务身份的一部分。\n失效条件 / Invalidation conditions:\n- URL 不同或缺失、目标为未知或外部服务、行为指纹变化，或者出现真实 Shell 进程、命令执行、恶意载荷及其他反证。\n处置建议 / Handling guidance:\n- 只有全部必需条件满足时才复用 false_positive；否则仅作参考或完全不召回，并按当前告警重新研判。",
+        "business_lesson": {
+          "schema_version": "soc.memory_business_lesson.v1",
+          "conclusion": "该模式是平安内部 AskBob LLM 服务调用，不是真实反弹 Shell。",
+          "business_rationale": [
+            "canonical URL 为 https://paic.com.cn/pws/askbob-gpt，并命中经审核的内部系统知识；检测规则真实触发，但该业务通信不代表主机被控。"
+          ],
+          "applicability_conditions": [
+            "PRD 环境、相同 rule_code 与检测器签名、相同强行为指纹，并且当前告警包含完全一致的 AskBob canonical URL 实体。"
+          ],
+          "generalization_boundaries": [
+            "源和目的 IP 可以变化，IP 不是该业务服务身份的一部分。"
+          ],
+          "invalidation_conditions": [
+            "URL 不同或缺失、目标为未知或外部服务、行为指纹变化，或者出现真实 Shell 进程、命令执行、恶意载荷及其他反证。"
+          ],
+          "handling_guidance": [
+            "只有全部必需条件满足时才复用 false_positive；否则仅作参考或完全不召回，并按当前告警重新研判。"
+          ]
+        },
+        "facets": {
+          "source_type": [
+            "nids"
+          ],
+          "source_system": [
+            "ptp-nids"
+          ],
+          "vendor": [
+            "pingan"
+          ],
+          "product": [
+            "ndr"
+          ],
+          "integration_name": [
+            "pingan_legacy_alert_platform"
+          ],
+          "detection_key": [
+            "ptp-nids:rule_code:rpaadm_002638"
+          ],
+          "rule_code": [
+            "rpaadm_002638"
+          ],
+          "rule_name": [
+            "Reverse connection detector"
+          ],
+          "category": [
+            "command_and_control"
+          ],
+          "severity": [
+            "high"
+          ],
+          "environment": [
+            "prd"
+          ],
+          "entity": [
+            "domain:paic.com.cn",
+            "url:https://paic.com.cn/pws/askbob-gpt"
+          ],
+          "scenario_key": [
+            "reverse_shell"
+          ],
+          "behavior_component": [
+            "attack_family:command_and_control",
+            "protocol:tcp",
+            "scenario:reverse_shell",
+            "technique:t1059",
+            "technique:t1071"
+          ],
+          "behavior_fingerprint": [
+            "be16cb63713150eceeb3a80f044e0eaf921f8f75d029fe63466e89fca1ad43c8"
+          ],
+          "detection_signature": [
+            "b75e2abca87ff894741f6de0fa08efe17920c5afa7316971f6ca02728a589e56"
+          ],
+          "attack_behavior_family": [
+            "command_and_control"
+          ],
+          "behavior_component_core": [
+            "attack_family:command_and_control",
+            "protocol:tcp",
+            "scenario:reverse_shell",
+            "technique:t1059",
+            "technique:t1071"
+          ],
+          "behavior_component_strong": [
+            "scenario:reverse_shell",
+            "technique:t1059",
+            "technique:t1071"
+          ],
+          "behavior_component_weak": [
+            "attack_family:command_and_control",
+            "protocol:tcp"
+          ],
+          "behavior_strength": [
+            "strong"
+          ]
+        },
+        "applicability": {
+          "schema_version": "soc.memory_applicability.v1",
+          "profile_id": "pingan.soc",
+          "profile_version": "6",
+          "feature_schema_version": "pingan.soc.memory_features.v5",
+          "required_facets": {
+            "detection_key": [
+              "ptp-nids:rule_code:rpaadm_002638"
+            ],
+            "detection_signature": [
+              "b75e2abca87ff894741f6de0fa08efe17920c5afa7316971f6ca02728a589e56"
+            ],
+            "behavior_fingerprint": [
+              "be16cb63713150eceeb3a80f044e0eaf921f8f75d029fe63466e89fca1ad43c8"
+            ],
+            "behavior_strength": [
+              "strong"
+            ],
+            "environment": [
+              "prd"
+            ],
+            "entity": [
+              "url:https://paic.com.cn/pws/askbob-gpt"
+            ]
+          },
+          "optional_facets": {
+            "source_type": [
+              "nids"
+            ],
+            "source_system": [
+              "ptp-nids"
+            ],
+            "product": [
+              "ndr"
+            ],
+            "scenario_key": [
+              "reverse_shell"
+            ],
+            "behavior_component": [
+              "attack_family:command_and_control",
+              "protocol:tcp",
+              "scenario:reverse_shell",
+              "technique:t1059",
+              "technique:t1071"
+            ],
+            "behavior_component_core": [
+              "attack_family:command_and_control",
+              "protocol:tcp",
+              "scenario:reverse_shell",
+              "technique:t1059",
+              "technique:t1071"
+            ],
+            "behavior_component_strong": [
+              "scenario:reverse_shell",
+              "technique:t1059",
+              "technique:t1071"
+            ],
+            "behavior_component_weak": [
+              "attack_family:command_and_control",
+              "protocol:tcp"
+            ],
+            "attack_behavior_family": [
+              "command_and_control"
+            ]
+          },
+          "excluded_facets": {},
+          "minimum_optional_matches": 0,
+          "minimum_strong_anchor_matches": 3,
+          "context_only_required_facet_keys": [
+            "behavior_strength",
+            "detection_key",
+            "detection_signature",
+            "entity",
+            "environment"
+          ],
+          "context_only_missing_facet_keys": [
+            "behavior_fingerprint"
+          ],
+          "context_only_similarity_facet_keys": [
+            "behavior_component_strong"
+          ],
+          "policy_version": "soc.memory_applicability_policy.v1"
+        },
+        "evidence_refs": [
+          "E-M-SHELL-0001"
+        ],
+        "validity": {
+          "valid_from": "2026-08-15T08:00:00Z",
+          "valid_until": "2026-11-14T08:00:00Z",
+          "review_after_days": 30,
+          "notes": "Simulation-only Memory evaluation validity window."
+        },
+        "confidence": 0.95,
+        "decision_impact": "detection_decision",
+        "decision_directive": {
+          "schema_version": "soc.memory_decision_directive.v1",
+          "effect": "override",
+          "target_verdict": "false_positive",
+          "review_effect": "clear",
+          "suggested_action": "reuse the reviewed business conclusion only within its exact scope",
+          "minimum_match_score": 5.0,
+          "required_facet_keys": [
+            "behavior_fingerprint",
+            "behavior_strength",
+            "detection_key",
+            "detection_signature",
+            "entity",
+            "environment"
+          ],
+          "rationale": "运营专家确认该精确检测、行为和 AskBob 服务身份组合属于内部 LLM 调用误报；该授权不覆盖其他 URL、服务或行为。",
+          "policy_version": "soc.memory_decision_directive_policy.v1"
+        },
+        "content_hash": "sha256:35a11cb3ee6b03dd0af164b2bc94cf46b75f1eab480ffef41e49119ff38b66b2",
+        "facets_hash": "sha256:b721db408c65da4e86a2c1797ce85274c6c336471eccf7181113d10919fdaf1d",
+        "retrieval_enabled": true,
+        "retrieval_policy_version": "soc.memory_retrieval_activation_policy.v1",
+        "retrieval_valid_until": "2026-09-15T08:00:00Z",
+        "retrieval_review_due_at": "2026-08-23T08:00:00Z",
+        "retrieval_updated_by": {
+          "actor_id": "memory-eval-fixture",
+          "actor_type": "user",
+          "surface": "test",
+          "roles": [
+            "soc_memory_reviewer"
+          ],
+          "auth_source": "test"
+        },
+        "retrieval_updated_at": "2026-08-16T07:00:00Z",
+        "retrieval_reason": "Simulation fixture activation.",
+        "created_by": {
+          "actor_id": "memory-eval-fixture",
+          "actor_type": "user",
+          "surface": "test",
+          "roles": [
+            "soc_memory_reviewer"
+          ],
+          "auth_source": "test"
+        },
+        "created_at": "2026-08-15T08:00:00Z",
+        "updated_at": "2026-08-16T07:00:00Z",
+        "deprecated_by": null,
+        "deprecated_at": null,
+        "deprecation_reason": null,
+        "revision_lineage": null,
+        "superseded_by_memory_id": null,
+        "superseded_at": null,
+        "supersession_reason": null,
+        "labels": [],
+        "metadata": {
+          "memory_profile_id": "pingan.soc",
+          "memory_profile_version": "6",
+          "memory_feature_schema_version": "pingan.soc.memory_features.v5",
+          "source_alert_ids": [
+            "TRAIN-SHELL"
+          ]
+        }
+      },
+      "source_alert_ids": [
+        "TRAIN-SHELL"
+      ]
+    },
+    {
+      "record": {
+        "schema_version": "soc.memory_record.v1",
+        "memory_id": "MEM-WEB-000001",
+        "version": 1,
+        "memory_type": "detection_lesson",
+        "target_artifact": "tenant_memory",
+        "status": "confirmed",
+        "tenant_scope": "pingan",
+        "tenant_id": "pingan",
+        "source_candidate_id": "MC-MEM-WEB-000001",
+        "source": {
+          "source_type": "eval_fixture",
+          "source_surface": null,
+          "source_id": "fixture:MEM-WEB-000001",
+          "source_doc": null,
+          "source_section": null,
+          "capability_card_id": null,
+          "run_id": null,
+          "alert_id": "TRAIN-WEB",
+          "queue_id": null,
+          "thread_id": null,
+          "message_id": null,
+          "correction_id": null,
+          "eval_sample_id": null,
+          "metadata": {
+            "source_alert_ids": [
+              "TRAIN-WEB"
+            ]
+          }
+        },
+        "summary": "该模式与已审核的 Webshell 上传攻击一致，应保持 suspicious 风险结论。",
+        "content": "结论 / Conclusion:\n- 该模式与已审核的 Webshell 上传攻击一致，应保持 suspicious 风险结论。\n业务依据 / Business rationale:\n- 运营专家审核了重复出现的上传行为和检测证据。\n适用条件 / Applicability:\n- 相同检测规则、检测器签名、强行为指纹和 PRD 环境。\n泛化边界 / Generalization boundaries:\n- 非必需实体可以变化，但不能单独证明模式适用。\n失效条件 / Invalidation conditions:\n- 检测器或行为变化时重新研判，不得仅凭规则名称复制结论。\n处置建议 / Handling guidance:\n- 精确适用时保持 suspicious；否则按当前告警重新研判。",
+        "business_lesson": {
+          "schema_version": "soc.memory_business_lesson.v1",
+          "conclusion": "该模式与已审核的 Webshell 上传攻击一致，应保持 suspicious 风险结论。",
+          "business_rationale": [
+            "运营专家审核了重复出现的上传行为和检测证据。"
+          ],
+          "applicability_conditions": [
+            "相同检测规则、检测器签名、强行为指纹和 PRD 环境。"
+          ],
+          "generalization_boundaries": [
+            "非必需实体可以变化，但不能单独证明模式适用。"
+          ],
+          "invalidation_conditions": [
+            "检测器或行为变化时重新研判，不得仅凭规则名称复制结论。"
+          ],
+          "handling_guidance": [
+            "精确适用时保持 suspicious；否则按当前告警重新研判。"
+          ]
+        },
+        "facets": {
+          "source_type": [
+            "nids"
+          ],
+          "source_system": [
+            "ptp-nids"
+          ],
+          "vendor": [
+            "pingan"
+          ],
+          "product": [
+            "ndr"
+          ],
+          "integration_name": [
+            "pingan_legacy_alert_platform"
+          ],
+          "detection_key": [
+            "ptp-nids:rule_code:rpaadm_002638"
+          ],
+          "rule_code": [
+            "rpaadm_002638"
+          ],
+          "rule_name": [
+            "Webshell upload detector"
+          ],
+          "category": [
+            "command_and_control"
+          ],
+          "severity": [
+            "high"
+          ],
+          "environment": [
+            "prd"
+          ],
+          "scenario_key": [
+            "webshell"
+          ],
+          "behavior_component": [
+            "attack_family:command_and_control",
+            "protocol:tcp",
+            "scenario:webshell",
+            "technique:t1190",
+            "technique:t1505.003"
+          ],
+          "behavior_fingerprint": [
+            "fec7755a8ba35b97b61c7f694e2b44e6bf7de63115f0397eae8e508eed6c0de2"
+          ],
+          "detection_signature": [
+            "2042fe52a648ce863edfc0e05358ac6d01ecd1aa6a35f9174fd8e76d296ac775"
+          ],
+          "attack_behavior_family": [
+            "command_and_control"
+          ],
+          "behavior_component_core": [
+            "attack_family:command_and_control",
+            "protocol:tcp",
+            "scenario:webshell",
+            "technique:t1190",
+            "technique:t1505.003"
+          ],
+          "behavior_component_strong": [
+            "scenario:webshell",
+            "technique:t1190",
+            "technique:t1505.003"
+          ],
+          "behavior_component_weak": [
+            "attack_family:command_and_control",
+            "protocol:tcp"
+          ],
+          "behavior_strength": [
+            "strong"
+          ]
+        },
+        "applicability": {
+          "schema_version": "soc.memory_applicability.v1",
+          "profile_id": "pingan.soc",
+          "profile_version": "6",
+          "feature_schema_version": "pingan.soc.memory_features.v5",
+          "required_facets": {
+            "detection_key": [
+              "ptp-nids:rule_code:rpaadm_002638"
+            ],
+            "detection_signature": [
+              "2042fe52a648ce863edfc0e05358ac6d01ecd1aa6a35f9174fd8e76d296ac775"
+            ],
+            "behavior_fingerprint": [
+              "fec7755a8ba35b97b61c7f694e2b44e6bf7de63115f0397eae8e508eed6c0de2"
+            ],
+            "behavior_strength": [
+              "strong"
+            ],
+            "environment": [
+              "prd"
+            ]
+          },
+          "optional_facets": {
+            "source_type": [
+              "nids"
+            ],
+            "source_system": [
+              "ptp-nids"
+            ],
+            "product": [
+              "ndr"
+            ],
+            "scenario_key": [
+              "webshell"
+            ],
+            "behavior_component": [
+              "attack_family:command_and_control",
+              "protocol:tcp",
+              "scenario:webshell",
+              "technique:t1190",
+              "technique:t1505.003"
+            ],
+            "behavior_component_core": [
+              "attack_family:command_and_control",
+              "protocol:tcp",
+              "scenario:webshell",
+              "technique:t1190",
+              "technique:t1505.003"
+            ],
+            "behavior_component_strong": [
+              "scenario:webshell",
+              "technique:t1190",
+              "technique:t1505.003"
+            ],
+            "behavior_component_weak": [
+              "attack_family:command_and_control",
+              "protocol:tcp"
+            ],
+            "attack_behavior_family": [
+              "command_and_control"
+            ]
+          },
+          "excluded_facets": {},
+          "minimum_optional_matches": 0,
+          "minimum_strong_anchor_matches": 3,
+          "context_only_required_facet_keys": [
+            "behavior_strength",
+            "detection_key",
+            "detection_signature",
+            "environment"
+          ],
+          "context_only_missing_facet_keys": [
+            "behavior_fingerprint"
+          ],
+          "context_only_similarity_facet_keys": [
+            "behavior_component_strong"
+          ],
+          "policy_version": "soc.memory_applicability_policy.v1"
+        },
+        "evidence_refs": [
+          "E-M-WEB-000001"
+        ],
+        "validity": {
+          "valid_from": "2026-08-15T08:00:00Z",
+          "valid_until": "2026-11-14T08:00:00Z",
+          "review_after_days": 30,
+          "notes": "Simulation-only Memory evaluation validity window."
+        },
+        "confidence": 0.95,
+        "decision_impact": "detection_decision",
+        "decision_directive": {
+          "schema_version": "soc.memory_decision_directive.v1",
+          "effect": "override",
+          "target_verdict": "suspicious",
+          "review_effect": "clear",
+          "suggested_action": "reuse the reviewed business conclusion only within its exact scope",
+          "minimum_match_score": 5.0,
+          "required_facet_keys": [
+            "behavior_fingerprint",
+            "behavior_strength",
+            "detection_key",
+            "detection_signature",
+            "environment"
+          ],
+          "rationale": "仿真审核员确认该精确 Webshell 行为模式应维持风险结论。",
+          "policy_version": "soc.memory_decision_directive_policy.v1"
+        },
+        "content_hash": "sha256:7075c59282c1aac0caeba98cc3a27fc2a448acead2a089dbca82a26be29a68fa",
+        "facets_hash": "sha256:3805f270aa2c74c7958e9269f5c2ae8a8435d20842be68e5a09a094c83c3010c",
+        "retrieval_enabled": true,
+        "retrieval_policy_version": "soc.memory_retrieval_activation_policy.v1",
+        "retrieval_valid_until": "2026-09-15T08:00:00Z",
+        "retrieval_review_due_at": "2026-08-23T08:00:00Z",
+        "retrieval_updated_by": {
+          "actor_id": "memory-eval-fixture",
+          "actor_type": "user",
+          "surface": "test",
+          "roles": [
+            "soc_memory_reviewer"
+          ],
+          "auth_source": "test"
+        },
+        "retrieval_updated_at": "2026-08-16T07:00:00Z",
+        "retrieval_reason": "Simulation fixture activation.",
+        "created_by": {
+          "actor_id": "memory-eval-fixture",
+          "actor_type": "user",
+          "surface": "test",
+          "roles": [
+            "soc_memory_reviewer"
+          ],
+          "auth_source": "test"
+        },
+        "created_at": "2026-08-15T08:00:00Z",
+        "updated_at": "2026-08-16T07:00:00Z",
+        "deprecated_by": null,
+        "deprecated_at": null,
+        "deprecation_reason": null,
+        "revision_lineage": null,
+        "superseded_by_memory_id": null,
+        "superseded_at": null,
+        "supersession_reason": null,
+        "labels": [],
+        "metadata": {
+          "memory_profile_id": "pingan.soc",
+          "memory_profile_version": "6",
+          "memory_feature_schema_version": "pingan.soc.memory_features.v5",
+          "source_alert_ids": [
+            "TRAIN-WEB"
+          ]
+        }
+      },
+      "source_alert_ids": [
+        "TRAIN-WEB"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "exact-cross-ip",
+      "run_id": "RUN-HELDOUT-EXACT",
+      "input_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_path": null,
+      "request": {
+        "schema_version": "soc.llm_analysis_request.v6",
+        "alert_id": "HELDOUT-SHELL-CROSS-IP",
+        "tenant_id": "pingan",
+        "environment": "prd",
+        "source": {
+          "source_type": "nids",
+          "source_system": "ptp-nids",
+          "vendor": "pingan",
+          "product": "ndr",
+          "integration_name": "pingan_legacy_alert_platform"
+        },
+        "detection": {
+          "rule_code": "rpaadm_002638",
+          "rule_name": "Reverse connection detector",
+          "rule_version": null,
+          "rule_category": null,
+          "detection_key": "ptp-nids:rule_code:rpaadm_002638"
+        },
+        "classification": {
+          "severity": "high",
+          "category": "command_and_control",
+          "tactic": [],
+          "technique": [
+            "T1059",
+            "T1071"
+          ],
+          "labels": {}
+        },
+        "canonical_entities": {
+          "network": {
+            "source_ip": null,
+            "destination_ip": null,
+            "src_port": null,
+            "dst_port": null,
+            "protocol": "tcp",
+            "application_protocol": null,
+            "direction": null,
+            "domain": "paic.com.cn",
+            "url": "https://paic.com.cn/pws/askbob-gpt",
+            "observations": []
+          },
+          "process": {
+            "process_name": null,
+            "process_id": null,
+            "process_path": null,
+            "command_line": null,
+            "parent_process_name": null,
+            "parent_process_id": null,
+            "parent_command_line": null,
+            "md5": null,
+            "sha256": null,
+            "observations": []
+          },
+          "user": {
+            "username": null,
+            "user_id": null,
+            "um_account": null,
+            "src_user": null,
+            "dst_user": null
+          },
+          "host": {
+            "host_name": null,
+            "host_id": null,
+            "asset_id": null,
+            "asset_group": null,
+            "ip_addresses": []
+          },
+          "file": {
+            "file_name": null,
+            "file_path": null,
+            "sha256": null,
+            "sha1": null,
+            "md5": null,
+            "observations": []
+          },
+          "http": {
+            "method": null,
+            "host": "paic.com.cn",
+            "path": "/pws/askbob-gpt",
+            "url": "https://paic.com.cn/pws/askbob-gpt",
+            "protocol": null,
+            "port": null,
+            "status_code": null,
+            "user_agent": null,
+            "referer": null,
+            "x_forwarded_for": null,
+            "observations": []
+          },
+          "email": null,
+          "threat": {
+            "iocs": [],
+            "campaign": null,
+            "threat_actor": null,
+            "malware_family": null
+          }
+        },
+        "extracted_entities": {
+          "mentions": [
+            {
+              "kind": "domain",
+              "value": "paic.com.cn",
+              "key": "domain:paic.com.cn",
+              "role": "http_host",
+              "confidence": 1.0,
+              "source": "deterministic",
+              "evidence_path": null,
+              "attributes": {}
+            },
+            {
+              "kind": "url",
+              "value": "https://paic.com.cn/pws/askbob-gpt",
+              "key": "url:https://paic.com.cn/pws/askbob-gpt",
+              "role": "http_url",
+              "confidence": 1.0,
+              "source": "deterministic",
+              "evidence_path": null,
+              "attributes": {}
+            }
+          ],
+          "ips": [],
+          "domains": [],
+          "urls": [],
+          "emails": [],
+          "processes": [],
+          "users": [],
+          "hosts": [],
+          "assets": [],
+          "rule_codes": [],
+          "rule_names": [],
+          "rules": [],
+          "warnings": []
+        },
+        "fact_reconstruction": {
+          "schema_version": "soc.fact_reconstruction.v3",
+          "evidence_policy": null,
+          "selected_input_path": null,
+          "selected_input_available": false,
+          "field_trusts": [],
+          "canonical_field_provenance": [],
+          "role_claims": [],
+          "scenario_hypotheses": [
+            {
+              "scenario_type": "reverse_shell",
+              "status": "confirmed",
+              "confidence": 0.9,
+              "evidence_paths": [],
+              "rationale": "Simulation fixture scenario."
+            }
+          ],
+          "role_resolutions": [],
+          "role_coherence": {
+            "schema_version": "soc.role_coherence_assessment.v1",
+            "scenario_type": null,
+            "status": "not_assessed",
+            "relationships": [],
+            "counterevidence_paths": [],
+            "rationale": "No deterministic role relationship was assessed."
+          },
+          "conflict_reports": [],
+          "warnings": []
+        },
+        "primary_evidence_path": null,
+        "primary_evidence": null,
+        "supplementary_evidence": [],
+        "evidence_highlights": [],
+        "evidence_compaction": {
+          "schema_version": "soc.evidence_compaction_report.v1",
+          "strategy_version": "soc.observation_compaction.v1",
+          "raw_payload_retained": true,
+          "source_message_count": 0,
+          "typed_observation_count": 0,
+          "behavior_group_count": 0,
+          "profile_count": 0,
+          "repeated_shape_message_count": 0,
+          "collapsed_repetition_count": 0,
+          "non_dominant_profile_count": 0,
+          "selected_evidence_paths": [],
+          "represented_field_paths": [],
+          "represented_field_count": 0,
+          "represented_source_count": 0,
+          "unrepresented_source_count": 0,
+          "high_value_omission_count": 0,
+          "groups": [],
+          "warnings": []
+        },
+        "evidence_coverage": {
+          "schema_version": "soc.evidence_coverage.v4",
+          "message_schemas": [],
+          "structured_field_paths": [],
+          "parsed_field_paths": [],
+          "decoded_field_paths": [],
+          "repaired_field_paths": [],
+          "canonical_source_paths": [],
+          "fact_source_paths": [],
+          "scenario_source_paths": [],
+          "llm_projected_paths": [],
+          "llm_sanitized_paths": [],
+          "llm_compacted_encoded_paths": [],
+          "llm_truncated_evidence_paths": [],
+          "omissions": [],
+          "high_value_gaps": [],
+          "counts": {},
+          "warnings": []
+        },
+        "source_field_semantics": [],
+        "conflict_count": 0,
+        "conflict_types": [],
+        "warnings": [],
+        "skill_context": {
+          "schema_version": "soc.skill_context.v2",
+          "source": "soc_skill_package_projection",
+          "selected_skills": [],
+          "total_token_budget": 0,
+          "total_estimated_token_count": 0,
+          "notes": []
+        },
+        "evidence_catalog": [],
+        "context_catalog": []
+      },
+      "base_decision": {
+        "verdict": "suspicious",
+        "confidence": 0.72,
+        "confidence_source": "unknown",
+        "confidence_is_calibrated": false,
+        "calibrated_probability": null,
+        "calibration_profile_version": null,
+        "evidence_state": "sufficient",
+        "suggested_action": "review current alert",
+        "needs_review": true,
+        "review_reasons": [],
+        "reason": "Simulation base decision.",
+        "policy_version": "soc.decision_policy.v7",
+        "confidence_explanation": null,
+        "automation_allowed": false
+      },
+      "prediction": {
+        "scenario_keys": [
+          "reverse_shell"
+        ],
+        "boundary_direction": "internal_to_internal",
+        "roles": [
+          {
+            "role": "attacker",
+            "entity_type": "ip",
+            "value": "30.20.20.20"
+          },
+          {
+            "role": "victim",
+            "entity_type": "ip",
+            "value": "30.10.10.10"
+          }
+        ],
+        "verifier_outcome": "not_triggered",
+        "verifier_failure_kind": null
+      },
+      "truth": {
+        "review_status": "accepted",
+        "review_source": "simulation_fixture",
+        "reviewer_id": "simulation-reviewer",
+        "reviewed_at": "2026-08-16T08:00:00Z",
+        "review_reason": "Deterministic simulation label for evaluator wiring.",
+        "actual_verdict": "false_positive",
+        "actual_scenario_keys": [
+          "reverse_shell"
+        ],
+        "actual_boundary_direction": "internal_to_internal",
+        "actual_roles": [
+          {
+            "role": "attacker",
+            "entity_type": "ip",
+            "value": "30.20.20.20"
+          },
+          {
+            "role": "victim",
+            "entity_type": "ip",
+            "value": "30.10.10.10"
+          }
+        ],
+        "expected_review_required": false,
+        "expected_memory_relationships": {
+          "MEM-SHELL-0001": "decision_applicable",
+          "MEM-WEB-000001": "unrelated"
+        }
+      }
+    },
+    {
+      "case_id": "strong-context-only",
+      "run_id": "RUN-HELDOUT-CONTEXT",
+      "input_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_path": null,
+      "request": {
+        "schema_version": "soc.llm_analysis_request.v6",
+        "alert_id": "HELDOUT-SHELL-CONTEXT",
+        "tenant_id": "pingan",
+        "environment": "prd",
+        "source": {
+          "source_type": "nids",
+          "source_system": "ptp-nids",
+          "vendor": "pingan",
+          "product": "ndr",
+          "integration_name": "pingan_legacy_alert_platform"
+        },
+        "detection": {
+          "rule_code": "rpaadm_002638",
+          "rule_name": "Reverse connection detector",
+          "rule_version": null,
+          "rule_category": null,
+          "detection_key": "ptp-nids:rule_code:rpaadm_002638"
+        },
+        "classification": {
+          "severity": "high",
+          "category": "command_and_control",
+          "tactic": [],
+          "technique": [
+            "T1059",
+            "T1105"
+          ],
+          "labels": {}
+        },
+        "canonical_entities": {
+          "network": {
+            "source_ip": null,
+            "destination_ip": null,
+            "src_port": null,
+            "dst_port": null,
+            "protocol": "tcp",
+            "application_protocol": null,
+            "direction": null,
+            "domain": "paic.com.cn",
+            "url": "https://paic.com.cn/pws/askbob-gpt",
+            "observations": []
+          },
+          "process": {
+            "process_name": null,
+            "process_id": null,
+            "process_path": null,
+            "command_line": null,
+            "parent_process_name": null,
+            "parent_process_id": null,
+            "parent_command_line": null,
+            "md5": null,
+            "sha256": null,
+            "observations": []
+          },
+          "user": {
+            "username": null,
+            "user_id": null,
+            "um_account": null,
+            "src_user": null,
+            "dst_user": null
+          },
+          "host": {
+            "host_name": null,
+            "host_id": null,
+            "asset_id": null,
+            "asset_group": null,
+            "ip_addresses": []
+          },
+          "file": {
+            "file_name": null,
+            "file_path": null,
+            "sha256": null,
+            "sha1": null,
+            "md5": null,
+            "observations": []
+          },
+          "http": {
+            "method": null,
+            "host": "paic.com.cn",
+            "path": "/pws/askbob-gpt",
+            "url": "https://paic.com.cn/pws/askbob-gpt",
+            "protocol": null,
+            "port": null,
+            "status_code": null,
+            "user_agent": null,
+            "referer": null,
+            "x_forwarded_for": null,
+            "observations": []
+          },
+          "email": null,
+          "threat": {
+            "iocs": [],
+            "campaign": null,
+            "threat_actor": null,
+            "malware_family": null
+          }
+        },
+        "extracted_entities": {
+          "mentions": [
+            {
+              "kind": "domain",
+              "value": "paic.com.cn",
+              "key": "domain:paic.com.cn",
+              "role": "http_host",
+              "confidence": 1.0,
+              "source": "deterministic",
+              "evidence_path": null,
+              "attributes": {}
+            },
+            {
+              "kind": "url",
+              "value": "https://paic.com.cn/pws/askbob-gpt",
+              "key": "url:https://paic.com.cn/pws/askbob-gpt",
+              "role": "http_url",
+              "confidence": 1.0,
+              "source": "deterministic",
+              "evidence_path": null,
+              "attributes": {}
+            }
+          ],
+          "ips": [],
+          "domains": [],
+          "urls": [],
+          "emails": [],
+          "processes": [],
+          "users": [],
+          "hosts": [],
+          "assets": [],
+          "rule_codes": [],
+          "rule_names": [],
+          "rules": [],
+          "warnings": []
+        },
+        "fact_reconstruction": {
+          "schema_version": "soc.fact_reconstruction.v3",
+          "evidence_policy": null,
+          "selected_input_path": null,
+          "selected_input_available": false,
+          "field_trusts": [],
+          "canonical_field_provenance": [],
+          "role_claims": [],
+          "scenario_hypotheses": [
+            {
+              "scenario_type": "command_execution",
+              "status": "confirmed",
+              "confidence": 0.9,
+              "evidence_paths": [],
+              "rationale": "Simulation fixture scenario."
+            }
+          ],
+          "role_resolutions": [],
+          "role_coherence": {
+            "schema_version": "soc.role_coherence_assessment.v1",
+            "scenario_type": null,
+            "status": "not_assessed",
+            "relationships": [],
+            "counterevidence_paths": [],
+            "rationale": "No deterministic role relationship was assessed."
+          },
+          "conflict_reports": [],
+          "warnings": []
+        },
+        "primary_evidence_path": null,
+        "primary_evidence": null,
+        "supplementary_evidence": [],
+        "evidence_highlights": [],
+        "evidence_compaction": {
+          "schema_version": "soc.evidence_compaction_report.v1",
+          "strategy_version": "soc.observation_compaction.v1",
+          "raw_payload_retained": true,
+          "source_message_count": 0,
+          "typed_observation_count": 0,
+          "behavior_group_count": 0,
+          "profile_count": 0,
+          "repeated_shape_message_count": 0,
+          "collapsed_repetition_count": 0,
+          "non_dominant_profile_count": 0,
+          "selected_evidence_paths": [],
+          "represented_field_paths": [],
+          "represented_field_count": 0,
+          "represented_source_count": 0,
+          "unrepresented_source_count": 0,
+          "high_value_omission_count": 0,
+          "groups": [],
+          "warnings": []
+        },
+        "evidence_coverage": {
+          "schema_version": "soc.evidence_coverage.v4",
+          "message_schemas": [],
+          "structured_field_paths": [],
+          "parsed_field_paths": [],
+          "decoded_field_paths": [],
+          "repaired_field_paths": [],
+          "canonical_source_paths": [],
+          "fact_source_paths": [],
+          "scenario_source_paths": [],
+          "llm_projected_paths": [],
+          "llm_sanitized_paths": [],
+          "llm_compacted_encoded_paths": [],
+          "llm_truncated_evidence_paths": [],
+          "omissions": [],
+          "high_value_gaps": [],
+          "counts": {},
+          "warnings": []
+        },
+        "source_field_semantics": [],
+        "conflict_count": 0,
+        "conflict_types": [],
+        "warnings": [],
+        "skill_context": {
+          "schema_version": "soc.skill_context.v2",
+          "source": "soc_skill_package_projection",
+          "selected_skills": [],
+          "total_token_budget": 0,
+          "total_estimated_token_count": 0,
+          "notes": []
+        },
+        "evidence_catalog": [],
+        "context_catalog": []
+      },
+      "base_decision": {
+        "verdict": "suspicious",
+        "confidence": 0.72,
+        "confidence_source": "unknown",
+        "confidence_is_calibrated": false,
+        "calibrated_probability": null,
+        "calibration_profile_version": null,
+        "evidence_state": "sufficient",
+        "suggested_action": "review current alert",
+        "needs_review": false,
+        "review_reasons": [],
+        "reason": "Simulation base decision.",
+        "policy_version": "soc.decision_policy.v7",
+        "confidence_explanation": null,
+        "automation_allowed": false
+      },
+      "prediction": {
+        "scenario_keys": [
+          "command_execution"
+        ],
+        "boundary_direction": "internal_to_internal",
+        "roles": [
+          {
+            "role": "attacker",
+            "entity_type": "ip",
+            "value": "30.20.20.20"
+          },
+          {
+            "role": "victim",
+            "entity_type": "ip",
+            "value": "30.10.10.10"
+          }
+        ],
+        "verifier_outcome": "unavailable",
+        "verifier_failure_kind": "provider_error"
+      },
+      "truth": {
+        "review_status": "accepted",
+        "review_source": "simulation_fixture",
+        "reviewer_id": "simulation-reviewer",
+        "reviewed_at": "2026-08-16T08:00:00Z",
+        "review_reason": "Deterministic simulation label for evaluator wiring.",
+        "actual_verdict": "suspicious",
+        "actual_scenario_keys": [
+          "command_execution"
+        ],
+        "actual_boundary_direction": "internal_to_internal",
+        "actual_roles": [
+          {
+            "role": "attacker",
+            "entity_type": "ip",
+            "value": "30.20.20.20"
+          },
+          {
+            "role": "victim",
+            "entity_type": "ip",
+            "value": "30.10.10.10"
+          }
+        ],
+        "expected_review_required": false,
+        "expected_memory_relationships": {
+          "MEM-SHELL-0001": "context_only",
+          "MEM-WEB-000001": "unrelated"
+        }
+      }
+    },
+    {
+      "case_id": "same-pattern-different-service",
+      "run_id": "RUN-HELDOUT-DIFFERENT-SERVICE",
+      "input_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "source_path": null,
+      "request": {
+        "schema_version": "soc.llm_analysis_request.v6",
+        "alert_id": "HELDOUT-SHELL-DIFFERENT-SERVICE",
+        "tenant_id": "pingan",
+        "environment": "prd",
+        "source": {
+          "source_type": "nids",
+          "source_system": "ptp-nids",
+          "vendor": "pingan",
+          "product": "ndr",
+          "integration_name": "pingan_legacy_alert_platform"
+        },
+        "detection": {
+          "rule_code": "rpaadm_002638",
+          "rule_name": "Reverse connection detector",
+          "rule_version": null,
+          "rule_category": null,
+          "detection_key": "ptp-nids:rule_code:rpaadm_002638"
+        },
+        "classification": {
+          "severity": "high",
+          "category": "command_and_control",
+          "tactic": [],
+          "technique": [
+            "T1059",
+            "T1071"
+          ],
+          "labels": {}
+        },
+        "canonical_entities": {
+          "network": {
+            "source_ip": null,
+            "destination_ip": null,
+            "src_port": null,
+            "dst_port": null,
+            "protocol": "tcp",
+            "application_protocol": null,
+            "direction": null,
+            "domain": "unreviewed.example",
+            "url": "https://unreviewed.example/pws/askbob-gpt",
+            "observations": []
+          },
+          "process": {
+            "process_name": null,
+            "process_id": null,
+            "process_path": null,
+            "command_line": null,
+            "parent_process_name": null,
+            "parent_process_id": null,
+            "parent_command_line": null,
+            "md5": null,
+            "sha256": null,
+            "observations": []
+          },
+          "user": {
+            "username": null,
+            "user_id": null,
+            "um_account": null,
+            "src_user": null,
+            "dst_user": null
+          },
+          "host": {
+            "host_name": null,
+            "host_id": null,
+            "asset_id": null,
+            "asset_group": null,
+            "ip_addresses": []
+          },
+          "file": {
+            "file_name": null,
+            "file_path": null,
+            "sha256": null,
+            "sha1": null,
+            "md5": null,
+            "observations": []
+          },
+          "http": {
+            "method": null,
+            "host": "unreviewed.example",
+            "path": "/pws/askbob-gpt",
+            "url": "https://unreviewed.example/pws/askbob-gpt",
+            "protocol": null,
+            "port": null,
+            "status_code": null,
+            "user_agent": null,
+            "referer": null,
+            "x_forwarded_for": null,
+            "observations": []
+          },
+          "email": null,
+          "threat": {
+            "iocs": [],
+            "campaign": null,
+            "threat_actor": null,
+            "malware_family": null
+          }
+        },
+        "extracted_entities": {
+          "mentions": [
+            {
+              "kind": "domain",
+              "value": "unreviewed.example",
+              "key": "domain:unreviewed.example",
+              "role": "http_host",
+              "confidence": 1.0,
+              "source": "deterministic",
+              "evidence_path": null,
+              "attributes": {}
+            },
+            {
+              "kind": "url",
+              "value": "https://unreviewed.example/pws/askbob-gpt",
+              "key": "url:https://unreviewed.example/pws/askbob-gpt",
+              "role": "http_url",
+              "confidence": 1.0,
+              "source": "deterministic",
+              "evidence_path": null,
+              "attributes": {}
+            }
+          ],
+          "ips": [],
+          "domains": [],
+          "urls": [],
+          "emails": [],
+          "processes": [],
+          "users": [],
+          "hosts": [],
+          "assets": [],
+          "rule_codes": [],
+          "rule_names": [],
+          "rules": [],
+          "warnings": []
+        },
+        "fact_reconstruction": {
+          "schema_version": "soc.fact_reconstruction.v3",
+          "evidence_policy": null,
+          "selected_input_path": null,
+          "selected_input_available": false,
+          "field_trusts": [],
+          "canonical_field_provenance": [],
+          "role_claims": [],
+          "scenario_hypotheses": [
+            {
+              "scenario_type": "reverse_shell",
+              "status": "confirmed",
+              "confidence": 0.9,
+              "evidence_paths": [],
+              "rationale": "Simulation fixture scenario."
+            }
+          ],
+          "role_resolutions": [],
+          "role_coherence": {
+            "schema_version": "soc.role_coherence_assessment.v1",
+            "scenario_type": null,
+            "status": "not_assessed",
+            "relationships": [],
+            "counterevidence_paths": [],
+            "rationale": "No deterministic role relationship was assessed."
+          },
+          "conflict_reports": [],
+          "warnings": []
+        },
+        "primary_evidence_path": null,
+        "primary_evidence": null,
+        "supplementary_evidence": [],
+        "evidence_highlights": [],
+        "evidence_compaction": {
+          "schema_version": "soc.evidence_compaction_report.v1",
+          "strategy_version": "soc.observation_compaction.v1",
+          "raw_payload_retained": true,
+          "source_message_count": 0,
+          "typed_observation_count": 0,
+          "behavior_group_count": 0,
+          "profile_count": 0,
+          "repeated_shape_message_count": 0,
+          "collapsed_repetition_count": 0,
+          "non_dominant_profile_count": 0,
+          "selected_evidence_paths": [],
+          "represented_field_paths": [],
+          "represented_field_count": 0,
+          "represented_source_count": 0,
+          "unrepresented_source_count": 0,
+          "high_value_omission_count": 0,
+          "groups": [],
+          "warnings": []
+        },
+        "evidence_coverage": {
+          "schema_version": "soc.evidence_coverage.v4",
+          "message_schemas": [],
+          "structured_field_paths": [],
+          "parsed_field_paths": [],
+          "decoded_field_paths": [],
+          "repaired_field_paths": [],
+          "canonical_source_paths": [],
+          "fact_source_paths": [],
+          "scenario_source_paths": [],
+          "llm_projected_paths": [],
+          "llm_sanitized_paths": [],
+          "llm_compacted_encoded_paths": [],
+          "llm_truncated_evidence_paths": [],
+          "omissions": [],
+          "high_value_gaps": [],
+          "counts": {},
+          "warnings": []
+        },
+        "source_field_semantics": [],
+        "conflict_count": 0,
+        "conflict_types": [],
+        "warnings": [],
+        "skill_context": {
+          "schema_version": "soc.skill_context.v2",
+          "source": "soc_skill_package_projection",
+          "selected_skills": [],
+          "total_token_budget": 0,
+          "total_estimated_token_count": 0,
+          "notes": []
+        },
+        "evidence_catalog": [],
+        "context_catalog": []
+      },
+      "base_decision": {
+        "verdict": "suspicious",
+        "confidence": 0.72,
+        "confidence_source": "unknown",
+        "confidence_is_calibrated": false,
+        "calibrated_probability": null,
+        "calibration_profile_version": null,
+        "evidence_state": "sufficient",
+        "suggested_action": "review current alert",
+        "needs_review": false,
+        "review_reasons": [],
+        "reason": "Simulation base decision.",
+        "policy_version": "soc.decision_policy.v7",
+        "confidence_explanation": null,
+        "automation_allowed": false
+      },
+      "prediction": {
+        "scenario_keys": [
+          "reverse_shell"
+        ],
+        "boundary_direction": "internal_to_internal",
+        "roles": [
+          {
+            "role": "attacker",
+            "entity_type": "ip",
+            "value": "30.20.20.20"
+          },
+          {
+            "role": "victim",
+            "entity_type": "ip",
+            "value": "30.10.10.10"
+          }
+        ],
+        "verifier_outcome": "not_triggered",
+        "verifier_failure_kind": null
+      },
+      "truth": {
+        "review_status": "accepted",
+        "review_source": "simulation_fixture",
+        "reviewer_id": "simulation-reviewer",
+        "reviewed_at": "2026-08-16T08:00:00Z",
+        "review_reason": "Deterministic simulation label for evaluator wiring.",
+        "actual_verdict": "suspicious",
+        "actual_scenario_keys": [
+          "reverse_shell"
+        ],
+        "actual_boundary_direction": "internal_to_internal",
+        "actual_roles": [
+          {
+            "role": "attacker",
+            "entity_type": "ip",
+            "value": "30.20.20.20"
+          },
+          {
+            "role": "victim",
+            "entity_type": "ip",
+            "value": "30.10.10.10"
+          }
+        ],
+        "expected_review_required": false,
+        "expected_memory_relationships": {
+          "MEM-SHELL-0001": "unrelated",
+          "MEM-WEB-000001": "unrelated"
+        }
+      }
+    }
+  ],
+  "fixture_path": null,
+  "rollout_authorized": false
+}

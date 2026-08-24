@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import (
     ActorContext,
     AlertClassification,
@@ -229,3 +230,149 @@ def test_typed_pingan_applicability_requires_exact_profile_and_scope() -> None:
     assert applicable.matches[0].applicability_report.status.value == "applicable"
     assert wrong_profile.matches == []
     assert wrong_profile.skipped_not_applicable == 1
+
+
+def test_pingan_profile_filters_legacy_same_rule_cross_behavior_memory() -> None:
+    base = _request()
+    request = base.model_copy(
+        update={
+            "environment": "dev-corpus-eval",
+            "source": base.source.model_copy(
+                update={
+                    "integration_name": "pingan_legacy_alert_platform",
+                }
+            ),
+            "detection": base.detection.model_copy(
+                update={
+                    "detection_key": "sec_guard_apt:rule_code:rpaadm_000558",
+                    "rule_code": "RPAADM_000558",
+                    "rule_name": "红队IP监控",
+                }
+            ),
+            "classification": base.classification.model_copy(update={"category": "web_attack", "technique": ["T1190"]}),
+            "canonical_entities": AlertEntitySet(
+                network=NetworkEntityRef(
+                    protocol="http",
+                    dst_port=80,
+                )
+            ),
+        }
+    )
+    registry = build_soc_memory_profile_registry()
+    profile = registry.resolve_request(request)
+    query = memory_query_from_analysis_request(request, profile=profile)
+    weak_applicability = SocMemoryApplicabilitySpec(
+        profile_id=profile.identity.profile_id,
+        profile_version=profile.identity.profile_version,
+        feature_schema_version=profile.identity.feature_schema_version,
+        required_facets={
+            "detection_key": ["sec_guard_apt:rule_code:rpaadm_000558"],
+            "environment": ["dev-corpus-eval"],
+        },
+        optional_facets={
+            "network_service": ["udp/44818"],
+            "vulnerability_id": ["CVE-2017-7924"],
+            "attack_behavior_family": [
+                "denial_of_service",
+                "vulnerability_exploitation",
+            ],
+        },
+    )
+    record = _record(
+        "MEM-LEGACY-PLC-SAME-RULE",
+        facets={
+            "detection_key": ["sec_guard_apt:rule_code:rpaadm_000558"],
+            "environment": ["dev-corpus-eval"],
+            "network_service": ["udp/44818"],
+            "vulnerability_id": ["CVE-2017-7924"],
+            "attack_behavior_family": [
+                "denial_of_service",
+                "vulnerability_exploitation",
+            ],
+        },
+    ).model_copy(update={"applicability": weak_applicability})
+    repository = InMemoryMemoryCandidateRepository()
+    repository.save_memory_record(record)
+
+    result = SocMemoryService(
+        record_repository=repository,
+        profile_registry=registry,
+    ).find_relevant_records(query)
+
+    assert result.matches == []
+    assert result.skipped_not_applicable == 1
+
+
+def test_pingan_profile_filters_component_only_legacy_network_scope() -> None:
+    base = _request()
+    request = base.model_copy(
+        update={
+            "environment": "dev-corpus-eval",
+            "source": base.source.model_copy(update={"integration_name": "pingan_legacy_alert_platform"}),
+            "detection": base.detection.model_copy(
+                update={
+                    "detection_key": "sec_guard_apt:rule_code:rpaadm_000558",
+                    "rule_code": "RPAADM_000558",
+                    "rule_name": "红队IP监控",
+                }
+            ),
+            "classification": base.classification.model_copy(update={"category": "web_attack", "technique": ["T1190"]}),
+            "canonical_entities": AlertEntitySet(network=NetworkEntityRef(protocol="http", dst_port=80)),
+        }
+    )
+    registry = build_soc_memory_profile_registry()
+    profile = registry.resolve_request(request)
+    query = memory_query_from_analysis_request(request, profile=profile)
+    detection_signature = query.facets["detection_signature"]
+    record_fingerprint = ["openvpn-behavior-fingerprint"]
+    applicability = SocMemoryApplicabilitySpec(
+        profile_id=profile.identity.profile_id,
+        profile_version=profile.identity.profile_version,
+        feature_schema_version=profile.identity.feature_schema_version,
+        required_facets={
+            "detection_key": ["sec_guard_apt:rule_code:rpaadm_000558"],
+            "detection_signature": detection_signature,
+            "behavior_fingerprint": record_fingerprint,
+            "behavior_strength": ["strong"],
+            "environment": ["dev-corpus-eval"],
+        },
+        optional_facets={
+            "behavior_component": [
+                "attack_family:proxy_tunnel_activity",
+                "network_service:udp/1194",
+                "protocol:udp",
+                "technique:t1190",
+            ],
+            "behavior_component_strong": ["technique:t1190"],
+        },
+        context_only_required_facet_keys=[
+            "behavior_strength",
+            "detection_key",
+            "detection_signature",
+            "environment",
+        ],
+        context_only_missing_facet_keys=["behavior_fingerprint"],
+        context_only_similarity_facet_keys=["behavior_component_strong"],
+    )
+    record = _record(
+        "MEM-LEGACY-OPENVPN-COMPONENTS",
+        facets={
+            "detection_key": ["sec_guard_apt:rule_code:rpaadm_000558"],
+            "detection_signature": detection_signature,
+            "behavior_fingerprint": record_fingerprint,
+            "behavior_strength": ["strong"],
+            "environment": ["dev-corpus-eval"],
+            "behavior_component": applicability.optional_facets["behavior_component"],
+            "behavior_component_strong": ["technique:t1190"],
+        },
+    ).model_copy(update={"applicability": applicability})
+    repository = InMemoryMemoryCandidateRepository()
+    repository.save_memory_record(record)
+
+    result = SocMemoryService(
+        record_repository=repository,
+        profile_registry=registry,
+    ).find_relevant_records(query)
+
+    assert result.matches == []
+    assert result.skipped_not_applicable == 1

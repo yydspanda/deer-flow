@@ -32,7 +32,7 @@ services:
       SOC_DATABASE_URL: sqlite:////app/backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite
       SOC_DEV_MEMORY_CORPUS_PATH: /app/project/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl
       SOC_DEV_MEMORY_WORKBENCH_ENABLED: "true"
-      SOC_DEV_CORPUS_WORKBENCH_PATH: /app/project/datas/source/full_alert_2026_month_forth_sample_200.pkl
+      SOC_DEV_CORPUS_WORKBENCH_PATH: /app/project/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl
       SOC_DEV_CORPUS_WORKBENCH_ENABLED: "true"
       SOC_ANALYZER_MODE: llm
       SOC_MEMORY_ENVIRONMENT: dev

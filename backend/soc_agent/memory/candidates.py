@@ -13,6 +13,7 @@ from soc_agent.contracts import (
     SocMutationAuditRecord,
     SocMutationOperation,
 )
+from soc_agent.memory.lineage import memory_candidate_lineage_key
 from soc_agent.memory.scoring import score_memory_record
 
 
@@ -83,6 +84,17 @@ class InMemoryMemoryCandidateRepository:
         return sorted(
             [item for item in self._candidates.values() if item.source.source_id in requested],
             key=lambda item: item.created_at,
+            reverse=True,
+        )
+
+    def find_memory_candidates_by_lineage_keys(
+        self,
+        lineage_keys: Sequence[str],
+    ) -> list[SocMemoryCandidate]:
+        requested = set(lineage_keys)
+        return sorted(
+            [item for item in self._candidates.values() if memory_candidate_lineage_key(item) in requested],
+            key=lambda item: (item.created_at, item.candidate_id),
             reverse=True,
         )
 

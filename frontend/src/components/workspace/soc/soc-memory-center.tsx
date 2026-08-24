@@ -7,7 +7,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   DatabaseIcon,
-  FlaskConicalIcon,
   HistoryIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -76,9 +75,27 @@ function shortId(value: string) {
     : value;
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number;
+  tone?: "neutral" | "attention" | "positive";
+}) {
   return (
-    <div className="min-w-0 border-r px-4 py-3 last:border-r-0">
+    <div
+      className={cn(
+        "min-w-0 border-r px-4 py-3 last:border-r-0",
+        tone === "attention" &&
+          value > 0 &&
+          "bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100",
+        tone === "positive" &&
+          value > 0 &&
+          "bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100",
+      )}
+    >
       <div className="text-muted-foreground text-xs">{label}</div>
       <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
     </div>
@@ -200,22 +217,28 @@ export function SocMemoryCenter({
         description="管理重复模式、待审经验、确认 Memory 与 Profile 演进"
         actions={
           <>
-            <Button variant="outline" size="sm" asChild>
+            <Button size="sm" asChild>
               <Link href="/workspace/soc/review/memory-candidates">
                 <ShieldCheckIcon className="size-4" />
-                审核候选
+                审核 Memory Candidate
+                {(overview?.metrics.pending_candidate_count ?? 0) > 0 ? (
+                  <span className="bg-primary-foreground/15 min-w-5 px-1.5 text-center text-xs tabular-nums">
+                    {overview?.metrics.pending_candidate_count}
+                  </span>
+                ) : null}
               </Link>
             </Button>
             <Button
-              variant="outline"
-              size="sm"
+              variant="ghost"
+              size="icon-sm"
               onClick={() => void refetch()}
               disabled={isFetching}
+              title="刷新 Memory Center"
+              aria-label="刷新 Memory Center"
             >
               <RefreshCwIcon
                 className={cn("size-4", isFetching && "animate-spin")}
               />
-              刷新
             </Button>
           </>
         }
@@ -242,10 +265,12 @@ export function SocMemoryCenter({
             <Metric
               label="待审候选"
               value={overview?.metrics.pending_candidate_count ?? 0}
+              tone="attention"
             />
             <Metric
               label="已确认 Memory"
               value={overview?.metrics.confirmed_memory_count ?? 0}
+              tone="positive"
             />
             <Metric
               label="检索已启用"
@@ -443,7 +468,17 @@ export function SocMemoryCenter({
                         </div>
                       </div>
                       {detail.pattern.candidate ? (
-                        <Button variant="outline" size="sm" asChild>
+                        <Button
+                          variant={
+                            ["pending_review", "confirmed_candidate"].includes(
+                              detail.pattern.candidate.status,
+                            )
+                              ? "default"
+                              : "secondary"
+                          }
+                          size="sm"
+                          asChild
+                        >
                           <Link
                             href={`/workspace/soc/review/memory-candidates/${detail.pattern.candidate.candidate_id}`}
                           >
@@ -451,8 +486,9 @@ export function SocMemoryCenter({
                             {["pending_review", "confirmed_candidate"].includes(
                               detail.pattern.candidate.status,
                             )
-                              ? "审核 Candidate"
-                              : "查看治理详情"}
+                              ? "审核并决定"
+                              : "查看治理记录"}
+                            <ChevronRightIcon className="size-4" />
                           </Link>
                         </Button>
                       ) : null}
@@ -694,28 +730,6 @@ export function SocMemoryCenter({
                   </div>
                 </div>
               )}
-            </div>
-          </section>
-
-          <section className="flex flex-wrap items-center justify-between gap-3 border px-4 py-3">
-            <div>
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <FlaskConicalIcon className="size-4" />
-                DEV 验证工具
-              </div>
-              <p className="text-muted-foreground mt-1 text-xs">
-                固定演练和 PKL 语料回放不属于生产 Memory inventory。
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/workspace/soc/dev/memory-validation/galaxylab">
-                  GalaxyLab 闭环
-                </Link>
-              </Button>
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/workspace/soc/corpus-validation">语料回放</Link>
-              </Button>
             </div>
           </section>
         </div>

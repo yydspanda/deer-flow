@@ -137,7 +137,7 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 确认记忆 | Confirmed Memory | `SocMemoryRecord` | 人类确认后的可检索记忆，默认仍受 retrieval policy 约束 |
 | 记忆准入 | Memory Admission | `MemoryAdmissionDecision` | 在创建候选前判断是否有人工提升信号、可复用锚点和足够理由 |
 | 检测签名 | Detection Signature | `detection_signature` facet | 租户 Profile 从 canonical detector name 生成的版本化签名，用于拆分一个 broad rule code 下的不同检测场景 |
-| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从 canonical core behavior 生成的可回放检索锚点；PingAn v4 endpoint profile 使用进程镜像/路径、稳定命令模块/开关、父服务和目标类型，排除 IP/主机/账号/随机参数；detail component 仍保留审计，弱特征不能单独产生改判权限 |
+| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从 canonical core behavior 生成的可回放检索锚点；通用 feature schema v2 增加目标网络服务与 CVE，PingAn Profile v6 / feature schema v5 再加入版本化攻击行为类型和 endpoint core，排除 IP/主机/账号/随机参数；端口、来源类别等弱特征可拆分同类但不能单独产生改判权限 |
 | 能力卡 | Capability Card | PingAn capability docs | 描述一个业务能力应落到 skill、MCP、adapter、memory 还是 eval |
 
 ---
@@ -921,7 +921,7 @@ export SOC_ROLE_VERIFIER_MODEL=deepseek-v4-pro
 export SOC_ROLE_VERIFIER_MIN_CONFIDENCE=0.35
 ```
 
-`soc-analysis-v34` asks the model for compact `soc.analysis_model_output.v4`: verdict, confidence,
+`soc-analysis-v35` asks the model for compact `soc.analysis_model_output.v4`: verdict, confidence,
 summary, reason, recommendation, request-local decision aliases such as `E-001`, and optional
 `S/A/M/C/T-001` aliases. Stable trust/method/reference rules stay in the system message; the bounded
 alert context comes first in the user message, while the task, exact response shape, and final checklist
@@ -939,6 +939,10 @@ still fail. The compact response always carries scenario, direction, role, gap a
 valid empty/not-assessed forms are used when a section has no applicable finding.
 `reference_catalogs.role_entities` separately exposes only Runtime-typed canonical/extracted entities;
 raw vendor field names, ports, counters, timestamps and event IDs remain ordinary evidence.
+The model-visible projection presents parsed JSON evidence as objects instead of escaped strings and starts
+coverage with an explicit analysis-readiness summary. Full vendor paths, parser fingerprints and the frozen
+`LLMAnalysisRequest` remain available only in the DEV/admin audit contract; they are not mislabeled as the
+literal model input.
 `soc-analysis-json-parser-v24` validates the compact core and each supplied optional item/section
 independently. Its logged local recovery is restricted to structural facts already present in the same
 response and frozen catalogs: strict decimal confidence normalization; ordered deduplication and a
@@ -1834,7 +1838,7 @@ and confirmed memory text.
 
 ```mermaid
 flowchart TD
-    S1["📝 Source<br/>correction / accepted conclusion / reviewed finding / repeated pattern"] --> A{"🚦 MemoryAdmissionService<br/>human signal + reason + reusable anchor"}
+    S1["📝 Source<br/>correction / accepted conclusion / reviewed finding / repeated pattern / explicit run promotion"] --> A{"🚦 MemoryAdmissionService<br/>human signal + reason + reusable anchor"}
     A -->|"observed_only"| O["📊 Observation / audit only<br/>no candidate noise"]
     A -->|"admitted"| C["🧬 SocMemoryCandidate<br/>pending_review"]
     C --> V["👤 Reviewer outcome<br/>final verdict + optional business fact"]
@@ -1863,6 +1867,44 @@ flowchart TD
 
 ### 10.3 Memory Center / 运营视图
 
+#### Used-Memory Correction / 已使用记忆纠错
+
+当运营人员跑完一条告警，发现本次命中的确认 Memory 有问题时，不允许回到数据库或 Memory Center
+直接覆盖正文。产品提供从告警结果中 `M-*` 记录直达的“纠正此 Memory”工作流：
+
+```mermaid
+flowchart LR
+    A["🚨 Alert Run<br/>本次已使用 MEM-X vN"] --> F["🚩 Flag issue<br/>结论错误 / 范围过宽 / 经验不完整"]
+    F --> V{"🔐 Service validation<br/>actor + idempotency + expected version<br/>exact SocMemoryUseRecord + hashes"}
+    V -->|invalid| X["⛔ Reject / Conflict<br/>不改任何状态"]
+    V -->|valid| S["⏸️ Suspend predecessor<br/>CAS 关闭旧 Memory retrieval"]
+    S --> C["🧬 Revision Candidate<br/>保存旧 Memory、Use、Run、Alert 血缘"]
+    C --> Q{"范围过宽?"}
+    Q -->|yes| P["🧩 Current Tenant Profile<br/>从 exact source Run 重算 facets + applicability"]
+    Q -->|no| K["📸 Predecessor scope snapshot"]
+    P --> R
+    K --> R
+    R["👤 Normal Candidate Review<br/>重写/生成 Business Lesson<br/>只允许收窄适用范围"]
+    R -->|reject / expire| H["🗃️ Close revision, keep old disabled<br/>结束冻结标记；显式治理后才能重新启用"]
+    R -->|confirm| N["📖 New Memory version<br/>旧 Record deprecated<br/>旧 Candidate superseded"]
+    N --> G["🛡️ Separate retrieval activation<br/>有效期 + 复核期 + CAS + audit"]
+```
+
+该流程只修订未来可复用经验，不回写当前告警的 Base/Memory/Effective Decision，也不删除过去受该
+Memory 影响的运行。每次修订都能回答：哪条告警发现问题、当时用了哪个精确版本、谁暂停了旧经验、
+新 Candidate 如何审核、最终由哪个 Memory 替代。入口 API 为
+`POST /api/soc/memory/records/{memory_id}/revision-candidates`；确认替代仍走统一
+`SocMemoryService.review_candidate()`，不会产生第二套审核实现。修订待审期间通用 retrieval activation
+不能重新打开旧版本；驳回或过期只结束 `revision_pending`，不会自动恢复旧经验。修订候选也不能沿用过期
+lineage 重新打开，必须从一次真实 Memory 命中重新发起。同一 Memory 同时只能有一个开放修订，第二个
+并行请求直接返回 conflict。
+
+`applicability_too_broad` 不是“复制旧 Memory 再改一句说明”。Service 必须加载发现误命中的 exact
+`AnalysisRun`，由当前 tenant Profile 重新投影 canonical behavior facets 和 typed applicability；Run
+缺失或无法形成可复用范围时 fail closed。检索时 tenant Profile 还会先拒绝 network service、CVE、行为族等
+实质冲突，再考虑 exact/context-only lane。为兼容已确认的历史记录，Profile 可以读取旧的 canonical
+`behavior_component` 表达，但不能读取 PingAn 原始字段，也不能把这套兼容逻辑放进 generic Runtime。
+
 正式 Memory Center 与固定 GalaxyLab DEV 工作台是两个产品面：
 
 - `/workspace/soc/memory` 展示数据库中的所有实际 Pattern、Candidate、Memory 和 Profile 状态。
@@ -1874,7 +1916,8 @@ flowchart TD
 审核对象”正文、来源和证据引用；只有可编辑状态展示审核表单，已确认状态展示关联 Memory 中持久化的
 六段 `Business Lesson`，被拒绝、替代、过期或停用的候选展示只读治理历史及合法后续动作。
 
-Memory Center 以稳定 `lineage_key` 作为一级对象，24h `aggregation_key` 只是候选生成窗口。一个模式
+Memory Center 以稳定 `lineage_key` 作为一级对象，Profile 定义的 fixed-window `aggregation_key` 只是候选生成窗口；
+generic 默认 24h，PingAn Profile v6 默认 30d。一个模式
 跨三个窗口出现 `6 + 1 + 1` 次时，页面展示一个 8 条 observation、3 个 window 的 Pattern；候选创建时
 冻结的 5 条与后续 3 条 reinforcement 分开显示，所有原始 observation 仍可审计和 replay。这样既不会
 让固定 Demo 冒充生产 Memory，也不会把长期重复模式按日期切碎。
@@ -1896,6 +1939,17 @@ Rules:
 - A workflow signal is not automatically a candidate. `MemoryAdmissionService` first requires an explicit
   human promotion/acceptance signal, a substantive reason and at least one reusable facet. Same-verdict clicks,
   ordinary notes, unreviewed domain findings and per-alert model output remain `observed_only`.
+- An analyst may explicitly promote a completed run that did not reach the automatic Pattern gate. The
+  authenticated, idempotent run-to-candidate action is itself the promotion signal and still requires a reusable
+  facet. Its note is optional; final verdict, business facts, applicability and governance reason belong to
+  Candidate review. It creates only a `manual_note` `pending_review` candidate and never changes the current
+  decision, ReviewQueue, retrieval, tenant policy, or action authority.
+- Manual promotion of a run that already owns a Pattern observation joins that exact stable Pattern lineage.
+  New candidates persist the link; legacy candidates are reconciled only by exact run plus tenant/Profile/environment
+  compatibility in the server read model. The link never fabricates recurrence support or rewrites stored history.
+- Manual promotion and correction use the same resolved tenant Profile projection as automatic Pattern learning;
+  server-owned Pattern environment is frozen into applicability. This prevents a manually created candidate from
+  degrading into broad `detection_key + environment` matching while automatic candidates remain behavior-scoped.
 - Candidate and query facets come from the same vendor-neutral builder. Alert/run IDs remain lineage metadata,
   never retrieval facets; a missing `rule_code` is supported through detection key, scenario, behavior fingerprint,
   role/entity and other available facets.
@@ -1926,7 +1980,9 @@ Rules:
   `soc.memory_pattern_aggregation.v3`: the generic fallback chooses one strongest vendor-neutral dimension;
   a server-owned tenant profile may define stricter same-class and duplicate-occurrence semantics without
   changing Runtime. Cohorts isolate tenant/environment/`simulation|operational`, and place the
-  canonical timezone-aware source event time in a fixed UTC window. The default 24-hour policy first requires
+  canonical timezone-aware source event time in a fixed UTC window. The generic profile defaults to 24 hours,
+  while a versioned tenant profile may declare another bounded default; PingAn Profile v6 uses 30 days. An
+  explicitly supplied operator/evaluation policy remains an auditable override. Each effective window first requires
   5 observations and 5 distinct alert sources, then separately requires 5 conclusive outcomes, at least 80%
   risk/benign consistency, and one consensus strong retrieval anchor before proposing exactly one frozen
   `pending_review` pattern lesson. Conflicted, unresolved, weak-anchor and low-support cohorts remain observations
@@ -1941,7 +1997,7 @@ Rules:
   strong anchors. An equivalent lesson in a later fixed window produces reinforcement observations and reuses the
   existing governed candidate instead of creating another expert task. A changed risk class or strong-anchor scope
   is a material new lesson; it may create a new candidate, but never auto-supersedes the reviewed record.
-- PingAn uses `PingAnSocMemoryProfile` behind the generic profile protocol. It consumes canonical Adapter output,
+- PingAn uses `PingAnSocMemoryProfile` v6 (feature schema v5) behind the generic profile protocol. It consumes canonical Adapter output,
   uses a canonical detection-key + behavior-fingerprint compound when both exist, treats detection-only as
   non-decisive rule context, retains behavior-only as the ruleless pattern fallback, rejects broad category-only
   cohorts, and deduplicates one upstream occurrence before support counting. Occurrence identity starts with the
@@ -1950,10 +2006,22 @@ Rules:
   a later alert with the same IP/rule but a different ZEUS alert ID is a new recurrence. PingAn legacy timestamps
   without an offset are localized by its Adapter as `Asia/Shanghai` with explicit assumption metadata; the generic
   recurrence kernel continues to require timezone-aware canonical time. Another tenant can register
-  another profile; generic contracts and persistence do not import PingAn fields.
+  another profile; generic contracts and persistence do not import PingAn fields. Its default candidate aggregation
+  window is a fixed 30-day UTC window because current PingAn detection rules are comparatively static; this is a
+  cohort boundary, not a 30-day Memory lifetime or a rolling lookback.
+- Generic feature schema v2 deterministically projects canonical destination transport/port as `network_service`
+  and public CVE identifiers as `vulnerability_id`. PingAn feature schema v5 adds a versioned
+  `attack_behavior_family`; all three participate in the behavior fingerprint, while source IP, destination IP and
+  ephemeral source port remain excluded. A same-rule `UDP/1194` proxy/tunnel cohort therefore remains cross-IP,
+  while `UDP/44818 + CVE-2017-7924` forms another cohort. Network service and source classification family are weak
+  authority anchors: they can split patterns but cannot alone create a deterministic verdict directive.
 - A quality-gated candidate carries `SocMemoryApplicabilitySpec`: profile/version/feature-schema identity, exact
   required/optional/excluded facets, and strong-anchor threshold. Retrieval evaluates this independently of ranking.
   A profile mismatch, exclusion hit, or missing required facet cannot produce an effective decision change.
+- Retrieval activation and decision authority are two separate reviewer choices. `retrieval_enabled` means the
+  lesson may be found; only a reviewed typed directive on a `detection_decision` record may change the effective
+  verdict. The Candidate/record UI must show these as “可检索” and “精确匹配后可参与结论” rather than one ambiguous
+  switch.
 - Confirmation requires explicit human action through `SocMemoryService`.
 - Confirmation does not make a record retrievable. `SocMemoryService.set_retrieval_activation()` is the
   only enable/disable boundary and requires an authorized memory governor, reason, expected record
@@ -1983,6 +2051,9 @@ Rules:
   `record_applicability` may promote an exact canonical candidate facet, such as one reviewed service
   URL, from optional to required. This narrows tenant Memory through the generic applicability contract;
   it does not add PingAn raw-field semantics to Runtime.
+  Human-facing applicability text uses localized labels plus the original facet key/value, for example
+  `必须匹配「行为强度（behavior_strength）」：强特征（strong）`; the typed applicability object remains the
+  machine source of truth, and legacy English lesson text is localized only as a read projection.
 - Memory quality is measured through the read-only `soc.memory_heldout_eval_fixture.v1` /
   `soc.memory_heldout_eval_report.v1` lane. Memory construction alerts and held-out query alerts must be
   disjoint; each accepted query carries independent analyst verdict/review truth and pairwise labels for every
@@ -2390,6 +2461,13 @@ Acceptance criteria for the first complete demo:
 - Lead Agent can answer around the review item using bounded context.
 - Read-only action/MCP result becomes `InvestigationEvidence`.
 - Analyst note/correction can create pending memory candidate.
+- Analyst can explicitly promote any completed run into the same pending-candidate governance flow.
+- DEV operators can inspect the selected alert's persisted Runtime/Provider/Pattern timeline with per-phase
+  status, duration and bounded quality metrics while the run is executing.
+- DEV administrators can explicitly open and download a full persisted audit bundle for one completed run:
+  raw source input, exact canonical normalization, entities/facts, bounded LLM input and structured output,
+  quality/grounding/materiality, Decision lineage, and Pattern/Memory writes. This heavyweight view is
+  isolated from live polling, visibly marked DEV/MOCK, read-only, and never re-runs the Runtime.
 - External disposition can sync status/reason into review context.
 - No high-risk action is executed from model/Memory text alone. Every execution has a human Grant or
   reviewed automatic-policy authorization plus exact adapter and append-only execution lineage.

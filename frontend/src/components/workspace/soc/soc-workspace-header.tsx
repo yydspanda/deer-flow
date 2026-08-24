@@ -118,7 +118,7 @@ export function SocWorkspaceHeader({
           </div>
         </div>
         {actions ? (
-          <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
+          <div className="flex w-full flex-wrap items-center gap-2 border-t pt-3 lg:w-auto lg:justify-end lg:border-t-0 lg:border-l lg:pt-0 lg:pl-4">
             {actions}
           </div>
         ) : null}

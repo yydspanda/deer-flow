@@ -32,6 +32,44 @@
 | 当前下一刀 | 将最新 clean-commit source/private 迁移包复制到内网；在 `/Users/zhangjianming627/deer-flow` 运行无 Docker `check -> install -> start`，再恢复 D12-B/PI-01 真实 Provider 验证。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
+## 2026-08-21 — PingAn Memory network-pattern precision and readable applicability
+
+- 通用 canonical Memory feature schema 升级到 v2：从归一化 network entity 投影 destination
+  `protocol/port` 为 `network_service`，并从 bounded current-alert evidence 提取标准 CVE 为
+  `vulnerability_id`。Generic Profile 同步升级为 v2；旧 typed record fail closed，不静默继承 directive。
+- PingAn Profile 升级为 v6 / feature schema v5。版本化 fingerprint 加入 network service、CVE 和
+  `attack_behavior_family`，继续排除源/目的 IP、ephemeral source port 和 lineage。Network service 与来源
+  classification family 只负责拆分同类、属于 weak authority；CVE、MITRE、process 等具体事实才可提供
+  strong behavior，避免宽类别单独授予未来改判权限。
+- Pattern signature 冻结最多 20 组的显式 facet 白名单；query projection 可保留更丰富特征，但不会再因
+  新增 facet 违反 `MemoryPatternSignature` 上限。真实 DEV SQLite 只读重投影验证：同
+  `RPAADM_000558` 下的 `2448168/2457097/2457177/2457581` 收敛为跨 IP 的
+  `UDP/1194 + proxy_tunnel_activity`；`2456140` 通过
+  `UDP/44818 + CVE-2017-7924 + vulnerability_exploitation` 独立成组。
+- 冻结 210 条 corpus 的指纹覆盖从 `189` 增至 `192`，但 broad recurrent group 从 `21/118 alerts`
+  收紧为 `14/59 alerts`，达到候选窗口的 group 从 `5/36 alerts` 收紧为 `2/18 alerts`；这表示新增特征
+  提高了可解释覆盖，同时停止把同 rule 下的不同网络行为凑成一个候选，不表示真实召回率已经验收。
+- Business Lesson 与审核页 applicability 改为中文标签并保留原始 key/value，例如
+  `必须匹配「行为强度（behavior_strength）」：强特征（strong）`。新草稿直接生成该格式；历史英文
+  Lesson 仅在前端只读投影中本地化，不改写 DB 审计记录。
+- 验证：PingAn Profile、Pattern、Runtime Memory Context 与 Lesson 聚焦后端回归 `65 passed`；前端
+  TypeScript 通过，Review workbench Playwright 聚焦用例通过。真实五条验证仅做 read-only projection，
+  未改当前 DEV candidate/Memory 状态。
+
+## 2026-08-20 — Corpus DEV full-chain audit surface
+
+- 保留 alert-scoped 轻量 execution 轮询，新建独立按需加载的管理员 DEV audit bundle；后端按固定顺序
+  输出 Run manifest、完整原始输入、解析/归一化、实体、事实、LLM request/result、质量校验、Decision
+  lineage 和 Pattern/Memory write，不重新运行 Runtime/LLM，也不修改任何业务状态。
+- `AnalysisRun` 新增 exact `normalized_alert` 持久化，保证未来复盘看到的是当次 Adapter 产物而不是新代码
+  重算结果；旧 run 明确标记 normalization artifact 为 partial，并仅展示 frozen request 的 fallback 投影。
+- 语料验证页新增 DEV/MOCK 全链路审计视图，支持阶段目录、审核关注点、指标、完整 JSON、复制和单阶段/
+  全 Bundle 下载。原 execution API 继续保持轻量，巨量证据只在管理员显式打开后加载。
+- 后端 `test_soc_corpus_workbench.py` 为 `9 passed`，Ruff、前端 TypeScript/ESLint 和 corpus Playwright
+  为 `1 passed`。重启并预热 DEV 服务后页面恢复；首次 webpack 冷编译约 33 秒，预热后同一路由约
+  0.1-0.2 秒。真实已持久化 `2445395` 可生成 10 个阶段、约 827 KB 的审计 bundle；它是功能上线前的
+  legacy run，未保存新增 `normalized_alert`，因此只该阶段正确显示 `partial`，新 run 会保存完整产物。
+
 ## 2026-08-19 — PingAn Apple Silicon native Host DEV handoff
 
 - 新增 `scripts/soc_pingan_macos_host_dev.py`，在不改 DeerFlow 通用启动器的前提下提供
@@ -7633,3 +7671,183 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 进入 `soc normalize suggest` 的离线建议设计：只读 drift/sample report，输出候选 mapping patch，不自动应用。
+
+### 2026-08-20 — Full labeled corpus DEV workbench v2
+
+- DEV 语料切换为 `full_alert_dams_labeled_merged.pkl`：共 4,343 条告警，其中 3,566 条带 ZEUS 运营处置标签，777 条无标签；原始 payload 全量保留在 gitignored 数据产物中。
+- 新增受限 PKL 构建器、轻量 workbench index 和 SQLite 随机访问 payload store；列表接口不加载或返回 1.2 GB 原始 payload，单条运行时才按 `alert_id` 读取并校验哈希。
+- 时间边界：按 canonical event time 升序回放；同一 Memory group 中后续告警必须等待前序告警完成，禁止未来 Memory 泄漏。运营标签在 Runtime 决策前隐藏，决策完成后才揭示。
+- 评测边界：分别记录 Base Decision 与 Effective Decision 到 `忽略/转交/无法判断` 的投影，并分别和历史运营标签对照；标签是运营处置结果，不冒充独立技术真值。
+- 66 条标签时间早于事件时间的数据保留并标记 `label_precedes_alert`，不阻塞 DEV 跑通，但不计入准确率或 Memory 影响。
+- PingAn Adapter 修复 10/13/16/19 位 Unix epoch 解析，避免 13 位毫秒时间戳被 Python ISO parser 误读为 18 世纪年份。
+- 首屏 API 省略未运行记录的 `null` 字段；完整 state JSON 从约 9.8 MB 降至约 5.8 MB，保留所有非空和布尔契约字段。
+- 验证：
+  - corpus/workbench/timestamp 定向后端回归：`10 passed`。
+  - `cd frontend && pnpm check`：passed。
+  - Next.js production build：passed。
+  - corpus validation Playwright：`1 passed`，覆盖标签延迟揭示、Base/Effective 对照和时间顺序阻塞。
+- 已知基线：`backend/tests/test_soc_agent_runtime.py` 全文件仍有 2 个既存 Memory demo 断言与当前治理契约不一致；与本切片无关，未在语料工作中改变 Memory 业务契约。
+
+### 2026-08-20 — Corpus environment isolation and internal LAN host access
+
+- 修复同一 Gateway 承载 `dev` Memory 工作台与 `dev-corpus-eval` 全量语料工作台时的 composition 冲突：新增实例级 `runtime_environment`，统一作用于 confirmed Memory、tenant policy 和 automation observer；普通入口的进程级环境一致性检查保持不变。
+- 平安内网 Mac host driver 的 `start` 默认发现默认/`en0/en1` 网卡上的私网 IPv4，注入 Next.js `allowedDevOrigins` 并打印 `http://<mac-ip>:2026`；保留 `--allowed-origin` 扩展精确主机，新增 `--local-only` 强制关闭 LAN。
+- LAN 自动发现只接受非 loopback/link-local 的 private IPv4；检测失败时 fail closed，不使用通配 origin，不禁用认证，也不修改通用 Docker 的 loopback 默认绑定。
+- 验证：environment/workbench 定向测试 `12 passed`；Mac host driver 测试 `27 passed`；Gateway 已重启并通过工作台健康检查。
+
+### 2026-08-20 — PingAn fixed 30-day Memory aggregation window
+
+- 通用 Memory Kernel 继续默认使用 24 小时 fixed UTC window；`SocMemoryProfileIdentity` 新增可选、受限的
+  `aggregation_window_seconds`，tenant Profile 可声明版本化默认值，显式 operator/eval policy 仍可覆盖。
+- `PingAnSocMemoryProfile` 升级为 v5（feature schema 保持 v4），默认窗口改为 30 天。旧 v4/24h observation
+  保留为历史，不静默改写或混入 v5 candidate。
+- 全量语料 workbench index 升级到 v3，冻结 Profile 身份和 `2592000` 秒窗口并 fail closed 校验；已重建
+  4,343 条语料索引及随机访问 payload store。
+- 实测“红队IP监控”目标强指纹在新窗口的最大同窗支持从 5 增至 220；固定窗口边界仍存在，本例在北京时间
+  `08/05 08:00` 恰好跨界，前 2 条属于上一窗口，后续窗口包含 220 条。
+- 定向验证覆盖通用 24h、PingAn 默认 30d、显式 24h override、Profile 版本和 index metadata；扩大窗口后
+  210 条基线中 candidate-ready window 从 2 个/12 条变为 5 个/36 条，GalaxyLab 最大同窗支持从 6 增至 11。
+- 本地 DEV SQLite 使用已保存 Runtime Run、零 LLM 调用追加重投影 13 条 v4 observation 为 v5；数据库核验
+  v4 window=1 天、v5 window=30 天。旧红队 pending candidate 被显式 supersede，新建 v5 红队和 GalaxyLab
+  pending candidate；旧已确认 v4 Memory 仅作为 legacy history 保留，未自动迁移或启用。
+
+### 2026-08-20 — Manual run promotion and live Runtime trace
+
+- 新增受治理的人工提炼入口：分析师可在任意已完成 `AnalysisRun` 上填写充分复用理由，通过
+  `SocReviewService.promote_run_to_memory()` 和
+  `POST /api/soc/memory/runs/{run_id}/promote` 创建 `manual_note` 来源的 `pending_review` Candidate。
+- 人工 Candidate 以 run/alert 作为稳定身份；重复请求或修改理由复用同一审核任务。已有自动 Pattern
+  Candidate 时，DEV 页面直接引导审核该 Candidate，不再提供制造重复候选的按钮。
+- 人工入口只绕过自动 Pattern 的 support/distinct-source 门槛，不绕过 `MemoryAdmissionService`、专家审核、
+  Business Lesson 或 retrieval activation；要求可信身份、SOC role、`Idempotency-Key`、不少于 20 个非空白
+  字符的理由和可复用 facet，并保持当前 run decision、ReviewQueue 和动作权限不变。
+- 全量语料工作台新增 alert-scoped 轻量 execution endpoint，将真实持久化 `AnalysisRun.steps`、active
+  Provider journal 和 Pattern Observation 映射为 Normalize、Facts、Context、LLM、Validate、Decision、Memory
+  七阶段轨迹。前端只在选中告警运行时每 800ms 轮询该 endpoint，不重取 4,343 条全量 state。
+- 轨迹展示每阶段/step 状态、耗时、warning/脱敏 error、模型与 Token、证据/上下文/Skill 数量、Grounding、
+  Decision 和 Observation/Candidate ID；不返回 raw payload、Evidence/Context 正文、Prompt、模型原文、
+  Provider response 或 secret。
+- 语料详情新增“提炼 Candidate”对话框；成功后留在当前告警并提供统一 Memory Candidate 审核入口。列表和详情统一读取
+  Profile 的 `pattern_window_days`，移除写死的 `24h` 显示；点击运行会自动定位到 Runtime Trace，并在
+  完成态刷新后保持轨迹处于视野中。
+- 验证：
+  - `backend/.venv/bin/pytest backend/tests/test_soc_agent_service.py backend/tests/test_soc_memory_router.py backend/tests/test_soc_corpus_workbench.py backend/tests/architecture/test_soc_agent_boundaries.py -q`：`136 passed`，包含 active Provider journal 的真实 `running` 投影。
+  - 后端 touched-file `ruff check` 与 `ruff format --check`：passed。
+  - 前端 touched-file ESLint 与 `pnpm typecheck`：passed。
+  - `pnpm exec playwright test tests/e2e/soc-corpus-validation.spec.ts --project=chromium`：`1 passed`，覆盖运行、
+    七阶段轨迹、Token 指标、人工理由和待审 Candidate 创建。
+
+### 2026-08-20 — Readable model projection and professional JSON audit viewer
+
+- `soc-analysis-v35` 将模型可见 evidence 从转义 JSON 字符串改为结构化 object/array；coverage 先给出
+  `analysis_readiness`，再提供 Message 解析、模型投影、受记录省略和高价值缺口摘要。完整路径、parser
+  fingerprint/version 和冻结请求继续只保留在 Runtime 审计层。
+- DEV 全链路审计的第 6 阶段拆成“模型实际可见”和“Runtime 审计契约”两个视图；只有 Run Prompt 与当前
+  Builder 版本一致时标记为精确重建，旧 Run 明确显示部分可用，不把当前投影冒充历史逐字输入。
+- 原始 `<pre>` 更换为延迟加载的只读 CodeMirror JSON 浏览器，支持语法高亮、行号、折叠、搜索跳转、
+  长行换行、格式化/紧凑切换、扩大视区、复制和下载。
+
+### 2026-08-21 — Corpus Candidate feedback and decision visibility
+
+- 全量语料运行若新生成 Pattern Candidate，会立即显示一次通知，并在当前告警详情保留醒目的 Candidate 状态和
+  “立即审核”入口；人工 Candidate 使用同一展示，不要求运营人员切换到 Memory Center 才能发现。
+- 搜索、适配层级、来源、标签对比、同类组、“仅未运行”和选中告警使用 tab-scoped `sessionStorage` 保留；它只是
+  页面连续性状态，不进入服务端业务契约或持久化数据库。
+- 详情顶部新增基于服务端 Effective Decision 的安全结论带，列表使用风险色左边界和结论图标；React 不重新计算
+  verdict、review requirement 或动作权限。
+- Candidate 高级匹配范围明确拆成后端 Profile 锁定的 required facets 和审核人可勾选的 optional narrowing：
+  勾选会把已有可选 facet 提升为必需条件，取消只删除本次新增限制；浏览器不能新增任意字段、删除强锚点或扩大范围。
+- 验证：`pnpm typecheck`、`pnpm lint`、`git diff --check` 均通过；认证关闭的临时 Next DEV 上执行
+  `soc-corpus-validation.spec.ts` 与 `soc-review.spec.ts`，`10 passed`。直接复用已登录 DEV 栈的第一次 Playwright
+  尝试被登录页拦截，属于测试入口配置问题，不是功能失败。
+
+### 2026-08-21 — SOC workspace action hierarchy audit
+
+- `SocWorkspaceHeader` 将页面命令区与标题/说明区用稳定边界分开，所有 SOC 页面共享该层级，不改 DeerFlow
+  全局工作区或服务端业务契约。
+- Memory Center 将“审核 Memory Candidate”提升为唯一主命令并显示待审数量；刷新改为图标工具按钮。待审指标、
+  已确认 Memory 和 Pattern 详情动作使用不同状态色与操作语义。
+- Candidate 台账明确区分待处理和历史记录：待审项使用警示左边界与“审核并决定”主按钮，终态项使用
+  “查看治理记录”次按钮。详情页增加返回台账入口，并用独立、固定的审核决定栏区分 AI 草稿、确认、放弃、过期和
+  停用操作。
+- 语料验证和 GalaxyLab 的 Candidate 入口统一为“审核并决定”；存在 Candidate 时，它优先于告警复核和人工提炼。
+- 视觉语义已写入 E2E：主命令 `default`、历史查看 `secondary`、放弃/停用 `destructive`。类型检查、定向 ESLint
+  通过；SOC Memory/Review 串行回归 `9 passed`，Candidate 台账/详情视觉追踪 `2 passed`，Memory Center 追踪
+  `1 passed`。
+- Memory Center 删除底部 `DEV 验证工具`、`GalaxyLab 闭环` 和 `语料回放`快捷入口；验证路由保留，但不再混入
+  生产治理页面。语料回放继续由独立的“语料验证 DEV”导航承载。
+
+### 2026-08-21 — Used-Memory versioned correction workflow
+
+- 告警详情的每条真实 `MEM-*` 召回记录新增“纠正此 Memory”入口，携带本次 `run_id` 进入独立纠错页；支持
+  `结论错误`、`范围过宽`、`经验不完整` 三类问题和充分业务理由。
+- 新增 `SocMemoryService.propose_revision_candidate()` 与
+  `POST /api/soc/memory/records/{memory_id}/revision-candidates`。服务核验可信 actor、幂等键、expected version、
+  该 run 实际使用的 `SocMemoryUseRecord` 及 content/facet hash；无关告警、旧版本和并发修改全部 fail closed。
+- 核验通过后，一个 mutation transaction 内 CAS 暂停旧 Memory retrieval、创建带 predecessor/use/run/alert
+  lineage 的 `memory_revision` pending candidate 并写 audit。旧 Memory 正文和历史 Decision 永不原地改写。
+- 修订候选复用现有 Business Lesson/适用范围审核。确认后创建新 record，旧 record 进入 `deprecated` 并指向
+  successor，旧 candidate 进入 `superseded`；新 record 的 retrieval 是否启用仍受独立治理。拒绝修订不会
+  静默恢复旧版本。
+- 生命周期补强：同一 Memory 只允许一个 open revision；修订待审期间禁止重新启用 predecessor；reject/expire 以 CAS 结束 `revision_pending` 但保持 retrieval
+  关闭；后续可显式恢复。被 reject 的修订不得以旧 lineage reopen，必须从新的真实 Memory use 发起。
+- 验证：后端相关回归 `88 passed`（其中修订工作流 `12 passed`），覆盖 in-memory/SQLite 完整替代、幂等、错误 run、已暂停记录 CAS、单 Memory 开放修订互斥、待审重启拦截、驳回后显式恢复、
+  stale-lineage reopen 拦截、跨 Repository 持久化及三处逐写入 rollback；touched backend `ruff check`、前端 `pnpm check` 通过；Corpus Playwright `3 passed`，覆盖
+  告警结果到修订 Candidate 的完整点击与请求契约。
+
+### 2026-08-24 — Manual promotion joins the stable Memory Pattern lifecycle
+
+- 修复人工提前提炼确认成功后，Candidate/Memory 已写入数据库但 Memory Center 仍显示“观察聚合中”的 read-model 缺口。
+- 新人工 Candidate 在 source/top-level metadata 持久化 exact Pattern lineage；既有记录按 exact run、alert、tenant、
+  Profile/schema 和 environment 只读补链，不改写历史、不增加 Pattern observation/support。
+- 当前 DEV 真实记录 `MC-76F57F121CFE -> MEM-70C8BABAF1D3` 已投影到
+  `红队IP监控 + canonical behavior`，生命周期为 `memory_active`、retrieval enabled，原 support count 保持 3。
+- 内存仓库与 SQLite Memory Center 回归 `4 passed`，手动提炼服务 lineage 持久化回归 `1 passed`；相关 Ruff 与
+  Python compile 检查通过。
+
+### 2026-08-24 — Manual Candidate lineage governance and one Memory-use effect
+
+- 人工提前提炼现在冻结点击时可见的 Pattern cohort：保存 observation/source 清单、support/distinct-source 数、
+  evidence-set hash 和 exact lineage。后续同 lineage 告警达到自动阈值时，返回原人工 Candidate，标记
+  `lineage_governance`，不再创建第二条自动 Candidate；新增告警继续作为 replay/reinforcement observation。
+- Memory use 幂等身份从单纯 `M-* context_ref` 收紧为 `(run_id, memory_id, memory_version)`。同一不可变 Memory
+  在同一次 Run 被重复投影时，Decision contributor 与持久化 use 均只保留一个最终
+  `context_only/reinforced/overridden/conflicted` 作用，并优先记录真正参与 Decision transition 的引用，
+  Memory health 只累计一次。
+- 兼容边界：旧 use 记录通过 run + Memory/version 查询复用；未增加 DB migration；Pattern 自动 Candidate、
+  equivalent lesson、人工审核、修订和 supersession 原有职责不变。
+- 验证：两个新增约束测试先失败后通过；`test_soc_memory_patterns.py`、`test_soc_memory_evolution.py` 和
+  `test_soc_agent_service.py` 合计 `124 passed`，相关文件 `ruff check` 通过。
+
+### 2026-08-24 — Manual promotion no longer duplicates Candidate review
+
+- “提前提炼”改为显式确认动作：可信分析师点击后即可把已完成 Run 送入 `pending_review` Candidate，不再强制先写
+  20 字沉淀理由；弹窗只保留“补充说明（可选）”。
+- `MemoryAdmissionService` 仅对 exact `manual_note + run_to_candidate + run_id + alert_id` 放宽文字要求；普通
+  review note、correction、Lead Agent 采纳和 domain finding 仍执行原有充分理由门槛。
+- 最终判断、业务事实、适用范围、处置建议和治理理由仍由 Candidate 审核页负责。可选备注不授予 retrieval、改判或
+  自动处置权限；无备注时 mutation audit 记录可信 actor、时间、Run 和显式操作，不伪造业务理由。
+- Gateway 新契约使用可选 `note`，并暂时接受旧 `reason` 作为兼容别名；同一 run/alert 的稳定 Candidate 身份和
+  Pattern lineage governance 保持不变。
+- 验证：后端 Admission/Router/Service/Pattern 定向回归 `143 passed`；认证关闭的 Next DEV 上执行 Corpus
+  Playwright `3 passed`，覆盖空请求创建待审 Candidate。
+
+### 2026-08-24 — Same-rule cross-behavior Memory isolation and scope repair
+
+- 修复 `RPAADM_000558` 下 HTTP、PLC 和 OpenVPN 不同行为因旧人工 Candidate 只要求
+  `detection_key + environment` 而同时召回的问题。Generic Retrieval 继续保持租户无关；PingAn Profile
+  在 applicability 前拒绝 network service、CVE 和 attack behavior family 的 canonical 语义冲突，并兼容
+  已确认旧记录中 `behavior_component*` 的规范化表达。
+- 人工 run promotion/correction 现在使用 resolved tenant Profile 投影 exact persisted run，并冻结服务端
+  Pattern environment；不再因人工入口退化为 generic facets。CLI search 与 held-out eval 也注入同一 Profile
+  registry，避免 Web、CLI 和评测结果漂移。
+- `applicability_too_broad` 修订现在要求 exact `SocMemoryUseRecord` 及 source `AnalysisRun`，通过当前 Profile
+  重建 facets/applicability；缺 Run、血缘不一致或范围不足时 fail closed。旧 Record 保持不可变并先暂停，新的
+  decision directive 仍必须由运营人员在 Candidate 审核中显式选择。
+- DEV 实例 `2493494 / RUN-87D397B113E8` 只读复验从 3 条同-rule Memory 收敛为唯一 HTTP 经验；PLC 与
+  OpenVPN 均计入 `skipped_not_applicable`。已创建待审范围修订 `MC-639EDF5F0647`，旧
+  `MEM-F89C52956DCF` 升至 v3 并暂停 retrieval，等待人工确认新强指纹范围及 future-match 用途。
+- 旧 held-out eval 默认基线仍固定 Profile v4，已新增并切换到 Profile v6 / feature schema v5 基线；v4 JSON
+  作为历史冻结证据保留并继续 fail closed，不做静默迁移。Memory eval 回归 `8 passed`。
+- 验证：相关后端回归 `65 passed`，修订工作流 `13 passed`，touched Ruff 全通过，前端 ESLint + TypeScript
+  通过；Candidate 用途开关 Playwright `1 passed`；DEV Gateway/Frontend 重启并完成全部 SOC route warmup。

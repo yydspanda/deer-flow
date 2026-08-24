@@ -9,6 +9,7 @@ from soc_agent.contracts import (
     SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
     ActorContext,
     ActorType,
+    AnalysisContextCatalogItem,
     AnalysisContextReferenceKind,
     AnalysisRun,
     CorrectionRecord,
@@ -16,6 +17,7 @@ from soc_agent.contracts import (
     EntrySurface,
     ServiceRequestContext,
     SocAutomationContributorKind,
+    SocAutomationContributorRef,
     SocAutomationContributorRole,
     SocDecisionTransitionKind,
     SocMemoryApplicabilityReport,
@@ -101,7 +103,7 @@ class SocMemoryEvolutionService:
         self.capture_run_usage(run)
 
     def capture_run_usage(self, run: AnalysisRun) -> list[SocMemoryUseRecord]:
-        """Persist one idempotent use record per projected M-* item."""
+        """Persist one final use effect per Run and immutable Memory version."""
 
         if self._mutation_uow is not None and not self._transaction_active:
             with self._mutation_uow.mutation_transaction() as repository:
@@ -129,7 +131,10 @@ class SocMemoryEvolutionService:
         transition = self._latest_transition(run.run_id)
         effective_verdict = transition.after.verdict if transition is not None else run.decision.verdict
         contributor_by_ref = {item.ref_id: item for item in (transition.contributors if transition is not None else []) if item.kind is SocAutomationContributorKind.CONFIRMED_MEMORY}
-        uses: list[SocMemoryUseRecord] = []
+        projections_by_memory: dict[
+            tuple[str, int],
+            list[tuple[AnalysisContextCatalogItem, float, str, str]],
+        ] = {}
         for item in run.llm_analysis_request.context_catalog:
             if item.kind is not AnalysisContextReferenceKind.CONFIRMED_MEMORY:
                 continue
@@ -140,10 +145,36 @@ class SocMemoryEvolutionService:
             facets_hash = item.metadata.get("record_facets_hash")
             if not isinstance(memory_id, str) or not isinstance(memory_version, int) or not isinstance(score, (int, float)) or not isinstance(content_hash, str) or not isinstance(facets_hash, str):
                 continue
-            idempotency_key = f"memory-use:{run.run_id}:{item.context_ref}:v{memory_version}"
+            projections_by_memory.setdefault(
+                (memory_id, memory_version),
+                [],
+            ).append((item, float(score), content_hash, facets_hash))
+
+        existing_by_memory: dict[tuple[str, int], SocMemoryUseRecord] = {}
+        for existing in self._repository.list_memory_uses(
+            run_id=run.run_id,
+            limit=10_000,
+        ):
+            existing_by_memory.setdefault(
+                (existing.memory_id, existing.memory_version),
+                existing,
+            )
+
+        uses: list[SocMemoryUseRecord] = []
+        for (memory_id, memory_version), projections in projections_by_memory.items():
+            existing = existing_by_memory.get((memory_id, memory_version))
+            if existing is not None:
+                uses.append(existing)
+                continue
+            item, score, content_hash, facets_hash = _select_memory_projection(
+                projections,
+                contributor_by_ref,
+            )
+            idempotency_key = f"memory-use:{run.run_id}:{memory_id}:v{memory_version}"
             existing = self._repository.find_memory_use_by_idempotency_key(idempotency_key)
             if existing is not None:
                 uses.append(existing)
+                existing_by_memory[(memory_id, memory_version)] = existing
                 continue
             contributor = contributor_by_ref.get(item.context_ref)
             effect = _use_effect(transition, contributor)
@@ -159,7 +190,7 @@ class SocMemoryEvolutionService:
                 tenant_id=run.llm_analysis_request.tenant_id,
                 context_ref=item.context_ref,
                 retrieval_policy_version=str(item.metadata.get("retrieval_policy_version") or "soc.memory_retrieval_policy.v2"),
-                retrieval_score=float(score),
+                retrieval_score=score,
                 matched_facets=_matched_facets(item.metadata),
                 applicability_report=applicability,
                 base_verdict=run.decision.verdict,
@@ -172,6 +203,7 @@ class SocMemoryEvolutionService:
             self._repository.save_memory_use(record)
             self._increment_use_health(record)
             uses.append(record)
+            existing_by_memory[(memory_id, memory_version)] = record
         return uses
 
     def get_lineage(self, memory_id: str) -> SocMemoryLineageReport:
@@ -625,6 +657,22 @@ def _use_effect(transition, contributor) -> SocMemoryUseEffect:
     if contributor.role is SocAutomationContributorRole.OVERRIDES:
         return SocMemoryUseEffect.OVERRIDDEN
     return SocMemoryUseEffect.REINFORCED
+
+
+def _select_memory_projection(
+    projections: list[tuple[AnalysisContextCatalogItem, float, str, str]],
+    contributor_by_ref: dict[str, SocAutomationContributorRef],
+) -> tuple[AnalysisContextCatalogItem, float, str, str]:
+    """Prefer the projection that actually contributed to the final decision."""
+
+    for projection in projections:
+        contributor = contributor_by_ref.get(projection[0].context_ref)
+        if contributor is not None and contributor.role is SocAutomationContributorRole.OVERRIDES:
+            return projection
+    for projection in projections:
+        if projection[0].context_ref in contributor_by_ref:
+            return projection
+    return projections[0]
 
 
 def _applicability_report(metadata: dict) -> SocMemoryApplicabilityReport:

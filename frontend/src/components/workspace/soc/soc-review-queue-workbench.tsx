@@ -5,6 +5,7 @@ import {
   BotIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   ClipboardCheckIcon,
   CircleIcon,
@@ -117,6 +118,15 @@ const MEMORY_CANDIDATE_STATUS_OPTIONS: {
   { value: "expired", label: "已过期" },
   { value: "deprecated", label: "已停用" },
 ];
+
+const MEMORY_REVISION_ISSUE_LABELS: Record<
+  NonNullable<SocMemoryCandidate["revision_lineage"]>["issue_type"],
+  string
+> = {
+  incorrect_conclusion: "结论错误",
+  applicability_too_broad: "范围过宽",
+  lesson_incomplete: "经验不完整",
+};
 
 const VERDICT_OPTIONS: { value: SocVerdict; label: string }[] = [
   { value: "true_positive", label: "真实攻击" },
@@ -244,14 +254,13 @@ function reviewedMemoryBusinessLesson(
   );
   const handlingGuidance = reviewedLessonItems(draft.lessonHandlingGuidance);
   const applicabilityConditions = applicability
-    ? Object.entries(applicability.required_facets).map(
-        ([key, values]) =>
-          `Required canonical facet ${key}: ${values.join(", ")}`,
+    ? Object.entries(applicability.required_facets).map(([key, values]) =>
+        memoryApplicabilityCondition(key, values),
       )
     : [];
   if (applicability?.minimum_optional_matches) {
     applicabilityConditions.push(
-      `At least ${applicability.minimum_optional_matches} reviewed optional facet groups must also match.`,
+      `还必须至少匹配 ${applicability.minimum_optional_matches} 组经审核的可选条件。`,
     );
   }
   if (
@@ -379,8 +388,12 @@ function hasObjectEntries(value: Record<string, unknown> | null | undefined) {
 
 function candidateSourceLabel(candidate: SocMemoryCandidate) {
   const source = candidate.source;
+  const sourceTypeLabel =
+    source.source_type === "memory_revision"
+      ? "Memory 修订"
+      : source.source_type;
   const refs = [
-    source.source_type,
+    sourceTypeLabel,
     source.run_id ? `run ${source.run_id}` : null,
     source.alert_id ? `alert ${source.alert_id}` : null,
     source.queue_id ? `queue ${source.queue_id}` : null,
@@ -399,6 +412,19 @@ function candidateStatusLabel(status: SocMemoryCandidate["status"]) {
     deprecated: "已停用",
   };
   return labels[status] ?? status;
+}
+
+function candidateStatusClass(status: SocMemoryCandidate["status"]) {
+  if (["pending_review", "confirmed_candidate"].includes(status)) {
+    return "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100";
+  }
+  if (status === "confirmed") {
+    return "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100";
+  }
+  if (["rejected", "expired", "deprecated"].includes(status)) {
+    return "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200";
+  }
+  return "border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-100";
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -435,12 +461,114 @@ function candidateRiskClassLabel(value: string | null) {
   return "待人工判断";
 }
 
+const MEMORY_FACET_LABELS: Record<string, string> = {
+  attack_behavior_family: "攻击行为类型",
+  detection_key: "检测键",
+  detection_signature: "检测签名",
+  rule_code: "规则编码",
+  rule_name: "规则名称",
+  behavior_fingerprint: "行为指纹",
+  behavior_strength: "行为强度",
+  behavior_component: "行为特征",
+  behavior_component_core: "核心行为",
+  behavior_component_strong: "强行为特征",
+  behavior_component_weak: "弱行为特征",
+  environment: "运行环境",
+  source_type: "告警来源类型",
+  source_system: "来源系统",
+  product: "安全产品",
+  scenario_key: "安全场景",
+  role_entity: "角色实体",
+  entity: "关联实体",
+  category: "告警类别",
+  severity: "严重级别",
+  network_service: "目标网络服务",
+  vulnerability_id: "漏洞标识",
+  service_uri: "服务地址",
+};
+
+const MEMORY_FACET_VALUE_LABELS: Record<string, Record<string, string>> = {
+  attack_behavior_family: {
+    command_and_control: "命令与控制",
+    denial_of_service: "拒绝服务",
+    proxy_tunnel_activity: "代理或隧道活动",
+    vulnerability_exploitation: "漏洞利用",
+  },
+  behavior_strength: {
+    strong: "强特征",
+    weak_only: "仅弱特征",
+  },
+  environment: {
+    dev: "开发环境",
+    "dev-corpus-eval": "DEV 语料验证",
+    local: "本地环境",
+    prd: "生产环境",
+    stg: "预发布环境",
+  },
+  source_type: {
+    edr: "终端检测与响应",
+    hids: "主机入侵检测",
+    ndr: "网络检测与响应",
+    nids: "网络入侵检测",
+  },
+};
+
+function memoryFacetLabel(key: string) {
+  return MEMORY_FACET_LABELS[key] ?? key;
+}
+
+function memoryFacetValueLabel(key: string, value: string) {
+  const label = MEMORY_FACET_VALUE_LABELS[key]?.[value.toLowerCase()];
+  return label ? `${label}（${value}）` : value;
+}
+
+function memoryApplicabilityCondition(key: string, values: string[]) {
+  return `必须匹配「${memoryFacetLabel(key)}（${key}）」：${values
+    .map((value) => memoryFacetValueLabel(key, value))
+    .join(", ")}`;
+}
+
+function memoryLessonDisplayValue(
+  section: (typeof MEMORY_LESSON_BLUEPRINT)[number]["key"],
+  value: string,
+) {
+  if (section === "applicability_conditions") {
+    const required = /^Required canonical facet ([^:]+):\s*(.+)$/.exec(value);
+    if (required) {
+      const key = required[1];
+      const rawValues = required[2];
+      if (!key || !rawValues) return value;
+      return memoryApplicabilityCondition(
+        key,
+        rawValues.split(/,\s*/).filter(Boolean),
+      );
+    }
+    const optional =
+      /^At least (\d+) reviewed optional facet groups must also match\.$/.exec(
+        value,
+      );
+    if (optional?.[1]) {
+      return `还必须至少匹配 ${optional[1]} 组经审核的可选条件。`;
+    }
+  }
+  if (
+    section === "invalidation_conditions" &&
+    value === "任一必需 canonical facet 与当前告警不匹配时，该经验失效。"
+  ) {
+    return "任一系统必需匹配条件与当前告警不一致时，该经验失效。";
+  }
+  return value;
+}
+
 function candidateScopeHighlights(candidate: SocMemoryCandidate) {
   const definitions = [
-    { key: "rule_code", label: "规则" },
-    { key: "product", label: "产品" },
-    { key: "environment", label: "环境" },
-    { key: "behavior_component", label: "行为" },
+    { key: "rule_code", label: memoryFacetLabel("rule_code") },
+    { key: "product", label: memoryFacetLabel("product") },
+    { key: "environment", label: memoryFacetLabel("environment") },
+    {
+      key: "behavior_component",
+      label: memoryFacetLabel("behavior_component"),
+    },
   ];
   return definitions.flatMap(({ key, label }) => {
     const values = candidate.facets[key] ?? [];
@@ -551,7 +679,7 @@ function MemoryLessonReadView({ lesson }: { lesson: SocMemoryBusinessLesson }) {
             <ul className="space-y-1 text-sm leading-6">
               {values[item.key].map((value) => (
                 <li key={value} className="break-words">
-                  {value}
+                  {memoryLessonDisplayValue(item.key, value)}
                 </li>
               ))}
             </ul>
@@ -1442,46 +1570,64 @@ function MemoryCandidateInventory({
             当前筛选条件下没有候选经验。
           </div>
         ) : (
-          candidates.map((candidate) => (
-            <div
-              key={candidate.candidate_id}
-              className="grid min-w-0 gap-3 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center"
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline">
-                    {candidateStatusLabel(candidate.status)}
-                  </Badge>
-                  <span className="text-muted-foreground font-mono text-xs break-all">
-                    {candidate.candidate_id}
-                  </span>
+          candidates.map((candidate) => {
+            const actionable = [
+              "pending_review",
+              "confirmed_candidate",
+            ].includes(candidate.status);
+            return (
+              <div
+                key={candidate.candidate_id}
+                className={cn(
+                  "grid min-w-0 gap-3 border-l-4 border-l-transparent p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center",
+                  actionable &&
+                    "border-l-amber-500 bg-amber-50/40 dark:bg-amber-950/10",
+                )}
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className={candidateStatusClass(candidate.status)}
+                    >
+                      {candidateStatusLabel(candidate.status)}
+                    </Badge>
+                    <span className="text-muted-foreground font-mono text-xs break-all">
+                      {candidate.candidate_id}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-sm font-semibold break-words">
+                    {candidate.summary}
+                  </div>
+                  <p className="text-muted-foreground mt-1 line-clamp-2 text-sm leading-6 whitespace-pre-wrap">
+                    {candidate.content}
+                  </p>
+                  <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                    <span>{candidateSourceLabel(candidate)}</span>
+                    <span>{candidate.evidence_refs.length} 条证据引用</span>
+                    <span>更新于 {formatTime(candidate.updated_at)}</span>
+                  </div>
                 </div>
-                <div className="mt-2 text-sm font-semibold break-words">
-                  {candidate.summary}
-                </div>
-                <p className="text-muted-foreground mt-1 line-clamp-2 text-sm leading-6 whitespace-pre-wrap">
-                  {candidate.content}
-                </p>
-                <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                  <span>{candidateSourceLabel(candidate)}</span>
-                  <span>{candidate.evidence_refs.length} 条证据引用</span>
-                  <span>更新于 {formatTime(candidate.updated_at)}</span>
-                </div>
-              </div>
-              <Button size="sm" variant="outline" asChild>
-                <Link
-                  href={`/workspace/soc/review/memory-candidates/${candidate.candidate_id}`}
+                <Button
+                  size="sm"
+                  variant={actionable ? "default" : "secondary"}
+                  asChild
                 >
-                  {["pending_review", "confirmed_candidate"].includes(
-                    candidate.status,
-                  )
-                    ? "开始审核"
-                    : "查看治理详情"}
-                  <ChevronRightIcon className="size-4" />
-                </Link>
-              </Button>
-            </div>
-          ))
+                  <Link
+                    href={`/workspace/soc/review/memory-candidates/${candidate.candidate_id}`}
+                  >
+                    {actionable ? (
+                      <ShieldCheckIcon className="size-4" />
+                    ) : (
+                      <SearchCheckIcon className="size-4" />
+                    )}
+                    {actionable ? "审核并决定" : "查看治理记录"}
+                    <ChevronRightIcon className="size-4" />
+                  </Link>
+                </Button>
+              </div>
+            );
+          })
         )}
       </div>
     </section>
@@ -1494,7 +1640,7 @@ function MemoryCandidateProposal({
   candidate: SocMemoryCandidate;
 }) {
   return (
-    <div className="mt-4 border-y py-4">
+    <div className="mt-4 border-l-4 border-sky-400 bg-sky-50/60 px-4 py-4 dark:border-sky-700 dark:bg-sky-950/20">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h4 className="text-sm font-semibold">
@@ -1530,16 +1676,25 @@ function MemoryCandidateGovernanceStatus({
   const descriptions: Partial<Record<SocMemoryCandidate["status"], string>> = {
     confirmed:
       "该候选已完成审核并沉淀为 Memory。审核后的完整 Business Lesson 在下方展示。",
-    rejected:
-      "该候选已被审核人放弃沉淀。候选正文和历史审计仍保留，可显式重新打开审核。",
+    rejected: candidate.revision_lineage
+      ? "本次 Memory 修订已结束，旧 Memory 保持停用。若后续告警再次证明经验有误，应从那次实际命中记录重新发起修订。"
+      : "该候选已被审核人放弃沉淀。候选正文和历史审计仍保留，可显式重新打开审核。",
     superseded: "该候选已被更新版本替代，仅作为历史审计记录保留。",
     expired: "该候选已过有效期，仅作为历史审计记录保留。",
     deprecated: "该候选已停用，不再参与后续 Memory 治理。",
   };
   return (
-    <div className="bg-muted/30 mt-4 border-y px-3 py-3">
+    <div
+      className={cn(
+        "mt-4 border-l-4 px-4 py-3",
+        candidateStatusClass(candidate.status),
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">
+        <Badge
+          variant="outline"
+          className={candidateStatusClass(candidate.status)}
+        >
           {candidateStatusLabel(candidate.status)}
         </Badge>
         <span className="text-sm font-medium">当前治理状态</span>
@@ -1599,7 +1754,7 @@ function MemoryCandidateSection({
 }) {
   return (
     <section className="rounded-md border">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+      <div className="bg-muted/30 flex flex-wrap items-center justify-between gap-3 border-b p-4">
         <div className="flex items-center gap-2">
           <CircleIcon className="text-muted-foreground size-4" />
           <h3 className="text-sm font-semibold">候选记忆</h3>
@@ -1640,7 +1795,14 @@ function MemoryCandidateSection({
             const reviewContextId = `memory-review-context-${candidate.candidate_id}`;
             return (
               <div key={candidate.candidate_id} className="p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div
+                  className={cn(
+                    "-mx-4 -mt-4 flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-start sm:justify-between",
+                    editable
+                      ? "border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/10"
+                      : "bg-muted/20",
+                  )}
+                >
                   <div className="min-w-0 sm:flex-1">
                     <div className="text-sm font-semibold break-words">
                       {candidate.summary}
@@ -1651,7 +1813,10 @@ function MemoryCandidateSection({
                     </div>
                   </div>
                   <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
-                    <Badge variant="outline">
+                    <Badge
+                      variant="outline"
+                      className={candidateStatusClass(candidate.status)}
+                    >
                       {candidateStatusLabel(candidate.status)}
                     </Badge>
                     <Badge variant="secondary">
@@ -1659,6 +1824,40 @@ function MemoryCandidateSection({
                     </Badge>
                   </div>
                 </div>
+
+                {candidate.revision_lineage ? (
+                  <div className="mt-4 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
+                    <div className="flex flex-wrap items-center gap-2 font-semibold">
+                      <AlertTriangleIcon className="size-4" />
+                      这是现有 Memory 的修订候选
+                      <Badge variant="outline">
+                        {
+                          MEMORY_REVISION_ISSUE_LABELS[
+                            candidate.revision_lineage.issue_type
+                          ]
+                        }
+                      </Badge>
+                    </div>
+                    <p className="mt-2 leading-6">
+                      前置 Memory{" "}
+                      {candidate.revision_lineage.predecessor_memory_id} v
+                      {candidate.revision_lineage.predecessor_memory_version}
+                      已暂停未来召回。只有本候选审核通过后，系统才会创建替代版本并将旧版本标记为历史记录。
+                    </p>
+                    <div className="mt-2 grid gap-1 text-xs md:grid-cols-2">
+                      <span className="font-mono break-all">
+                        source run: {candidate.revision_lineage.source_run_id}
+                      </span>
+                      <span className="font-mono break-all">
+                        source alert:{" "}
+                        {candidate.revision_lineage.source_alert_id}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs leading-5">
+                      纠错依据：{candidate.revision_lineage.reason}
+                    </p>
+                  </div>
+                ) : null}
 
                 <MemoryCandidateProposal candidate={candidate} />
 
@@ -1722,71 +1921,152 @@ function MemoryCandidateSection({
                       </Button>
                     </CollapsibleTrigger>
                     <CollapsibleContent className="pb-3">
-                      <p className="text-muted-foreground text-xs">
-                        必需条件全部命中才可能复用；勾选可选条件会进一步收窄范围。
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {Object.entries(applicability.required_facets).map(
-                          ([key, values]) => (
-                            <Badge key={key} variant="outline">
-                              必需 {key}: {values.slice(0, 3).join(", ")}
-                            </Badge>
-                          ),
-                        )}
-                      </div>
-                      {Object.keys(applicability.optional_facets).length > 0 ? (
-                        <div className="mt-3 grid gap-2 md:grid-cols-2">
-                          {Object.entries(applicability.optional_facets).map(
-                            ([key, values]) => {
-                              const checked =
-                                draft.promotedFacetKeys.includes(key);
-                              const inputId = `memory-scope-${candidate.candidate_id}-${key}`;
-                              return (
-                                <label
-                                  key={key}
-                                  htmlFor={inputId}
-                                  className="flex min-w-0 items-start gap-2 text-xs"
-                                >
-                                  <input
-                                    id={inputId}
-                                    type="checkbox"
-                                    checked={checked}
-                                    disabled={isReviewing || !editable}
-                                    className="mt-0.5 size-4 shrink-0"
-                                    onChange={(event) =>
-                                      onReviewDraftChange(candidate, {
-                                        promotedFacetKeys: event.target.checked
-                                          ? [
-                                              ...draft.promotedFacetKeys.filter(
-                                                (item) => item !== key,
-                                              ),
-                                              key,
-                                            ]
-                                          : draft.promotedFacetKeys.filter(
-                                              (item) => item !== key,
-                                            ),
-                                      })
-                                    }
-                                  />
-                                  <span className="min-w-0">
-                                    <span className="font-medium">{key}</span>
-                                    <span className="text-muted-foreground ml-1 break-all">
-                                      {values.slice(0, 3).join(", ")}
-                                    </span>
-                                  </span>
-                                </label>
-                              );
-                            },
+                      <div className="border bg-zinc-50 px-3 py-3 text-xs">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <KeyRoundIcon className="size-4" />
+                          <span className="font-semibold">
+                            系统锁定条件 / Required
+                          </span>
+                          <Badge variant="outline">全部必须命中</Badge>
+                        </div>
+                        <p className="text-muted-foreground mt-2 leading-5">
+                          这些条件由 {applicability.profile_id}@
+                          {applicability.profile_version}{" "}
+                          根据候选证据生成，保护规则与强行为锚点，审核页不能删除或改写。
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {Object.entries(applicability.required_facets).map(
+                            ([key, values]) => (
+                              <Badge
+                                key={key}
+                                variant="outline"
+                                className="max-w-full bg-white text-left break-all whitespace-normal"
+                              >
+                                {memoryFacetLabel(key)}：
+                                {values
+                                  .slice(0, 3)
+                                  .map((value) =>
+                                    memoryFacetValueLabel(key, value),
+                                  )
+                                  .join(", ")}
+                              </Badge>
+                            ),
                           )}
                         </div>
+                      </div>
+                      {Object.keys(applicability.optional_facets).length > 0 ? (
+                        <div className="mt-3 border px-3 py-3 text-xs">
+                          <div className="font-semibold">
+                            可选收窄条件 / Optional Narrowing
+                          </div>
+                          <p className="text-muted-foreground mt-1 leading-5">
+                            勾选等于增加一项必需条件；取消勾选等于删除本次增加。这里只能收窄，不能扩大，也不能输入
+                            Profile 未提供的任意字段。
+                          </p>
+                          <div className="mt-3 grid gap-2 md:grid-cols-2">
+                            {Object.entries(applicability.optional_facets).map(
+                              ([key, values]) => {
+                                const checked =
+                                  draft.promotedFacetKeys.includes(key);
+                                const inputId = `memory-scope-${candidate.candidate_id}-${key}`;
+                                return (
+                                  <label
+                                    key={key}
+                                    htmlFor={inputId}
+                                    className={cn(
+                                      "flex min-w-0 items-start gap-2 border px-3 py-2",
+                                      checked &&
+                                        "border-sky-300 bg-sky-50 text-sky-950",
+                                    )}
+                                  >
+                                    <input
+                                      id={inputId}
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={isReviewing || !editable}
+                                      className="mt-0.5 size-4 shrink-0"
+                                      aria-label={`增加匹配条件 ${memoryFacetLabel(key)}`}
+                                      onChange={(event) =>
+                                        onReviewDraftChange(candidate, {
+                                          promotedFacetKeys: event.target
+                                            .checked
+                                            ? [
+                                                ...draft.promotedFacetKeys.filter(
+                                                  (item) => item !== key,
+                                                ),
+                                                key,
+                                              ]
+                                            : draft.promotedFacetKeys.filter(
+                                                (item) => item !== key,
+                                              ),
+                                        })
+                                      }
+                                    />
+                                    <span className="min-w-0">
+                                      <span className="font-medium">
+                                        {memoryFacetLabel(key)}
+                                      </span>
+                                      <span className="text-muted-foreground ml-1 break-all">
+                                        {values
+                                          .slice(0, 3)
+                                          .map((value) =>
+                                            memoryFacetValueLabel(key, value),
+                                          )
+                                          .join(", ")}
+                                      </span>
+                                    </span>
+                                  </label>
+                                );
+                              },
+                            )}
+                          </div>
+                        </div>
                       ) : null}
+                      {Object.keys(applicability.excluded_facets).length > 0 ? (
+                        <div className="mt-3 border border-red-200 bg-red-50 px-3 py-3 text-xs text-red-950">
+                          <div className="font-semibold">
+                            排除条件 / Exclusions
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {Object.entries(applicability.excluded_facets).map(
+                              ([key, values]) => (
+                                <Badge key={key} variant="outline">
+                                  {memoryFacetLabel(key)}：
+                                  {values
+                                    .slice(0, 3)
+                                    .map((value) =>
+                                      memoryFacetValueLabel(key, value),
+                                    )
+                                    .join(", ")}
+                                </Badge>
+                              ),
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="text-muted-foreground mt-3 border-t pt-3 text-xs leading-5">
+                        当前匹配公式：
+                        <span className="font-medium text-zinc-900">
+                          {
+                            Object.keys(
+                              effectiveApplicability?.required_facets ?? {},
+                            ).length
+                          }{" "}
+                          组必需条件全部命中
+                        </span>
+                        {effectiveApplicability?.minimum_optional_matches
+                          ? `，并至少命中 ${effectiveApplicability.minimum_optional_matches} 组剩余可选条件`
+                          : ""}
+                        。新字段或新的匹配语义必须由租户 Memory Profile
+                        产生并经过后端契约验证，不能在浏览器中临时扩权。
+                      </div>
                     </CollapsibleContent>
                   </Collapsible>
                 ) : null}
 
                 {editable ? (
                   <>
-                    <div className="mt-4 border-t pt-4">
+                    <div className="mt-5 border-t-2 pt-4">
                       <div className="text-sm font-semibold">
                         1. 确认业务判断
                       </div>
@@ -1851,7 +2131,6 @@ function MemoryCandidateSection({
                         <Button
                           type="button"
                           size="sm"
-                          variant="outline"
                           disabled={
                             isReviewing ||
                             isDraftingLesson ||
@@ -1864,14 +2143,14 @@ function MemoryCandidateSection({
                           {isDraftingLesson
                             ? "生成中"
                             : hasLessonDraft
-                              ? "重新生成 Memory"
-                              : "AI 生成 Memory"}
+                              ? "重新生成 Business Lesson"
+                              : "AI 生成 Business Lesson"}
                         </Button>
                       </div>
                     </div>
 
                     {hasLessonDraft ? (
-                      <div className="mt-4 border-t pt-4">
+                      <div className="mt-5 border-t-2 pt-4">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <div className="text-sm font-semibold">
@@ -1942,7 +2221,13 @@ function MemoryCandidateSection({
                                     variant="outline"
                                     className="max-w-full break-all whitespace-normal"
                                   >
-                                    {key}：{values.slice(0, 3).join(", ")}
+                                    {memoryFacetLabel(key)}：
+                                    {values
+                                      .slice(0, 3)
+                                      .map((value) =>
+                                        memoryFacetValueLabel(key, value),
+                                      )
+                                      .join(", ")}
                                   </Badge>
                                 ))}
                               </div>
@@ -1998,16 +2283,24 @@ function MemoryCandidateSection({
                     ) : null}
 
                     {decisionEligible && hasLessonDraft ? (
-                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+                      <div
+                        className={cn(
+                          "mt-5 flex flex-wrap items-center justify-between gap-3 border-y px-3 py-4",
+                          draft.applyToFutureMatches
+                            ? "border-sky-200 bg-sky-50/70 dark:border-sky-900 dark:bg-sky-950/20"
+                            : "bg-muted/30",
+                        )}
+                      >
                         <div>
                           <div className="text-sm font-semibold">
-                            3. 设置未来复用
+                            3. 选择未来用途
                           </div>
-                          <p className="text-muted-foreground mt-1 text-xs">
-                            精确命中机器适用范围后，复用本次审核结论。
+                          <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
+                            “启用检索”只决定以后能否搜到这条
+                            Memory；这里决定搜到后是仅供模型参考，还是在全部必需条件精确命中时参与最终结论。
                           </p>
                         </div>
-                        <label className="flex items-center gap-2 text-xs font-medium">
+                        <label className="flex items-center gap-3 border bg-white px-3 py-2 text-xs font-medium dark:bg-zinc-950">
                           <Switch
                             checked={draft.applyToFutureMatches}
                             disabled={
@@ -2020,9 +2313,13 @@ function MemoryCandidateSection({
                                 applyToFutureMatches: checked,
                               })
                             }
-                            aria-label="未来精确匹配改判"
+                            aria-label="允许精确匹配时参与最终结论"
                           />
-                          用于未来精确匹配
+                          <span>
+                            {draft.applyToFutureMatches
+                              ? "精确匹配后可参与结论"
+                              : "仅供模型参考，不改判"}
+                          </span>
                         </label>
                       </div>
                     ) : null}
@@ -2072,12 +2369,22 @@ function MemoryCandidateSection({
                   </CollapsibleContent>
                 </Collapsible>
 
-                <div className="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4">
+                <div className="bg-background/95 sticky bottom-0 z-10 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t px-4 py-4 shadow-[0_-8px_20px_-18px_rgba(0,0,0,0.7)] backdrop-blur">
+                  <div>
+                    <div className="text-sm font-semibold">审核决定</div>
+                    <div className="text-muted-foreground mt-0.5 text-xs">
+                      主操作会写入治理审计；放弃或停用不会改写原始告警结论。
+                    </div>
+                  </div>
                   <div className="flex flex-wrap gap-2">
-                    {candidate.status === "rejected" ? (
+                    {candidate.status === "rejected" &&
+                    candidate.revision_lineage ? (
+                      <span className="text-muted-foreground max-w-sm text-right text-xs leading-5">
+                        修订版本已冻结；请从新的实际误命中告警重新发起。
+                      </span>
+                    ) : candidate.status === "rejected" ? (
                       <Button
                         size="sm"
-                        variant="outline"
                         disabled={isReviewing}
                         title="保留原驳回审计，并将候选返回待审核状态"
                         onClick={() => onReview(candidate, "reopen")}
@@ -2101,7 +2408,7 @@ function MemoryCandidateSection({
                         </Button>
                         <Button
                           size="sm"
-                          variant="outline"
+                          variant="destructive"
                           disabled={isReviewing}
                           title="仅放弃这条 Memory 候选，不改变告警的最终判断"
                           onClick={() => onReview(candidate, "reject")}
@@ -2111,7 +2418,7 @@ function MemoryCandidateSection({
                         </Button>
                         <Button
                           size="sm"
-                          variant="outline"
+                          variant="ghost"
                           disabled={isReviewing}
                           onClick={() => onReview(candidate, "expire")}
                         >
@@ -2121,7 +2428,7 @@ function MemoryCandidateSection({
                     ) : candidate.status === "confirmed" ? (
                       <Button
                         size="sm"
-                        variant="outline"
+                        variant="destructive"
                         disabled={isReviewing}
                         onClick={() => onReview(candidate, "deprecate")}
                       >
@@ -2308,12 +2615,24 @@ function MemoryRetrievalActivationSection({
                         record.retrieval_enabled ? "secondary" : "outline"
                       }
                     >
-                      {record.retrieval_enabled
-                        ? "retrieval enabled"
-                        : "retrieval disabled"}
+                      {record.retrieval_enabled ? "可检索" : "未启用检索"}
+                    </Badge>
+                    <Badge
+                      variant={
+                        record.decision_directive ? "secondary" : "outline"
+                      }
+                    >
+                      {record.decision_directive
+                        ? "精确匹配后可参与结论"
+                        : "仅供模型参考"}
                     </Badge>
                   </div>
                 </div>
+                <p className="text-muted-foreground mt-2 text-xs leading-5">
+                  检索状态决定这条 Memory
+                  能否进入候选上下文；决策用途决定它在满足全部适用条件后，是否可以形成可审计的
+                  Memory Decision。
+                </p>
                 <div className="mt-4">
                   {record.business_lesson ? (
                     <MemoryLessonReadView lesson={record.business_lesson} />
@@ -3102,7 +3421,15 @@ export function SocReviewQueueWorkbench({
                   </p>
                 </div>
                 {initialCandidateId ? (
-                  <Badge variant="outline">{initialCandidateId}</Badge>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="ghost" size="sm" asChild>
+                      <Link href="/workspace/soc/review/memory-candidates">
+                        <ChevronLeftIcon className="size-4" />
+                        返回候选台账
+                      </Link>
+                    </Button>
+                    <Badge variant="outline">{initialCandidateId}</Badge>
+                  </div>
                 ) : (
                   <Badge variant="secondary">
                     {standaloneMemoryCandidates.length} 条候选

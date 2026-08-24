@@ -43,17 +43,17 @@ _URI_OR_DOMAIN_RE = re.compile(
 _NAMESPACED_IDENTIFIER_RE = re.compile(
     r"(?<![A-Za-z0-9._-])[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+){2,}",
 )
-_FORBIDDEN_CONCLUSION_ACTION_TERMS = (
-    "关闭",
-    "封禁",
-    "隔离",
-    "拒绝",
-    "拒绝访问",
-    "抑制",
-    "批准",
-    "授权",
-    "阻断",
-    "升级处理",
+_FORBIDDEN_CONCLUSION_ACTION_PATTERNS = (
+    re.compile(
+        r"(?:应|应当|需要|必须|建议|可以|可|允许|直接|立即|自动|无需|不必|不得|禁止|不要|不做)"
+        r".{0,12}(?:关闭|封禁|隔离|拒绝访问|抑制|批准|阻断|升级处理|授权(?:执行|处置|动作))"
+    ),
+    re.compile(
+        r"(?:关闭|封禁|隔离|抑制|阻断)"
+        r"(?:该|此|相关|目标|攻击|来源|告警|预警|事件|工单|IP|地址|主机|终端|账号|用户|进程|文件|域名|流量|连接|资产|请求|访问)"
+    ),
+    re.compile(r"(?:批准|授权)(?:执行|处置|动作|封禁|隔离|阻断|关闭)"),
+    re.compile(r"升级处理"),
 )
 _SAFE_METADATA_KEYS = (
     "admission_wait_duration_ms",
@@ -306,7 +306,7 @@ def _validate_output_contract(
     missing_reviewer_refs = sorted(required_reviewer_refs - rationale_refs)
     if missing_reviewer_refs:
         raise ValueError("memory lesson draft rationale does not cite reviewer-owned input: " + ", ".join(missing_reviewer_refs))
-    if any(term in output.conclusion for term in _FORBIDDEN_CONCLUSION_ACTION_TERMS):
+    if any(pattern.search(output.conclusion) for pattern in _FORBIDDEN_CONCLUSION_ACTION_PATTERNS):
         raise ValueError("memory lesson conclusion contains action language reserved for handling_guidance")
     source_text = "\n".join(str(item.value) for item in source_catalog)
     output_text = "\n".join(
@@ -347,6 +347,9 @@ def _build_output_repair_messages(
                 "Repair one invalid SOC Business Lesson JSON object. Return JSON only. "
                 "Use only the supplied bounded lesson_context and exact D-* aliases. "
                 "Do not add authority, applicability, alert facts, or identifiers. "
+                "The conclusion must contain facts and verdict only. Move close, suppress, block, isolate, "
+                "approval, execution-authorization, and other action instructions to handling_guidance. "
+                "A source-backed factual authorization status may remain factual, but must not grant an action. "
                 "Preserve valid business meaning from invalid_output, fill only schema-required sections, "
                 "and obey additionalProperties=false."
             ),

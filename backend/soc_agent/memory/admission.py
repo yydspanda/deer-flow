@@ -69,10 +69,16 @@ class MemoryAdmissionService:
                 reasons.append(MemoryAdmissionReasonCode.EXPLICIT_PROMOTION_REQUESTED)
             else:
                 reasons.append(MemoryAdmissionReasonCode.NO_HUMAN_PROMOTION_SIGNAL)
-        elif source_type is SocMemoryCandidateSourceType.REVIEW_NOTE:
+        elif source_type in {
+            SocMemoryCandidateSourceType.REVIEW_NOTE,
+            SocMemoryCandidateSourceType.MANUAL_NOTE,
+        }:
             origin = command.source.metadata.get("origin")
             accepted = origin == "accepted_lead_agent_conclusion"
             explicit = command.source.metadata.get("promote_to_memory") is True
+            explicit_run_promotion = (
+                source_type is SocMemoryCandidateSourceType.MANUAL_NOTE and explicit and command.source.metadata.get("promotion_action") == "run_to_candidate" and bool(command.source.run_id) and bool(command.source.alert_id)
+            )
             human_signal = True
             promotion_signal = accepted or explicit
             if accepted:
@@ -82,7 +88,7 @@ class MemoryAdmissionService:
             if not promotion_signal:
                 reasons.append(MemoryAdmissionReasonCode.NO_HUMAN_PROMOTION_SIGNAL)
             reason_length_key = "acceptance_reason_length" if accepted else "note_length"
-            reason_is_strong = int(command.source.metadata.get(reason_length_key) or 0) >= 20
+            reason_is_strong = explicit_run_promotion or int(command.source.metadata.get(reason_length_key) or 0) >= 20
         elif source_type is SocMemoryCandidateSourceType.DOMAIN_FINDING:
             feedback = command.metadata.get("analyst_feedback_present") is True
             human_signal = feedback

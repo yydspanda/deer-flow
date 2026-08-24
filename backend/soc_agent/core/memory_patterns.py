@@ -87,6 +87,7 @@ class SocMemoryPatternService:
     ) -> None:
         self._repository = repository
         self._candidate_repository = candidate_repository
+        self._policy_explicit = policy is not None
         self._policy = policy or MemoryPatternAggregationPolicy()
         self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(repository, candidate_repository)
         self._mutation_uow = mutation_uow or mutation_uow_from(
@@ -114,8 +115,9 @@ class SocMemoryPatternService:
     ) -> MemoryPatternAggregationResult:
         """Project and admit one completed Runtime result through the same service."""
 
-        policy_fingerprint = stable_hash(self._policy.model_dump(mode="json"))
         profile = self._profile_registry.resolve_run(run)
+        effective_policy = self._policy_for_profile(profile)
+        policy_fingerprint = stable_hash(effective_policy.model_dump(mode="json"))
         command = memory_pattern_command_from_run(
             run,
             source_type=source_type,
@@ -140,6 +142,22 @@ class SocMemoryPatternService:
             _INGEST_ROLES,
             operation="ingesting a repeated memory pattern observation",
         )
+        profile = self._profile_registry.get(command.profile_id)
+        if profile is not None and (profile.identity.profile_version != command.profile_version or profile.identity.feature_schema_version != command.feature_schema_version):
+            profile = None
+        effective_policy = self._policy_for_profile(profile)
+        if effective_policy != self._policy:
+            return SocMemoryPatternService(
+                repository=self._repository,
+                candidate_repository=self._candidate_repository,
+                policy=effective_policy,
+                mutation_audit_repository=self._mutation_audit_repository,
+                mutation_uow=self._mutation_uow,
+                event_sink=self._event_sink,
+                now_provider=self._now_provider,
+                profile_registry=self._profile_registry,
+                _transaction_active=self._transaction_active,
+            ).ingest_observation(command, context=context)
         repository = self._require_repository()
         content_hash = _observation_content_hash(command, self._policy)
         window_start, window_end = _fixed_window(
@@ -311,7 +329,10 @@ class SocMemoryPatternService:
             policy=policy,
             recurrence_threshold_met=threshold_met,
         )
-        current_candidate = self._find_candidate(aggregation_key)
+        current_candidate, current_coverage = self._find_candidate(
+            aggregation_key,
+            observations[0].lineage_key,
+        )
         equivalent_candidate = (
             self._find_equivalent_lesson_candidate(
                 observations[0],
@@ -321,12 +342,15 @@ class SocMemoryPatternService:
             else None
         )
         candidate = current_candidate or equivalent_candidate
-        candidate_coverage = "current_cohort" if current_candidate is not None else "equivalent_lesson" if equivalent_candidate is not None else "none"
+        candidate_coverage = current_coverage if current_candidate is not None else "equivalent_lesson" if equivalent_candidate is not None else "none"
         current_ids = [item.observation_id for item in observations]
         snapshot_ids = _candidate_observation_ids(candidate)
         snapshot_items = [item for item in observations if item.observation_id in set(snapshot_ids)]
         baseline_hash = _candidate_evidence_set_hash(candidate)
-        source_integrity_checked = candidate_coverage == "current_cohort"
+        source_integrity_checked = candidate_coverage in {
+            "current_cohort",
+            "lineage_governance",
+        } and bool(snapshot_ids)
         if source_integrity_checked:
             recomputed_hash = _evidence_set_hash(snapshot_items) if snapshot_ids and snapshot_items else None
             missing = sorted(set(snapshot_ids) - set(current_ids))
@@ -379,7 +403,10 @@ class SocMemoryPatternService:
             policy=self._policy,
             recurrence_threshold_met=threshold_met,
         )
-        existing = self._find_candidate(observation.aggregation_key)
+        existing, existing_coverage = self._find_candidate(
+            observation.aggregation_key,
+            observation.lineage_key,
+        )
         if not threshold_met:
             return MemoryPatternAggregationResult(
                 observation=observation,
@@ -390,12 +417,15 @@ class SocMemoryPatternService:
                 threshold_met=False,
                 cohort_quality=cohort_quality,
                 candidate=existing,
-                candidate_coverage=("current_cohort" if existing is not None else "none"),
+                candidate_coverage=(existing_coverage if existing is not None else "none"),
+                candidate_frozen=existing is not None,
                 idempotent=idempotent,
                 duplicate_source=duplicate_source,
                 duplicate_occurrence=duplicate_occurrence,
                 note=(
-                    "duplicate operational occurrence retained as one observation"
+                    "manual candidate already governs this Pattern lineage; automatic candidate creation is suppressed"
+                    if existing_coverage == "lineage_governance"
+                    else "duplicate operational occurrence retained as one observation"
                     if duplicate_occurrence
                     else "duplicate alert source retained as one observation"
                     if duplicate_source
@@ -412,7 +442,7 @@ class SocMemoryPatternService:
                 threshold_met=True,
                 cohort_quality=cohort_quality,
                 candidate=existing,
-                candidate_coverage=("current_cohort" if existing is not None else "none"),
+                candidate_coverage=(existing_coverage if existing is not None else "none"),
                 candidate_frozen=existing is not None,
                 idempotent=idempotent,
                 duplicate_source=duplicate_source,
@@ -429,12 +459,14 @@ class SocMemoryPatternService:
                 threshold_met=True,
                 cohort_quality=cohort_quality,
                 candidate=existing,
-                candidate_coverage="current_cohort",
+                candidate_coverage=existing_coverage,
                 candidate_frozen=True,
                 idempotent=idempotent,
                 duplicate_source=duplicate_source,
                 duplicate_occurrence=duplicate_occurrence,
-                note="candidate snapshot is frozen; later observations remain replay-only",
+                note=(
+                    "manual candidate already governs this Pattern lineage; automatic candidate creation is suppressed" if existing_coverage == "lineage_governance" else "candidate snapshot is frozen; later observations remain replay-only"
+                ),
             )
         equivalent = self._find_equivalent_lesson_candidate(
             observation,
@@ -570,10 +602,27 @@ class SocMemoryPatternService:
             raise SocServiceConflictError("memory observation profile version does not match the registered profile")
         return profile
 
-    def _find_candidate(self, aggregation_key: str) -> SocMemoryCandidate | None:
+    def _find_candidate(
+        self,
+        aggregation_key: str,
+        lineage_key: str,
+    ) -> tuple[SocMemoryCandidate | None, str]:
         if self._candidate_repository is None:
-            return None
-        return self._candidate_repository.find_memory_candidate_by_source_id(f"memory_pattern:{aggregation_key}")
+            return None, "none"
+        current = self._candidate_repository.find_memory_candidate_by_source_id(f"memory_pattern:{aggregation_key}")
+        if current is not None:
+            return current, "current_cohort"
+        find_by_lineage = getattr(
+            self._candidate_repository,
+            "find_memory_candidates_by_lineage_keys",
+            None,
+        )
+        if not callable(find_by_lineage):
+            return None, "none"
+        for candidate in find_by_lineage([lineage_key]):
+            if candidate.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE and candidate.metadata.get("source") == "manual_run_promotion":
+                return candidate, "lineage_governance"
+        return None, "none"
 
     def _find_equivalent_lesson_candidate(
         self,
@@ -644,6 +693,19 @@ class SocMemoryPatternService:
         if self._repository is None:
             raise SocServiceNotImplementedError("memory pattern workflow requires a MemoryPatternObservationRepository")
         return self._repository
+
+    def _policy_for_profile(
+        self,
+        profile: SocMemoryProfile | None,
+    ) -> MemoryPatternAggregationPolicy:
+        if self._policy_explicit or profile is None:
+            return self._policy
+        window_seconds = profile.identity.aggregation_window_seconds
+        if window_seconds is None or window_seconds == self._policy.window_seconds:
+            return self._policy
+        return self._policy.model_copy(
+            update={"window_seconds": window_seconds},
+        )
 
 
 def _fixed_window(observed_at: datetime, window_seconds: int) -> tuple[datetime, datetime]:

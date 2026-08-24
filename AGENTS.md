@@ -246,5 +246,7 @@ PingAn internal Apple Silicon DEV uses `scripts/soc_pingan_macos_host_dev.py` wh
 host already provides Python `3.12+`, uv, Node `22+`, the repository-pinned pnpm, nginx
 `1.23+`, and approved PingAn PyPI/NPM registries. It delegates to the normal host launcher
 with dependency sync skipped, Next.js telemetry disabled, local SQLite, and
-`LocalSandboxProvider`; Docker is not required. The separate CPython `3.12.3` offline
-bundle remains a fallback rather than a second Runtime path.
+`LocalSandboxProvider`; Docker is not required. Its `start` command advertises detected
+private macOS LAN addresses to Next.js DEV by default so authenticated internal coworkers
+can use nginx on port `2026`; use `--local-only` to clear that allowlist. The separate
+CPython `3.12.3` offline bundle remains a fallback rather than a second Runtime path.

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.gateway.routers.soc_transport import create_soc_router
 from app.gateway.soc_dependencies import (
     get_or_create_soc_repository,
+    get_soc_review_service,
     soc_service_context_from_request,
 )
 from soc_agent.application.memory import build_soc_memory_profile_registry
@@ -37,11 +38,16 @@ from soc_agent.contracts import (
     SocMemoryRetrievalActivationCommand,
     SocMemoryRetrievalActivationResult,
     SocMemoryRetrievalResult,
+    SocMemoryRevisionCandidateCreateCommand,
+    SocMemoryRevisionCandidateCreateResult,
+    SocMemoryRevisionIssueType,
     SocMemoryRevisionProposal,
     SocMemoryRevisionProposalStatus,
     SocMemoryRevisionReviewCommand,
     SocMemoryRevisionReviewDecision,
     SocMemoryRevisionReviewResult,
+    SocMemoryRunPromotionCommand,
+    SocMemoryRunPromotionResult,
     Verdict,
 )
 from soc_agent.core import (
@@ -50,6 +56,7 @@ from soc_agent.core import (
     SocMemoryEvolutionService,
     SocMemoryLessonDraftService,
     SocMemoryService,
+    SocReviewService,
     SocServiceAuthorizationError,
     SocServiceConflictError,
     SocServiceError,
@@ -71,6 +78,34 @@ class MemoryRecordListResponse(BaseModel):
 
 class MemoryRevisionProposalListResponse(BaseModel):
     items: list[SocMemoryRevisionProposal]
+
+
+class MemoryRunPromotionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    note: str | None = Field(default=None, max_length=12_000)
+    reason: str | None = Field(
+        default=None,
+        max_length=12_000,
+        description="Deprecated compatibility alias for note.",
+    )
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+
+    @field_validator("note", "reason")
+    @classmethod
+    def normalize_optional_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        return normalized or None
+
+    @model_validator(mode="after")
+    def resolve_legacy_reason(self) -> MemoryRunPromotionRequest:
+        if self.note is not None and self.reason is not None and self.note != self.reason:
+            raise ValueError("note and deprecated reason must match when both are provided")
+        if self.note is None:
+            self.note = self.reason
+        return self
 
 
 class MemoryCandidateReviewRequest(BaseModel):
@@ -123,6 +158,15 @@ class MemoryRevisionReviewRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=4000)
 
 
+class MemoryRevisionCandidateCreateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expected_record_version: int = Field(ge=1)
+    source_run_id: str = Field(min_length=1, max_length=64)
+    issue_type: SocMemoryRevisionIssueType
+    reason: str = Field(min_length=10, max_length=4000)
+
+
 class MemoryCandidateSupersessionRequest(BaseModel):
     successor_candidate_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1, max_length=2000)
@@ -134,10 +178,19 @@ def get_soc_memory_service(request: Request) -> SocMemoryService:
         return injected
 
     repository = get_or_create_soc_repository(request)
-    return SocMemoryService(candidate_repository=repository, record_repository=repository)
+    return SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        memory_evolution_repository=repository,
+        mutation_audit_repository=repository,
+        mutation_uow=repository,
+        analysis_run_repository=repository,
+        profile_registry=build_soc_memory_profile_registry(),
+    )
 
 
 MemoryServiceDep = Annotated[SocMemoryService, Depends(get_soc_memory_service)]
+ReviewServiceDep = Annotated[SocReviewService, Depends(get_soc_review_service)]
 
 
 def get_soc_memory_center_service(request: Request) -> SocMemoryCenterService:
@@ -291,6 +344,42 @@ def get_memory_candidate(candidate_id: str, service: MemoryServiceDep) -> SocMem
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post(
+    "/runs/{run_id}/promote",
+    response_model=SocMemoryRunPromotionResult,
+    response_model_exclude_none=True,
+)
+def promote_run_to_memory_candidate(
+    run_id: str,
+    body: MemoryRunPromotionRequest,
+    request: Request,
+    service: ReviewServiceDep,
+) -> SocMemoryRunPromotionResult:
+    """Explicitly promote one completed run into the governed review inbox."""
+
+    context = soc_service_context_from_request(request, include_soc_roles=True)
+    if context.idempotency_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
+    try:
+        return service.promote_run_to_memory(
+            SocMemoryRunPromotionCommand(
+                run_id=run_id,
+                note=body.note,
+                confidence=body.confidence,
+                metadata={"source": "soc_web_run_promotion"},
+            ),
+            context=context,
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/candidates/{candidate_id}/review", response_model=SocMemoryCandidateReviewResult)
 def review_memory_candidate(
     candidate_id: str,
@@ -427,6 +516,42 @@ def get_memory_record(memory_id: str, service: MemoryServiceDep) -> SocMemoryRec
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/records/{memory_id}/revision-candidates",
+    response_model=SocMemoryRevisionCandidateCreateResult,
+)
+def create_memory_revision_candidate(
+    memory_id: str,
+    payload: MemoryRevisionCandidateCreateRequest,
+    request: Request,
+    service: MemoryServiceDep,
+) -> SocMemoryRevisionCandidateCreateResult:
+    context = soc_service_context_from_request(request, include_soc_roles=True)
+    if context.idempotency_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
+    try:
+        return service.propose_revision_candidate(
+            SocMemoryRevisionCandidateCreateCommand(
+                memory_id=memory_id,
+                expected_record_version=payload.expected_record_version,
+                source_run_id=payload.source_run_id,
+                issue_type=payload.issue_type,
+                reason=payload.reason,
+            ),
+            context=context,
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(

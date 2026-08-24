@@ -11,10 +11,13 @@ import {
   closeSocReviewItem,
   correctSocReviewRun,
   createSocApprovalGrant,
+  createSocMemoryRevisionCandidate,
   dryRunSocApprovedAction,
   draftSocMemoryBusinessLesson,
   executeSocApprovedAction,
   expireSocApprovalRequest,
+  getSocCorpusWorkbenchAudit,
+  getSocCorpusWorkbenchExecution,
   getSocCorpusWorkbenchState,
   getSocDispositionSampleReviewInbox,
   getSocMemoryCandidate,
@@ -35,6 +38,7 @@ import {
   listSocReviewItems,
   processSocMemoryWorkbenchAlert,
   processSocCorpusWorkbenchAlert,
+  promoteSocRunToMemory,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
@@ -56,7 +60,9 @@ import type {
   SocMemoryCandidateSupersessionRequest,
   SocMemoryQuery,
   SocMemoryRecordStatus,
+  SocMemoryRevisionCandidateCreateRequest,
   SocMemoryRetrievalActivationRequest,
+  SocMemoryRunPromotionRequest,
   SocNormalizationIssueStatus,
   SocNormalizationIssueUpdateRequest,
   SocRequestContext,
@@ -185,6 +191,10 @@ export const socMemoryWorkbenchQueryKeys = {
 export const socCorpusWorkbenchQueryKeys = {
   all: ["soc-corpus-workbench"] as const,
   state: () => [...socCorpusWorkbenchQueryKeys.all, "state"] as const,
+  execution: (alertId: string | null | undefined) =>
+    [...socCorpusWorkbenchQueryKeys.all, "execution", alertId] as const,
+  audit: (alertId: string | null | undefined) =>
+    [...socCorpusWorkbenchQueryKeys.all, "audit", alertId] as const,
 };
 
 export const socNormalizationQueryKeys = {
@@ -476,6 +486,37 @@ export function useSocCorpusWorkbench() {
   return { state: query.data ?? null, ...query };
 }
 
+export function useSocCorpusWorkbenchExecution(
+  alertId: string | null | undefined,
+  { live = false }: { live?: boolean } = {},
+) {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socCorpusWorkbenchQueryKeys.execution(alertId),
+    queryFn: () => getSocCorpusWorkbenchExecution(alertId!, context),
+    enabled: !!alertId,
+    retry: false,
+    refetchInterval: live ? 800 : false,
+    staleTime: live ? 0 : SOC_NAVIGATION_STALE_TIME_MS,
+  });
+  return { execution: query.data ?? null, ...query };
+}
+
+export function useSocCorpusWorkbenchAudit(
+  alertId: string | null | undefined,
+  { enabled = false }: { enabled?: boolean } = {},
+) {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socCorpusWorkbenchQueryKeys.audit(alertId),
+    queryFn: () => getSocCorpusWorkbenchAudit(alertId!, context),
+    enabled: enabled && !!alertId,
+    retry: false,
+    staleTime: Infinity,
+  });
+  return { audit: query.data ?? null, ...query };
+}
+
 export function useProcessSocCorpusWorkbenchAlert() {
   const context = useSocWebRequestContext();
   const queryClient = useQueryClient();
@@ -487,11 +528,41 @@ export function useProcessSocCorpusWorkbenchAlert() {
         socCorpusWorkbenchQueryKeys.state(),
         result.state,
       );
+      void queryClient.invalidateQueries({
+        queryKey: socCorpusWorkbenchQueryKeys.execution(result.alert_id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: socCorpusWorkbenchQueryKeys.audit(result.alert_id),
+      });
       void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
       void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
       void queryClient.invalidateQueries({
         queryKey: socOperationsQueryKeys.all,
       });
+    },
+  });
+}
+
+export function usePromoteSocRunToMemory() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      runId,
+      request,
+    }: {
+      runId: string;
+      request: SocMemoryRunPromotionRequest;
+    }) => promoteSocRunToMemory(runId, request, context),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({
+        queryKey: socCorpusWorkbenchQueryKeys.state(),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: socCorpusWorkbenchQueryKeys.execution(result.alert_id),
+      });
+      void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
     },
   });
 }
@@ -758,6 +829,32 @@ export function useSocMemoryRecord(memoryId: string | null | undefined) {
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { record: data ?? null, isLoading, isFetching, error };
+}
+
+export function useCreateSocMemoryRevisionCandidate() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      memoryId,
+      request,
+    }: {
+      memoryId: string;
+      request: SocMemoryRevisionCandidateCreateRequest;
+    }) => createSocMemoryRevisionCandidate(memoryId, request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
+    },
+    onError: async (error) => {
+      if (error instanceof SocApiError && error.status === 409) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all }),
+          queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all }),
+        ]);
+      }
+    },
+  });
 }
 
 export function useUpdateSocMemoryRetrievalActivation() {

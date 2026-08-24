@@ -21,7 +21,7 @@ from soc_agent.model_reference_aliases import (
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v34"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v35"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -315,7 +315,7 @@ Use security expertise to produce the best current conclusion from the supplied 
 </trust_model>
 
 <analysis_method>
-1. Inspect evidence coverage, field trust, warnings, conflict reports, and fact reconstruction. Treat a high-value gap or damaged evidence as material; routine bounded omission is not automatically material.
+1. Inspect evidence.coverage.analysis_readiness first, then field trust, warnings, conflict reports, and fact reconstruction. Treat a high-value gap or damaged evidence as material; documented routine omission is not automatically material.
 2. Determine up to three open-vocabulary scenarios. Use an upstream classification as the starting assertion and revise it only when exact evidence or governed context supports a better interpretation.
 3. Assign one activity stage per scenario: detection_hit, attempt_observed, effect_observed, impact_confirmed, or indeterminate.
    A directly observed response/state change or an exact reviewed provider outcome may support effect_observed; impact_confirmed requires exact scoped impact evidence. HTTP 200 alone proves only that an HTTP response was observed.

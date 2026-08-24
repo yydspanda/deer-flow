@@ -67,6 +67,7 @@ def get_soc_review_service(request: Request) -> SocReviewService:
         external_disposition_repository=repository,
         memory_candidate_repository=repository,
         memory_record_repository=repository,
+        memory_pattern_observation_repository=repository,
         memory_profile_registry=build_soc_memory_profile_registry(),
     )
 

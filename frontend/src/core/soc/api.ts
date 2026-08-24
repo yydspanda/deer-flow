@@ -8,6 +8,8 @@ import type {
   SocAgentApprovalRequestStatus,
   SocAgentApprovedActionCommand,
   SocAnalysisRun,
+  SocCorpusWorkbenchAuditBundle,
+  SocCorpusWorkbenchExecution,
   SocCorpusWorkbenchProcessResult,
   SocCorpusWorkbenchState,
   SocDispositionOutcomeApplyResult,
@@ -34,9 +36,13 @@ import type {
   SocMemoryRecord,
   SocMemoryRecordListResponse,
   SocMemoryRecordStatus,
+  SocMemoryRevisionCandidateCreateRequest,
+  SocMemoryRevisionCandidateCreateResult,
   SocMemoryRetrievalActivationRequest,
   SocMemoryRetrievalActivationResult,
   SocMemoryRetrievalResult,
+  SocMemoryRunPromotionRequest,
+  SocMemoryRunPromotionResult,
   SocMemoryWorkbenchProcessResult,
   SocMemoryWorkbenchState,
   SocNormalizationBaselineListResponse,
@@ -220,6 +226,53 @@ export async function processSocCorpusWorkbenchAlert(
   return readJson<SocCorpusWorkbenchProcessResult>(
     response,
     "Failed to process SOC Corpus DEV alert",
+  );
+}
+
+export async function getSocCorpusWorkbenchExecution(
+  alertId: string,
+  context?: SocRequestContext,
+): Promise<SocCorpusWorkbenchExecution> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/alerts/${encodeURIComponent(alertId)}/execution`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocCorpusWorkbenchExecution>(
+    response,
+    "Failed to load SOC corpus execution",
+  );
+}
+
+export async function getSocCorpusWorkbenchAudit(
+  alertId: string,
+  context?: SocRequestContext,
+): Promise<SocCorpusWorkbenchAuditBundle> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/alerts/${encodeURIComponent(alertId)}/audit`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocCorpusWorkbenchAuditBundle>(
+    response,
+    "Failed to load SOC corpus audit bundle",
+  );
+}
+
+export async function promoteSocRunToMemory(
+  runId: string,
+  request: SocMemoryRunPromotionRequest,
+  context?: SocRequestContext,
+): Promise<SocMemoryRunPromotionResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/runs/${encodeURIComponent(runId)}/promote`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryRunPromotionResult>(
+    response,
+    "Failed to promote SOC run to memory review",
   );
 }
 
@@ -844,6 +897,25 @@ export async function getSocMemoryRecord(
   return readJson<SocMemoryRecord>(
     response,
     "Failed to load SOC memory record",
+  );
+}
+
+export async function createSocMemoryRevisionCandidate(
+  memoryId: string,
+  request: SocMemoryRevisionCandidateCreateRequest,
+  context?: SocRequestContext,
+): Promise<SocMemoryRevisionCandidateCreateResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/records/${encodeURIComponent(memoryId)}/revision-candidates`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryRevisionCandidateCreateResult>(
+    response,
+    "Failed to create SOC memory revision candidate",
   );
 }
 

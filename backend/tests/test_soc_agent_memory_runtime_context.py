@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,6 +28,7 @@ from soc_agent.contracts import (
     SocMemoryTargetArtifact,
 )
 from soc_agent.core.runtime import analyze_alert
+from soc_agent.llm import SocAnalyzerMode, SocLLMSettings
 from soc_agent.memory import (
     ConfirmedMemoryAnalysisRequestEnricher,
     memory_query_from_analysis_request,
@@ -153,8 +155,8 @@ def test_memory_query_uses_only_generic_canonical_dimensions() -> None:
         "source": "fixed_runtime_pre_llm",
         "alert_id": "ALT-MEMORY-RUNTIME-1",
         "memory_profile_id": "soc.generic",
-        "memory_profile_version": "1",
-        "memory_feature_schema_version": "soc.memory_features.generic.v1",
+        "memory_profile_version": "2",
+        "memory_feature_schema_version": "soc.memory_features.generic.v2",
         "strong_anchor_keys_present": [
             "detection_key",
             "rule_code",
@@ -227,6 +229,30 @@ def test_memory_environment_configuration_must_be_consistent(
         match="memory, tenant-policy and automation environments must match",
     ):
         analysis_application._resolve_memory_environment(None)
+
+
+def test_runtime_environment_is_scoped_across_memory_and_automation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOC_MEMORY_ENVIRONMENT", "dev")
+    monkeypatch.setenv("SOC_TENANT_POLICY_ENVIRONMENT", "dev")
+    monkeypatch.setenv("SOC_AUTOMATION_ENVIRONMENT", "dev")
+    monkeypatch.setenv("SOC_TENANT_POLICY_ENABLED", "false")
+    monkeypatch.setenv("SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS", "false")
+    monkeypatch.delenv("SOC_TENANT_DISPOSITION_POLICY_PATH", raising=False)
+    monkeypatch.delenv("SOC_AUTOMATION_POLICY_PATH", raising=False)
+
+    service = analysis_application.build_soc_analysis_service(
+        SimpleNamespace(),
+        settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+        runtime_environment="DEV-CORPUS-EVAL",
+    )
+
+    enrichers = service._runtime._analysis_request_enricher._enrichers
+    memory_enricher = next(item for item in enrichers if isinstance(item, ConfirmedMemoryAnalysisRequestEnricher))
+    automation_observer = service._post_analysis_observers[0]
+    assert memory_enricher._environment == "dev-corpus-eval"
+    assert automation_observer._environment == "dev-corpus-eval"
 
 
 def test_memory_retrieval_failure_is_sanitized_and_non_blocking() -> None:

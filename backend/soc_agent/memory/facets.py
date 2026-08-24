@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+import re
+from typing import TYPE_CHECKING, Any
 
 from soc_agent.contracts import (
     AdjudicatedRoleStatus,
@@ -28,6 +30,11 @@ _RESOLVED_MODEL_ROLE_STATUSES = frozenset(
         AdjudicatedRoleStatus.RESOLVED_FROM_EVIDENCE,
     }
 )
+_CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,}\b", flags=re.IGNORECASE)
+_NETWORK_PROTOCOL_ALIASES = {
+    "6": "tcp",
+    "17": "udp",
+}
 
 
 def memory_facets_from_analysis_request(
@@ -71,7 +78,18 @@ def memory_facets_from_analysis_request(
                 _role_entity(resolution.role, resolution.selected_value),
             )
 
-    behavior_components = _behavior_components(request)
+    network_services = _network_services(request)
+    vulnerability_ids = _vulnerability_ids(request)
+    for service in network_services:
+        _add(facets, "network_service", service)
+    for vulnerability_id in vulnerability_ids:
+        _add(facets, "vulnerability_id", vulnerability_id)
+
+    behavior_components = _behavior_components(
+        request,
+        network_services=network_services,
+        vulnerability_ids=vulnerability_ids,
+    )
     for component in behavior_components:
         _add(facets, "behavior_component", component)
     if len(behavior_components) >= 2:
@@ -80,7 +98,7 @@ def memory_facets_from_analysis_request(
             "behavior_fingerprint",
             stable_hash(
                 {
-                    "schema_version": "soc.memory_behavior_fingerprint.v1",
+                    "schema_version": "soc.memory_behavior_fingerprint.v2",
                     "components": behavior_components,
                 }
             ),
@@ -163,7 +181,12 @@ def _facets_from_alert_or_report(
     return facets
 
 
-def _behavior_components(request: LLMAnalysisRequest) -> list[str]:
+def _behavior_components(
+    request: LLMAnalysisRequest,
+    *,
+    network_services: list[str],
+    vulnerability_ids: list[str],
+) -> list[str]:
     entities = request.canonical_entities
     components: list[str] = []
     for hypothesis in request.fact_reconstruction.scenario_hypotheses[:8]:
@@ -183,6 +206,10 @@ def _behavior_components(request: LLMAnalysisRequest) -> list[str]:
             _append(components, f"protocol:{value}")
     if entities.http.method:
         _append(components, f"http_method:{entities.http.method}")
+    for service in network_services:
+        _append(components, f"network_service:{service}")
+    for vulnerability_id in vulnerability_ids:
+        _append(components, f"vulnerability:{vulnerability_id}")
     for technique in request.classification.technique[:20]:
         _append(components, f"technique:{technique}")
     for mention in request.extracted_entities.mentions:
@@ -191,6 +218,81 @@ def _behavior_components(request: LLMAnalysisRequest) -> list[str]:
         if len(components) >= 40:
             break
     return sorted(components)
+
+
+def _network_services(request: LLMAnalysisRequest) -> list[str]:
+    """Project transport and destination-port pairs without retaining IPs."""
+
+    network = request.canonical_entities.network
+    services: set[str] = set()
+
+    def add(protocol: str | None, port: int | None) -> None:
+        normalized_protocol = _normalize_network_protocol(protocol)
+        if normalized_protocol is None or port is None or not 0 <= port <= 65535:
+            return
+        services.add(f"{normalized_protocol}/{port}")
+
+    add(network.protocol, network.dst_port)
+    for observation in network.observations[:100]:
+        add(observation.protocol or network.protocol, observation.dst_port)
+
+    if not services:
+        http = request.canonical_entities.http
+        add(network.protocol or http.protocol, http.port)
+    return sorted(services)[:20]
+
+
+def _normalize_network_protocol(value: str | None) -> str | None:
+    normalized = str(value).strip().casefold() if value is not None else ""
+    if not normalized:
+        return None
+    return _NETWORK_PROTOCOL_ALIASES.get(normalized, normalized)
+
+
+def _vulnerability_ids(request: LLMAnalysisRequest) -> list[str]:
+    """Extract stable public CVE identifiers from bounded current-alert evidence."""
+
+    values: list[str] = []
+    values.extend(str(value) for value in request.classification.labels.values())
+    values.extend(request.canonical_entities.threat.iocs)
+    values.extend(str(item.value) for item in request.evidence_catalog if item.value is not None)
+    values.extend(item.value for item in request.evidence_highlights)
+    for evidence in [request.primary_evidence, *request.supplementary_evidence]:
+        if evidence is None:
+            continue
+        values.extend(_bounded_evidence_strings(evidence.content))
+
+    vulnerability_ids: set[str] = set()
+    for value in values:
+        for match in _CVE_PATTERN.finditer(value):
+            vulnerability_ids.add(match.group(0).upper())
+            if len(vulnerability_ids) >= 20:
+                return sorted(vulnerability_ids)
+    return sorted(vulnerability_ids)
+
+
+def _bounded_evidence_strings(content: str) -> list[str]:
+    try:
+        value = json.loads(content)
+    except (TypeError, ValueError):
+        return [content]
+
+    strings: list[str] = []
+
+    def collect(item: Any) -> None:
+        if len(strings) >= 2_000:
+            return
+        if isinstance(item, str):
+            strings.append(item)
+        elif isinstance(item, dict):
+            for child in item.values():
+                collect(child)
+        elif isinstance(item, list):
+            for child in item:
+                collect(child)
+
+    collect(value)
+    return strings
 
 
 def _role_entity(role: str, value: str) -> str:

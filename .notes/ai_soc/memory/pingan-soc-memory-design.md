@@ -15,8 +15,9 @@
    标准协议，因此以后接其他公司时新增 Profile，不修改通用内核。
 3. 只有重复、结论明确、相互一致且存在强锚点的 cohort 才生成一条候选，运营专家审核的是“模式”，
    不是每天上万条告警。
-4. `detection_key` 只负责识别规则大类；Profile v4 再从 canonical `rule_name` 生成
-   `detection_signature`，并从 canonical endpoint entities 生成 core/detail behavior component。
+4. `detection_key` 只负责识别规则大类；PingAn Profile v6（feature schema v5）再从 canonical
+   `rule_name` 生成 `detection_signature`，并从 canonical network/endpoint evidence 生成版本化
+   core/detail behavior component。
    只有 `detection_key + detection_signature + strong behavior_fingerprint` 才定义可改判的同类行为，
    rule-only/weak-only Memory 永远只是背景参考。
 5. 告警处理完成后，只更新本次真正用过的 Memory：一致则增加支持，冲突则记录反证、更新健康度并
@@ -31,7 +32,8 @@ PingAn Memory uses a **generic Memory Kernel + tenant profile** design:
 - The generic kernel owns contracts, lifecycle, persistence, retrieval, audit, decision
   lineage, feedback, health, and revision proposals.
 - `PingAnSocMemoryProfile` owns how a PingAn canonical alert is classified as the same
-  operational occurrence or the same reusable alert class.
+  operational occurrence or the same reusable alert class, and declares the versioned
+  default fixed aggregation window for that class.
 - Every completed alert may become an immutable observation. It does **not** become one
   Memory or one expert-review task.
 - A review candidate is created only when a repeated cohort passes recurrence,
@@ -80,6 +82,9 @@ flowchart TD
     C --> G{"🚦 Quality Gate<br/>support + distinct + conclusive<br/>consistency + strong anchor"}
     G -->|fail| O1["🗄️ Observation only<br/>不占专家审核队列"]
     G -->|pass| MC["🧬 Pattern Memory Candidate<br/>模式级高质量候选"]
+    R --> MP["👤 Explicit Run Promotion<br/>人工认为本次研判值得沉淀"]
+    MP --> MC2["🧬 Manual pending Candidate<br/>绕过重复门槛，不绕过治理"]
+    MC2 --> HR
     MC --> HR{"👤 Human Review<br/>业务经验 + 适用范围 + 有效期"}
     HR -->|reject| X["🚫 Rejected / 不可检索"]
     HR -->|confirm| MR["📖 Confirmed Record<br/>retrieval disabled"]
@@ -192,7 +197,7 @@ alerts fall out of the recurrence workflow as naive datetimes.
 
 ### 5.3 Same reusable alert class
 
-The PingAn profile v4 selects one stable cohort signature:
+The PingAn Profile v6 / feature schema v5 selects one stable cohort signature:
 
 1. when available, hash canonical `detection_key + detection_signature + behavior_fingerprint`
    into a `compound` cohort; the original facets remain separately auditable;
@@ -209,12 +214,14 @@ silently disable reuse.
 `detection_signature` is a deterministic hash of source/product and the whitespace/case-normalized
 canonical rule name. It is deliberately separate from `detection_key`: PingAn data shows that one
 ZEUS `rule_code` may contain many detector names. Exact rule-name normalization is conservative;
-future governed aliasing may merge reviewed cosmetic aliases, but v4 never guesses that two names
+future governed aliasing may merge reviewed cosmetic aliases, but v5 never guesses that two names
 are equivalent.
 
 The current `behavior_fingerprint` is deterministic and pre-LLM. It reuses canonical
 facts already produced by SOC Runtime and hashes a versioned, sorted set of core behavior
-components. Profile v4 retains the vendor-neutral scenario/process/protocol/MITRE components and,
+components. Generic feature schema v2 adds canonical destination transport/port as
+`network_service` and extracts public CVE identifiers as `vulnerability_id` from bounded current-alert
+evidence. PingAn feature schema v5 retains scenario/process/protocol/MITRE components and,
 for PingAn endpoint evidence, adds canonical process image/path, command module and switch names,
 parent Windows service, and a typed protected-registry-hive target class. Exact target names such as
 `SAM` and `SYSTEM` remain separate auditable detail components rather than splitting a cohort when an
@@ -222,8 +229,10 @@ upstream event reports only one hive. The PingAn EDR Adapter first projects flat
 `str_suspicious_file` values into provenance-linked `endpoint_action_target` observations; the Memory
 Profile never reads that raw alias. IP, host, UM/account, alert/run IDs and random command values such
 as ClassId UUIDs are deliberately excluded so the same behavior may match across changing entities.
-Profile v4 classifies protocol, HTTP method and generic
-`scenario:web_attack` as weak components; process, specific scenario, MITRE technique and typed
+PingAn feature schema v5 additionally normalizes canonical alert categories into an auditable
+`attack_behavior_family`; reviewed aliases such as OpenVPN proxy/tunnel descriptions converge without
+using a model-generated scenario. Protocol, HTTP method, network service, source classification family and generic
+`scenario:web_attack` are weak components; process, specific scenario, MITRE technique, CVE and typed
 behavior components are strong. A decisive compound requires exact detection key, detector
 signature, behavior fingerprint, environment and `behavior_strength=strong`. When the exact
 detection/signature/environment match but the full fingerprint differs, Retrieval may expose the
@@ -232,8 +241,16 @@ component overlaps; it cannot apply its directive. Protocol-only similarity is n
 Evaluate component stability on a held-out PingAn corpus and bump the feature schema whenever the
 component policy changes.
 
-Profile v4 is intentionally incompatible with v2/v3. Existing records remain auditable but cannot be
-matched or apply a directive until the source cohort is re-aggregated and reviewed under v4.
+Profile v6 / feature schema v5 is intentionally incompatible with earlier versions. Existing records remain
+auditable but cannot be matched or apply a directive until the source cohort is re-aggregated, reviewed and
+activated under v6.
+
+The real DEV replay for rule `RPAADM_000558` demonstrates the boundary: alerts `2448168`, `2457097`,
+`2457177` and `2457581` converge on `UDP/1194 + proxy_tunnel_activity` across changing IPs, while alert
+`2456140` becomes another cohort through `UDP/44818 + CVE-2017-7924 + vulnerability_exploitation`.
+This is a feature-policy rule, not an alert-ID exception. New canonical protocols, destination ports and CVEs
+automatically use the same projection; unknown PingAn categories retain an exact source-category family until a
+reviewed alias is versioned.
 
 `category`, `severity`, source type, or a model-only scenario label can help rank or
 explain a match, but they cannot alone create a decisive PingAn lesson. This avoids both
@@ -268,7 +285,7 @@ The default `soc.memory_pattern_aggregation.v3` policy is:
 
 | Gate | Default | Why |
 |---|---:|---|
-| Window | 24 hours | Bound one recurrence cohort |
+| Window | 30 days for PingAn Profile v6 | Bound one recurrence cohort for comparatively static PingAn rules |
 | Observations | >= 5 | One alert cannot become a pattern |
 | Distinct sources | >= 5 | Retries do not manufacture support |
 | Conclusive outcomes | >= 5 | Unknown results do not form a lesson |
@@ -277,8 +294,10 @@ The default `soc.memory_pattern_aggregation.v3` policy is:
 
 Three clocks must not be conflated:
 
-- **aggregation window**: 24 hours by default; it groups repeated observations into one
-  review candidate and is not the Memory lifetime;
+- **aggregation window**: PingAn Profile v6 defaults to a fixed 30-day UTC window; it
+  groups repeated observations into one review candidate and is neither a rolling
+  lookback nor the Memory lifetime. The generic profile remains 24 hours, and explicit
+  offline/operator policies may override the profile default;
 - **record validity**: generated pattern candidates currently default to 90 days, which
   covers the requested one-to-two-month operational lifetime;
 - **retrieval activation/review**: the reviewer explicitly chooses an activation expiry
@@ -298,6 +317,27 @@ The generated candidate contains:
 An equivalent lesson in a later window is reinforcement, not a new candidate. A changed
 risk class or strong-anchor scope creates a new reviewable lesson and never silently
 overwrites the old record.
+
+### 6.1 Manual Run Promotion / 人工提炼单次研判
+
+自动 Pattern gate 负责控制批量告警产生的候选噪声，但它不是唯一入口。分析师在一条已完成 Run 中发现
+重要、可复用的业务经验时，可以显式点击“提前提炼”创建 Candidate，即使该 cohort 尚未达到 5/5 门槛。
+该动作本身已经表达“交给专家治理”的意图，因此不强制分析师提前编写沉淀理由；可选备注只用于提示审核人
+重点关注的内容。最终判断、业务事实、使用条件、处置建议和治理理由统一在 Candidate 审核阶段完成，避免重复填写。
+
+该入口复用 `SocReviewService -> SocMemoryCandidateSourceBridge -> MemoryAdmissionService ->
+SocMemoryService`，来源为 `manual_note`，状态固定为 `pending_review`。它仍要求可复用 facet，保留
+可信 actor、操作时间、run/alert/evidence lineage 和幂等审计；不会直接生成 Business Lesson、确认记录、
+开启检索、改变当前告警结论或授权处置。审核人随后在统一 Candidate 页面生成或编辑六段 Business Lesson，
+再执行确认与激活。无备注时，审计记录描述“已认证分析师显式发起提前提炼”，不得伪装为业务审核理由。
+
+如果该 Run 已经形成 `MemoryPatternObservation`，人工 Candidate 必须携带其精确 `lineage_key`、
+`aggregation_key`、`observation_id`，以及点击提炼时可见 cohort 的 observation/source 清单、support 数和
+证据集合哈希，使提前提炼后的 Candidate/Memory 仍显示在同一个 Pattern 生命周期中。该快照一经创建即冻结；
+同一 `lineage_key` 后续达到自动门槛时，只返回这条人工 Candidate，并以 `lineage_governance` 标记其覆盖关系，
+不会再创建一条自动 Candidate。后来进入的告警仍保存为 Observation，用于 replay、强化和未来显式修订。
+历史上缺少这些元数据的人工 Candidate，由 Memory Center 仅按同一 `source_run_id`、tenant、Profile/schema
+和 environment 做只读补链；这不增加 support count、不伪造达到 5/5，也不改写历史记录。
 
 ## 7. Human Review And Activation
 
@@ -386,7 +426,12 @@ actions can still be authorized without Memory by the separate automation policy
 
 ## 9. Feedback, Health, And Revision
 
-Every projected `M-*` creates one idempotent `SocMemoryUseRecord` with:
+Every unique `(run_id, memory_id, memory_version)` creates one idempotent
+`SocMemoryUseRecord`. If the same immutable Memory is accidentally projected through
+multiple `M-*` references, Runtime collapses them and prefers the reference that actually
+contributed to the final decision. The Decision transition contributor list is deduplicated
+on the same identity before the use record is captured. One Memory version therefore has
+exactly one final effect in one Run, and health is incremented once. The record contains:
 
 - exact Memory ID/version/content/facet hashes;
 - run/alert/tenant/context reference;
@@ -557,8 +602,8 @@ validate the evaluator wiring, but `real_quality_metrics_available=false` and
 Rollback is retrieval disablement. Raw alerts, Base Decisions, uses, feedback, and prior
 record versions remain available for replay.
 
-Profile v2/v3 records do not silently match Profile v4 queries. They remain auditable but
-must be re-aggregated under the v4 feature schema and reviewed again before receiving v4
+Earlier Profile records do not silently match Profile v6 / feature-schema-v5 queries. They remain auditable but
+must be re-aggregated under the v5 feature schema and reviewed again before receiving v6
 retrieval or decision authority. A migration must never infer a compound behavior scope
 from an old detection-only or coarser behavior record.
 

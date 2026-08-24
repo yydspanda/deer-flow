@@ -296,8 +296,10 @@ PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
 - cohort 严格隔离 tenant、environment 和 `simulation|operational` data class，并按 canonical
   timezone-aware `AlertInput.event.event_time` 落入固定 UTC window。缺失或 naive event time 时跳过聚合，
   不使用 `run.started_at` 伪造历史窗口，也不猜租户时区。
-- policy `soc.memory_pattern_aggregation.v3` 默认 window=24h、minimum support=5、minimum distinct
-  sources=5、minimum conclusive support=5、risk/benign consistency >=80%，并要求至少一个与候选类型对应的
+- policy `soc.memory_pattern_aggregation.v3` 的 generic 默认 window=24h；tenant profile 可声明版本化的
+  bounded default，PingAn Profile v6 默认 fixed UTC 30d，显式离线/operator policy 可覆盖。所有 Profile
+  仍使用 minimum support=5、minimum distinct sources=5、minimum conclusive support=5、risk/benign
+  consistency >=80%，并要求至少一个与候选类型对应的
   consensus strong retrieval anchor。
 - 每条 v3 observation 保存 bounded lesson snapshot，而不是创建 Memory：verdict/risk class、review/evidence
   state、summary/reason/recommendation、primary scenario/stage 和 direction。低支持、冲突、未决过多或弱锚点
@@ -313,13 +315,15 @@ PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
 - recurrence 不证明 benign/malicious、授权、攻击影响或处置动作，不能改变 Runtime decision、确认记忆、
   启用 retrieval 或执行 action。Kafka/batch sidecar 默认关闭，聚合失败不阻断基础分析。
 - `SocMemoryProfileRegistry` 在 composition root 选择 tenant/source profile。PingAn profile 只消费 canonical
-  Adapter 输出：Profile v4 使用 detection key + detector signature + behavior fingerprint 形成 compound
+  Adapter 输出：Profile v6 / feature schema v5 使用 detection key + detector signature + behavior fingerprint 形成 compound
   cohort；只有 strong behavior compound 才可 decision-eligible，detection-only/weak-only 只能形成
   rule-context，behavior-only strong 保留为 ruleless pattern，category-only 不形成 PingAn cohort；
   同 upstream event/input occurrence 不重复增加 support。
-  v4 的 endpoint core fingerprint 仅使用 canonical process image/path、稳定 command module/switch、
+  v5 的 endpoint/network core fingerprint 使用 canonical process image/path、稳定 command module/switch、
   parent service 和 typed target class；精确 target file 留作 detail。IP、host、account 与 ClassId 等随机值
-  不参与 fingerprint。平铺 EDR target 必须先由 Adapter 生成带 provenance 的 file observation。
+  不参与 fingerprint。canonical destination service、CVE 和版本化 attack behavior family 可拆分同 rule
+  下的不同真实行为；network service 与来源类别 family 仍是 weak authority anchor。平铺 EDR target 必须先由
+  Adapter 生成带 provenance 的 file observation。
 - 候选和确认记录可携带 `SocMemoryApplicabilitySpec`。Retrieval 在打分/强锚点之后独立核对 profile/version、
   required/optional/excluded facets；只有 `applicable` 才允许 typed directive 参与有效决策。受 Profile
   限定的 `partial/context-only` match 可以作为明确降权的 LLM 背景，但 Automation 必须拒绝其 directive。
@@ -424,7 +428,8 @@ soc memory reconcile
 
 - **Done / PI-03F3**：daemon 和 internal batch 只在显式配置时启用同一
   `SocMemoryPatternService`；默认行为保持 Runtime-only。
-- 每条 alert/offset 只成为 immutable observation/evidence ref。固定 UTC source-event-time window 达到
+- 每条 alert/offset 只成为 immutable observation/evidence ref。Profile 定义的固定 UTC source-event-time window
+  （generic 24h；PingAn v6 默认 30d）达到
   5 support + 5 distinct sources 后，还需 5 条有效结论、>=80% 风险类别一致性和 consensus strong anchor，
   才创建一个 frozen `pending_review` pattern lesson；其他 cohort 不占用专家审核时间。
 - 幂等、scope、evidence-set hash、manual-only supersession 和 read-only replay 已落地；migration 为

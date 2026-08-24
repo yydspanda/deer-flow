@@ -98,6 +98,23 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 python3.12 scripts/soc_pingan_macos_host_dev.py start
 ```
 
+The PingAn-only host driver now detects the private IPv4 addresses on the macOS
+default/`en*` interfaces and adds them to Next.js `allowedDevOrigins`. Nginx already
+listens on `2026`, so authenticated coworkers on the trusted internal LAN can open the
+printed `http://<mac-ip>:2026` URL. Additional DNS names or addresses remain explicit:
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon \
+  --allowed-origin soc-dev.internal
+```
+
+Use `start --local-only` to disable LAN access explicitly. The resolved list is applied
+after `.env.soc-dev.local` is sourced, fixing `/_next/*` hydration and the
+`/_next/webpack-hmr` WebSocket without changing Gateway CORS. Automatic discovery
+accepts private IPv4 only and fails closed when none is available; use
+`--allowed-origin HOST` for an approved non-RFC1918 corporate address. Keep
+authentication enabled and the macOS firewall scoped to the trusted network.
+
 The native `install` command keeps the canonical PyPI-authored `backend/uv.lock`
 unchanged. It uses `uv export --frozen` to derive exact versions and hashes, then
 `uv pip sync --require-hashes` to download those artifacts from the scoped PingAn

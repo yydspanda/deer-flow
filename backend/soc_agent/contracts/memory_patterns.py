@@ -327,6 +327,7 @@ class MemoryPatternAggregationResult(BaseModel):
         "none",
         "current_cohort",
         "equivalent_lesson",
+        "lineage_governance",
     ] = "none"
     candidate_created: bool = False
     candidate_frozen: bool = False
@@ -372,6 +373,7 @@ class MemoryPatternReplayReport(BaseModel):
         "none",
         "current_cohort",
         "equivalent_lesson",
+        "lineage_governance",
     ] = "none"
     candidate_origin_aggregation_key: str | None = Field(
         default=None,

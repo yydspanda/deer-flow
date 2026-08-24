@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -18,6 +19,7 @@ from soc_agent.contracts import (
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
+    BoundedAnalysisEvidence,
     DetectionRuleRef,
     EntityKind,
     EntityMention,
@@ -102,6 +104,7 @@ def _run(
     source_system: str = "zeus",
     product: str = "ndr",
     category: str = "command_and_control",
+    primary_evidence_content: str | None = None,
 ) -> AnalysisRun:
     evidence_ref = "E-000000000001"
     analysis = AnalysisResult(
@@ -214,6 +217,16 @@ def _run(
                     else []
                 )
             ),
+            primary_evidence=(
+                BoundedAnalysisEvidence(
+                    source_path="alert.hitLog[0].zeusRawLogs[0].message",
+                    layer="raw_message",
+                    trust_level="high",
+                    content=primary_evidence_content,
+                )
+                if primary_evidence_content is not None
+                else None
+            ),
         ),
         analysis=analysis,
     )
@@ -316,9 +329,10 @@ def test_pingan_profile_creates_one_typed_same_class_candidate() -> None:
     assert result.candidate.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
     assert "经验结论" in result.candidate.content
     assert len(repository.list_memory_candidates()) == 1
+    assert result.observation.window_end - result.observation.window_start == timedelta(days=1)
 
 
-def test_pingan_v4_behavior_fingerprint_generalizes_host_class_id_and_hive_subset() -> None:
+def test_pingan_v5_behavior_fingerprint_generalizes_host_class_id_and_hive_subset() -> None:
     profile = build_soc_memory_profile_registry().resolve_run(
         _run(
             1,
@@ -351,8 +365,8 @@ def test_pingan_v4_behavior_fingerprint_generalizes_host_class_id_and_hive_subse
         )
     )
 
-    assert profile.identity.profile_version == "4"
-    assert profile.identity.feature_schema_version == "pingan.soc.memory_features.v4"
+    assert profile.identity.profile_version == "6"
+    assert profile.identity.feature_schema_version == "pingan.soc.memory_features.v5"
     assert first["behavior_fingerprint"] == second["behavior_fingerprint"]
     assert first["behavior_component_core"] == second["behavior_component_core"]
     assert {
@@ -387,7 +401,7 @@ def test_pingan_v4_behavior_fingerprint_generalizes_host_class_id_and_hive_subse
         ),
     ],
 )
-def test_pingan_v4_behavior_fingerprint_rejects_material_component_changes(
+def test_pingan_v5_behavior_fingerprint_rejects_material_component_changes(
     changed_entities: AlertEntitySet,
 ) -> None:
     profile = build_soc_memory_profile_registry().resolve_run(_run(1))
@@ -410,7 +424,145 @@ def test_pingan_v4_behavior_fingerprint_rejects_material_component_changes(
     assert baseline["behavior_fingerprint"] != changed["behavior_fingerprint"]
 
 
-def test_pingan_v4_reviewed_endpoint_memory_generalizes_entities_without_generalizing_behavior() -> None:
+def test_pingan_v5_network_behavior_splits_same_rule_by_service_and_vulnerability() -> None:
+    profile = build_soc_memory_profile_registry().resolve_run(_run(1))
+    openvpn_runs = [
+        _run(
+            index,
+            detection_key="sec_guard_apt:rule_code:rpaadm_000558",
+            rule_name="红队IP监控",
+            techniques=["T1190"],
+            canonical_entities=AlertEntitySet(
+                network=NetworkEntityRef(
+                    source_ip=f"199.45.154.{170 + index}",
+                    destination_ip=f"124.196.28.{60 + index}",
+                    src_port=40_000 + index,
+                    dst_port=1194,
+                    protocol="udp",
+                )
+            ),
+            category="代理工具",
+        )
+        for index in range(1, 5)
+    ]
+    plc_run = _run(
+        5,
+        detection_key="sec_guard_apt:rule_code:rpaadm_000558",
+        rule_name="红队IP监控",
+        techniques=["T1190"],
+        canonical_entities=AlertEntitySet(
+            network=NetworkEntityRef(
+                source_ip="36.32.3.212",
+                destination_ip="124.196.50.90",
+                src_port=26392,
+                dst_port=44818,
+                protocol="udp",
+            )
+        ),
+        category="拒绝服务",
+        primary_evidence_content=json.dumps(
+            {
+                "rule_name": "Rockwell Automation拒绝服务漏洞(CVE-2017-7924)",
+                "description": "Remote PCCC packet may cause a denial of service.",
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    openvpn_facets = [profile.project_run_facets(run) for run in openvpn_runs]
+    plc_facets = profile.project_run_facets(plc_run)
+    openvpn_signature_items = [profile.build_pattern_signature(run, facets=facets) for run, facets in zip(openvpn_runs, openvpn_facets, strict=True)]
+    openvpn_signatures = {item.value for item in openvpn_signature_items}
+    plc_signature_item = profile.build_pattern_signature(
+        plc_run,
+        facets=plc_facets,
+    )
+    plc_signature = plc_signature_item.value
+
+    assert len(openvpn_signatures) == 1
+    assert plc_signature not in openvpn_signatures
+    assert all(len(item.facets) <= 20 for item in [*openvpn_signature_items, plc_signature_item])
+    assert all(facets["network_service"] == ["udp/1194"] for facets in openvpn_facets)
+    assert all(facets["attack_behavior_family"] == ["proxy_tunnel_activity"] for facets in openvpn_facets)
+    assert plc_facets["network_service"] == ["udp/44818"]
+    assert plc_facets["vulnerability_id"] == ["CVE-2017-7924"]
+    assert set(plc_facets["attack_behavior_family"]) == {
+        "denial_of_service",
+        "vulnerability_exploitation",
+    }
+
+
+def test_pingan_profile_rejects_cross_behavior_memory_retrieval_for_same_rule() -> None:
+    profile = build_soc_memory_profile_registry().resolve_run(_run(1))
+    http_run = _run(
+        6,
+        detection_key="sec_guard_apt:rule_code:rpaadm_000558",
+        rule_name="红队IP监控",
+        techniques=["T1190"],
+        canonical_entities=AlertEntitySet(
+            network=NetworkEntityRef(
+                source_ip="36.32.3.213",
+                destination_ip="124.196.50.91",
+                src_port=38117,
+                dst_port=80,
+                protocol="http",
+            ),
+            http=HttpEntityRef(
+                method="GET",
+                host="service.example.internal",
+                path="/health",
+                port=80,
+                protocol="http",
+            ),
+        ),
+        category="web_attack",
+    )
+    plc_run = _run(
+        7,
+        detection_key="sec_guard_apt:rule_code:rpaadm_000558",
+        rule_name="红队IP监控",
+        techniques=["T1190"],
+        canonical_entities=AlertEntitySet(
+            network=NetworkEntityRef(
+                source_ip="36.32.3.212",
+                destination_ip="124.196.50.90",
+                src_port=26392,
+                dst_port=44818,
+                protocol="udp",
+            )
+        ),
+        category="拒绝服务",
+        primary_evidence_content=json.dumps(
+            {
+                "rule_name": "Rockwell Automation拒绝服务漏洞(CVE-2017-7924)",
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    http_facets = profile.project_run_facets(http_run)
+    plc_facets = profile.project_run_facets(plc_run)
+
+    assert (
+        profile.retrieval_conflict_reasons(
+            record_facets=http_facets,
+            query_facets=http_facets,
+        )
+        == []
+    )
+    assert set(
+        profile.retrieval_conflict_reasons(
+            record_facets=plc_facets,
+            query_facets=http_facets,
+        )
+    ) == {
+        "network_service_mismatch",
+        "vulnerability_scope_missing",
+        "attack_behavior_family_mismatch",
+    }
+
+
+def test_pingan_v5_reviewed_endpoint_memory_generalizes_entities_without_generalizing_behavior() -> None:
     repository = InMemoryMemoryPatternRepository()
     pattern_service = _service(repository)
     _observe(
@@ -445,6 +597,7 @@ def test_pingan_v4_reviewed_endpoint_memory_generalizes_entities_without_general
         candidate_repository=repository,
         record_repository=repository,
         mutation_audit_repository=repository,
+        profile_registry=build_soc_memory_profile_registry(),
         now_provider=lambda: reviewed_at,
     )
     reviewed = memory_service.review_candidate(
@@ -455,7 +608,7 @@ def test_pingan_v4_reviewed_endpoint_memory_generalizes_entities_without_general
             record_lesson=SocMemoryBusinessLesson(
                 conclusion="Windows Update 的 wuaucltcore.exe 在审核行为范围内读取受保护注册表配置单元，属于无风险误报。",
                 business_rationale=["运营确认 UUS、wuauserv 和 UpdateDeploy.dll 组合是受管 Windows 更新行为。"],
-                applicability_conditions=["检测规则、检测器签名和 Profile v4 core behavior fingerprint 必须全部一致。"],
+                applicability_conditions=["检测规则、检测器签名和 Profile v5 core behavior fingerprint 必须全部一致。"],
                 generalization_boundaries=["主机、IP、账号、ClassId 以及 SAM/SYSTEM 子集可以变化。"],
                 invalidation_conditions=["进程路径、命令模块、父服务或目标类型变化时不得沿用该结论。"],
                 handling_guidance=["精确适用时复用 false_positive；否则按当前告警重新研判。"],
@@ -468,7 +621,7 @@ def test_pingan_v4_reviewed_endpoint_memory_generalizes_entities_without_general
             activation_review_after_days=30,
         ),
         context=ServiceRequestContext(
-            idempotency_key="confirm-pingan-windows-update-v4",
+            idempotency_key="confirm-pingan-windows-update-v5",
             actor=ActorContext(
                 actor_id="memory-reviewer",
                 actor_type=ActorType.USER,
@@ -711,10 +864,25 @@ def test_pingan_profile_is_server_selected_for_runtime_query() -> None:
     )
 
     assert query.metadata["memory_profile_id"] == "pingan.soc"
-    assert query.metadata["memory_feature_schema_version"] == ("pingan.soc.memory_features.v4")
+    assert query.metadata["memory_feature_schema_version"] == ("pingan.soc.memory_features.v5")
     assert query.facets["detection_key"] == ["pingan:ndr:reverse-shell"]
     assert len(query.facets["detection_signature"]) == 1
     assert query.facets["behavior_strength"] == ["strong"]
+
+
+def test_pingan_profile_defaults_to_thirty_day_fixed_window() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = SocMemoryPatternService(
+        repository=repository,
+        candidate_repository=repository,
+        profile_registry=build_soc_memory_profile_registry(),
+    )
+
+    result = _observe(service, _run(1), "batch:thirty-day-window")
+
+    assert result.observation.profile_version == "6"
+    assert result.observation.window_end - result.observation.window_start == timedelta(days=30)
+    assert result.observation.aggregation_policy.window_seconds == 30 * 24 * 60 * 60
 
 
 def test_reviewer_can_confirm_activate_and_authorize_exact_future_matches() -> None:

@@ -313,6 +313,71 @@ def test_memory_use_feedback_and_safety_suspension_are_persisted(
     assert still_suspended.retrieval_enabled is False
 
 
+def test_same_memory_version_has_one_final_use_effect_per_run(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 15, 6, 30, tzinfo=UTC)
+    repository = _repository(tmp_path / "memory-use-identity.db")
+    memory = _active_benign_memory(now)
+    run = _run(memory, now)
+    assert run.llm_analysis_request is not None
+    original = run.llm_analysis_request.context_catalog[0]
+    duplicate_projection = original.model_copy(update={"context_ref": "M-DUPLICATE0001"})
+    run = run.model_copy(
+        update={
+            "llm_analysis_request": run.llm_analysis_request.model_copy(
+                update={
+                    "context_catalog": [
+                        duplicate_projection,
+                        original,
+                    ]
+                }
+            )
+        }
+    )
+    repository.save_memory_record(memory)
+    repository.save_run(run)
+
+    transition = (
+        SocAutomationService(
+            repository=repository,
+            policy=None,
+            environment="prd",
+            memory_repository=repository,
+            now_provider=lambda: now,
+        )
+        .evaluate(
+            run,
+            context=_analyst_context("automation-memory-use-identity"),
+        )
+        .decision_transition
+    )
+    assert transition.after.verdict is Verdict.FALSE_POSITIVE
+    assert len(transition.contributors) == 1
+
+    evolution = SocMemoryEvolutionService(
+        repository=repository,
+        memory_record_repository=repository,
+        automation_repository=repository,
+        mutation_audit_repository=repository,
+        mutation_uow=repository,
+        now_provider=lambda: now,
+    )
+    first = evolution.capture_run_usage(run)
+    replay = evolution.capture_run_usage(run)
+    persisted = repository.list_memory_uses(run_id=run.run_id, limit=100)
+
+    assert len(first) == 1
+    assert len(replay) == 1
+    assert len(persisted) == 1
+    assert replay[0].use_id == first[0].use_id
+    assert first[0].memory_id == memory.memory_id
+    assert first[0].memory_version == memory.version
+    assert first[0].effect.value == "overridden"
+    assert first[0].directive_applied is True
+    assert first[0].context_ref in {item.ref_id for item in transition.contributors}
+
+
 def test_supporting_final_outcome_keeps_reviewed_memory_active(
     tmp_path: Path,
 ) -> None:

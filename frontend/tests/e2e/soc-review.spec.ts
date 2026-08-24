@@ -42,9 +42,22 @@ test.describe("SOC review workbench", () => {
     });
     await expect(memorySection.getByText("可形成决策经验")).toBeVisible();
     await memorySection.getByRole("button", { name: /高级匹配范围/ }).click();
+    await expect(
+      memorySection.getByText("系统锁定条件 / Required"),
+    ).toBeVisible();
+    await expect(
+      memorySection.getByText("可选收窄条件 / Optional Narrowing"),
+    ).toBeVisible();
+    await expect(
+      memorySection.getByText("检测键：pingan:ndr:reverse-shell"),
+    ).toBeVisible();
     await memorySection
       .locator("#memory-scope-MC-ALPHA-001-source_type")
       .check();
+    await expect(
+      memorySection.getByLabel("增加匹配条件 告警来源类型"),
+    ).toBeChecked();
+    await expect(memorySection.getByText(/当前匹配公式：/)).toBeVisible();
     await memorySection.getByRole("combobox", { name: "最终业务判断" }).click();
     await page.getByRole("option", { name: "误报" }).click();
     await memorySection
@@ -56,7 +69,14 @@ test.describe("SOC review workbench", () => {
         exact: true,
       }),
     ).toBeDisabled();
-    await memorySection.getByRole("button", { name: "AI 生成 Memory" }).click();
+    const generateLessonButton = memorySection.getByRole("button", {
+      name: "AI 生成 Business Lesson",
+    });
+    await expect(generateLessonButton).toHaveAttribute(
+      "data-variant",
+      "default",
+    );
+    await generateLessonButton.click();
     await expect(
       page.getByText("AI 经验草稿已生成，请审核后确认"),
     ).toBeVisible();
@@ -65,6 +85,14 @@ test.describe("SOC review workbench", () => {
         "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
       ),
     ).toBeVisible();
+    await expect(
+      memorySection.getByText(
+        "必须匹配「检测键（detection_key）」：pingan:ndr:reverse-shell",
+      ),
+    ).toBeVisible();
+    await expect(
+      memorySection.getByText(/Required canonical facet/),
+    ).toHaveCount(0);
     await expect(memorySection.getByText(/fixture-lesson-model/)).toBeVisible();
     await expect(
       memorySection.getByRole("textbox", { name: "经验结论" }),
@@ -140,10 +168,10 @@ test.describe("SOC review workbench", () => {
         conclusion: "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
         business_rationale: ["运营专家已核对当前告警证据和内部服务登记信息。"],
         applicability_conditions: [
-          "Required canonical facet detection_key: pingan:ndr:reverse-shell",
-          "Required canonical facet behavior_fingerprint: behavior-alpha",
-          "Required canonical facet environment: prd",
-          "Required canonical facet source_type: nids",
+          "必须匹配「检测键（detection_key）」：pingan:ndr:reverse-shell",
+          "必须匹配「行为指纹（behavior_fingerprint）」：behavior-alpha",
+          "必须匹配「运行环境（environment）」：生产环境（prd）",
+          "必须匹配「告警来源类型（source_type）」：网络入侵检测（nids）",
         ],
         generalization_boundaries: ["审核范围未约束的源和目的 IP 可以变化。"],
         invalidation_conditions: [
@@ -240,11 +268,14 @@ test.describe("SOC review workbench", () => {
       ),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "查看治理详情" }),
+      page.getByRole("link", { name: "查看治理记录" }),
     ).toHaveAttribute(
       "href",
       "/workspace/soc/review/memory-candidates/MC-ALPHA-001",
     );
+    await expect(
+      page.getByRole("link", { name: "查看治理记录" }),
+    ).toHaveAttribute("data-variant", "secondary");
     expect(
       state.requests.filter((request) =>
         [
@@ -295,7 +326,7 @@ test.describe("SOC review workbench", () => {
       has: page.getByRole("heading", { name: "候选记忆" }),
     });
     const generateDraftButton = candidateSection.getByRole("button", {
-      name: "AI 生成 Memory",
+      name: "AI 生成 Business Lesson",
     });
     await expect(generateDraftButton).toBeDisabled();
     await candidateSection
@@ -304,6 +335,9 @@ test.describe("SOC review workbench", () => {
     await page.getByRole("option", { name: "误报" }).click();
     await expect(generateDraftButton).toBeEnabled();
     await generateDraftButton.click();
+    await expect(
+      page.getByRole("link", { name: "返回候选台账" }),
+    ).toHaveAttribute("href", "/workspace/soc/review/memory-candidates");
     for (const lessonField of [
       "经验结论",
       "业务依据",
@@ -321,6 +355,24 @@ test.describe("SOC review workbench", () => {
         "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
       ),
     ).toBeVisible();
+    await expect(
+      candidateSection.getByText("3. 选择未来用途", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      candidateSection.getByText("仅供模型参考，不改判", { exact: true }),
+    ).toBeVisible();
+    await candidateSection
+      .getByRole("switch", { name: "允许精确匹配时参与最终结论" })
+      .click();
+    await expect(
+      candidateSection.getByText("精确匹配后可参与结论", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      candidateSection.getByRole("button", { name: "确认并沉淀 Memory" }),
+    ).toHaveAttribute("data-variant", "default");
+    await expect(
+      candidateSection.getByRole("button", { name: "放弃沉淀此候选" }),
+    ).toHaveAttribute("data-variant", "destructive");
     expect(
       state.requests.find((request) =>
         request.path.endsWith("/MC-ALPHA-001/lesson-draft"),

@@ -22,7 +22,7 @@ from soc_agent.contracts import (
     SocMemoryRecord,
     SocMemoryRecordStatus,
 )
-from soc_agent.memory import SocMemoryProfileRegistry
+from soc_agent.memory import SocMemoryProfileRegistry, memory_candidate_lineage_key
 from soc_agent.protocols import (
     MemoryCandidateRepository,
     MemoryCenterRepository,
@@ -338,7 +338,7 @@ def _candidates_by_lineage(
 ) -> dict[str, list[SocMemoryCandidate]]:
     grouped: dict[str, list[SocMemoryCandidate]] = defaultdict(list)
     for candidate in candidates:
-        lineage_key = _candidate_lineage_key(candidate)
+        lineage_key = memory_candidate_lineage_key(candidate)
         if lineage_key is not None:
             grouped[lineage_key].append(candidate)
     return grouped
@@ -427,14 +427,6 @@ def _pattern_lifecycle(
     }:
         return SocMemoryPatternLifecycleState.CANDIDATE_INTERMEDIATE
     return SocMemoryPatternLifecycleState.TERMINAL_HISTORY
-
-
-def _candidate_lineage_key(candidate: SocMemoryCandidate) -> str | None:
-    value = candidate.metadata.get("lineage_key")
-    if isinstance(value, str) and value:
-        return value
-    value = candidate.source.metadata.get("lineage_key")
-    return value if isinstance(value, str) and value else None
 
 
 def _candidate_profile(

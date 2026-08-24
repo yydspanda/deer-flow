@@ -156,13 +156,13 @@ def test_memory_lesson_drafter_builds_high_quality_askbob_draft_without_persiste
 
     assert "AskBob LLM 服务" in draft.lesson.conclusion
     assert draft.lesson.applicability_conditions == [
-        "Required canonical facet behavior_fingerprint: reverse-shell-askbob",
-        "Required canonical facet detection_key: pingan:ndr:reverse-shell",
-        "Required canonical facet environment: prd",
-        "Required canonical facet service_uri: paic.com.cn/pws/askbob-gpt",
+        "必须匹配「行为指纹（behavior_fingerprint）」：reverse-shell-askbob",
+        "必须匹配「检测键（detection_key）」：pingan:ndr:reverse-shell",
+        "必须匹配「运行环境（environment）」：生产环境（prd）",
+        "必须匹配「服务地址（service_uri）」：paic.com.cn/pws/askbob-gpt",
     ]
     assert draft.lesson.invalidation_conditions[:2] == [
-        "任一必需 canonical facet 与当前告警不匹配时，该经验失效。",
+        "任一系统必需匹配条件与当前告警不一致时，该经验失效。",
         "当前告警出现与已审核业务结论冲突的新证据或攻击影响时，必须重新研判。",
     ]
     assert draft.reviewer_verdict is Verdict.FALSE_POSITIVE
@@ -265,7 +265,7 @@ def test_memory_lesson_drafter_drops_only_empty_unknown_top_level_field() -> Non
     assert draft.provenance.repair_applied is True
     assert draft.provenance.repair_actions == ["drop_empty_unknown_field:generalization_boundaries_text"]
     assert draft.lesson.invalidation_conditions == [
-        "任一必需 canonical facet 与当前告警不匹配时，该经验失效。",
+        "任一系统必需匹配条件与当前告警不一致时，该经验失效。",
         "当前告警出现与已审核业务结论冲突的新证据或攻击影响时，必须重新研判。",
     ]
 
@@ -391,6 +391,108 @@ def test_memory_lesson_drafter_repairs_one_incomplete_provider_output() -> None:
         "output_tokens": 246,
         "total_tokens": 888,
     }
+
+
+def test_memory_lesson_drafter_repairs_action_instruction_in_conclusion() -> None:
+    candidate = _candidate()
+    client = SequenceFakeChatClient(
+        [
+            json.dumps(
+                {
+                    "schema_version": "soc.memory_business_lesson_model_output.v2",
+                    "reviewer_verdict": "false_positive",
+                    "conclusion": "该重复模式是已确认的无风险业务行为，命中后不做阻断。",
+                    "supporting_source_refs": ["D-001"],
+                    "business_rationale": [
+                        {
+                            "statement": "审核人已明确选择误报结论。",
+                            "source_refs": ["D-001"],
+                        }
+                    ],
+                    "generalization_boundaries": ["非必需实体可以变化，机器适用条件不变。"],
+                    "invalidation_conditions": [],
+                    "handling_guidance": ["先校验机器适用条件，不满足时重新研判。"],
+                    "uncertainties": [],
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "schema_version": "soc.memory_business_lesson_model_output.v2",
+                    "reviewer_verdict": "false_positive",
+                    "conclusion": "该重复模式是已确认的无风险业务行为，技术结论为误报。",
+                    "supporting_source_refs": ["D-001"],
+                    "business_rationale": [
+                        {
+                            "statement": "审核人已明确选择误报结论。",
+                            "source_refs": ["D-001"],
+                        }
+                    ],
+                    "generalization_boundaries": ["非必需实体可以变化，机器适用条件不变。"],
+                    "invalidation_conditions": [],
+                    "handling_guidance": ["先校验机器适用条件；精确命中且无反证时复用误报结论，否则重新研判。"],
+                    "uncertainties": [],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+
+    draft = JsonLLMMemoryLessonDrafter(
+        client=client,
+        model_name="lesson-test-model",
+    ).draft(candidate, reviewer_verdict=Verdict.FALSE_POSITIVE)
+
+    assert draft.lesson.conclusion == "该重复模式是已确认的无风险业务行为，技术结论为误报。"
+    assert len(client.calls) == 2
+    assert draft.provenance.repair_actions == ["provider_output_repair"]
+    assert "reserved for handling_guidance" in client.calls[1]["messages"][1]["content"]
+    assert "conclusion must contain facts and verdict only" in client.calls[1]["messages"][0]["content"]
+
+
+def test_memory_lesson_drafter_allows_factual_authorization_status_in_conclusion() -> None:
+    candidate = _candidate()
+    prompt = build_memory_lesson_draft_prompt(
+        candidate,
+        reviewer_verdict=Verdict.TRUE_POSITIVE,
+        reviewer_context=("真实攻击尝试已经发生；是否属于已授权攻防演练只影响处置方式，不改变技术结论。"),
+    )
+    verdict_ref = next(item.source_ref for item in prompt.source_catalog if item.source_kind == "reviewer_verdict")
+    reviewer_ref = next(item.source_ref for item in prompt.source_catalog if item.source_kind == "reviewer_context")
+    client = FakeChatClient(
+        json.dumps(
+            {
+                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "reviewer_verdict": "true_positive",
+                "conclusion": "该模式代表真实攻击尝试；授权状态不改变攻击行为已经发生的技术结论。",
+                "supporting_source_refs": [verdict_ref, reviewer_ref],
+                "business_rationale": [
+                    {
+                        "statement": "审核人确认真实攻击尝试已经发生，授权状态只影响处置方式。",
+                        "source_refs": [verdict_ref, reviewer_ref],
+                    }
+                ],
+                "generalization_boundaries": ["攻击实体可以变化，但检测类型和受治理行为模式必须一致。"],
+                "invalidation_conditions": [],
+                "handling_guidance": ["先核对机器适用条件，再按独立的授权事实决定处置方式。"],
+                "uncertainties": ["当前资料未确认该行为是否处于有效授权范围。"],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    draft = JsonLLMMemoryLessonDrafter(
+        client=client,
+        model_name="lesson-test-model",
+        output_retry_attempts=0,
+    ).draft(
+        candidate,
+        reviewer_verdict=Verdict.TRUE_POSITIVE,
+        reviewer_context=("真实攻击尝试已经发生；是否属于已授权攻防演练只影响处置方式，不改变技术结论。"),
+    )
+
+    assert "授权状态不改变" in draft.lesson.conclusion
+    assert len(client.calls) == 1
 
 
 @pytest.mark.parametrize(

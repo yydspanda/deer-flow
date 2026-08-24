@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-08-11
+> Updated: 2026-08-20
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -106,6 +106,8 @@ flowchart TD
     Q3 --> Q4["🗃️ RoleAdjudicationRevisionRecord<br/>append-only revision, no action authority"]
     Q4 --> G
     I --> Q["🧑‍💻 Correction / Review Note<br/>人工改判、备注或显式采纳结论"]
+    I --> Q5["🧑‍💻 Promote completed Run<br/>人工提炼本次研判"]
+    Q5 --> Q1
     J --> Q0["🧠 Lead Agent conclusion<br/>模型输出本身不写记忆"]
     Q0 -->|"analyst accepts + reason"| Q
     Q --> Q1{"🚦 Memory Admission<br/>人工提升 + 理由 + 可复用锚点"}
@@ -166,15 +168,24 @@ flowchart TD
     checkpoint/history，采纳仍只生成 `pending_review` candidate。Kafka/批处理也不能逐告警写 candidate；
     PI-03F3 只在显式启用时把完成的 run 保存为 immutable observation，以 tenant/environment/data class
     隔离。server-owned Memory Profile 从 canonical 字段选择 cohort 与 occurrence identity：generic fallback
-    保持跨厂商，PingAn Profile v4 使用 detection key + detector signature + behavior fingerprint 形成
+    保持跨厂商，PingAn Profile v6（feature schema v5）使用 detection key + detector signature + behavior fingerprint 形成
     compound cohort；只有 strong behavior compound 才可 decision-eligible，detection-only/weak-only 降为
     rule-context，behavior-only strong 保留 ruleless pattern，并拒绝 category-only cohort；
     同 upstream event/input occurrence 不重复增加 support。随后使用 canonical
-    timezone-aware source event time 的固定 UTC 窗口。`soc.memory_pattern_aggregation.v3` 默认要求 24h 内
+    timezone-aware source event time 的固定 UTC 窗口。通用 Profile 默认 24h，PingAn Profile v6 默认 30d；
+    `soc.memory_pattern_aggregation.v3` 要求一个有效 Profile 窗口内
     达到 5 support + 5 distinct sources + 5 conclusive outcomes，并满足 risk/benign consistency >=80% 和
     consensus strong anchor，才提出一个 frozen `pending_review` pattern lesson。低支持、冲突、未决或弱锚点
     cohort 只保留 observation，不进入专家队列；候选必须总结适用范围、结论分布、代表性理由和例外，不能
     复述单条告警。后续记录仅供 replay，重复本身不证明授权、影响或处置权限。
+10.1 若某条已完成研判未达到自动 Pattern 候选门槛，但分析师判断其中包含值得复用的业务经验，可通过
+    `SocReviewService.promote_run_to_memory()` 显式提炼。该操作要求可信身份、幂等键、充分理由和可复用
+    facet，只创建 `manual_note` 来源的 `pending_review` candidate；它不修改本次 verdict、ReviewQueue、
+    confirmed Memory 或动作权限，后续仍必须完成 Business Lesson 审核与 retrieval activation。
+10.2 DEV 语料工作台按单告警读取真实持久化运行轨迹：`AnalysisRun.steps` 展示 Normalize、Facts、Context、
+    LLM、Validate、Decision，Provider journal 展示当前模型调用，Pattern Observation 展示后续 Memory 写入。
+    前端仅在当前告警运行时轮询轻量 endpoint，并只展示状态、耗时和有界指标，不读取全量 state 推测进度，
+    也不暴露 raw payload、Prompt、证据正文或模型原始响应。
 11. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
    状态迁移后才可进入 bounded context。普通 `M-*` 不直接改判；若确认时另附审核后的 typed decision
    directive，且 future match 的 exact profile/applicability/version/score/required facets 全部满足，则只追加 effective-decision

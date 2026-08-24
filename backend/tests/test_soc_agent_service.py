@@ -31,6 +31,8 @@ from soc_agent.contracts import (
     DecisionReviewReason,
     EntrySurface,
     InvestigationEvidence,
+    MemoryPatternDataClass,
+    MemoryPatternSourceType,
     ReviewNoteCommand,
     ReviewNoteOrigin,
     ReviewQueueCloseCommand,
@@ -76,6 +78,7 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
     SocMemoryRetrievalActivationCommand,
+    SocMemoryRunPromotionCommand,
     SocMemoryTargetArtifact,
     SocMutationOperation,
     Verdict,
@@ -91,6 +94,7 @@ from soc_agent.core import (
     SocAnalysisService,
     SocCorrelationService,
     SocDaemonService,
+    SocMemoryPatternService,
     SocMemoryService,
     SocNormalizationService,
     SocReviewService,
@@ -103,6 +107,7 @@ from soc_agent.core import (
 from soc_agent.memory import (
     ConfirmedMemoryAnalysisRequestEnricher,
     InMemoryMemoryCandidateRepository,
+    InMemoryMemoryPatternRepository,
     SocMemoryCandidateSourceBridge,
     build_memory_retrieval_diff,
 )
@@ -1116,6 +1121,120 @@ def test_review_service_add_note_proposes_pending_memory_candidate_idempotently(
     context = service.get_investigation_context(open_item.queue_id)
     assert [item.candidate_id for item in context.memory_candidates] == [candidate.candidate_id]
     assert context.run.decision == run.decision
+
+
+def test_review_service_explicitly_promotes_completed_run_without_changing_decision() -> None:
+    repository = InMemoryAlertRepository()
+    memory_repository = InMemoryMemoryPatternRepository()
+    run = SocAnalysisService(repository=repository).analyze(_sample("pingan_legacy_edr.json"))
+    assert run.llm_analysis_request is not None
+    run = run.model_copy(update={"llm_analysis_request": run.llm_analysis_request.model_copy(update={"tenant_id": "pingan"})})
+    repository.save_run(run)
+    decision_before = run.decision.model_dump(mode="json")
+    profile_registry = build_soc_memory_profile_registry()
+    pattern_result = SocMemoryPatternService(
+        repository=memory_repository,
+        candidate_repository=memory_repository,
+        profile_registry=profile_registry,
+    ).observe_run(
+        run,
+        source_type=MemoryPatternSourceType.BATCH_ALERT,
+        transport_ref=f"service-test:{run.run_id}",
+        environment="dev",
+        data_class=MemoryPatternDataClass.SIMULATION,
+        context=ServiceRequestContext(
+            actor=ActorContext(
+                actor_id="memory-pattern-test",
+                actor_type=ActorType.SERVICE,
+                surface=EntrySurface.TEST,
+                roles=["soc_batch_runner"],
+            )
+        ),
+    )
+    service = SocReviewService(
+        repository=repository,
+        memory_candidate_repository=memory_repository,
+        memory_pattern_observation_repository=memory_repository,
+        memory_profile_registry=profile_registry,
+    )
+    command = SocMemoryRunPromotionCommand(
+        run_id=run.run_id,
+    )
+
+    first = service.promote_run_to_memory(
+        command,
+        context=ServiceRequestContext(
+            actor=ActorContext(
+                actor_id="analyst-1",
+                surface=EntrySurface.WEB,
+                roles=["soc_analyst"],
+                auth_source=ActorAuthSource.SESSION,
+            )
+        ),
+    )
+    second = service.promote_run_to_memory(
+        command,
+        context=ServiceRequestContext(
+            actor=ActorContext(
+                actor_id="analyst-1",
+                surface=EntrySurface.WEB,
+                roles=["soc_analyst"],
+                auth_source=ActorAuthSource.SESSION,
+            )
+        ),
+    )
+    revised_note = service.promote_run_to_memory(
+        command.model_copy(
+            update={
+                "note": "可选补充说明变化时，同一个 Run 仍必须复用原有待审 Candidate。",
+            }
+        ),
+        context=ServiceRequestContext(
+            actor=ActorContext(
+                actor_id="analyst-1",
+                surface=EntrySurface.WEB,
+                roles=["soc_analyst"],
+                auth_source=ActorAuthSource.SESSION,
+            )
+        ),
+    )
+
+    assert first.memory_candidate is not None
+    assert first.memory_admission.status.value == "admitted"
+    assert second.memory_candidate is not None
+    assert second.memory_candidate.candidate_id == first.memory_candidate.candidate_id
+    assert revised_note.memory_candidate is not None
+    assert revised_note.memory_candidate.candidate_id == first.memory_candidate.candidate_id
+    candidate = first.memory_candidate
+    assert candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE
+    assert candidate.source.run_id == run.run_id
+    assert candidate.source.alert_id == run.alert_id
+    assert candidate.source.metadata["promotion_action"] == "run_to_candidate"
+    assert candidate.source.metadata["analyst_note_present"] is False
+    assert candidate.source.metadata["note_length"] == 0
+    assert candidate.source.metadata["lineage_key"] == pattern_result.observation.lineage_key
+    assert candidate.source.metadata["pattern_observation_id"] == pattern_result.observation.observation_id
+    assert candidate.metadata["lineage_key"] == pattern_result.observation.lineage_key
+    assert candidate.facets["behavior_fingerprint"] == pattern_result.observation.signature.facets["behavior_fingerprint"]
+    assert candidate.facets["behavior_strength"] == ["strong"]
+    assert candidate.applicability is not None
+    assert set(candidate.applicability.required_facets) >= {
+        "behavior_fingerprint",
+        "behavior_strength",
+        "detection_key",
+        "detection_signature",
+        "environment",
+    }
+    assert candidate.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
+    assert candidate.runtime_decision_allowed is False
+    assert candidate.metadata["source"] == "manual_run_promotion"
+    assert candidate.metadata["analyst_note_present"] is False
+    assert "Analyst note:" not in candidate.content
+    persisted = repository.get_run(run.run_id)
+    assert persisted is not None
+    assert persisted.decision is not None
+    assert persisted.decision.model_dump(mode="json") == decision_before
 
 
 def test_review_service_records_explicit_human_acceptance_of_lead_agent_conclusion() -> None:

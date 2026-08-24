@@ -8,7 +8,9 @@ DOCKER_DIR="$PROJECT_ROOT/docker"
 RUNTIME_DIR="$BACKEND_DIR/.deer-flow/soc-validation/memory-dev-web"
 DATABASE_PATH="$RUNTIME_DIR/soc-memory-dev.sqlite"
 CORPUS_PATH="$PROJECT_ROOT/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
-CORPUS_EXPLORER_PATH="$PROJECT_ROOT/datas/source/full_alert_2026_month_forth_sample_200.pkl"
+CORPUS_EXPLORER_PATH="$PROJECT_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"
+CORPUS_EXPLORER_INDEX_PATH="${CORPUS_EXPLORER_PATH%.pkl}.workbench-index.json"
+CORPUS_EXPLORER_PAYLOAD_STORE_PATH="${CORPUS_EXPLORER_PATH%.pkl}.workbench-payloads.sqlite"
 DATABASE_URL="sqlite:///$DATABASE_PATH"
 MEMORY_CENTER_URL="http://localhost:2026/workspace/soc/memory"
 WORKBENCH_URL="http://localhost:2026/workspace/soc/dev/memory-validation/galaxylab"
@@ -53,6 +55,16 @@ require_source() {
     fi
     if [ ! -f "$CORPUS_EXPLORER_PATH" ]; then
         echo "Missing local SOC source corpus: $CORPUS_EXPLORER_PATH" >&2
+        return 1
+    fi
+    if [ ! -f "$CORPUS_EXPLORER_INDEX_PATH" ]; then
+        echo "Missing local SOC corpus workbench index: $CORPUS_EXPLORER_INDEX_PATH" >&2
+        echo "Rebuild it with validation/compact_zeus/corpus/build_dams_labeled_dataset.py." >&2
+        return 1
+    fi
+    if [ ! -f "$CORPUS_EXPLORER_PAYLOAD_STORE_PATH" ]; then
+        echo "Missing local SOC corpus payload store: $CORPUS_EXPLORER_PAYLOAD_STORE_PATH" >&2
+        echo "Rebuild it with validation/compact_zeus/corpus/build_dams_labeled_dataset.py." >&2
         return 1
     fi
 }

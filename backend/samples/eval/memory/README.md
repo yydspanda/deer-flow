@@ -1,6 +1,6 @@
 # SOC Memory Held-out Evaluation
 
-`pingan_profile_v4_simulation_v1.json` is a simulation-only wiring baseline. Its
+`pingan_profile_v6_simulation_v1.json` is the current simulation-only wiring baseline. Its
 Shell Memory is an analyst-readable business lesson: an exact AskBob internal LLM
 endpoint caused a reviewed reverse-connection false positive. It records the
 conclusion, business rationale, applicability, cross-IP boundary, invalidation
@@ -10,6 +10,10 @@ Those sections use the same `soc.memory_business_lesson.v1` stored by production
 The production service, not this test file, owns lesson validation, rendering,
 persistence, and retrieval. A fixture-provided lesson is input truth, not an
 implementation of those behaviors.
+
+`pingan_profile_v4_simulation_v1.json` remains a historical frozen artifact. It is
+not the default and must fail closed under Profile v6 instead of being silently
+reinterpreted with newer behavior features.
 
 The fixture contains frozen, retrieval-active Memory records and disjoint held-out
 queries:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from soc_agent.contracts import (
     AlertInput,
@@ -27,12 +27,17 @@ from soc_agent.contracts import (
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryRunPromotionCommand,
     SocMemoryTargetArtifact,
     Verdict,
 )
 from soc_agent.memory.admission import MemoryAdmissionService
 from soc_agent.memory.facets import memory_facets_from_analysis_run
-from soc_agent.memory.profiles import GenericSocMemoryProfile, SocMemoryProfileRegistry
+from soc_agent.memory.profiles import (
+    GenericSocMemoryProfile,
+    SocMemoryProfile,
+    SocMemoryProfileRegistry,
+)
 from soc_agent.normalizers import normalize_alert_payload
 
 
@@ -191,6 +196,25 @@ class SocMemoryCandidateSourceBridge:
             context=context,
         ).candidate
 
+    def admit_from_run_promotion(
+        self,
+        run: AnalysisRun,
+        command: SocMemoryRunPromotionCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> MemoryAdmissionOutcome:
+        """Admit an explicit analyst promotion without changing the run decision."""
+
+        return self.admit_command(
+            memory_candidate_command_from_run_promotion(
+                run,
+                command,
+                profile_registry=self._profile_registry,
+                source_surface=context.actor.surface if context is not None else None,
+            ),
+            context=context,
+        )
+
 
 def memory_candidate_command_from_correction(
     run: AnalysisRun,
@@ -209,8 +233,8 @@ def memory_candidate_command_from_correction(
     content = _correction_content(run, correction)
     same_verdict = correction.previous_verdict is correction.corrected_verdict
     summary_prefix = "Review confirmation" if same_verdict else "Correction feedback"
-    facets = memory_facets_from_analysis_run(run, alert=alert)
     profile = profile_registry.resolve_run(run) if profile_registry is not None else GenericSocMemoryProfile()
+    facets = _project_run_facets(run, alert=alert, profile=profile)
     applicability = profile.build_applicability(
         consensus_facets=facets,
         strong_anchor_facets=facets,
@@ -248,7 +272,10 @@ def memory_candidate_command_from_correction(
             **({"previous_verdict": [correction.previous_verdict.value]} if correction.previous_verdict is not None else {}),
         },
         applicability=applicability,
-        decision_impact=_decision_impact_for_correction(correction.corrected_verdict),
+        decision_impact=_decision_impact_for_applicability(
+            applicability,
+            fallback=_decision_impact_for_correction(correction.corrected_verdict),
+        ),
         review_owner="soc_analyst",
         labels=["correction", "candidate-only", correction.corrected_verdict.value],
         metadata={
@@ -412,6 +439,122 @@ def memory_candidate_command_from_review_note(
     )
 
 
+def memory_candidate_command_from_run_promotion(
+    run: AnalysisRun,
+    command: SocMemoryRunPromotionCommand,
+    *,
+    profile_registry: SocMemoryProfileRegistry | None = None,
+    source_surface: EntrySurface | None = None,
+) -> SocMemoryCandidateCreateCommand:
+    """Build one pending candidate from an explicit analyst promotion."""
+
+    alert = _normalized_alert(run)
+    profile = profile_registry.resolve_run(run) if profile_registry is not None else GenericSocMemoryProfile()
+    facets = _project_run_facets(run, alert=alert, profile=profile)
+    pattern_environment = command.metadata.get("environment")
+    if isinstance(pattern_environment, str) and pattern_environment.strip():
+        facets["environment"] = [pattern_environment.strip().casefold()]
+    applicability = profile.build_applicability(
+        consensus_facets=facets,
+        strong_anchor_facets=facets,
+    )
+    stable_key = _stable_run_promotion_key(run)
+    verdict = _run_verdict(run)
+    detection_label = _run_detection_label(run, alert=alert)
+    pattern_metadata: dict[str, Any] = {
+        key: value
+        for key in (
+            "lineage_key",
+            "aggregation_key",
+            "pattern_observation_id",
+            "environment",
+            "data_class",
+            "evidence_set_hash",
+        )
+        if isinstance((value := command.metadata.get(key)), str) and value
+    }
+    pattern_metadata.update(
+        {
+            key: value
+            for key in (
+                "support_count_at_creation",
+                "distinct_source_count_at_creation",
+            )
+            if isinstance((value := command.metadata.get(key)), int) and not isinstance(value, bool) and value >= 0
+        }
+    )
+    pattern_metadata.update({key: list(value) for key in ("observation_ids", "source_ids") if isinstance((value := command.metadata.get(key)), list) and all(isinstance(item, str) and item for item in value)})
+    pattern_metadata.update(
+        {
+            key: value
+            for key in (
+                "candidate_snapshot_frozen",
+                "later_observations_are_replay_only",
+            )
+            if isinstance((value := command.metadata.get(key)), bool)
+        }
+    )
+    analyst_note = command.note
+    return SocMemoryCandidateCreateCommand(
+        candidate_type=_candidate_type_for_verdict(verdict),
+        target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+        summary=f"Analyst-promoted lesson candidate: {detection_label}",
+        content=_run_promotion_content(run, command),
+        tenant_scope=_tenant_scope(alert),
+        tenant_id=alert.tenant_id if alert is not None else None,
+        source=SocMemoryCandidateSource(
+            source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
+            source_surface=source_surface,
+            source_id=f"manual_run_promotion:{stable_key}",
+            run_id=run.run_id,
+            alert_id=run.alert_id,
+            metadata={
+                **command.metadata,
+                "promote_to_memory": True,
+                "promotion_action": "run_to_candidate",
+                "note_length": len(analyst_note or ""),
+                "analyst_note_present": analyst_note is not None,
+                "runtime_verdict": verdict.value if verdict is not None else None,
+            },
+        ),
+        evidence_refs=_dedupe(
+            [
+                f"manual_run_promotion:{stable_key}",
+                *_base_evidence_refs(run, queue_id=None),
+            ]
+        ),
+        validity=SocMemoryCandidateValidity(notes="Explicit analyst promotion must still be reviewed before it becomes reusable SOC memory."),
+        idempotency_key=f"memory_candidate:manual_run_promotion:{stable_key}",
+        confidence=command.confidence,
+        facets={
+            **facets,
+            "candidate_source": ["manual_run_promotion"],
+            **({"runtime_verdict": [verdict.value]} if verdict is not None else {}),
+        },
+        applicability=applicability,
+        decision_impact=_decision_impact_for_applicability(
+            applicability,
+            fallback=SocMemoryDecisionImpact.REVIEW_HINT,
+        ),
+        review_owner="soc_analyst",
+        labels=[
+            "manual-run-promotion",
+            "candidate-only",
+            *([verdict.value] if verdict is not None else []),
+        ],
+        metadata={
+            "runtime_decision_allowed": False,
+            "source": "manual_run_promotion",
+            "promotion_note_length": len(analyst_note or ""),
+            "analyst_note_present": analyst_note is not None,
+            "memory_profile_id": profile.identity.profile_id,
+            "memory_profile_version": profile.identity.profile_version,
+            "memory_feature_schema_version": profile.identity.feature_schema_version,
+            **pattern_metadata,
+        },
+    )
+
+
 def _normalized_alert(run: AnalysisRun) -> AlertInput | None:
     if run.input_payload is None:
         return None
@@ -419,6 +562,17 @@ def _normalized_alert(run: AnalysisRun) -> AlertInput | None:
         return normalize_alert_payload(run.input_payload)
     except Exception:  # noqa: BLE001 - candidate source should survive malformed historical payloads
         return None
+
+
+def _project_run_facets(
+    run: AnalysisRun,
+    *,
+    alert: AlertInput | None,
+    profile: SocMemoryProfile,
+) -> dict[str, list[str]]:
+    if run.llm_analysis_request is not None:
+        return profile.project_run_facets(run)
+    return memory_facets_from_analysis_run(run, alert=alert)
 
 
 def _tenant_scope(alert: AlertInput | None) -> str:
@@ -506,6 +660,57 @@ def _review_note_content(
     return "\n".join(lines)
 
 
+def _run_promotion_content(
+    run: AnalysisRun,
+    command: SocMemoryRunPromotionCommand,
+) -> str:
+    lines = [
+        f"Run: {run.run_id}",
+        f"Alert: {run.alert_id}",
+    ]
+    if command.note is not None:
+        lines.append(f"Analyst note: {command.note}")
+    if run.analysis is not None:
+        lines.append(f"Runtime summary: {run.analysis.summary}")
+        lines.append(f"Runtime reason: {run.analysis.reason}")
+    verdict = _run_verdict(run)
+    if verdict is not None:
+        confidence = run.decision.confidence if run.decision is not None else run.analysis.confidence if run.analysis is not None else None
+        suffix = f" ({confidence:.2f})" if confidence is not None else ""
+        lines.append(f"Runtime verdict: {verdict.value}{suffix}")
+    return "\n".join(lines)
+
+
+def _stable_run_promotion_key(
+    run: AnalysisRun,
+) -> str:
+    raw = "|".join(
+        [
+            run.run_id,
+            run.alert_id,
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _run_verdict(run: AnalysisRun) -> Verdict | None:
+    if run.decision is not None:
+        return run.decision.verdict
+    if run.analysis is not None:
+        return run.analysis.verdict
+    return None
+
+
+def _run_detection_label(
+    run: AnalysisRun,
+    *,
+    alert: AlertInput | None,
+) -> str:
+    if alert is not None:
+        return alert.detection.rule_name or alert.detection.rule_code or alert.detection.detection_key or run.alert_id
+    return run.alert_id
+
+
 def _normalize_feedback(value: str | None) -> str | None:
     if value is None:
         return None
@@ -519,6 +724,10 @@ def _candidate_type_for_correction(verdict: Verdict) -> SocMemoryCandidateType:
     if verdict in {Verdict.TRUE_POSITIVE, Verdict.SUSPICIOUS}:
         return SocMemoryCandidateType.DETECTION_LESSON
     return SocMemoryCandidateType.PROCEDURE
+
+
+def _candidate_type_for_verdict(verdict: Verdict | None) -> SocMemoryCandidateType:
+    return _candidate_type_for_correction(verdict) if verdict is not None else SocMemoryCandidateType.PROCEDURE
 
 
 def _candidate_type_for_finding(finding: SocDomainFinding) -> SocMemoryCandidateType:
@@ -541,6 +750,16 @@ def _decision_impact_for_correction(verdict: Verdict) -> SocMemoryDecisionImpact
     if verdict in {Verdict.TRUE_POSITIVE, Verdict.SUSPICIOUS}:
         return SocMemoryDecisionImpact.REVIEW_HINT
     return SocMemoryDecisionImpact.NONE
+
+
+def _decision_impact_for_applicability(
+    applicability: Any,
+    *,
+    fallback: SocMemoryDecisionImpact,
+) -> SocMemoryDecisionImpact:
+    if applicability is not None and "behavior_fingerprint" in applicability.required_facets:
+        return SocMemoryDecisionImpact.DETECTION_DECISION
+    return fallback
 
 
 def _correction_confidence(correction: CorrectionRecord) -> float:
@@ -630,4 +849,5 @@ __all__ = [
     "memory_candidate_command_from_correction",
     "memory_candidate_command_from_domain_finding",
     "memory_candidate_command_from_review_note",
+    "memory_candidate_command_from_run_promotion",
 ]

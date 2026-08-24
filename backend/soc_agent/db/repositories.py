@@ -59,6 +59,7 @@ from soc_agent.contracts import (
     SocEvaluationDataClass,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
+    SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
     SocMemoryFeedbackEvent,
     SocMemoryHealthRecord,
@@ -112,6 +113,10 @@ from soc_agent.domain.correlation import score_similar_alert
 from soc_agent.governed_context import (
     GovernedContextFactVersionConflictError,
     validate_governed_context_fact_append,
+)
+from soc_agent.memory.lineage import (
+    memory_candidate_lineage_key,
+    project_memory_candidates_to_pattern_lineages,
 )
 from soc_agent.memory.scoring import score_memory_record
 from soc_agent.tenant_policy import TenantPolicyDecisionConflictError
@@ -240,6 +245,26 @@ class SqlAlchemyAlertRepository:
     def list_runs(self, *, limit: int = 50) -> list[AnalysisRun]:
         with self._session_factory() as session:
             result = session.execute(select(SocAnalysisRunRow).order_by(SocAnalysisRunRow.updated_at.desc(), SocAnalysisRunRow.created_at.desc()).limit(limit))
+            return [AnalysisRun.model_validate(row.run_payload) for row in result.scalars()]
+
+    def list_runs_by_alert_id(
+        self,
+        alert_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[AnalysisRun]:
+        """Load recent runs for one alert without scanning the complete run table."""
+
+        with self._session_factory() as session:
+            result = session.execute(
+                select(SocAnalysisRunRow)
+                .where(SocAnalysisRunRow.alert_id == alert_id)
+                .order_by(
+                    SocAnalysisRunRow.updated_at.desc(),
+                    SocAnalysisRunRow.created_at.desc(),
+                )
+                .limit(limit)
+            )
             return [AnalysisRun.model_validate(row.run_payload) for row in result.scalars()]
 
     def claim_run_recovery(
@@ -2009,6 +2034,7 @@ class SqlAlchemyAlertRepository:
         environment: str | None = None,
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
+        alert_id: str | None = None,
         limit: int = 500,
         offset: int = 0,
     ) -> list[MemoryPatternObservation]:
@@ -2026,6 +2052,8 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocMemoryPatternObservationRow.data_class == data_class.value)
             if source_type is not None:
                 query = query.where(SocMemoryPatternObservationRow.source_type == source_type.value)
+            if alert_id is not None:
+                query = query.where(SocMemoryPatternObservationRow.alert_id == alert_id)
             rows = session.execute(
                 query.order_by(
                     SocMemoryPatternObservationRow.observed_at.asc(),
@@ -2258,19 +2286,53 @@ class SqlAlchemyAlertRepository:
         if not normalized:
             return []
         with self._session_factory() as session:
-            aggregation_keys = list(session.scalars(select(SocMemoryPatternObservationRow.aggregation_key).where(SocMemoryPatternObservationRow.lineage_key.in_(normalized)).distinct()))
-            if not aggregation_keys:
-                return []
-            source_ids = [f"memory_pattern:{item}" for item in aggregation_keys]
-            rows = session.execute(
-                select(SocMemoryCandidateRow)
-                .where(SocMemoryCandidateRow.source_id.in_(source_ids))
-                .order_by(
-                    SocMemoryCandidateRow.created_at.desc(),
-                    SocMemoryCandidateRow.candidate_id.asc(),
+            pattern_source_ids = select((literal("memory_pattern:") + SocMemoryPatternObservationRow.aggregation_key).label("source_id")).where(SocMemoryPatternObservationRow.lineage_key.in_(normalized)).distinct()
+            repeated_rows = list(
+                session.scalars(
+                    select(SocMemoryCandidateRow)
+                    .where(SocMemoryCandidateRow.source_id.in_(pattern_source_ids))
+                    .order_by(
+                        SocMemoryCandidateRow.created_at.desc(),
+                        SocMemoryCandidateRow.candidate_id.asc(),
+                    )
                 )
-            ).scalars()
-            return [SocMemoryCandidate.model_validate(row.candidate_payload) for row in rows]
+            )
+            manual_pairs = list(
+                session.execute(
+                    select(
+                        SocMemoryCandidateRow,
+                        SocMemoryPatternObservationRow,
+                    )
+                    .join(
+                        SocMemoryPatternObservationRow,
+                        SocMemoryCandidateRow.source_run_id == SocMemoryPatternObservationRow.run_id,
+                    )
+                    .where(
+                        SocMemoryCandidateRow.source_type == SocMemoryCandidateSourceType.MANUAL_NOTE.value,
+                        SocMemoryPatternObservationRow.lineage_key.in_(normalized),
+                    )
+                )
+            )
+            projected: dict[tuple[str, str], SocMemoryCandidate] = {}
+            for row in repeated_rows:
+                candidate = SocMemoryCandidate.model_validate(row.candidate_payload)
+                lineage_key = memory_candidate_lineage_key(candidate)
+                if lineage_key in normalized:
+                    projected[(candidate.candidate_id, lineage_key)] = candidate
+            for candidate_row, observation_row in manual_pairs:
+                linked = project_memory_candidates_to_pattern_lineages(
+                    [SocMemoryCandidate.model_validate(candidate_row.candidate_payload)],
+                    [_memory_pattern_observation_from_row(observation_row)],
+                )
+                for candidate in linked:
+                    lineage_key = memory_candidate_lineage_key(candidate)
+                    if lineage_key is not None:
+                        projected[(candidate.candidate_id, lineage_key)] = candidate
+            return sorted(
+                projected.values(),
+                key=lambda item: (item.created_at, item.candidate_id),
+                reverse=True,
+            )
 
     def save_skill_feedback_observation(self, observation: SkillFeedbackObservation) -> None:
         payload = observation.model_dump(mode="json")

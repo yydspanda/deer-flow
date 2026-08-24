@@ -463,6 +463,45 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     assert by_key["mitre:T1190"].role == "technique"
 
 
+def test_pingan_epoch_milliseconds_are_not_parsed_as_an_ancient_iso_date() -> None:
+    payload = {
+        "tenant_id": "pingan",
+        "alert": {
+            "alertId": "2475233",
+            "createAt": "2026-08-07 02:29:26",
+            "hitLog": [
+                {
+                    "topic": "cnsp-core",
+                    "zeusRawLogs": [
+                        {
+                            "timestamp": "2026-08-07 02:27:32",
+                            "message": json.dumps({"datatime": "1786040850058"}),
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+    alert = normalize_alert_payload(payload)
+
+    assert alert.event.event_time == datetime(
+        2026,
+        8,
+        6,
+        18,
+        27,
+        30,
+        58_000,
+        tzinfo=UTC,
+    )
+    assert alert.extensions["event_time_policy"] == {
+        "naive_timezone": "Asia/Shanghai",
+        "event_time_timezone_assumed": False,
+        "received_at_timezone_assumed": True,
+    }
+
+
 def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     alert = normalize_alert_payload(_sample("pingan_legacy_edr.json"))
 

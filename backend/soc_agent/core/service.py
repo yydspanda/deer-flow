@@ -95,6 +95,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
+    SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
     SocMemoryCandidateSupersessionCommand,
@@ -112,6 +113,12 @@ from soc_agent.contracts import (
     SocMemoryRetrievalActivationResult,
     SocMemoryRetrievalResult,
     SocMemoryReviewEffect,
+    SocMemoryRevisionCandidateCreateCommand,
+    SocMemoryRevisionCandidateCreateResult,
+    SocMemoryRevisionIssueType,
+    SocMemoryRevisionLineage,
+    SocMemoryRunPromotionCommand,
+    SocMemoryRunPromotionResult,
     SocMutationOperation,
     SocSkillResolution,
     UnifiedInvestigationView,
@@ -125,6 +132,7 @@ from soc_agent.memory import (
     SocMemoryCandidateSourceBridge,
     SocMemoryProfileRegistry,
     memory_candidate_command_from_review_note,
+    memory_pattern_lineage_metadata,
     memory_query_from_analysis_request,
     render_memory_business_lesson,
     resolve_memory_business_lesson,
@@ -150,6 +158,7 @@ from soc_agent.protocols import (
     MemoryCandidateRepository,
     MemoryEvolutionRepository,
     MemoryFeedbackObserver,
+    MemoryPatternObservationRepository,
     MemoryPatternObserver,
     MemoryRecordRepository,
     NormalizationMaintenanceMonitor,
@@ -781,6 +790,7 @@ class SocReviewService:
         external_disposition_repository: SocExternalDispositionRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
         memory_record_repository: MemoryRecordRepository | None = None,
+        memory_pattern_observation_repository: MemoryPatternObservationRepository | None = None,
         memory_feedback_observer: MemoryFeedbackObserver | None = None,
         memory_profile_registry: SocMemoryProfileRegistry | None = None,
         mutation_audit_repository: SocMutationAuditRepository | None = None,
@@ -800,6 +810,7 @@ class SocReviewService:
         self._external_disposition_repository = external_disposition_repository
         self._memory_candidate_repository = memory_candidate_repository
         self._memory_record_repository = memory_record_repository
+        self._memory_pattern_observation_repository = memory_pattern_observation_repository
         self._memory_profile_registry = memory_profile_registry or SocMemoryProfileRegistry()
         self._event_sink = event_sink or NoopEventSink()
         self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(
@@ -1365,6 +1376,114 @@ class SocReviewService:
             memory_admission=outcome.decision,
         )
 
+    def promote_run_to_memory(
+        self,
+        command: SocMemoryRunPromotionCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryRunPromotionResult:
+        """Create a governed pending candidate without changing the run decision."""
+
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.HUMAN_MUTATION_ROLES,
+            operation="promoting an analysis run for memory review",
+        )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = self._transactional_clone(
+                    repository,
+                    event_sink=buffered_events,
+                ).promote_run_to_memory(command, context=request_context)
+            buffered_events.flush()
+            return result
+        if self._repository is None:
+            raise SocServiceNotImplementedError("promote_run_to_memory requires an AlertRepository")
+        if self._memory_candidate_repository is None:
+            raise SocServiceNotImplementedError("promote_run_to_memory requires a MemoryCandidateRepository")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.MEMORY_RUN_PROMOTE,
+            request_context,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="analysis_run",
+                target_id=command.run_id,
+            )
+
+        run = self._repository.get_run(command.run_id)
+        if run is None:
+            raise SocServiceNotFoundError(f"run {command.run_id} not found")
+        if run.status in {
+            AnalysisRunStatus.PENDING,
+            AnalysisRunStatus.RUNNING,
+            AnalysisRunStatus.FAILED,
+            AnalysisRunStatus.INTERRUPTED,
+            AnalysisRunStatus.ROLLED_BACK,
+        }:
+            raise SocServiceConflictError(f"run {command.run_id} is {run.status.value}; only a completed analysis can be promoted")
+        if run.analysis is None or run.decision is None:
+            raise SocServiceConflictError(f"run {command.run_id} has no complete analysis decision to promote")
+
+        memory_service = SocMemoryService(
+            candidate_repository=self._memory_candidate_repository,
+            event_sink=self._event_sink,
+        )
+        pattern_metadata = self._run_pattern_lineage_metadata(run)
+        promotion_command = command.model_copy(
+            update={
+                "metadata": {
+                    **command.metadata,
+                    **pattern_metadata,
+                }
+            }
+        )
+        outcome = SocMemoryCandidateSourceBridge(
+            memory_service,
+            profile_registry=self._memory_profile_registry,
+        ).admit_from_run_promotion(
+            run,
+            promotion_command,
+            context=request_context,
+        )
+        result = SocMemoryRunPromotionResult(
+            run_id=run.run_id,
+            alert_id=run.alert_id,
+            memory_candidate=outcome.candidate,
+            memory_admission=outcome.decision,
+        )
+        if existing_audit is None:
+            audit_reason = command.note or ("Authenticated analyst explicitly promoted a completed run for Memory Candidate review.")
+            self._append_mutation_audit(
+                build_mutation_audit(
+                    operation=SocMutationOperation.MEMORY_RUN_PROMOTE,
+                    target_type="analysis_run",
+                    target_id=run.run_id,
+                    run_id=run.run_id,
+                    alert_id=run.alert_id,
+                    context=request_context,
+                    reason=audit_reason,
+                    command=command_payload,
+                    result_ref=(outcome.candidate.candidate_id if outcome.candidate is not None else f"admission:{outcome.decision.command_hash[:16]}"),
+                    payload={
+                        "candidate_id": (outcome.candidate.candidate_id if outcome.candidate is not None else None),
+                        "memory_admission_status": outcome.decision.status.value,
+                        "memory_admission_policy_version": outcome.decision.policy_version,
+                        "memory_admission_quality_score": outcome.decision.quality_score,
+                        "pattern_lineage_key": pattern_metadata.get("lineage_key"),
+                        "pattern_observation_id": pattern_metadata.get("pattern_observation_id"),
+                        "analyst_note_present": command.note is not None,
+                    },
+                )
+            )
+        return result
+
     def _transactional_clone(
         self,
         repository: SocMutationRepository,
@@ -1384,12 +1503,86 @@ class SocReviewService:
             external_disposition_repository=(repository if self._external_disposition_repository is not None else None),
             memory_candidate_repository=(repository if self._memory_candidate_repository is not None else None),
             memory_record_repository=(repository if self._memory_record_repository is not None else None),
+            memory_pattern_observation_repository=(repository if self._memory_pattern_observation_repository is not None else None),
             memory_profile_registry=self._memory_profile_registry,
             mutation_audit_repository=repository,
             mutation_uow=self._mutation_uow,
             event_sink=event_sink,
             _transaction_active=True,
         )
+
+    def _run_pattern_lineage_metadata(
+        self,
+        run: AnalysisRun,
+    ) -> dict[str, Any]:
+        """Freeze the governed Pattern cohort visible when an analyst promotes a run."""
+
+        repository = self._memory_pattern_observation_repository
+        if repository is None:
+            return {}
+        profile = self._memory_profile_registry.resolve_run(run)
+        observations = repository.list_memory_pattern_observations(
+            alert_id=run.alert_id,
+            limit=200,
+        )
+        matching = [
+            item
+            for item in observations
+            if item.source.run_id == run.run_id
+            and (
+                item.profile_id,
+                item.profile_version,
+                item.feature_schema_version,
+            )
+            == (
+                profile.identity.profile_id,
+                profile.identity.profile_version,
+                profile.identity.feature_schema_version,
+            )
+        ]
+        lineage_keys = {item.lineage_key for item in matching}
+        if len(lineage_keys) != 1:
+            if matching:
+                logger.warning(
+                    "manual memory promotion run %s maps to multiple Pattern lineages; leaving the candidate unlinked",
+                    run.run_id,
+                )
+            return {}
+        observation = max(
+            matching,
+            key=lambda item: (item.created_at, item.observation_id),
+        )
+        cohort = repository.list_memory_pattern_observations(
+            aggregation_key=observation.aggregation_key,
+            limit=10_000,
+        )
+        unique_by_source = {}
+        for item in cohort:
+            unique_by_source.setdefault(item.source.source_id, item)
+        snapshot = sorted(
+            unique_by_source.values(),
+            key=lambda item: (item.source.observed_at, item.observation_id),
+        )
+        return {
+            **memory_pattern_lineage_metadata(observation),
+            "observation_ids": [item.observation_id for item in snapshot],
+            "source_ids": [item.source.source_id for item in snapshot],
+            "support_count_at_creation": len(snapshot),
+            "distinct_source_count_at_creation": len({item.source.source_id for item in snapshot}),
+            "evidence_set_hash": stable_hash(
+                [
+                    {
+                        "observation_id": item.observation_id,
+                        "content_hash": item.content_hash,
+                        "source_id": item.source.source_id,
+                        "evidence_refs": item.evidence_refs,
+                    }
+                    for item in snapshot
+                ]
+            ),
+            "candidate_snapshot_frozen": True,
+            "later_observations_are_replay_only": True,
+        }
 
     def _find_mutation_audit(
         self,
@@ -1510,7 +1703,10 @@ class SocReviewService:
             correlation_result=correlation_result,
         )
         if self._memory_record_repository is not None:
-            relevant_memories = SocMemoryService(record_repository=self._memory_record_repository).find_relevant_records(
+            relevant_memories = SocMemoryService(
+                record_repository=self._memory_record_repository,
+                profile_registry=self._memory_profile_registry,
+            ).find_relevant_records(
                 _memory_query_from_investigation_context(
                     context,
                     profile_registry=self._memory_profile_registry,
@@ -1542,15 +1738,21 @@ class SocMemoryService:
         *,
         candidate_repository: MemoryCandidateRepository | None = None,
         record_repository: MemoryRecordRepository | None = None,
+        memory_evolution_repository: MemoryEvolutionRepository | None = None,
         mutation_audit_repository: SocMutationAuditRepository | None = None,
         mutation_uow: SocMutationUnitOfWork | None = None,
         event_sink: SocEventSink | None = None,
+        analysis_run_repository: AlertRepository | None = None,
+        profile_registry: SocMemoryProfileRegistry | None = None,
         now_provider: Callable[[], datetime] | None = None,
         _transaction_active: bool = False,
     ) -> None:
         self._candidate_repository = candidate_repository
         self._record_repository = record_repository
+        self._memory_evolution_repository = memory_evolution_repository
         self._event_sink = event_sink or NoopEventSink()
+        self._analysis_run_repository = analysis_run_repository
+        self._profile_registry = profile_registry or SocMemoryProfileRegistry()
         self._mutation_uow = mutation_uow or mutation_uow_from(
             candidate_repository,
             record_repository,
@@ -1603,6 +1805,7 @@ class SocMemoryService:
             decision_impact=command.decision_impact,
             review_owner=command.review_owner,
             labels=command.labels,
+            revision_lineage=command.revision_lineage,
             metadata={
                 **command.metadata,
                 "request_id": request_context.request_id,
@@ -1642,6 +1845,288 @@ class SocMemoryService:
             raise SocServiceNotFoundError(f"memory candidate {candidate_id} not found")
         return candidate
 
+    def propose_revision_candidate(
+        self,
+        command: SocMemoryRevisionCandidateCreateCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryRevisionCandidateCreateResult:
+        """Suspend one used Memory and create an auditable successor candidate."""
+
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.REVIEWER_ROLES,
+            operation="proposing a SOC memory revision",
+        )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = SocMemoryService(
+                    candidate_repository=repository,
+                    record_repository=repository,
+                    memory_evolution_repository=repository,
+                    mutation_audit_repository=repository,
+                    mutation_uow=self._mutation_uow,
+                    event_sink=buffered_events,
+                    analysis_run_repository=(repository if self._analysis_run_repository is not None else None),
+                    profile_registry=self._profile_registry,
+                    now_provider=self._now_provider,
+                    _transaction_active=True,
+                ).propose_revision_candidate(command, context=request_context)
+            buffered_events.flush()
+            return result
+        if self._candidate_repository is None:
+            raise SocServiceNotImplementedError("memory revision requires a MemoryCandidateRepository")
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("memory revision requires a MemoryRecordRepository")
+        if self._memory_evolution_repository is None:
+            raise SocServiceNotImplementedError("memory revision requires a MemoryEvolutionRepository")
+        if self._mutation_audit_repository is None:
+            raise SocServiceNotImplementedError("memory revision requires a SocMutationAuditRepository")
+
+        command_payload = command.model_dump(mode="json")
+        idempotency_key = mutation_idempotency_key(request_context)
+        existing_audit = self._mutation_audit_repository.find_mutation_audit_by_idempotency_key(
+            SocMutationOperation.MEMORY_REVISION_CANDIDATE_CREATE,
+            idempotency_key,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="memory_record",
+                target_id=command.memory_id,
+            )
+            if existing_audit.result_ref is None:
+                raise SocServiceConflictError("memory revision audit is missing its successor candidate")
+            candidate = self.get_candidate(existing_audit.result_ref)
+            predecessor = self.get_record(command.memory_id)
+            previous_version = existing_audit.payload.get("previous_record_version")
+            previous_enabled = existing_audit.payload.get("previous_retrieval_enabled")
+            if not isinstance(previous_version, int) or not isinstance(previous_enabled, bool):
+                raise SocServiceConflictError("memory revision audit is missing predecessor state")
+            return SocMemoryRevisionCandidateCreateResult(
+                candidate=candidate,
+                predecessor_record=predecessor,
+                previous_record_version=previous_version,
+                previous_retrieval_enabled=previous_enabled,
+                audit_id=existing_audit.audit_id,
+                created_at=candidate.created_at,
+            )
+
+        predecessor = self.get_record(command.memory_id)
+        if predecessor.version != command.expected_record_version:
+            raise SocServiceConflictError(f"memory record {predecessor.memory_id} expected version {command.expected_record_version}, found {predecessor.version}")
+        if predecessor.status is not SocMemoryRecordStatus.CONFIRMED:
+            raise SocServiceConflictError(f"memory record {predecessor.memory_id} is {predecessor.status.value}; only confirmed memory can be revised")
+        if predecessor.metadata.get("revision_pending") is True:
+            raise SocServiceConflictError(f"memory record {predecessor.memory_id} already has a pending revision")
+        uses = self._memory_evolution_repository.list_memory_uses(
+            memory_id=predecessor.memory_id,
+            run_id=command.source_run_id,
+            limit=100,
+        )
+        source_use = max(uses, key=lambda item: (item.created_at, item.use_id), default=None)
+        if source_use is None:
+            raise SocServiceConflictError(f"run {command.source_run_id} did not use memory {predecessor.memory_id}")
+        if source_use.memory_content_hash != predecessor.content_hash or source_use.memory_facets_hash != predecessor.facets_hash:
+            raise SocServiceConflictError("the source run used a different Memory content or facet version; refresh before revising")
+
+        revision_facets = predecessor.facets
+        revision_applicability = predecessor.applicability
+        revision_decision_impact = predecessor.decision_impact
+        revision_scope_metadata: dict[str, Any] = {
+            "revision_scope_source": "predecessor_snapshot",
+        }
+        if command.issue_type is SocMemoryRevisionIssueType.APPLICABILITY_TOO_BROAD:
+            if self._analysis_run_repository is None:
+                raise SocServiceNotImplementedError("applicability revision requires an AlertRepository")
+            source_run = self._analysis_run_repository.get_run(source_use.run_id)
+            if source_run is None:
+                raise SocServiceConflictError(f"source run {source_use.run_id} is unavailable for applicability revision")
+            if source_run.alert_id != source_use.alert_id:
+                raise SocServiceConflictError("the source run alert does not match the persisted Memory use")
+            profile = self._profile_registry.resolve_run(source_run)
+            revision_facets = profile.project_run_facets(source_run)
+            revision_applicability = profile.build_applicability(
+                consensus_facets=revision_facets,
+                strong_anchor_facets=revision_facets,
+            )
+            if revision_applicability is None:
+                raise SocServiceConflictError("the source run does not provide enough canonical facets to narrow Memory applicability")
+            revision_decision_impact = SocMemoryDecisionImpact.DETECTION_DECISION if "behavior_fingerprint" in revision_applicability.required_facets else SocMemoryDecisionImpact.REVIEW_HINT
+            revision_scope_metadata = {
+                "revision_scope_source": "source_run_profile_projection",
+                "memory_profile_id": profile.identity.profile_id,
+                "memory_profile_version": profile.identity.profile_version,
+                "memory_feature_schema_version": (profile.identity.feature_schema_version),
+            }
+
+        now = self._now_provider()
+        if now.utcoffset() is None:
+            raise SocServiceError("memory service clock must be timezone-aware")
+        previous_version = predecessor.version
+        previous_enabled = predecessor.retrieval_enabled
+        suspended = predecessor.model_copy(
+            update={
+                "version": previous_version + 1,
+                "retrieval_enabled": False,
+                "retrieval_policy_version": SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
+                "retrieval_valid_until": None,
+                "retrieval_review_due_at": None,
+                "retrieval_updated_by": request_context.actor,
+                "retrieval_updated_at": now,
+                "retrieval_reason": command.reason,
+                "updated_at": now,
+                "labels": _retrieval_activation_labels(predecessor.labels, enabled=False),
+                "metadata": {
+                    **predecessor.metadata,
+                    "retrieval_enabled": False,
+                    "revision_pending": True,
+                    "revision_issue_type": command.issue_type.value,
+                    "revision_source_run_id": source_use.run_id,
+                },
+            }
+        )
+        if not self._record_repository.compare_and_set_memory_record(
+            suspended,
+            expected_version=previous_version,
+        ):
+            raise SocServiceConflictError(f"memory record {predecessor.memory_id} changed while its revision was being created")
+
+        lineage = SocMemoryRevisionLineage(
+            predecessor_memory_id=predecessor.memory_id,
+            predecessor_memory_version=source_use.memory_version,
+            predecessor_content_hash=source_use.memory_content_hash,
+            predecessor_facets_hash=source_use.memory_facets_hash,
+            suspended_record_version=suspended.version,
+            source_memory_use_id=source_use.use_id,
+            source_run_id=source_use.run_id,
+            source_alert_id=source_use.alert_id,
+            issue_type=command.issue_type,
+            reason=command.reason,
+            requested_at=now,
+        )
+        revision_candidate = self.propose_candidate(
+            SocMemoryCandidateCreateCommand(
+                candidate_type=predecessor.memory_type,
+                target_artifact=predecessor.target_artifact,
+                summary=f"[Memory 修订] {predecessor.summary}",
+                content=_memory_revision_candidate_content(
+                    predecessor,
+                    lineage=lineage,
+                ),
+                tenant_scope=predecessor.tenant_scope,
+                tenant_id=predecessor.tenant_id,
+                source=SocMemoryCandidateSource(
+                    source_type=SocMemoryCandidateSourceType.MEMORY_REVISION,
+                    source_surface=request_context.actor.surface,
+                    source_id=f"memory-revision:{predecessor.memory_id}:v{source_use.memory_version}",
+                    run_id=source_use.run_id,
+                    alert_id=source_use.alert_id,
+                    metadata={
+                        "memory_id": predecessor.memory_id,
+                        "memory_version": source_use.memory_version,
+                        "memory_use_id": source_use.use_id,
+                    },
+                ),
+                evidence_refs=list(
+                    dict.fromkeys(
+                        [
+                            *predecessor.evidence_refs,
+                            f"memory:{predecessor.memory_id}:v{source_use.memory_version}",
+                            f"memory_use:{source_use.use_id}",
+                            f"run:{source_use.run_id}",
+                            f"alert:{source_use.alert_id}",
+                        ]
+                    )
+                ),
+                validity=SocMemoryCandidateValidity(
+                    valid_from=now,
+                    valid_until=(predecessor.validity.valid_until if predecessor.validity.valid_until is not None and predecessor.validity.valid_until > now else None),
+                    review_after_days=predecessor.validity.review_after_days,
+                    notes=(f"Revision of {predecessor.memory_id} v{source_use.memory_version}; pending human review and replacement confirmation."),
+                ),
+                idempotency_key=f"memory-revision-candidate:{idempotency_key}",
+                confidence=predecessor.confidence,
+                facets=revision_facets,
+                applicability=revision_applicability,
+                decision_impact=revision_decision_impact,
+                review_owner=request_context.actor.actor_id,
+                labels=sorted(
+                    set(
+                        predecessor.labels
+                        + [
+                            "memory-revision",
+                            f"revision-{command.issue_type.value}",
+                            "retrieval-disabled",
+                        ]
+                    )
+                    - {"confirmed-memory", "retrieval-enabled"}
+                ),
+                revision_lineage=lineage,
+                metadata={
+                    **predecessor.metadata,
+                    "revision_of_memory_id": predecessor.memory_id,
+                    "revision_of_memory_version": source_use.memory_version,
+                    "revision_source_candidate_id": predecessor.source_candidate_id,
+                    "revision_source_memory_use_id": source_use.use_id,
+                    "revision_issue_type": command.issue_type.value,
+                    "revision_pending": True,
+                    **revision_scope_metadata,
+                },
+            ),
+            context=request_context,
+        )
+        audit = build_mutation_audit(
+            operation=SocMutationOperation.MEMORY_REVISION_CANDIDATE_CREATE,
+            target_type="memory_record",
+            target_id=predecessor.memory_id,
+            run_id=source_use.run_id,
+            alert_id=source_use.alert_id,
+            context=request_context,
+            reason=command.reason,
+            command=command_payload,
+            result_ref=revision_candidate.candidate_id,
+            payload={
+                "candidate_id": revision_candidate.candidate_id,
+                "source_memory_use_id": source_use.use_id,
+                "issue_type": command.issue_type.value,
+                "previous_record_version": previous_version,
+                "result_record_version": suspended.version,
+                "previous_retrieval_enabled": previous_enabled,
+                "retrieval_enabled": suspended.retrieval_enabled,
+            },
+        )
+        self._mutation_audit_repository.append_mutation_audit(audit)
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.MEMORY_UPDATED,
+                request_id=request_context.request_id,
+                run_id=source_use.run_id,
+                alert_id=source_use.alert_id,
+                actor=request_context.actor,
+                payload={
+                    "operation": "memory_record.revision_candidate_created",
+                    "memory_id": predecessor.memory_id,
+                    "memory_version": source_use.memory_version,
+                    "candidate_id": revision_candidate.candidate_id,
+                    "issue_type": command.issue_type.value,
+                    "retrieval_suspended": previous_enabled,
+                    "audit_id": audit.audit_id,
+                },
+            )
+        )
+        return SocMemoryRevisionCandidateCreateResult(
+            candidate=revision_candidate,
+            predecessor_record=suspended,
+            previous_record_version=previous_version,
+            previous_retrieval_enabled=previous_enabled,
+            audit_id=audit.audit_id,
+            created_at=now,
+        )
+
     def supersede_candidate(
         self,
         command: SocMemoryCandidateSupersessionCommand,
@@ -1662,9 +2147,11 @@ class SocMemoryService:
                 result = SocMemoryService(
                     candidate_repository=repository,
                     record_repository=repository,
+                    memory_evolution_repository=(repository if self._memory_evolution_repository is not None else None),
                     mutation_audit_repository=repository,
                     mutation_uow=self._mutation_uow,
                     event_sink=buffered_events,
+                    profile_registry=self._profile_registry,
                     now_provider=self._now_provider,
                     _transaction_active=True,
                 ).supersede_candidate(command, context=request_context)
@@ -1806,9 +2293,11 @@ class SocMemoryService:
                 result = SocMemoryService(
                     candidate_repository=repository,
                     record_repository=repository,
+                    memory_evolution_repository=(repository if self._memory_evolution_repository is not None else None),
                     mutation_audit_repository=repository,
                     mutation_uow=self._mutation_uow,
                     event_sink=buffered_events,
+                    profile_registry=self._profile_registry,
                     now_provider=self._now_provider,
                     _transaction_active=True,
                 ).review_candidate(command, context=request_context)
@@ -1851,6 +2340,7 @@ class SocMemoryService:
         if reviewed_at.utcoffset() is None:
             raise SocServiceError("memory service clock must be timezone-aware")
         memory_record: SocMemoryRecord | None = None
+        revision_predecessor: SocMemoryRecord | None = None
 
         if command.decision is SocMemoryCandidateReviewDecision.CONFIRM_CANDIDATE:
             _validate_memory_candidate_transition(candidate.status, command.decision)
@@ -1923,6 +2413,14 @@ class SocMemoryService:
                     context=request_context,
                 )
                 memory_record = activation.record
+            if candidate.revision_lineage is not None:
+                revision_predecessor = self._supersede_revision_predecessor(
+                    candidate,
+                    successor_record=memory_record,
+                    actor=request_context.actor,
+                    reason=command.reason,
+                    superseded_at=reviewed_at,
+                )
         elif command.decision is SocMemoryCandidateReviewDecision.REJECT:
             _validate_memory_candidate_transition(candidate.status, command.decision)
             candidate = self._transition_candidate(
@@ -1932,7 +2430,16 @@ class SocMemoryService:
                 actor=request_context.actor,
                 reviewed_at=reviewed_at,
             )
+            if candidate.revision_lineage is not None:
+                revision_predecessor = self._close_revision_predecessor_without_replacement(
+                    candidate,
+                    actor=request_context.actor,
+                    reason=command.reason,
+                    resolved_at=reviewed_at,
+                )
         elif command.decision is SocMemoryCandidateReviewDecision.REOPEN:
+            if candidate.revision_lineage is not None:
+                raise SocServiceConflictError("a rejected memory revision cannot be reopened; create a new revision from an exact Memory use")
             _validate_memory_candidate_transition(candidate.status, command.decision)
             candidate = self._transition_candidate(
                 candidate,
@@ -1952,6 +2459,16 @@ class SocMemoryService:
                 actor=request_context.actor,
                 reviewed_at=reviewed_at,
             )
+            if candidate.revision_lineage is not None and previous_status in {
+                SocMemoryCandidateStatus.PENDING_REVIEW,
+                SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+            }:
+                revision_predecessor = self._close_revision_predecessor_without_replacement(
+                    candidate,
+                    actor=request_context.actor,
+                    reason=command.reason,
+                    resolved_at=reviewed_at,
+                )
             if self._record_repository is not None:
                 memory_record = self._record_repository.get_memory_record_by_candidate_id(candidate.candidate_id)
                 if memory_record is not None:
@@ -2002,6 +2519,8 @@ class SocMemoryService:
                         "decision": command.decision.value,
                         "memory_id": memory_record.memory_id if memory_record is not None else None,
                         "retrieval_enabled": (memory_record.retrieval_enabled if memory_record is not None else None),
+                        "revision_predecessor_memory_id": (revision_predecessor.memory_id if revision_predecessor is not None else None),
+                        "revision_predecessor_status": (revision_predecessor.status.value if revision_predecessor is not None else None),
                     },
                 )
             )
@@ -2020,6 +2539,7 @@ class SocMemoryService:
                     "decision": command.decision.value,
                     "memory_id": memory_record.memory_id if memory_record is not None else None,
                     "retrieval_enabled": memory_record.retrieval_enabled if memory_record is not None else None,
+                    "revision_predecessor_memory_id": (revision_predecessor.memory_id if revision_predecessor is not None else None),
                 },
             )
         )
@@ -2030,6 +2550,146 @@ class SocMemoryService:
             decision=command.decision,
             reviewed_at=reviewed_at,
         )
+
+    def _close_revision_predecessor_without_replacement(
+        self,
+        candidate: SocMemoryCandidate,
+        *,
+        actor: ActorContext,
+        reason: str,
+        resolved_at: datetime,
+    ) -> SocMemoryRecord:
+        """End one failed revision while leaving the predecessor safely disabled."""
+
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("closing a memory revision requires a MemoryRecordRepository")
+        lineage = candidate.revision_lineage
+        if lineage is None:
+            raise SocServiceError("closing a memory revision requires revision_lineage")
+        predecessor = self.get_record(lineage.predecessor_memory_id)
+        if predecessor.status is not SocMemoryRecordStatus.CONFIRMED:
+            raise SocServiceConflictError(f"memory revision predecessor {predecessor.memory_id} is {predecessor.status.value}")
+        if predecessor.version != lineage.suspended_record_version:
+            raise SocServiceConflictError(f"memory revision predecessor {predecessor.memory_id} expected suspended version {lineage.suspended_record_version}, found {predecessor.version}")
+        if predecessor.content_hash != lineage.predecessor_content_hash or predecessor.facets_hash != lineage.predecessor_facets_hash:
+            raise SocServiceConflictError("memory revision predecessor content or applicability changed after the revision was proposed")
+        if predecessor.retrieval_enabled:
+            raise SocServiceConflictError("memory revision predecessor retrieval was re-enabled while the revision was pending")
+
+        previous_version = predecessor.version
+        updated = predecessor.model_copy(
+            update={
+                "version": previous_version + 1,
+                "retrieval_enabled": False,
+                "retrieval_policy_version": SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
+                "retrieval_valid_until": None,
+                "retrieval_review_due_at": None,
+                "retrieval_updated_by": actor,
+                "retrieval_updated_at": resolved_at,
+                "retrieval_reason": reason,
+                "updated_at": resolved_at,
+                "labels": _retrieval_activation_labels(predecessor.labels, enabled=False),
+                "metadata": {
+                    **predecessor.metadata,
+                    "retrieval_enabled": False,
+                    "revision_pending": False,
+                    "revision_resolution": candidate.status.value,
+                    "revision_resolution_candidate_id": candidate.candidate_id,
+                    "revision_resolved_at": resolved_at.isoformat(),
+                },
+            }
+        )
+        if not self._record_repository.compare_and_set_memory_record(
+            updated,
+            expected_version=previous_version,
+        ):
+            raise SocServiceConflictError(f"memory revision predecessor {predecessor.memory_id} changed while the revision was being closed")
+        return updated
+
+    def _supersede_revision_predecessor(
+        self,
+        candidate: SocMemoryCandidate,
+        *,
+        successor_record: SocMemoryRecord,
+        actor: ActorContext,
+        reason: str,
+        superseded_at: datetime,
+    ) -> SocMemoryRecord:
+        """Finalize one reviewed successor without rewriting predecessor content."""
+
+        if self._record_repository is None or self._candidate_repository is None:
+            raise SocServiceNotImplementedError("memory revision finalization requires candidate and record repositories")
+        lineage = candidate.revision_lineage
+        if lineage is None:
+            raise SocServiceError("revision predecessor finalization requires revision_lineage")
+        predecessor = self.get_record(lineage.predecessor_memory_id)
+        if predecessor.status is SocMemoryRecordStatus.DEPRECATED and predecessor.superseded_by_memory_id == successor_record.memory_id:
+            return predecessor
+        if predecessor.status is not SocMemoryRecordStatus.CONFIRMED:
+            raise SocServiceConflictError(f"memory revision predecessor {predecessor.memory_id} is {predecessor.status.value}")
+        if predecessor.version != lineage.suspended_record_version:
+            raise SocServiceConflictError(f"memory revision predecessor {predecessor.memory_id} expected suspended version {lineage.suspended_record_version}, found {predecessor.version}")
+        if predecessor.content_hash != lineage.predecessor_content_hash or predecessor.facets_hash != lineage.predecessor_facets_hash:
+            raise SocServiceConflictError("memory revision predecessor content or applicability changed after the revision was proposed")
+        if predecessor.retrieval_enabled:
+            raise SocServiceConflictError("memory revision predecessor retrieval was re-enabled after the revision was proposed")
+
+        previous_version = predecessor.version
+        updated = predecessor.model_copy(
+            update={
+                "version": previous_version + 1,
+                "status": SocMemoryRecordStatus.DEPRECATED,
+                "retrieval_enabled": False,
+                "retrieval_policy_version": SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
+                "retrieval_valid_until": None,
+                "retrieval_review_due_at": None,
+                "retrieval_updated_by": actor,
+                "retrieval_updated_at": superseded_at,
+                "retrieval_reason": reason,
+                "updated_at": superseded_at,
+                "deprecated_by": actor,
+                "deprecated_at": superseded_at,
+                "deprecation_reason": reason,
+                "superseded_by_memory_id": successor_record.memory_id,
+                "superseded_at": superseded_at,
+                "supersession_reason": reason,
+                "labels": _retrieval_activation_labels(
+                    sorted(set(predecessor.labels + ["superseded-memory"])),
+                    enabled=False,
+                ),
+                "metadata": {
+                    **predecessor.metadata,
+                    "retrieval_enabled": False,
+                    "revision_pending": False,
+                    "superseded_by_memory_id": successor_record.memory_id,
+                    "superseded_by_candidate_id": candidate.candidate_id,
+                },
+            }
+        )
+        if not self._record_repository.compare_and_set_memory_record(
+            updated,
+            expected_version=previous_version,
+        ):
+            raise SocServiceConflictError(f"memory revision predecessor {predecessor.memory_id} changed during replacement")
+
+        predecessor_candidate = self._candidate_repository.get_memory_candidate(predecessor.source_candidate_id)
+        if predecessor_candidate is not None:
+            predecessor_candidate = predecessor_candidate.model_copy(
+                update={
+                    "status": SocMemoryCandidateStatus.SUPERSEDED,
+                    "superseded_by_candidate_id": candidate.candidate_id,
+                    "superseded_at": superseded_at,
+                    "supersession_reason": reason,
+                    "updated_at": superseded_at,
+                    "metadata": {
+                        **predecessor_candidate.metadata,
+                        "superseded_by_memory_id": successor_record.memory_id,
+                        "supersession_basis": "reviewed_memory_revision",
+                    },
+                }
+            )
+            self._candidate_repository.save_memory_candidate(predecessor_candidate)
+        return updated
 
     def _transition_candidate(
         self,
@@ -2128,9 +2788,11 @@ class SocMemoryService:
                 result = SocMemoryService(
                     candidate_repository=(repository if self._candidate_repository is not None else None),
                     record_repository=repository,
+                    memory_evolution_repository=(repository if self._memory_evolution_repository is not None else None),
                     mutation_audit_repository=repository,
                     mutation_uow=self._mutation_uow,
                     event_sink=buffered_events,
+                    profile_registry=self._profile_registry,
                     now_provider=self._now_provider,
                     _transaction_active=True,
                 ).set_retrieval_activation(command, context=request_context)
@@ -2185,6 +2847,8 @@ class SocMemoryService:
         if command.action is SocMemoryRetrievalActivationAction.ENABLE:
             if record.status is not SocMemoryRecordStatus.CONFIRMED:
                 raise SocServiceError(f"cannot enable retrieval for memory in status {record.status.value}")
+            if record.metadata.get("revision_pending") is True:
+                raise SocServiceConflictError(f"memory record {record.memory_id} has a pending revision and cannot be re-enabled")
             if record.retrieval_enabled:
                 raise SocServiceConflictError(f"memory record {record.memory_id} retrieval is already enabled")
             if record.validity.valid_from > now:
@@ -2398,6 +3062,19 @@ class SocMemoryService:
                 query,
                 matched_facets,
             )
+            query_profile_id = query.metadata.get("memory_profile_id")
+            profile = self._profile_registry.get(query_profile_id) if isinstance(query_profile_id, str) else None
+            profile_conflicts = (
+                profile.retrieval_conflict_reasons(
+                    record_facets=record.facets,
+                    query_facets=query.facets,
+                )
+                if profile is not None
+                else []
+            )
+            if profile_conflicts:
+                skipped_not_applicable += 1
+                continue
             exact_or_legacy = applicability_report.status in {
                 SocMemoryApplicabilityStatus.APPLICABLE,
                 SocMemoryApplicabilityStatus.LEGACY_ANCHOR_ONLY,
@@ -2480,6 +3157,29 @@ def _memory_applicability_priority(match: SocMemoryMatch) -> int:
     return 0
 
 
+def _memory_revision_candidate_content(
+    predecessor: SocMemoryRecord,
+    *,
+    lineage: SocMemoryRevisionLineage,
+) -> str:
+    previous_lesson = render_memory_business_lesson(predecessor.business_lesson) if predecessor.business_lesson is not None else predecessor.content
+    return "\n".join(
+        [
+            "Memory 修订请求",
+            f"问题类型: {lineage.issue_type.value}",
+            f"修订原因: {lineage.reason}",
+            f"来源运行: {lineage.source_run_id}",
+            f"来源告警: {lineage.source_alert_id}",
+            f"前置 Memory: {lineage.predecessor_memory_id} v{lineage.predecessor_memory_version}",
+            "",
+            "旧版 Business Lesson",
+            previous_lesson,
+            "",
+            "该内容仅作为修订草稿输入；最终 Business Lesson、适用范围和决策指令必须重新审核。",
+        ]
+    )
+
+
 def _memory_record_from_candidate(
     candidate: SocMemoryCandidate,
     *,
@@ -2517,6 +3217,7 @@ def _memory_record_from_candidate(
         created_by=actor,
         created_at=created_at,
         updated_at=created_at,
+        revision_lineage=candidate.revision_lineage,
         labels=sorted(set(candidate.labels + ["confirmed-memory", "retrieval-disabled"])),
         metadata={
             **candidate.metadata,
@@ -2524,6 +3225,14 @@ def _memory_record_from_candidate(
             "review_reason": command.reason,
             "business_lesson_schema_version": (lesson.schema_version if lesson is not None else None),
             "retrieval_enabled": False,
+            **(
+                {
+                    "revision_pending": False,
+                    "revision_completed_at": created_at.isoformat(),
+                }
+                if candidate.revision_lineage is not None
+                else {}
+            ),
             **validity_metadata,
         },
     )

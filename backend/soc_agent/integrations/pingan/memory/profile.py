@@ -26,14 +26,38 @@ from soc_agent.memory.profiles import SocMemoryProfileIdentity
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.utils.hashing import stable_hash
 
+_PINGAN_PATTERN_FACET_KEYS = (
+    "source_type",
+    "source_system",
+    "product",
+    "detection_key",
+    "rule_code",
+    "rule_name",
+    "detection_signature",
+    "category",
+    "environment",
+    "scenario_key",
+    "network_service",
+    "vulnerability_id",
+    "attack_behavior_family",
+    "behavior_component",
+    "behavior_component_core",
+    "behavior_component_strong",
+    "behavior_fingerprint",
+    "behavior_strength",
+    "role_entity",
+    "entity",
+)
+
 
 class PingAnSocMemoryProfile:
     """Conservative PingAn profile layered on the generic Memory Kernel."""
 
     identity = SocMemoryProfileIdentity(
         profile_id="pingan.soc",
-        profile_version="4",
-        feature_schema_version="pingan.soc.memory_features.v4",
+        profile_version="6",
+        feature_schema_version="pingan.soc.memory_features.v5",
+        aggregation_window_seconds=30 * 24 * 60 * 60,
     )
 
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
@@ -77,6 +101,7 @@ class PingAnSocMemoryProfile:
         detection_keys = facets.get("detection_key", [])
         detection_signatures = facets.get("detection_signature", [])
         behavior_fingerprints = facets.get("behavior_fingerprint", [])
+        signature_facets = _pingan_pattern_facets(facets)
         if detection_keys and behavior_fingerprints:
             detection_key = detection_keys[0]
             detection_signature = detection_signatures[0] if detection_signatures else None
@@ -86,7 +111,7 @@ class PingAnSocMemoryProfile:
                 value=f"compound:{stable_hash({'detection_key': detection_key, 'detection_signature': detection_signature, 'behavior_fingerprint': behavior_fingerprint})}",
                 label=f"{request.detection.rule_name or detection_key} + canonical behavior",
                 origin=self.identity.feature_schema_version,
-                facets=facets,
+                facets=signature_facets,
             )
 
         if detection_keys:
@@ -97,7 +122,7 @@ class PingAnSocMemoryProfile:
                 value=_bounded_value(f"detection:{stable_hash({'detection_key': value, 'detection_signature': signature})}"),
                 label=request.detection.rule_name or value,
                 origin="pingan_adapter:canonical_detection",
-                facets=facets,
+                facets=signature_facets,
             )
 
         if behavior_fingerprints:
@@ -106,7 +131,7 @@ class PingAnSocMemoryProfile:
                 value=_bounded_value(behavior_fingerprints[0]),
                 label="PingAn canonical behavior fingerprint",
                 origin=self.identity.feature_schema_version,
-                facets=facets,
+                facets=signature_facets,
             )
 
         # A model-only scenario label is not stable enough to own a PingAn
@@ -224,6 +249,9 @@ class PingAnSocMemoryProfile:
                 "behavior_component_weak",
                 "behavior_fingerprint",
                 "behavior_strength",
+                "network_service",
+                "vulnerability_id",
+                "attack_behavior_family",
                 "role_entity",
                 "entity",
                 "environment",
@@ -253,6 +281,60 @@ class PingAnSocMemoryProfile:
             context_only_similarity_facet_keys=context_only_similarity,
         )
 
+    def retrieval_conflict_reasons(
+        self,
+        *,
+        record_facets: dict[str, list[str]],
+        query_facets: dict[str, list[str]],
+    ) -> list[str]:
+        """Reject same-rule lessons whose canonical behavior scope conflicts."""
+
+        record = _normalized_facet_sets(record_facets)
+        query = _normalized_facet_sets(query_facets)
+        reasons: list[str] = []
+
+        record_services = _semantic_scope_values(
+            record,
+            "network_service",
+            component_prefix="network_service:",
+        )
+        query_services = _semantic_scope_values(
+            query,
+            "network_service",
+            component_prefix="network_service:",
+        )
+        if record_services and query_services and record_services.isdisjoint(query_services):
+            reasons.append("network_service_mismatch")
+
+        record_vulnerabilities = _semantic_scope_values(
+            record,
+            "vulnerability_id",
+            component_prefix="vulnerability:",
+        )
+        query_vulnerabilities = _semantic_scope_values(
+            query,
+            "vulnerability_id",
+            component_prefix="vulnerability:",
+        )
+        if record_vulnerabilities and not query_vulnerabilities:
+            reasons.append("vulnerability_scope_missing")
+        elif record_vulnerabilities.isdisjoint(query_vulnerabilities) and query_vulnerabilities:
+            reasons.append("vulnerability_scope_mismatch")
+
+        record_families = _semantic_scope_values(
+            record,
+            "attack_behavior_family",
+            component_prefix="attack_family:",
+        )
+        query_families = _semantic_scope_values(
+            query,
+            "attack_behavior_family",
+            component_prefix="attack_family:",
+        )
+        if record_families and query_families and record_families.isdisjoint(query_families):
+            reasons.append("attack_behavior_family_mismatch")
+        return reasons
+
 
 def _canonical_alert_id(run: AnalysisRun) -> str | None:
     payload = run.input_payload
@@ -273,6 +355,35 @@ def _canonical_alert_id(run: AnalysisRun) -> str | None:
     return None
 
 
+def _normalized_facet_sets(
+    facets: dict[str, list[str]],
+) -> dict[str, set[str]]:
+    return {str(key).strip().casefold(): {str(value).strip().casefold() for value in values if str(value).strip()} for key, values in facets.items() if str(key).strip()}
+
+
+def _semantic_scope_values(
+    facets: dict[str, set[str]],
+    key: str,
+    *,
+    component_prefix: str,
+) -> set[str]:
+    """Read one canonical scope from both current and legacy component facets."""
+
+    values = set(facets.get(key, set()))
+    for component_key in (
+        "behavior_component",
+        "behavior_component_core",
+        "behavior_component_strong",
+        "behavior_component_weak",
+    ):
+        for component in facets.get(component_key, set()):
+            if component.startswith(component_prefix):
+                scoped_value = component.removeprefix(component_prefix).strip()
+                if scoped_value:
+                    values.add(scoped_value)
+    return values
+
+
 def _canonical_event_id(run: AnalysisRun) -> str | None:
     if run.input_payload is None:
         return None
@@ -291,6 +402,14 @@ def _bounded_value(value: str) -> str:
     return f"sha256:{stable_hash(normalized)}"
 
 
+def _pingan_pattern_facets(
+    facets: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    """Freeze only decision-relevant and reviewer-useful facets on a cohort."""
+
+    return {key: list(facets[key]) for key in _PINGAN_PATTERN_FACET_KEYS if facets.get(key)}
+
+
 def _project_pingan_facets(
     facets: dict[str, list[str]],
     *,
@@ -303,6 +422,10 @@ def _project_pingan_facets(
 
     base_components = list(projected.get("behavior_component", []))
     tenant_components, tenant_core_components = _pingan_canonical_behavior_components(request)
+    for family in _pingan_attack_behavior_families(request, projected):
+        _add_facet(projected, "attack_behavior_family", family)
+        _append_component(tenant_components, f"attack_family:{family}")
+        _append_component(tenant_core_components, f"attack_family:{family}")
     for component in tenant_components:
         _add_facet(projected, "behavior_component", component)
     components = sorted(projected.get("behavior_component", []))
@@ -315,7 +438,7 @@ def _project_pingan_facets(
         projected["behavior_fingerprint"] = [
             stable_hash(
                 {
-                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v4",
+                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v5",
                     "components": fingerprint_components,
                 }
             )
@@ -377,6 +500,46 @@ def _pingan_canonical_behavior_components(
     if target_names & {"sam", "security", "system"}:
         add_core("target_class:windows_protected_registry_hive")
     return sorted(components), sorted(core_components)
+
+
+_PINGAN_ATTACK_CATEGORY_FAMILIES = {
+    "command_and_control": "command_and_control",
+    "c2": "command_and_control",
+    "命令与控制": "command_and_control",
+    "代理工具": "proxy_tunnel_activity",
+    "代理隧道": "proxy_tunnel_activity",
+    "vpn": "proxy_tunnel_activity",
+    "拒绝服务": "denial_of_service",
+    "dos": "denial_of_service",
+    "ddos": "denial_of_service",
+    "恶意外联": "malicious_outbound_connection",
+    "反弹shell": "reverse_shell",
+    "反弹 shell": "reverse_shell",
+    "webshell": "webshell",
+    "命令执行": "command_execution",
+    "提权": "privilege_escalation",
+    "横向移动": "lateral_movement",
+}
+
+
+def _pingan_attack_behavior_families(
+    request: LLMAnalysisRequest,
+    facets: dict[str, list[str]],
+) -> list[str]:
+    """Normalize PingAn classifications without importing raw field aliases."""
+
+    families: list[str] = []
+    category = " ".join((request.classification.category or "").split()).casefold()
+    if category:
+        family = _PINGAN_ATTACK_CATEGORY_FAMILIES.get(category)
+        if family is None:
+            token = re.sub(r"[^\w.-]+", "_", category, flags=re.UNICODE).strip("_")
+            family = f"source_category:{token}" if token else None
+        if family:
+            families.append(family)
+    if facets.get("vulnerability_id"):
+        families.append("vulnerability_exploitation")
+    return sorted(dict.fromkeys(families))
 
 
 def _normalized_windows_path_suffix(value: str | None) -> str | None:
@@ -457,7 +620,7 @@ def _detection_signature(request: LLMAnalysisRequest) -> str | None:
 
 def _is_strong_behavior_component(value: str) -> bool:
     normalized = value.strip().casefold()
-    if normalized.startswith(("protocol:", "http_method:")):
+    if normalized.startswith(("protocol:", "http_method:", "network_service:", "attack_family:")):
         return False
     return normalized != "scenario:web_attack"
 

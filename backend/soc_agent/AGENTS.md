@@ -57,6 +57,32 @@ file for SOC code. The authoritative product and engineering documents are:
 - Every step records start/end/duration. Provider token usage is `reported`, `estimated`,
   or `mixed`; monetary cost and accuracy stay unmeasured without reviewed pricing and
   independent truth labels.
+- Operator-facing execution timelines are read-only projections of persisted
+  `AnalysisRun.steps`, provider request journals, and downstream write state. Keep the
+  endpoint alert-scoped and lightweight; expose bounded metrics and sanitized errors,
+  never raw prompts, evidence bodies, provider responses, or credentials.
+- The explicitly gated corpus DEV workbench may expose a separate, on-demand,
+  `soc_admin`-only audit bundle containing the persisted raw input, canonical alert,
+  bounded model context, parsed model result, validation reports, Decision lineage, and
+  Pattern/Memory writes. It must never share the live polling response, re-run Runtime,
+  read process secrets, mutate state, or be enabled as a production analyst endpoint.
+- The bounded-input audit artifact must distinguish model-visible projection from the
+  frozen Runtime request. Only a matching prompt/builder version may be labeled exact;
+  old runs use an explicit partial reconstruction status instead of silently applying a
+  current projector to historical input.
+- Persist the exact canonical `AlertInput` produced by the normalize step on new
+  `AnalysisRun` records. Audit projections for older runs must mark that artifact partial
+  and may show a clearly named projection from the frozen analysis request; they must not
+  silently re-normalize old raw data with current Adapter code.
+- Historical replay uses canonical timezone-aware event time, never source row order or
+  alert ID as chronology. Within one Memory cohort, process the earliest unobserved alert
+  first so a later sample cannot create context for an earlier event. Tenant workflow
+  labels remain outside model input, are revealed only after the Runtime decision, and
+  may measure operational agreement only when their timestamp follows the alert.
+- Pattern aggregation uses fixed UTC windows. The generic Memory Profile defaults to 24
+  hours; tenant profiles may own a versioned bounded default such as PingAn's 30-day
+  window. Do not infer this duration from raw vendor fields or silently rewrite old
+  observations when a Profile changes.
 
 ## Persistence And Ingress
 

@@ -13,7 +13,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v3"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v4"
 MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v2"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000
@@ -21,7 +21,7 @@ MAX_REVIEWER_CONTEXT_CHARS = 4_000
 _OUTPUT_EXAMPLE: dict[str, Any] = {
     "schema_version": MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION,
     "reviewer_verdict": "false_positive",
-    "conclusion": "该重复模式是已确认的内部服务调用；仅在相同服务和行为模式命中且没有当前反证时，可复用无风险结论。",
+    "conclusion": "该重复模式是已确认的内部服务调用，技术结论为误报，并非真实反弹 Shell。",
     "supporting_source_refs": ["EX-D-001", "EX-D-002", "EX-D-003"],
     "business_rationale": [
         {
@@ -135,7 +135,7 @@ def memory_lesson_draft_response_schema() -> dict[str, Any]:
                 "type": "string",
                 "minLength": 10,
                 "maxLength": 2000,
-                "description": "Reusable Chinese business conclusion, not an alert summary.",
+                "description": ("Reusable Chinese business meaning and reviewer-selected technical verdict only; never include handling or external-action instructions."),
             },
             "supporting_source_refs": {
                 "type": "array",
@@ -241,7 +241,9 @@ Write concise analyst-facing Chinese. A Business Lesson explains what the repeat
 1. Use reviewer_verdict as the final outcome around which the draft is written. Treat candidate/cohort verdicts only as historical model observations, even when they disagree.
 2. Use reviewer context only when present; do not fabricate a missing tenant-specific explanation. If it is absent, state that the business explanation remains unprovided instead of turning prior model consistency into business truth.
 3. Write a reusable conclusion, not a restatement of one alert. State business meaning and the reviewer-selected risk verdict only.
-   Put handling in handling_guidance and never put close/suppress/block/isolate/approve commands in the conclusion.
+   Put handling in handling_guidance and never put close/suppress/block/isolate/approve/authorize-execution commands in the conclusion.
+   A source-backed factual statement such as "authorization status does not change that the attack attempt occurred" may remain in the conclusion;
+   it describes technical meaning and grants no action authority. Put uncertainty about whether authorization applies in uncertainties.
 4. Explain each business basis with its own exact D-* references.
 5. State useful generalization boundaries: what can change without changing the lesson.
 6. Add business-specific invalidation conditions when supported. Runtime always supplies the deterministic required-facet mismatch and current-counterevidence floors, so return an empty list rather than inventing another condition.
@@ -298,7 +300,7 @@ def _user_prompt(
             "- Every literal identifier is copied exactly from a cited current D-* value; no spelling, spacing, path, or character variation is allowed.",
             "- Generalization boundaries say what may vary; invalidation conditions say what blocks reuse.",
             "- No required:* facet is generalized or replaced; invalidation_conditions contains only supported business-specific additions and may be empty because Runtime supplies the deterministic floors.",
-            "- The conclusion contains no close, suppress, block, isolate, approval, or other action instruction.",
+            "- The conclusion contains no close, suppress, block, isolate, approval, authorize-execution, or other action instruction; factual authorization status is allowed only when source-backed and non-authorizing.",
             "- No field grants decision or action authority and no applicability condition is invented.",
             "- All free-text values are concise Chinese; identifiers may retain their original spelling.",
             "Return the JSON object now.",

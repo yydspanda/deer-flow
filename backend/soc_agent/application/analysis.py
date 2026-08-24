@@ -46,10 +46,15 @@ def build_soc_analysis_service(
     settings: SocLLMSettings | None = None,
     action_adapter_registry: SocActionAdapterRegistryPort | None = None,
     memory_environment: str | None = None,
+    runtime_environment: str | None = None,
 ) -> SocAnalysisService:
     """Build the one analysis service shared by CLI and offline batch entry points."""
 
     resolved_settings = settings or SocLLMSettings.from_env()
+    resolved_environment = _resolve_runtime_environment(
+        memory_environment=memory_environment,
+        runtime_environment=runtime_environment,
+    )
     maintenance = (
         SocNormalizationMaintenanceService(
             baseline_repository=repository,
@@ -62,10 +67,11 @@ def build_soc_analysis_service(
         repository,
         settings=resolved_settings,
         action_adapter_registry=action_adapter_registry,
+        runtime_environment=resolved_environment,
     )
     analysis_request_enricher = _build_analysis_request_enricher(
         repository,
-        memory_environment=_resolve_memory_environment(memory_environment),
+        memory_environment=resolved_environment,
     )
     analyzer, role_verifier = build_configured_analysis_nodes(
         settings=resolved_settings,
@@ -98,10 +104,14 @@ def _build_analysis_request_enricher(
         )
     ]
     if repository is not None:
+        profile_registry = build_soc_memory_profile_registry()
         enrichers.append(
             ConfirmedMemoryAnalysisRequestEnricher(
-                SocMemoryService(record_repository=repository),
-                profile_registry=build_soc_memory_profile_registry(),
+                SocMemoryService(
+                    record_repository=repository,
+                    profile_registry=profile_registry,
+                ),
+                profile_registry=profile_registry,
                 environment=memory_environment,
             )
         )
@@ -124,11 +134,29 @@ def _resolve_memory_environment(explicit: str | None) -> str | None:
     return next(iter(candidates), None)
 
 
+def _resolve_runtime_environment(
+    *,
+    memory_environment: str | None,
+    runtime_environment: str | None,
+) -> str | None:
+    """Resolve one environment for every scoped component in a service instance."""
+
+    if runtime_environment is None:
+        return _resolve_memory_environment(memory_environment)
+    resolved = runtime_environment.strip().casefold()
+    if not resolved:
+        raise ValueError("runtime_environment must not be blank")
+    if memory_environment is not None and memory_environment.strip().casefold() != resolved:
+        raise ValueError("memory_environment and runtime_environment must match")
+    return resolved
+
+
 def _build_post_analysis_observers(
     repository: SqlAlchemyAlertRepository | None,
     *,
     settings: SocLLMSettings,
     action_adapter_registry: SocActionAdapterRegistryPort | None = None,
+    runtime_environment: str | None = None,
 ) -> tuple[PostAnalysisObserver, ...]:
     observers: list[PostAnalysisObserver] = []
     tenant_policy_enabled = _strict_env_bool(
@@ -136,7 +164,13 @@ def _build_post_analysis_observers(
         default=False,
     )
     policy_path = os.environ.get("SOC_TENANT_DISPOSITION_POLICY_PATH", "").strip()
-    tenant_environment = os.environ.get("SOC_TENANT_POLICY_ENVIRONMENT", "").strip()
+    tenant_environment = (
+        runtime_environment
+        or os.environ.get(
+            "SOC_TENANT_POLICY_ENVIRONMENT",
+            "",
+        ).strip()
+    )
     advisor_mode = (
         os.environ.get(
             "SOC_TENANT_POLICY_ADVISOR_MODE",
@@ -201,7 +235,13 @@ def _build_post_analysis_observers(
 
     automation_path = os.environ.get("SOC_AUTOMATION_POLICY_PATH", "").strip()
     if repository is not None:
-        automation_environment = os.environ.get("SOC_AUTOMATION_ENVIRONMENT", "").strip()
+        automation_environment = (
+            runtime_environment
+            or os.environ.get(
+                "SOC_AUTOMATION_ENVIRONMENT",
+                "",
+            ).strip()
+        )
         if automation_path and not automation_environment:
             raise ValueError("SOC_AUTOMATION_ENVIRONMENT is required when SOC_AUTOMATION_POLICY_PATH is configured")
         if automation_environment and tenant_environment and automation_environment.casefold() != tenant_environment.casefold():
