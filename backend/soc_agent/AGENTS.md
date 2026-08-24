@@ -38,6 +38,10 @@ file for SOC code. The authoritative product and engineering documents are:
   from canonical typed observations and stable catalogs: current evidence `E-*`, Skill
   `S-*`, adapter semantics `A-*`, confirmed Memory `M-*`, governed context `C-*`, and
   tool evidence `T-*`.
+- Process fragments may share a canonical `event_scope_id`, but consumers may combine
+  them only through the same normalized process name plus the same non-null PID. An alert
+  boundary or shared event scope alone does not permit inventing one process chain from
+  unrelated observations.
 - The compact model output uses request-local aliases. Runtime restores aliases through
   the frozen one-to-one map, validates the compact contract, hydrates stable references,
   and Grounding verifies citations. Unknown or ambiguous references fail; hydration must
@@ -136,6 +140,10 @@ file for SOC code. The authoritative product and engineering documents are:
 - Reviewed tenant-static knowledge is bounded, versioned, source-linked `C-*` context and
   has no direct decision authority. Dynamic authorization/exercise/maintenance facts use
   the governed-context lifecycle.
+- Process-chain Playbooks may use only canonical observations and explicit direct-parent
+  fields. File relation/name/path constraints must match one `FileObservationRef`; never
+  assemble a pattern by mixing process images, IOC artifacts, or action targets from a
+  global path set.
 - Tenant operational handling is a default-off post-Runtime layer. Generic code must not
   contain `tenant == pingan` or hostname-substring safety branches. Shadow/enforced mode,
   policy version, matched signals, before/after decision, and action impact are audited.

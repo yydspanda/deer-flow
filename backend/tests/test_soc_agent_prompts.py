@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from soc_agent.contracts import AnalysisEvidenceCatalogItem
+from soc_agent.contracts import (
+    AnalysisContextCatalogItem,
+    AnalysisContextReferenceKind,
+    AnalysisEvidenceCatalogItem,
+    AnalysisMemoryContextComparison,
+    AnalysisMemoryUseMode,
+    SocMemoryApplicabilityStatus,
+)
 from soc_agent.core import SocAnalysisService
 from soc_agent.llm import parse_analysis_result_output
 from soc_agent.prompts import (
@@ -134,6 +141,51 @@ def test_analysis_prompt_selects_one_relevant_complete_example() -> None:
     assert 'id="conflicted"' in conflicted_prompt.user
 
 
+def test_analysis_prompt_exposes_context_only_memory_as_semantic_input_without_directive_authority() -> None:
+    request = _analysis_request("pingan_legacy_apt.json")
+    memory = AnalysisContextCatalogItem(
+        context_ref="M-A1B2C3D4E5F6",
+        kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
+        label="Reviewed internal-service false-positive lesson",
+        source_id="MEM-PROMPT-001@v2",
+        summary="The same internal service is known to trigger this detector without a reverse shell.",
+        memory_comparison=AnalysisMemoryContextComparison(
+            use_mode=AnalysisMemoryUseMode.CONTEXT_ONLY,
+            applicability_status=SocMemoryApplicabilityStatus.PARTIAL,
+            shared_facets={
+                "detection_key": ["sample:reverse-shell"],
+                "network_service": ["tcp/443"],
+            },
+            current_only_facets={"entity": ["ip:10.0.0.21"]},
+            memory_only_facets={"entity": ["ip:10.0.0.20"]},
+            missing_required_facet_keys=["behavior_fingerprint"],
+            reason_codes=["context_only_similarity_satisfied"],
+        ),
+    )
+    prompt = build_analysis_prompt(request.model_copy(update={"context_catalog": [*request.context_catalog, memory]}))
+
+    assert prompt.example_id == "context_memory"
+    assert 'id="context_memory"' in prompt.user
+    memory_projection = next(item for item in prompt.context["reference_catalogs"]["reasoning_context"] if item["kind"] == "confirmed_memory")
+    assert memory_projection["context_ref"] == "M-001"
+    assert memory_projection["memory_comparison"]["use_mode"] == "context_only"
+    assert memory_projection["memory_comparison"]["shared_facets"]["network_service"] == ["tcp/443"]
+    assert memory_projection["memory_comparison"]["current_only_facets"] == {"entity": ["ip:10.0.0.21"]}
+    assert "context_only forbids a deterministic Memory directive, not semantic use" in prompt.user
+    assert "Never choose suspicious only because Memory is context-only" in prompt.user
+    assert '"case": "context_only_generalizes"' in prompt.user
+    assert '"case": "context_only_does_not_generalize"' in prompt.user
+
+
+def test_analysis_prompt_balances_false_positive_and_true_positive_without_memory() -> None:
+    prompt = build_analysis_prompt(_analysis_request("missing_fields.json"))
+
+    assert '"case": "false_positive_without_memory"' in prompt.user
+    assert '"case": "true_positive_without_memory"' in prompt.user
+    assert "suspicious is a supported positive judgment, not the default" in prompt.user
+    assert '"case": "true_positive_with_later_benign_disposition"' in prompt.user
+
+
 def test_all_analysis_output_examples_pass_current_parser_contract() -> None:
     catalog = [
         AnalysisEvidenceCatalogItem(
@@ -156,7 +208,17 @@ def test_all_analysis_output_examples_pass_current_parser_contract() -> None:
     replacements = {
         "EX-E-001": "E-001",
         "EX-E-002": "E-002",
+        "EX-M-001": "M-001",
     }
+    context_catalog = [
+        AnalysisContextCatalogItem(
+            context_ref="M-A1B2C3D4E5F6",
+            kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
+            label="Synthetic reviewed memory",
+            source_id="MEM-SYNTHETIC-001@v1",
+            summary="Synthetic context used only to validate the model-output example contract.",
+        )
+    ]
 
     def replace_example_references(value):
         if isinstance(value, dict):
@@ -166,16 +228,26 @@ def test_all_analysis_output_examples_pass_current_parser_contract() -> None:
         return replacements.get(value, value)
 
     examples = analysis_output_examples()
-    assert set(examples) == {"network_roles", "non_network", "conflicted"}
+    assert set(examples) == {
+        "context_memory",
+        "network_roles",
+        "non_network",
+        "conflicted",
+    }
     for example_id, example in examples.items():
         assert example["summary"]
         parsed = parse_analysis_result_output(
             json.dumps(replace_example_references(example), ensure_ascii=False),
             evidence_catalog=catalog,
+            context_catalog=context_catalog,
         )
         assert parsed.repair_applied is False, example_id
         assert parsed.result.summary == example["summary"], example_id
         assert parsed.result.reason == example["reason"], example_id
+        if example_id == "context_memory":
+            assert parsed.result.verdict.value == "false_positive"
+            assert parsed.result.reasoning[0].context_refs == ["M-A1B2C3D4E5F6"]
+            assert "confirmed_memory" in {basis.value for basis in parsed.result.reasoning[0].basis}
 
 
 def test_analysis_prompt_projects_only_selected_low_trust_structured_fallback() -> None:

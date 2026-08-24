@@ -146,6 +146,7 @@ def build_hids_process_observations(
             _drop_none(
                 {
                     "observation_id": f"process:{parsed.message_hash[:16]}",
+                    "event_scope_id": f"process:{parsed.message_hash[:16]}",
                     "evidence_path": f"{parsed.source_path}#parsed",
                     "event_time": _first_str(fields, ("datatime", "time", "atime")) or _first_str(parsed.header, ("timestamp", "event_time")),
                     "host_name": _first_str(fields, ("host_name",)),
@@ -254,6 +255,7 @@ def hids_field_importance_rules() -> list[dict[str, Any]]:
                 "parsed.pname",
                 "parsed.pid",
                 "parsed.cmd",
+                "parsed.event_content",
                 "parsed.ppname",
                 "parsed.ppid",
                 "parsed.pcmd",
@@ -636,7 +638,10 @@ def build_hids_canonical_field_provenance(
             "entities.process.process_name": _process_source_path(fields, alert.entities.process.process_name),
             "entities.process.process_id": _first_present_path(fields, _PROCESS_ID_ALIASES),
             "entities.process.process_path": _first_present_path(fields, _PROCESS_PATH_ALIASES),
-            "entities.process.command_line": _first_present_path(fields, _PROCESS_COMMAND_ALIASES),
+            "entities.process.command_line": _process_command_source_path(
+                fields,
+                alert.entities.process.command_line,
+            ),
             "entities.process.parent_process_name": _process_source_path(
                 fields,
                 alert.entities.process.parent_process_name,
@@ -855,7 +860,7 @@ def _explicit_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
             "process_name": name,
             "process_id": _intish(_first_str(fields, _PROCESS_ID_ALIASES)),
             "process_path": _first_str(fields, _PROCESS_PATH_ALIASES),
-            "command_line": _first_str(fields, _PROCESS_COMMAND_ALIASES),
+            "command_line": _process_command_line(fields),
             "username": _first_str(fields, _PROCESS_USER_ALIASES),
             "md5": _validated_digest(_first_str(fields, ("md5",)), expected_length=32),
             "sha256": _validated_digest(_first_str(fields, ("sha256",)), expected_length=64),
@@ -987,7 +992,7 @@ def _process_node_source_path(
         name_aliases=_PROCESS_NAME_ALIASES,
         id_aliases=_PROCESS_ID_ALIASES,
     ):
-        source = _first_present_path(fields, process_aliases.get(field_name, ()))
+        source = _process_command_source_path(fields, node.command_line) if field_name == "command_line" else _first_present_path(fields, process_aliases.get(field_name, ()))
         if source:
             return source
     if _node_matches_aliases(
@@ -1004,6 +1009,34 @@ def _process_node_source_path(
         tree_text = _first_str(fields, (*_TREE_ALIASES, "process_chain")) or ""
         if node.process_name in tree_text:
             return tree_source
+    return None
+
+
+def _process_command_line(fields: Mapping[str, Any]) -> str | None:
+    explicit = _first_str(fields, _PROCESS_COMMAND_ALIASES)
+    if explicit:
+        return explicit
+    event_content = _first_str(fields, ("event_content",))
+    if not event_content:
+        return None
+    match = re.search(r"(?:其)?执行命令(?:为)?[：:]\s*(.+)$", event_content)
+    if match is None:
+        return None
+    command = match.group(1).strip()
+    return command or None
+
+
+def _process_command_source_path(
+    fields: Mapping[str, Any],
+    value: str | None,
+) -> str | None:
+    if not value:
+        return None
+    for alias in _PROCESS_COMMAND_ALIASES:
+        if _first_str(fields, (alias,)) == value:
+            return alias
+    if _process_command_line(fields) == value:
+        return "event_content"
     return None
 
 

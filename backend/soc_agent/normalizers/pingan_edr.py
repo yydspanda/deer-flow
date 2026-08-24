@@ -134,6 +134,7 @@ def build_edr_process_observations(
                 _drop_none(
                     {
                         "observation_id": (f"process:{parsed.message_hash[:12]}:{detail_name}"),
+                        "event_scope_id": f"process:{parsed.message_hash[:16]}",
                         "evidence_path": (f"{parsed.source_path}#parsed.{detail_name}"),
                         "event_time": _first_str(
                             detail,
@@ -161,6 +162,7 @@ def build_edr_process_observations(
             _drop_none(
                 {
                     "observation_id": f"process:{parsed.message_hash[:16]}",
+                    "event_scope_id": f"process:{parsed.message_hash[:16]}",
                     "evidence_path": f"{parsed.source_path}#parsed",
                     "event_time": _first_str(
                         parsed.header,
@@ -186,6 +188,14 @@ def build_edr_file_observations(
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     for parsed in parsed_messages:
+        event_time = _first_str(
+            parsed.header,
+            ("timestamp", "event_time"),
+        ) or _first_str(
+            parsed.fields,
+            ("timestamp", "time", "access_time", "first_access_time"),
+        )
+        observed_paths: set[str] = set()
         details = _detail_records(parsed.fields)
         for detail_name, detail in details:
             action_detail = _as_dict(detail.get("action_detail"))
@@ -210,36 +220,54 @@ def build_edr_file_observations(
                     }
                 )
             )
-        if details:
-            continue
+            if file_path:
+                observed_paths.add(_normalized_file_path(file_path))
 
-        target_path = _first_str(parsed.fields, ("str_suspicious_file",))
-        if target_path is None:
-            continue
-        observations.append(
-            _drop_none(
-                {
-                    "observation_id": f"file:{parsed.message_hash[:16]}:target",
-                    "evidence_path": f"{parsed.source_path}#parsed.str_suspicious_file",
-                    "relation": "endpoint_action_target",
-                    "event_time": _first_str(
-                        parsed.header,
-                        ("timestamp", "event_time"),
-                    )
-                    or _first_str(
-                        parsed.fields,
-                        ("timestamp", "time", "access_time", "first_access_time"),
-                    ),
-                    "process_id": _intish(
-                        _first_str(
-                            parsed.fields,
-                            ("process__pid", "str_process_id"),
-                        )
-                    ),
-                    "file_path": target_path,
-                }
+        if not details:
+            target_path = _first_str(
+                parsed.fields,
+                ("str_suspicious_file",),
             )
-        )
+            if target_path is not None:
+                observations.append(
+                    _drop_none(
+                        {
+                            "observation_id": (f"file:{parsed.message_hash[:16]}:target"),
+                            "evidence_path": (f"{parsed.source_path}#parsed.str_suspicious_file"),
+                            "relation": "endpoint_action_target",
+                            "event_time": event_time,
+                            "process_id": _intish(
+                                _first_str(
+                                    parsed.fields,
+                                    ("process__pid", "str_process_id"),
+                                )
+                            ),
+                            "file_path": target_path,
+                        }
+                    )
+                )
+                observed_paths.add(_normalized_file_path(target_path))
+
+        ioc_file_path = _path_shaped_ioc_file(parsed.fields.get("str_ioc_value"))
+        if ioc_file_path is not None and _normalized_file_path(ioc_file_path) not in observed_paths:
+            observations.append(
+                _drop_none(
+                    {
+                        "observation_id": (f"file:{parsed.message_hash[:16]}:ioc"),
+                        "evidence_path": (f"{parsed.source_path}#parsed.str_ioc_value"),
+                        "relation": "observed_artifact",
+                        "event_time": event_time,
+                        "process_id": _intish(
+                            _first_str(
+                                parsed.fields,
+                                ("process__pid", "str_process_id"),
+                            )
+                        ),
+                        "file_name": _file_name(ioc_file_path),
+                        "file_path": ioc_file_path,
+                    }
+                )
+            )
     return observations
 
 
@@ -377,6 +405,16 @@ def build_edr_source_field_semantics(
                     "vendor_activity_identifier",
                     "activity_identifier_is_preserved_for_audit_and_correlation_but_is_not_an_ip_hash_or_security_role",
                     reasoning=False,
+                )
+            )
+
+        if _path_shaped_ioc_file(parsed.fields.get("str_ioc_value")):
+            observations.append(
+                _semantic(
+                    f"{base_path}.str_ioc_value",
+                    "endpoint_ioc_file_observation",
+                    "path_shaped_vendor_ioc_is_a_distinct_observed_file_artifact_not_the_process_image_or_automatic_maliciousness_truth",
+                    entities=True,
                 )
             )
 
@@ -690,6 +728,23 @@ def _append_observation_provenance(
     process_by_evidence = {item.evidence_path: (index, item) for index, item in enumerate(alert.entities.process.observations)}
     file_by_evidence = {item.evidence_path: (index, item) for index, item in enumerate(alert.entities.file.observations)}
     for parsed in parsed_messages:
+        ioc_file_item = file_by_evidence.get(f"{parsed.source_path}#parsed.str_ioc_value")
+        if ioc_file_item is not None:
+            observation_index, observation = ioc_file_item
+            _append_provenance(
+                provenance,
+                canonical_path=(f"entities.file.observations[{observation_index}].file_path"),
+                selected_value=observation.file_path,
+                parsed=parsed,
+                source_path="str_ioc_value",
+            )
+            _append_provenance(
+                provenance,
+                canonical_path=(f"entities.file.observations[{observation_index}].file_name"),
+                selected_value=observation.file_name,
+                parsed=parsed,
+                source_path="str_ioc_value",
+            )
         details = _detail_records(parsed.fields)
         if details:
             for detail_name, detail in details:
@@ -1075,6 +1130,27 @@ def _explicit_indicator_values(value: Any) -> list[str]:
     if ip_values and len(ip_values) == len(parts):
         return ip_values
     return [text]
+
+
+def _path_shaped_ioc_file(value: Any) -> str | None:
+    values = value if isinstance(value, list) else [value]
+    for raw_value in values:
+        for candidate in str(raw_value or "").split(","):
+            path = candidate.strip().strip('"').strip("'")
+            if not path or not re.match(r"^(?:[A-Za-z]:[\\/]|\\\\|/)", path):
+                continue
+            file_name = _file_name(path)
+            if re.fullmatch(r"[^\\/]+\.[A-Za-z0-9][A-Za-z0-9._-]{0,15}", file_name):
+                return path
+    return None
+
+
+def _normalized_file_path(value: str) -> str:
+    return value.strip().replace("\\", "/").casefold()
+
+
+def _file_name(value: str) -> str:
+    return value.strip().replace("\\", "/").rsplit("/", 1)[-1]
 
 
 def _boolish(value: Any) -> bool | None:

@@ -72,6 +72,20 @@ class AnalysisContextReferenceKind(StrEnum):
     TOOL_RESULT = "tool_result"
 
 
+class AnalysisMemoryUseMode(StrEnum):
+    """How one reviewed Memory may be used by the bounded analyzer.
+
+    The mode describes decision authority, not semantic relevance. In
+    particular, ``context_only`` Memory may still inform the model-owned Base
+    Decision after the model compares the current alert with the reviewed
+    lesson. It simply cannot apply a deterministic Memory directive.
+    """
+
+    DIRECTIVE_APPLICABLE = "directive_applicable"
+    EXACT_CONTEXT = "exact_context"
+    CONTEXT_ONLY = "context_only"
+
+
 class AnalysisKnowledgeDestination(StrEnum):
     """Model-suggested destination for candidate knowledge under review."""
 
@@ -511,6 +525,38 @@ class SocMemoryApplicabilityReport(BaseModel):
     matched_strong_anchor_count: int = Field(default=0, ge=0)
     context_only_allowed: bool = False
     reason_codes: list[str] = Field(default_factory=list)
+
+
+class AnalysisMemoryContextComparison(BaseModel):
+    """Bounded deterministic comparison between current alert and Memory.
+
+    Tenant profiles own facet construction and applicability. The generic
+    Runtime only exposes their exact overlap and deltas so the LLM can judge
+    whether a reviewed lesson is semantically transferable without confusing
+    that judgment with machine directive authority.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.analysis_memory_context_comparison.v1"] = "soc.analysis_memory_context_comparison.v1"
+    use_mode: AnalysisMemoryUseMode
+    applicability_status: SocMemoryApplicabilityStatus | None = None
+    decision_directive_applicable: bool = False
+    shared_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
+    current_only_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
+    memory_only_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
+    matched_required_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
+    missing_required_facet_keys: list[str] = Field(default_factory=list, max_length=30)
+    excluded_facet_hits: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
+    reason_codes: list[str] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_use_mode_authority(self) -> AnalysisMemoryContextComparison:
+        if self.decision_directive_applicable and self.use_mode is not AnalysisMemoryUseMode.DIRECTIVE_APPLICABLE:
+            raise ValueError("only directive_applicable Memory may carry deterministic directive authority")
+        if self.use_mode is AnalysisMemoryUseMode.DIRECTIVE_APPLICABLE and not self.decision_directive_applicable:
+            raise ValueError("directive_applicable Memory requires decision_directive_applicable=true")
+        return self
 
 
 class SocMemoryBusinessLesson(BaseModel):
@@ -2615,6 +2661,7 @@ class ProcessObservationRef(BaseModel):
     """One process observation with its source and full available ancestry."""
 
     observation_id: str = Field(min_length=1)
+    event_scope_id: str | None = Field(default=None, min_length=1, max_length=256)
     evidence_path: str = Field(min_length=1)
     event_time: str | None = None
     host_name: str | None = None
@@ -2813,6 +2860,7 @@ class AnalysisContextCatalogItem(BaseModel):
     source_id: str = Field(min_length=1, max_length=512)
     summary: str = Field(min_length=1, max_length=4000)
     content_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    memory_comparison: AnalysisMemoryContextComparison | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -2826,6 +2874,8 @@ class AnalysisContextCatalogItem(BaseModel):
         }[self.kind]
         if not self.context_ref.startswith(expected_prefix):
             raise ValueError(f"context_ref for {self.kind.value} must start with {expected_prefix}")
+        if self.memory_comparison is not None and self.kind is not AnalysisContextReferenceKind.CONFIRMED_MEMORY:
+            raise ValueError("memory_comparison is allowed only on confirmed Memory context")
         return self
 
 

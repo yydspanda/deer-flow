@@ -73,7 +73,6 @@ from soc_agent.protocols import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEMO_THREAD_PREFIX = "SOC-DEMO"
 DEMO_IDEMPOTENCY_VERSION = "v1"
-DEMO_TENANT_SCOPE = "pingan-demo"
 
 
 class SocDemoInvestigationRepository(
@@ -328,7 +327,7 @@ def _seed_confirmed_memory(
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
         summary=f"Demo confirmed memory for {fixture.scenario}",
         content=_memory_content_for_fixture(fixture, review_item=review_item),
-        tenant_scope=DEMO_TENANT_SCOPE,
+        tenant_scope=review_item.tenant_id or "global",
         tenant_id=review_item.tenant_id,
         source=SocMemoryCandidateSource(
             source_type=SocMemoryCandidateSourceType.EVAL_FIXTURE,

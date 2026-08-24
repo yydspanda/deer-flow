@@ -22,6 +22,83 @@ class TenantKnowledgeFactKind(StrEnum):
     REVIEWED_EXAMPLE = "reviewed_example"
 
 
+class TenantProcessObservationPattern(BaseModel):
+    """Multi-signal process pattern that must match one canonical observation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_process_names: list[str] = Field(min_length=1, max_length=16)
+    required_process_name_prefixes: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+    )
+    required_command_terms: list[str] = Field(default_factory=list, max_length=16)
+    required_exact_command_lines: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+    )
+    required_path_prefixes: list[str] = Field(default_factory=list, max_length=16)
+
+    @field_validator(
+        "required_process_names",
+        "required_process_name_prefixes",
+        "required_command_terms",
+        "required_exact_command_lines",
+        "required_path_prefixes",
+    )
+    @classmethod
+    def normalize_pattern_values(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value.strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("tenant process observation pattern values must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_multiple_signals(self) -> TenantProcessObservationPattern:
+        process_identity_count = len(self.required_process_names) + len(self.required_process_name_prefixes)
+        if process_identity_count < 2 and not self.required_command_terms and not self.required_exact_command_lines and not self.required_path_prefixes:
+            raise ValueError("tenant process observation pattern requires multiple process identities or a command/path constraint")
+        return self
+
+
+class TenantFileObservationPattern(BaseModel):
+    """Multi-signal file pattern that must match one canonical file observation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    required_relations: list[Literal["endpoint_action_target", "observed_artifact"]] = Field(default_factory=list, max_length=4)
+    required_file_names: list[str] = Field(default_factory=list, max_length=16)
+    required_path_prefixes: list[str] = Field(default_factory=list, max_length=16)
+    required_path_suffixes: list[str] = Field(default_factory=list, max_length=16)
+
+    @field_validator(
+        "required_file_names",
+        "required_path_prefixes",
+        "required_path_suffixes",
+    )
+    @classmethod
+    def normalize_pattern_values(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value.strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("tenant file observation pattern values must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_multiple_signals(self) -> TenantFileObservationPattern:
+        populated_groups = sum(
+            bool(values)
+            for values in (
+                self.required_relations,
+                self.required_file_names,
+                self.required_path_prefixes,
+                self.required_path_suffixes,
+            )
+        )
+        if populated_groups < 2:
+            raise ValueError("tenant file observation pattern requires at least two typed constraints")
+        return self
+
+
 class TenantKnowledgeSelector(BaseModel):
     """Relevance selector. Non-empty selector groups are combined with AND."""
 
@@ -34,7 +111,18 @@ class TenantKnowledgeSelector(BaseModel):
     source_types: list[str] = Field(default_factory=list, max_length=30)
     host_prefixes: list[str] = Field(default_factory=list, max_length=100)
     process_names: list[str] = Field(default_factory=list, max_length=100)
+    parent_process_names: list[str] = Field(default_factory=list, max_length=100)
     path_prefixes: list[str] = Field(default_factory=list, max_length=100)
+    command_terms: list[str] = Field(default_factory=list, max_length=100)
+    parent_command_terms: list[str] = Field(default_factory=list, max_length=100)
+    process_observation_patterns: list[TenantProcessObservationPattern] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    file_observation_patterns: list[TenantFileObservationPattern] = Field(
+        default_factory=list,
+        max_length=20,
+    )
     account_patterns: list[str] = Field(default_factory=list, max_length=100)
     uri_prefixes: list[str] = Field(default_factory=list, max_length=100)
 
@@ -46,7 +134,10 @@ class TenantKnowledgeSelector(BaseModel):
         "source_types",
         "host_prefixes",
         "process_names",
+        "parent_process_names",
         "path_prefixes",
+        "command_terms",
+        "parent_command_terms",
         "account_patterns",
         "uri_prefixes",
     )
@@ -80,7 +171,12 @@ class TenantKnowledgeSelector(BaseModel):
                 self.source_types,
                 self.host_prefixes,
                 self.process_names,
+                self.parent_process_names,
                 self.path_prefixes,
+                self.command_terms,
+                self.parent_command_terms,
+                self.process_observation_patterns,
+                self.file_observation_patterns,
                 self.account_patterns,
                 self.uri_prefixes,
             )
@@ -152,8 +248,10 @@ class TenantKnowledgeProfile(BaseModel):
 
 
 __all__ = [
+    "TenantFileObservationPattern",
     "TenantKnowledgeFact",
     "TenantKnowledgeFactKind",
     "TenantKnowledgeProfile",
     "TenantKnowledgeSelector",
+    "TenantProcessObservationPattern",
 ]

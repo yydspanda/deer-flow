@@ -2,7 +2,7 @@
 
 > Status: Implemented baseline
 >
-> Review date: 2026-08-13
+> Review dates: 2026-08-13, 2026-08-24
 >
 > Scope: PingAn legacy alert integration only
 
@@ -39,6 +39,11 @@ Selector 是知识的启用条件。一个 Profile 可以包含很多知识，�
 | `host_prefixes` | canonical host name | `CTXGMPVS-PA178` 命中 `CTX` | rule name 或 raw text 中偶然出现的 `CTX` |
 | `process_names` | canonical process/parent/tree node name | `PaMailH5App.exe` | 一段描述文本中的同名字符串 |
 | `path_prefixes` | canonical process/file path | `C:/Program Files/pingantechmail/B/...` | command line 或任意 payload 的模糊包含 |
+| `command_terms` | canonical process/parent/tree node command line | `powershell.exe -File Map_Drive.ps1` 命中 `map_drive.ps1` | rule name、raw payload 或告警描述中的同名字符串 |
+| `process_observation_patterns` | 一个 process observation，或同一 `event_scope_id` 内通过“相同规范化进程名 + 相同非空 PID”连通的 observation component | `Ccm32BitLauncher -> cmd -> PowerShell` | 两条不相关日志、同事件中不连通的片段或只有同名但 PID 缺失的片段 |
+| `parent_process_names` / `parent_command_terms` | canonical direct parent identity/command | 标准 `msiexec.exe /V` 自调用 | 从进程名称集合猜测父子关系 |
+| `file_observation_patterns` | 同一个 canonical file observation 的 relation、name、path prefix/suffix | Startup 下的 `observed_artifact` `.lnk` | 把进程文件与 IOC 文件拼成一个对象 |
+| `required_exact_command_lines` | canonical normalized complete command | `net share` | `net share d$ /delete`、`net user ...` 等包含相同前缀的变更命令 |
 | `account_patterns` | canonical user/UM/process user | `EX-ZHANGWU233` | request body 中偶然出现的账号样式文本 |
 | `uri_prefixes` | canonical HTTP path/URL path | `/code_pilot/api/v1/...` | 日志全文中的路径片段 |
 
@@ -53,9 +58,15 @@ Palo 条目必须同时命中精确 IP 和 URI。大小写、Windows 路径分�
 | `pingan.network_direction` | 内部/办公/BGP/APP-TS/PAFC 地址、GeoIP 误标边界、域名边界、反连与代理链路解释 | `1.3.0` |
 | `pingan.platform_context` | 青藤 HIDS 来源背景、禁止从 topic 推断环境 | `1.0.0` |
 | `pingan.internal_systems` | CTX、HappyPA、PaMail、AskBob、IOBS、CodePilot、data-manager、Palo、ubiops、账号格式 | `1.0.0` |
+| `pingan.endpoint_playbooks` | canonical 多信号命中的已审核终端行为解释：组策略、SCCM、PyCharm/WMIC、Notepad++、exact `net share`、FDMEE、Office Assistant NSIS、MSI Startup | `1.4.0` |
 
 内部系统条目只建立“应用、平台、主机角色或账号格式身份”。即使旧资料曾把某案例写成误报，新 Profile
 也不会直接输出低风险、忽略或白名单结论。
+
+`endpoint_playbooks` 与普通身份知识不同：它保存已审核、可在首条告警使用的多信号行为解释，但仍只
+投影 `C-*` 分析上下文，不产生 Memory Directive 或运营处置权限。它只读取 canonical typed process、
+parent、command-line 和 file observation 信号。当前 matcher 不扫描 rule name、原始 payload 或任意描述
+文本；非空 selector group 继续按 AND 组合，文件条件必须在同一个 file observation 上成立。
 
 ## 4. Review 2026-08-13 / 本次人工确认
 
@@ -89,10 +100,61 @@ EDR 软件路径已有独立 `software_path_catalog`、Tenant Policy 和评测�
 安全演练和授权工具进入 `AuthorizedActivityFact`；可复用的人工历史结论进入受审核 Memory；实时资产、TI
 和标签进入 MCP/Action Adapter。
 
+## Review 2026-08-24 / 终端 Playbook 首批确认
+
+旧资料中的组策略登录脚本案例已作为第一个 bootstrap playbook 启用，理由是它不是某一 IP/主机的一次
+运营点击，而是由稳定 canonical 多信号表达的已审核行为模式：
+
+```text
+source_type = edr|hids
+AND process_names contains gpscript.exe
+AND canonical command line contains map_drive.ps1
+```
+
+命中后，`C-*` 会说明 `gpscript.exe /Logon -> PowerShell -File Map_Drive.ps1` 与仅加载
+`System.Management.Automation.dll` 的组合强烈支持组策略登录脚本误报解释；异常父进程/路径、编码或
+下载载荷、凭据访问、持久化、网络回连及其他当前恶意效果均为失效条件。该知识不自动忽略、不直接
+修改 Effective Decision，也不替代后续由运营反馈产生的 Memory。
+
+为什么不把它做成 Memory：这是经旧知识源和当前项目所有者确认的租户启动知识，目标是在尚无历史
+Memory 的第一条告警就可使用。为什么不放 public Skill：它包含 PingAn 运营确认和内部规则背景。后续
+同类告警的具体结论、适用范围调整和反例仍进入受治理 Memory；其他旧案例在逐条 selector/eval 审核前
+保持未启用，禁止整份旧 Prompt 常驻。
+
+### Review 2026-08-24 / Endpoint Playbooks v1.3
+
+第二批只启用了有明确旧来源、可被当前 canonical 数据表达且有真实正反例的条目：
+
+- SCCM PowerShell：同一 sensor event 内的 process edge 必须通过共享 PID/identity 连通；13 条部署样本
+  命中，执行 `cacls` 权限修改的相邻样本不命中。
+- PyCharm/WMIC：必须同时出现 PyCharm/WMIC 进程链和 SecurityCenter2 AntivirusProduct 只读命令；
+  21 条命中，DataGrip/IDEA/其他 PyCharm 命令不借用该知识。
+- Notepad++：必须是 `explorer.exe` 交互启动且命中已审核编辑器路径；两个 EDR 样本命中，普通 Windows
+  Notepad 调命令样本不命中。
+- `net share`：完整规范化命令必须严格相等；只读列举命中，`net share d$ /delete` 不命中。
+
+### Review 2026-08-24 / Endpoint Playbooks v1.4
+
+项目所有者随后分别确认启用三条独立 Playbook：
+
+- FDMEE：仅匹配 `cscript.exe` 执行已审核 `215.22.0.180/hfm_core/FDMEEWorkspace/.../data/scripts/event/*.vbs`
+  结构；当前语料 12/12 命中，服务器或脚本层级变化不命中。
+- Office Assistant NSIS：要求连通的 Office Assistant Setup / `old-uninstaller.exe` 产品更新链、标准更新
+  参数及 Temp `System.dll` action target；只命中 `1968376`，不把旧 agent-updater 或全部 NSIS 视为同一事实。
+- MSI Startup：要求标准路径 `msiexec -Embedding`、标准父进程 `msiexec /V` 和同一告警中 Startup
+  `observed_artifact` `.lnk`；`1976406`、`1976564`、`1986762` 3/3 命中。
+
+为避免从全局路径集合拼接事实，通用 selector 增加 canonical direct-parent 和单个 file observation 的
+类型化 gate。MSI 的 path-shaped `str_ioc_value` 仍作为独立 `observed_artifact`，不会覆盖
+`str_suspicious_file` 代表的进程/动作对象。完整来源、反例和未迁移项见
+`legacy-knowledge-migration-matrix.md`。
+
 ## 6. Deferred Candidates / 后续候选
 
-旧资料还包含机房代码、安全产品名称、扫描器地址和更多业务系统。暂不启用的原因分别是：缺少稳定的
-canonical typed selector、需要有效期/owner，或只有单案例结论。后续新增必须：
+旧资料还包含机房代码、安全产品名称、扫描器地址、更多业务系统和其他 endpoint playbook。逐项状态、
+真实语料覆盖、负例和需要当前项目所有者确认的内容统一见
+`legacy-knowledge-migration-matrix.md`。暂不启用的原因分别是：缺少稳定的 canonical typed selector、
+需要有效期/owner，或只有单案例结论。后续新增必须：
 
 1. 先确认它是稳定静态身份，而不是动态授权或历史处置；
 2. 使用 canonical typed selector，不用 raw vendor field 或宽泛 `text_terms`；

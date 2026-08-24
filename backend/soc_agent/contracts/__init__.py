@@ -233,6 +233,8 @@ from soc_agent.contracts.schemas import (
     AnalysisKnowledgeDestination,
     AnalysisMaterialityImpact,
     AnalysisMaterialityReport,
+    AnalysisMemoryContextComparison,
+    AnalysisMemoryUseMode,
     AnalysisNodeOutput,
     AnalysisOutputIssue,
     AnalysisOutputQuality,
@@ -535,10 +537,12 @@ from soc_agent.contracts.skill_improvement import (
     SkillPackageVersionRef,
 )
 from soc_agent.contracts.tenant_knowledge import (
+    TenantFileObservationPattern,
     TenantKnowledgeFact,
     TenantKnowledgeFactKind,
     TenantKnowledgeProfile,
     TenantKnowledgeSelector,
+    TenantProcessObservationPattern,
 )
 from soc_agent.contracts.tenant_policy import (
     TenantDispositionPolicy,
@@ -657,6 +661,8 @@ __all__ = [
     "AnalysisKnowledgeDestination",
     "AnalysisMaterialityImpact",
     "AnalysisMaterialityReport",
+    "AnalysisMemoryContextComparison",
+    "AnalysisMemoryUseMode",
     "AnalysisModelCoreOutputV2",
     "AnalysisModelCoreOutputV3",
     "AnalysisModelCoreOutputV4",
@@ -919,10 +925,12 @@ __all__ = [
     "SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION",
     "SocMutationAuditRecord",
     "SocMutationOperation",
+    "TenantFileObservationPattern",
     "TenantKnowledgeFact",
     "TenantKnowledgeFactKind",
     "TenantKnowledgeProfile",
     "TenantKnowledgeSelector",
+    "TenantProcessObservationPattern",
     "MAX_SOC_ALERT_ENTITIES_HINT_BYTES",
     "MAX_SOC_ALERT_RAW_BYTES",
     "SOC_ALERT_INGRESS_METADATA_KEY",

@@ -678,6 +678,8 @@ def test_pingan_v5_reviewed_endpoint_memory_generalizes_entities_without_general
     memory_context = [item for item in enriched_exact.context_catalog if item.kind.value == "confirmed_memory"]
     assert len(memory_context) == 1
     assert memory_context[0].metadata["decision_directive_applicable"] is True
+    assert memory_context[0].memory_comparison is not None
+    assert memory_context[0].memory_comparison.use_mode.value == "directive_applicable"
 
     if changed.matches:
         assert changed.matches[0].applicability_report is not None
@@ -691,6 +693,8 @@ def test_pingan_v5_reviewed_endpoint_memory_generalizes_entities_without_general
         changed_context = [item for item in enriched_changed.context_catalog if item.kind.value == "confirmed_memory"]
         assert changed_context
         assert changed_context[0].metadata["decision_directive_applicable"] is False
+        assert changed_context[0].memory_comparison is not None
+        assert changed_context[0].memory_comparison.use_mode.value == "context_only"
 
 
 def test_pingan_profile_rejects_category_only_cohorts() -> None:

@@ -7851,3 +7851,74 @@
   作为历史冻结证据保留并继续 fail closed，不做静默迁移。Memory eval 回归 `8 passed`。
 - 验证：相关后端回归 `65 passed`，修订工作流 `13 passed`，touched Ruff 全通过，前端 ESLint + TypeScript
   通过；Candidate 用途开关 Playwright `1 passed`；DEV Gateway/Frontend 重启并完成全部 SOC route warmup。
+
+### 2026-08-24 — Context-only Memory participates in Base Decision
+
+- 修正 `context-only` 被模型理解为“不可使用”的语义缺口。新增 typed
+  `AnalysisMemoryContextComparison`，由 Runtime 确定性投影当前告警与 confirmed Memory 的共同 facet、
+  双向差异、required 命中/缺失、exclusion 和 applicability reason；通用 Runtime 不读取 PingAn raw 字段。
+- `use_mode=directive_applicable|exact_context|context_only` 只描述确定性 Decision 权限。`context_only`
+  可以在核对 Business Lesson 适用/泛化/失效边界后参与 LLM Base Decision，但不能应用 Memory Directive、
+  授权动作或绕过 Tenant Policy。模型实际使用时必须引用 exact `M-*`，稳定 Memory/version 和 use effect
+  继续由 Runtime 持久化。
+- Analysis Prompt 升级为 `soc-analysis-v37`：明确“无 Directive 不等于无业务价值”“不同 IP/host/account
+  不得单独迫使 suspicious”“suspicious 不是缺少可选 enrichment 的默认值”，并加入无 Memory 的
+  false-positive/true-positive、context-only 可泛化/不可泛化及技术真阳性但后续 Tenant Policy 可忽略的
+  对称校准示例。旧 PingAn 长 Prompt 不整体复制；静态知识、Skill、Memory、Tenant Policy 和 Adapter
+  继续保持分层。
+- 回归覆盖 Prompt/parser、Memory projection/retrieval、PingAn Profile、materiality、Tenant Policy 和
+  automation，最终共 `187 passed`；SOC architecture boundary 另有 `12 passed`，相关 Ruff 检查与
+  `git diff --check` 通过。
+- DEV 代表样本 `2480991` 先使用正确 `dev-corpus-eval` 环境完成 `soc-analysis-v36` 结构验证：无
+  repair/fallback、13/13 evidence 与 5/5 reasoning grounding 通过。模型引用
+  `MEM-34E0E2FAC877@v2`，识别 OpenVPN/UDP 1194 等共同条件及当前新增 SIP/5060、behavior fingerprint
+  差异；因差异仍输出 `suspicious`，但理由来自显式比较，不再把“context-only 无改判权”本身当作转交
+  原因。最终 `v37` 代表重放结果见本节后续验收记录。第一次误用 `environment=dev` 的重跑未召回
+  Memory，验证了 tenant/environment 隔离会 fail closed，不作为模型质量样本。
+- 最终 `v37` 重放为 `RUN-0A851C915C4A`：16.513 秒，Base verdict 从旧版 `suspicious` 变为
+  `false_positive (0.78)`，无 repair/fallback，9/9 evidence 与 8/8 reasoning grounding 通过，materiality
+  可用且不要求 Review。模型明确引用 `MEM-34E0E2FAC877@v2`，同时解释共同 OpenVPN/UDP 1194 模式和
+  当前 SIP/5060 差异；持久化 use 仍为 `context_only`、`directive_applied=false`。这证明受治理经验可以
+  语义影响 Base Decision，同时没有获得确定性 Memory Decision 或动作权限。
+- 额外以 `environment=dev` 隔离现有 Memory，对 EDR `2444022`、HIDS `2445584`、NDR `2443945` 做首见
+  告警检查；三条最初均为 `suspicious`。NDR 与历史转交方向一致，HIDS 确实缺少业务/授权事实；EDR 已
+  识别 `gpscript.exe /Logon -> PowerShell -File Map_Drive.ps1`，却因旧平安案例尚未迁入受治理上下文而
+  保守判可疑，确认剩余问题是 tenant bootstrap knowledge 缺口，不应继续用 Prompt 强行放宽。
+- 新增通用 typed selector `command_terms`，它只读取 canonical process command line，不扫描规则名或 raw
+  payload；新增 PingAn-only `pingan.endpoint_playbooks@1.0.0`，首条事实以
+  `source_type + gpscript.exe + map_drive.ps1` 三组 AND 条件选择组策略登录脚本 Playbook。其他租户不加载，
+  命中只形成 `C-*`、`decision_authority=none`，当前恶意反证可使其失效。
+- 同一 EDR 样本重放 `RUN-6B744640A549`：无 Memory，命中精确 Playbook 后从 `suspicious 0.72` 收敛为
+  `false_positive 0.82`，20.571 秒，无 repair/fallback、无需 Review。该结果证明旧 PingAn Prompt 中稳定
+  且已审核的行为知识可以帮助首见告警，而动态 case outcome 仍应进入 Memory，运营处置继续归 Tenant
+  Policy；不会把旧长 Prompt 整体复制进通用 Runtime。
+
+### 2026-08-24 — PingAn legacy knowledge matrix and endpoint Playbooks v1.3
+
+- 新增 `capabilities/pingan/legacy-knowledge-migration-matrix.md`，逐条记录旧 EDR/HIDS/APT/NIDS 案例的
+  正确落点、真实启用状态、代表语料、反例、canonical gap 与需运营确认项；历史运营点击只用于发现
+  样本，不再被误写成 `review_status=reviewed`。
+- 通用 `TenantKnowledgeSelector` 新增 observation-scoped process pattern：同一 observation 可直接匹配；
+  同一传感器事件拆出的多条 process edge 只有“规范化进程名 + 非空 PID”均相同、形成连通分量时才能
+  组合，禁止跨日志、不连通片段或仅同名但 PID 缺失的片段拼接。`ProcessObservationRef.event_scope_id`
+  由 Adapter 明确提供。
+- 新增 normalized exact-command 条件，用于严格区分只读 `net share` 与 `net share d$ /delete` 等变更命令。
+  HIDS Adapter 同时把 `event_content` 中明确的“执行命令为”投影为有 provenance 的 canonical command，
+  不依赖 rule text。
+- `pingan.endpoint_playbooks@1.3.0` 在原组策略条目外增加 SCCM PowerShell 部署、PyCharm/WMIC AV 只读
+  查询、交互式 Notepad++ mapped-file 和 exact `net share` 四条。全部仍为 bounded `C-*` 且
+  `decision_authority=none`。
+- 4343 条语料中的候选审计：SCCM 精确命中 13 条，`cacls` 权限变更反例不命中；PyCharm/WMIC 命中
+  21 条，DataGrip/IDEA/其他 PyCharm 命令不命中；Notepad++ 命中 2 条而 Windows Notepad 调命令不命中；
+  exact `net share` 命中 1 条，3 条共享删除命令不命中。
+- 项目所有者随后确认分别启用 cscript/FDMEE、Office Assistant NSIS 与 MSI Startup，Profile 升级为
+  `pingan.endpoint_playbooks@1.4.0`。三条保持独立：Office Assistant 不借用旧 agent-updater 身份，也不把
+  全部 NSIS 视为安全；FDMEE 固定受控 server/share/event-script 层级；MSI 同时要求标准 child/parent
+  `msiexec` 参数和单个 Startup `.lnk` artifact。
+- 通用 selector 为此新增 process-name prefix、canonical direct-parent 和 single-file-observation gate；
+  file relation/name/path prefix/suffix 必须在同一个 `FileObservationRef` 上成立，禁止从全局路径集合拼接。
+  4343 条语料候选回放结果：FDMEE `12/12`、Office Assistant `1/1`、MSI Startup `3/3`，每条只命中预期
+  endpoint Fact；合成反例覆盖错误服务器/脚本层级、其他产品/DLL、非标准 msiexec 路径/父进程/参数及
+  非 Startup/非 `.lnk` 对象。所有命中仍为 `C-*`、`decision_authority=none`。
+- 其余无代表语料、动态授权或历史 case outcome 继续留在 Matrix 的 `no_representative_corpus`、
+  `governed_dynamic` 或 `memory_or_eval` 状态，不因本次确认一并激活。

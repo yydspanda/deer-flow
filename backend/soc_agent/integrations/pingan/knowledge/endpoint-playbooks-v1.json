@@ -1,0 +1,294 @@
+{
+  "schema_version": "soc.tenant_knowledge_profile.v1",
+  "profile_id": "pingan.endpoint_playbooks",
+  "version": "1.4.0",
+  "integration_names": [
+    "pingan_legacy_alert_platform"
+  ],
+  "tenant_ids": [],
+  "review_status": "reviewed",
+  "review_ref": ".notes/ai_soc/capabilities/pingan/tenant-static-knowledge-migration.md#review-2026-08-24",
+  "max_projected_items": 8,
+  "max_projected_chars": 8000,
+  "facts": [
+    {
+      "fact_id": "pa.endpoint-group-policy-logon-script",
+      "kind": "reviewed_example",
+      "label": "PingAn group-policy PowerShell logon script pattern",
+      "statement": "A canonical endpoint process context containing gpscript.exe and a Map_Drive.ps1 command is a reviewed PingAn group-policy logon-script pattern. When the current process chain also shows the Group Policy service or gpscript.exe /Logon launching PowerShell with -File Map_Drive.ps1, and the only reported object is a PowerShell runtime component such as System.Management.Automation.dll, this strongly supports a false-positive interpretation of broad PowerShell execution detections. Do not transfer that conclusion when the current alert shows an unexpected parent or path, encoded or downloaded payload, credential access, persistence, network callback, another malicious effect, or any other exact contradictory evidence. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "edr",
+          "hids"
+        ],
+        "process_names": [
+          "gpscript.exe"
+        ],
+        "command_terms": [
+          "map_drive.ps1"
+        ]
+      },
+      "source_ref": "security-log-analysis/references/edr/README.md:517-578; operator-approved migration 2026-08-24",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.endpoint-sccm-powershell-deployment",
+      "kind": "reviewed_example",
+      "label": "PingAn SCCM PowerShell deployment pattern",
+      "statement": "A single canonical process observation containing Ccm32BitLauncher.exe launching powershell.exe with -ExecutionPolicy Bypass, -windowstyle hidden, and either -file start.ps1 or a ccmcache install.ps1 path matches a reviewed PingAn SCCM software-deployment pattern. When the current evidence also shows the expected Windows CCM path and only normal PowerShell runtime loading, this strongly supports a false-positive interpretation of broad renamed-PowerShell or suspicious-PowerShell detections. Do not transfer that conclusion when the process pair is split across unrelated observations, the launcher/path or script differs unexpectedly, the command downloads or decodes a payload, or current evidence shows credential access, persistence outside the deployment package, callback, tampering, or another malicious effect. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "edr"
+        ],
+        "process_observation_patterns": [
+          {
+            "required_process_names": [
+              "Ccm32BitLauncher.exe",
+              "powershell.exe"
+            ],
+            "required_command_terms": [
+              "-ExecutionPolicy Bypass",
+              "-windowstyle hidden",
+              "-file start.ps1"
+            ],
+            "required_path_prefixes": [
+              "C:/Windows/CCM"
+            ]
+          },
+          {
+            "required_process_names": [
+              "Ccm32BitLauncher.exe",
+              "powershell.exe"
+            ],
+            "required_command_terms": [
+              "-ExecutionPolicy bypass",
+              "-windowstyle hidden",
+              "ccmcache",
+              "install.ps1"
+            ],
+            "required_path_prefixes": [
+              "C:/Windows/CCM"
+            ]
+          }
+        ]
+      },
+      "source_ref": "security-log-analysis/references/edr/README.md:956-1011; real corpus alert 2492577",
+      "priority": 11
+    },
+    {
+      "fact_id": "pa.endpoint-pycharm-wmic-av-inventory",
+      "kind": "reviewed_example",
+      "label": "PingAn PyCharm WMIC antivirus inventory pattern",
+      "statement": "A single canonical process observation containing pycharm64.exe and WMIC.exe, where WMIC performs the read-only SecurityCenter2 AntivirusProduct displayName/productState query, matches a reviewed PingAn developer-environment inventory pattern. This supports a false-positive interpretation of broad software-discovery detections when the current command is exactly read-only and no contradictory behavior is present. Do not transfer that conclusion to isolated WMIC execution, a different parent chain, remote WMI, mutation or deletion commands, obfuscation, persistence, credential access, network callback, or another current malicious effect. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "hids"
+        ],
+        "process_observation_patterns": [
+          {
+            "required_process_names": [
+              "pycharm64.exe",
+              "WMIC.exe"
+            ],
+            "required_command_terms": [
+              "SecurityCenter2",
+              "AntivirusProduct",
+              "Get displayName,productState"
+            ]
+          }
+        ]
+      },
+      "source_ref": "security-log-analysis/references/hids/README.md:125-151; real corpus alert 2451633",
+      "priority": 12
+    },
+    {
+      "fact_id": "pa.endpoint-notepad-memory-map",
+      "kind": "reviewed_example",
+      "label": "PingAn interactive Notepad++ memory-map pattern",
+      "statement": "An explorer.exe-launched Notepad++ process from one of the reviewed PingAn editor paths matches the known interactive editor context behind broad mapped-process-injection detections. When the current evidence shows only the editor opening a user document or its own image, with no injected target process or downstream malicious effect, this strongly supports a false-positive interpretation. Do not transfer that conclusion to a different executable/path, non-interactive parent, child shell or script execution, unsigned replacement, remote thread or memory-write evidence, credential access, persistence, callback, or another current malicious effect. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "edr"
+        ],
+        "process_names": [
+          "explorer.exe"
+        ],
+        "process_observation_patterns": [
+          {
+            "required_process_names": [
+              "notepad++port.exe"
+            ],
+            "required_path_prefixes": [
+              "D:/Program Files (x86)"
+            ]
+          },
+          {
+            "required_process_names": [
+              "notepad++.exe"
+            ],
+            "required_path_prefixes": [
+              "D:/software/Notepad7.6/Notepad"
+            ]
+          }
+        ]
+      },
+      "source_ref": "security-log-analysis/references/edr/README.md:708-772; real corpus alerts 2478371 and 2529831",
+      "priority": 13
+    },
+    {
+      "fact_id": "pa.endpoint-net-share-list",
+      "kind": "reviewed_example",
+      "label": "PingAn read-only net share listing pattern",
+      "statement": "A canonical HIDS process observation whose complete normalized command is exactly 'net share' represents the read-only Windows operation that lists local shares. In the reviewed PingAn case this explains a broad backdoor-detection false positive. Do not transfer that conclusion to any command with additional arguments, including share creation or deletion, administrative-share changes, remote execution, account or group mutation, or to current evidence showing persistence, credential access, lateral movement, callback, or another malicious effect. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "hids"
+        ],
+        "process_observation_patterns": [
+          {
+            "required_process_names": [
+              "net.exe"
+            ],
+            "required_exact_command_lines": [
+              "net share"
+            ]
+          }
+        ]
+      },
+      "source_ref": "security-log-analysis/references/hids/README.md:153-173; real corpus alert 2503147",
+      "priority": 14
+    },
+    {
+      "fact_id": "pa.endpoint-fdmee-unc-script",
+      "kind": "reviewed_example",
+      "label": "PingAn Oracle FDMEE cscript UNC event-script pattern",
+      "statement": "A canonical HIDS process observation containing cscript.exe and a command that executes a VBS event script from the reviewed 215.22.0.180 hfm_core FDMEEWorkspace data/scripts/event UNC hierarchy matches a confirmed PingAn Oracle FDMEE/ETL scheduling pattern. The reviewed invocation may carry opaque job or context arguments after the VBS path; their presence alone is not proof of an encoded payload. This strongly supports a false-positive interpretation of broad cscript remote-download detections when the current command remains within that hierarchy and no contradictory behavior is present. Do not transfer the conclusion to another server, share, script hierarchy, interpreter, a changed or separately downloaded script body, credential access, persistence, callback, child payload, or another current malicious effect. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "hids"
+        ],
+        "process_observation_patterns": [
+          {
+            "required_process_names": [
+              "cscript.exe"
+            ],
+            "required_command_terms": [
+              "215.22.0.180/hfm_core_",
+              "/FDMEEWorkspace/",
+              "/data/scripts/event/",
+              ".vbs"
+            ]
+          }
+        ]
+      },
+      "source_ref": "security-log-analysis/references/hids/README.md:105-123,277-294; operator-approved migration 2026-08-24; real corpus alerts 2448147,2448151,2454995,2454996,2493113,2493114,2500006,2500007,2524994,2524995,2565457,2565458",
+      "priority": 15
+    },
+    {
+      "fact_id": "pa.endpoint-office-assistant-nsis-update",
+      "kind": "reviewed_example",
+      "label": "PingAn Office Assistant NSIS update pattern",
+      "statement": "A connected canonical process observation containing an Office Assistant Setup executable from Windows ccmcache and old-uninstaller.exe from a Windows Temp directory, where the uninstaller uses /KEEP_APP_DATA, /allusers, --updated, and the AI Office Assistant install target, plus a same-alert endpoint action target named System.dll under Windows Temp, matches the confirmed PingAn Office Assistant NSIS update chain. This strongly supports a false-positive interpretation of broad DLL side-loading or cleanup detections. Do not generalize this to all NSIS activity or to the separate historical agent-updater product. The conclusion is invalid when the product target, distribution path, update parameters, uninstaller identity, plugin name/path, connected process chain, or current effects differ, or when current evidence shows tampering, persistence outside the product update, credential access, callback, or another malicious effect. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "edr"
+        ],
+        "process_observation_patterns": [
+          {
+            "required_process_names": [
+              "old-uninstaller.exe"
+            ],
+            "required_process_name_prefixes": [
+              "Office Assistant Setup"
+            ],
+            "required_command_terms": [
+              "/KEEP_APP_DATA",
+              "/allusers",
+              "--updated",
+              "_?=C:/Program Files/AI Office Assistant"
+            ],
+            "required_path_prefixes": [
+              "C:/Windows/ccmcache",
+              "C:/Windows/Temp"
+            ]
+          }
+        ],
+        "file_observation_patterns": [
+          {
+            "required_relations": [
+              "endpoint_action_target"
+            ],
+            "required_file_names": [
+              "System.dll"
+            ],
+            "required_path_prefixes": [
+              "C:/Windows/Temp"
+            ],
+            "required_path_suffixes": [
+              "/System.dll"
+            ]
+          }
+        ]
+      },
+      "source_ref": "security-log-analysis/references/edr/README.md:360-420,645-704; operator-approved Office Assistant-specific migration 2026-08-24; real corpus alert 1968376",
+      "priority": 16
+    },
+    {
+      "fact_id": "pa.endpoint-msi-startup-shortcut",
+      "kind": "reviewed_example",
+      "label": "PingAn Windows Installer Startup shortcut pattern",
+      "statement": "A canonical EDR context containing Windows msiexec.exe from System32 or SysWOW64 with -Embedding, a canonical parent process also named msiexec.exe whose command is the reviewed /V self-call from a standard Windows path, and one observed_artifact under the common Startup directory ending in .lnk matches the confirmed PingAn MSI installation pattern. This strongly supports a false-positive interpretation of broad Startup persistence detections when the current evidence is limited to the installer creating the shortcut. Do not transfer the conclusion to a non-standard msiexec path, a different parent, missing or altered -Embedding or /V semantics, an artifact outside Startup, a non-.lnk payload, a shortcut resolving to an unexpected executable, or current evidence of tampering, credential access, callback, persistence beyond the reviewed installer behavior, or another malicious effect. This playbook informs analysis only and grants no disposition or action authority.",
+      "selector": {
+        "source_types": [
+          "edr"
+        ],
+        "parent_process_names": [
+          "msiexec.exe"
+        ],
+        "parent_command_terms": [
+          "C:/Windows/System32/msiexec.exe /V",
+          "C:/Windows/SysWOW64/msiexec.exe /V"
+        ],
+        "process_observation_patterns": [
+          {
+            "required_process_names": [
+              "msiexec.exe"
+            ],
+            "required_command_terms": [
+              "-Embedding"
+            ],
+            "required_path_prefixes": [
+              "C:/Windows/System32"
+            ]
+          },
+          {
+            "required_process_names": [
+              "msiexec.exe"
+            ],
+            "required_command_terms": [
+              "-Embedding"
+            ],
+            "required_path_prefixes": [
+              "C:/Windows/SysWOW64"
+            ]
+          }
+        ],
+        "file_observation_patterns": [
+          {
+            "required_relations": [
+              "observed_artifact"
+            ],
+            "required_path_prefixes": [
+              "C:/ProgramData/Microsoft/Windows/Start Menu/Programs/Startup"
+            ],
+            "required_path_suffixes": [
+              ".lnk"
+            ]
+          }
+        ]
+      },
+      "source_ref": "security-log-analysis/references/edr/README.md:582-640; operator-approved migration 2026-08-24; real corpus alerts 1976406,1976564,1986762",
+      "priority": 17
+    }
+  ]
+}

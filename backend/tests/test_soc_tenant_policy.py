@@ -596,7 +596,7 @@ def test_composition_root_applies_enabled_policy_skill_before_effective_decision
 
     decisions = repository.list_tenant_policy_decisions(run_id=run.run_id)
     transitions = repository.list_decision_transitions(run_id=run.run_id)
-    assert len(observers) == 2
+    assert len(observers) == 3
     assert len(decisions) == 1
     assert decisions[0].decision_source is TenantPolicyDecisionSource.LLM_POLICY_SKILL
     assert len(transitions) == 1

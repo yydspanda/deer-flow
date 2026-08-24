@@ -85,6 +85,39 @@ generic `soc_agent` code.
   target coherence, approval requirements, provider mode, idempotency, and execution
   audit remain separate gates.
 
+## Tenant Knowledge And Playbooks
+
+- Stable, reviewed PingAn facts and first-alert playbooks live in versioned profiles under
+  `knowledge/` and project only bounded `C-*` context. They are not public Skills,
+  confirmed Memory, Tenant Policy, or action authorization.
+- Profile selectors consume canonical typed entities only. Host/process/path/account/URI
+  and command-line selectors must not scan raw payloads or vendor rule text. Non-empty
+  selector groups are combined with AND; broad single-key rules are not acceptable for a
+  benign playbook.
+- A reviewed playbook may help the LLM choose the Base Decision on a first-seen alert, but
+  every statement must include current-evidence requirements and invalidation conditions.
+  It always projects `decision_authority=none`; operational ignore/transfer remains a
+  separate Tenant Policy decision.
+- Multi-edge process playbooks may combine fragments only when the Adapter assigned the
+  same canonical `event_scope_id` and the fragments form a connected process component
+  through the same normalized process name plus the same non-null PID. A repeated common
+  process name with missing PID is not a cross-observation identity.
+  Exact commands such as read-only `net share` use exact-command selectors; substring
+  matching must not grant the same context to mutating variants.
+- Product update and installer Playbooks must retain product-specific identity instead
+  of declaring an installer framework broadly benign. Direct-parent constraints consume
+  canonical parent fields, and file relation/name/path constraints must match one
+  canonical file observation; do not join `str_suspicious_file`, `str_ioc_value`, or
+  unrelated `detailsN` paths after normalization.
+- `str_ioc_value` is polymorphic. The EDR Adapter may project an absolute, file-shaped
+  value as a distinct `observed_artifact` with exact provenance; it must not overwrite
+  the process image from `str_suspicious_file`, and a non-path IOC must not be invented as
+  a file. This evidence projection alone does not classify the artifact as benign or
+  malicious.
+- Repeated, analyst-confirmed case outcomes belong to governed Memory rather than static
+  profiles. Event-time authorization, red-team identity, maintenance windows, and current
+  asset state belong to governed context or a read-only provider.
+
 ## Internal DEV And Handoff
 
 - The internal model is accepted through the loopback OpenAI-compatible smoke in

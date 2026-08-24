@@ -541,7 +541,7 @@ PingAn SOC capability onboarding 约束：
 - 经验记忆必须先进入 `pending_review` 或 eval fixture；只有人工确认、版本化和可回滚后才允许作为 confirmed memory 或 active lesson 影响后续判断。
 - `.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 prompt 原文必须先按 `.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md` 拆解；不得整体复制进 Lead Agent prompt、analysis node prompt 或 public skill。
 - `skills/public/soc-*` 只能包含跨客户通用研判方法；平安内部域名、部门、账号、BU/PA code、路径、白名单、具体 `rule_code`、模板 ID、策略 ID、operateType 等必须进入 tenant memory、adapter mapping、policy/config 或 eval fixture。
-- 已评审且稳定的租户网络、应用、平台和命名约定可进入 versioned `TenantKnowledgeProfile`，仅按 canonical typed selector 投影为 bounded `C-*`。主机前缀、进程名、路径前缀、账号 full-match pattern 和 URI 前缀不得通过 raw evidence 全文包含匹配；同一 selector group 为 OR，不同非空 group 为 AND。每个投影必须保留 profile/fact/version/source/review/hash 且 `decision_authority=none`，应用或产品身份不能直接等价为 benign、authorized、ignore 或 action authority。
+- 已评审且稳定的租户网络、应用、平台、命名约定和首见行为 Playbook 可进入 versioned `TenantKnowledgeProfile`，仅按 canonical typed selector 投影为 bounded `C-*`。主机前缀、进程名、direct-parent、路径前缀、命令行 term、单个 file observation、账号 full-match pattern 和 URI 前缀不得通过 raw evidence 或 rule text 全文包含匹配；同一 selector group 为 OR，不同非空 group 为 AND。进程组合必须在一个 canonical observation 内成立，或仅在相同 `event_scope_id` 内沿“相同规范化进程名 + 相同非空 PID”的连通片段合并，禁止跨独立日志拼接；文件 relation/name/path prefix/path suffix 必须在同一个 canonical file observation 上成立，禁止从全局路径集合拼接；只读命令与变更命令存在语义边界时必须使用 normalized exact-command gate，不能使用子串。行为 Playbook 必须采用多组 typed signal，写明当前证据要求和失效条件，禁止只靠 rule name、单个宽泛文本或租户身份直接输出结论。每个投影必须保留 profile/fact/version/source/review/hash 且 `decision_authority=none`，应用、产品或 Playbook 命中不能直接形成 Memory Decision、operational ignore/transfer 或 action authority。
 - 平安环境知识进入 memory 时必须带 tenant scope、source doc/section、status、validity 和 evidence refs；默认 `pending_review`，不能直接 confirmed。扫描、渗透测试、运维窗口、自动化服务等“当前是否被授权”的动态事实不得用 memory 代替，必须进入 authorized-activity fact lifecycle。
 - 平安字段名和字段别名只能出现在 adapter/normalizer/mapping tests 或脱敏 fixture 中；core contract、public skill 和 Lead Agent prompt 必须消费 canonical fields。
 - 平安处置经验如果需要外部事实查询，必须先建 read-only MCP/action adapter；如果会改变外部状态，必须是 high-risk/analyst-write action，并经过人工 approval 或明确的服务端 playbook authorization。
@@ -1371,9 +1371,12 @@ normalizers/hids.py
 - `detailsN` 必须按数字下标排序。Adapter 可以选择第一条有效 detail 形成单值 canonical
   process/file 摘要，但每条可用 detail 都必须形成带精确 `evidence_path` 的
   `ProcessObservationRef`；child process 作为同一 observation 的独立 node，不能覆盖父进程。
-- 只有 endpoint file action 的 `file_name/file_path` 可形成 `FileObservationRef`。
-  registry/task 字段是 reasoning context，不得伪装成 file entity；file target、`is_exist` 和
-  child process observation 均不自动证明恶意或执行成功。
+- Nested endpoint file action 的 `file_name/file_path` 可形成 `FileObservationRef`；平铺 EDR 的
+  `str_suspicious_file` 映射为 `endpoint_action_target`。多态 `str_ioc_value` 只有在 Adapter 确认其为
+  absolute file-shaped value 时才可另行投影为带原字段 provenance 的 `observed_artifact`，不得覆盖
+  process image/action target，也不得把 IP、hash 或其他 IOC 伪造成 file。registry/task 字段是
+  reasoning context，不得伪装成 file entity；file target、IOC artifact、`is_exist` 和 child process
+  observation 均不自动证明恶意或执行成功。
 - `iplist` 是 endpoint/impacted-host 证据，只能形成 host IP 与 provisional
   `victim`/`impacted_asset` claims；不得由此生成 network `source`/`destination` 或 attacker。
 - `process_md5` 仅接受 32 位十六进制，`process_sha256` 仅接受 64 位十六进制。非法值保留在
@@ -1703,14 +1706,16 @@ normalizers/hids.py
   replay；精确别名恢复属于 hydration，不计 repair，未知别名不得模糊匹配。
 - `reference_catalogs.role_entities` 只暴露 Runtime 已类型化的 canonical/extracted 实体；raw vendor
   字段名、端口、计数器、时间戳和事件 ID 仍只是普通证据，不能因为名字像实体就成为角色目标。
-- `soc-analysis-v35` 将稳定的信任、分析方法和引用规则放在 system message；bounded alert context 位于
+- `soc-analysis-v37` 将稳定的信任、分析方法和引用规则放在 system message；bounded alert context 位于
   user message 前部，任务、精确响应结构和 final checklist 位于尾部。scenario/direction/role 使用精确
   key 契约，角色只能把 `reference_catalogs.role_entities` 中选中项的 `evidence_ref` 复制为
-  `entity_ref`。Prompt Builder 按 `conflicted -> typed network evidence/network source -> non-network` 选择且只注入一个完整、
+  `entity_ref`。Prompt Builder 按 `conflicted -> context-only Memory -> typed network evidence/network source -> non-network`
+  选择且只注入一个完整、
   机器校验的 synthetic Golden Demo，并把 `prompt_example_id` 写入 trace；示例专用 `EX-*` 绝不能进入
   模型输出，示例 verdict/scenario/direction/role/confidence/action 也只能用于 shape guidance，不得复制为
-  当前结论。不得使用缺少必填字段的片段式伪 few-shot，也不得把全部 Demo 常驻每次调用。
-- `soc-analysis-v35` / `soc-analysis-json-parser-v24` 只允许有日志、无安全语义的机械恢复；仅当完整字段
+  当前结论。另提供 compact decision calibration，必须对称覆盖无 Memory 的 false-positive/true-positive、
+  context-only 可迁移/不可迁移，以及技术真阳性但后续 Tenant Policy 可忽略；它不构成第二套 output shape。
+- `soc-analysis-v37` / `soc-analysis-json-parser-v24` 只允许有日志、无安全语义的机械恢复；仅当完整字段
   集合可无歧义判定为紧凑模型输出时，允许恢复缺失的顶层 `soc.analysis_model_output.v4` 版本。允许把
   严格十进制 confidence 字符串转为数值；core/optional 引用只能按冻结目录过滤、去重并保持原顺序截到
   契约上限 20；可用显式 `scenario_key` 补缺失展示名；可用同一可选对象已有字段生成缺失 rationale，
@@ -1886,6 +1891,16 @@ normalizers/hids.py
 - 租户静态知识使用严格 `TenantKnowledgeProfile.v1`，只按 canonical current-request selector 匹配并投影
   bounded、hashed、source-linked `C-*`。profile loader 不执行租户代码；每项固定
   `decision_authority=none`。
+- 首见行为 Playbook 仍属于租户静态知识，而不是伪造的 confirmed Memory。它必须由已审核来源迁移，
+  使用 canonical typed 多信号 selector，并把适用条件和当前恶意反证写在同一 Fact 中；模型可引用该
+  `C-*` 参与 Base Decision，但后续 Memory/Tenant/Automation authority 层保持不变。
+- Process Playbook 的同事件聚合必须由 canonical `event_scope_id` 限定，并只合并“相同规范化进程名 +
+  相同非空 PID”的连通 observation；只有同名但 PID 缺失不构成跨 observation identity，未连通片段
+  即使来自同一告警也不得凑成匹配。需要区分读取与变更的
+  命令必须使用 exact-command selector，例如 `net share` 不得匹配 `net share d$ /delete`。
+- 需要 parent 语义时必须读取 canonical direct-parent 字段；需要文件对象语义时，relation、name、path
+  prefix/suffix 必须共同命中同一个 `FileObservationRef`。不得从全局进程名或路径集合猜父子关系，也不得
+  把进程文件、IOC 和动作目标跨 observation 拼成一个 Playbook。
 - 通用方法进 public Skill `S-*`，字段/采集语义进 Adapter `A-*`，人工历史经验进 Memory `M-*`，实时
   MCP 查询进 `T-*`，运营规则进 Tenant/Automation Policy。不得用一个长租户 Prompt 混合这些权限层。
 - 动态授权测试、护网参与者、变更窗口和当前资产状态不是静态 profile；必须继续走 typed Governed
@@ -2432,7 +2447,7 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
-当前 `soc-analysis-v35` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费
+当前 `soc-analysis-v37` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费
 `LLMAnalysisRequest.v6` 和受控 context catalogs，输出 compact `soc.analysis_model_output.v4`；Runtime
 将其 hydration 为 `AnalysisResult.v4`，再依次经过 schema/domain validation、evidence grounding、
 analysis materiality 和 Decision Policy v7。模型不能决定后续状态或动作权限。
@@ -2871,7 +2886,8 @@ tool permission denial rate
   `target_file:SAM|SYSTEM` 等精确观察；network service、CVE 和版本化 `attack_behavior_family` 可参与
   同类拆分。`IP/host/account`、alert/run lineage 和 ClassId 等随机参数不得进入
   fingerprint。平铺 EDR `str_suspicious_file` 必须先由 PingAn Adapter 转成带 provenance 的
-  `endpoint_action_target`，Profile 不得读取供应商原始别名。Profile 必须把 `protocol:*`、`http_method:*`、
+  `endpoint_action_target`；path-shaped `str_ioc_value` 必须保留为独立 `observed_artifact`，Profile
+  不得读取供应商原始别名或把两者合并。Profile 必须把 `protocol:*`、`http_method:*`、
   `network_service:*`、来源 classification family 和 generic `scenario:web_attack` 标记为 weak behavior；
   CVE、MITRE、process 和其他当前 reviewed component 才可投影为 strong。决策型 compound applicability 必须精确匹配
   environment、detection key、detection signature、behavior fingerprint 和 `behavior_strength=strong`。
@@ -2882,6 +2898,19 @@ tool permission denial rate
   weak-only overlap 不得召回。该投影必须显式标记
   `context_only_allowed=true`，在 token 排序中晚于 exact match，并且不得应用
   `SocMemoryDecisionDirective`。没有 component overlap 的同-rule 记录仍为 not applicable。
+- 每个投影给分析模型的 confirmed Memory 必须使用 typed
+  `AnalysisMemoryContextComparison` 明示 `use_mode`、`shared_facets`、`current_only_facets`、
+  `memory_only_facets`、required-facet 命中/缺失、exclusion 命中和 applicability reason codes。
+  比较只能由 Runtime 根据当前 query 与冻结 record facets 确定性生成；模型和客户端不得自报、扩大或
+  删除这些匹配事实。
+- `context_only` 是 deterministic directive authority 的否定，不是 semantic relevance 的否定。模型可在
+  检查 Business Lesson 的 applicability/generalization/invalidation 后，让该 `M-*` 影响 Base Decision，
+  且必须在 `decision_context_refs`/`R-*` 中留痕；但它不得形成 Memory Decision、授权动作或跳过 Tenant
+  Policy。一次 Run 中同一 Memory/version 仍只能记录一种最终 use effect。
+- 禁止仅因为 Memory 无 Directive、只有 partial/context-only 命中、IP/host/account 不同，或缺少可选
+  CMDB/TI/EDR enrichment 而默认输出 `suspicious`。同样禁止仅因同 rule/detection 命中就复用历史结论。
+  服务、漏洞、行为族、执行结果、授权范围或显式失效条件等实质差异必须阻止结论迁移；无 Memory 时仍
+  必须从当前 `E-*`、通用 `S-*`、Adapter `A-*` 和 tenant knowledge `C-*` 给出最佳受支持 Base verdict。
 - Before accepting either exact or context-only applicability, the resolved tenant Profile may reject substantive
   canonical scope conflicts such as different network service, CVE, or attack-behavior family. Compatibility with
   older records may derive these scopes from canonical `behavior_component*` prefixes, but never from tenant raw

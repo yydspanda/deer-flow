@@ -329,7 +329,7 @@ def test_pingan_nids_projects_session_http_sensor_and_provenance_without_verdict
     assert request.evidence_coverage.llm_compacted_encoded_paths == [request.primary_evidence.encoded_span_omissions[0].field_path]
     prompt_context = project_analysis_context(request)
     assert "encoded_span_omissions" not in prompt_context["evidence"]["primary_evidence"]
-    assert prompt_context["evidence"]["coverage"]["compacted_encoded_count"] == 1
+    assert prompt_context["evidence"]["coverage"]["model_projection"]["encoded_span_compaction_count"] == 1
     semantics = {item["field_path"].split("#parsed.", 1)[-1]: item for item in alert.extensions["source_field_semantics"]}
     assert semantics["alert.action"]["meaning"] == ("allowed_means_sensor_did_not_block_not_that_the_attack_succeeded")
     assert semantics["alert.attack_res"]["participates_in_reasoning"] is False
@@ -946,6 +946,50 @@ def test_pingan_edr_comma_kv_message_populates_canonical_entities() -> None:
     } <= semantics
 
 
+def test_pingan_edr_preserves_path_shaped_ioc_as_distinct_file_observation() -> None:
+    process_path = r"C:\Windows\SysWOW64\msiexec.exe"
+    startup_path = "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\Error Recovery Guide.lnk"
+    message = (
+        "<14>[SourceIP:30.99.18.127][AuditDB.tbl_ud_pe_threat_alert]"
+        "str_title=添加自启动项(Startup),str_process_short=msiexec.exe,"
+        f"str_suspicious_file={process_path},"
+        f"str_cmd={process_path} -Embedding 0123456789ABCDEF E Global\\MSI0000,"
+        f"str_ioc_value={startup_path},str_mac>varchar(64)>=,"
+        "str_user_process=SYSTEM"
+    )
+    payload = _payload(
+        message,
+        topic="leagsoft-edr",
+        topic_name="EDR",
+    )
+
+    request = build_analysis_request_for_payload(payload)
+    observations = request.canonical_entities.file.observations
+
+    assert [(item.relation.value, item.file_path) for item in observations] == [
+        ("endpoint_action_target", process_path),
+        ("observed_artifact", startup_path),
+    ]
+    assert observations[1].file_name == "Error Recovery Guide.lnk"
+    assert observations[1].evidence_path.endswith("message#parsed.str_ioc_value")
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.file.observations[1].file_path"].selected_from.endswith("message#parsed.str_ioc_value")
+    semantics = {item.semantic_type for item in request.source_field_semantics}
+    assert "endpoint_ioc_file_observation" in semantics
+
+
+def test_pingan_edr_does_not_invent_or_duplicate_ioc_file_observations() -> None:
+    process_path = r"C:\Windows\System32\svchost.exe"
+
+    def observations_for(ioc_value: str) -> list[tuple[str, str | None]]:
+        message = f"<14>[SourceIP:30.99.18.127][AuditDB.tbl_ud_pe_threat_alert]str_process_short=svchost.exe,str_suspicious_file={process_path},str_ioc_value={ioc_value}"
+        request = build_analysis_request_for_payload(_payload(message, topic="leagsoft-edr", topic_name="EDR"))
+        return [(item.relation.value, item.file_path) for item in request.canonical_entities.file.observations]
+
+    assert observations_for("203.0.113.10") == [("endpoint_action_target", process_path)]
+    assert observations_for(process_path) == [("endpoint_action_target", process_path)]
+
+
 def test_pingan_edr_self_attack_alias_and_digest_shaped_values_do_not_invent_network_roles() -> None:
     digest_shaped_id = "b" * 32
     message = (
@@ -1145,6 +1189,32 @@ def test_pingan_hids_quoted_kv_message_extracts_host_ip_and_process_tree() -> No
         ("java", 3065),
         ("chattr", 3287784),
     ]
+
+
+def test_pingan_hids_extracts_observed_command_from_event_content() -> None:
+    command = (
+        r"wmic /Namespace:\\\\root\\SecurityCenter2 "
+        "Path AntivirusProduct Get displayName,productState"
+    )
+    message = (
+        "2026-08-05T13:37:52+08:00 HOST-SENSOR qtAlert[664] "
+        'datatype="web_command_win" internal_ip="30.16.36.20" '
+        'host_name="SZC-BPW0064502" event_type="web_command_win" '
+        f'event_content="WMIC.exe进程发现异常执行行为，其执行命令为：{command}" '
+        'process_name="WMIC.exe" '
+        'process_tree="pycharm64.exe(165556)-&gt;WMIC.exe(29612)"'
+    )
+    payload = _payload(message, topic="security_qthids", topic_name="HIDS")
+
+    request = build_analysis_request_for_payload(payload)
+    process = request.canonical_entities.process
+
+    assert process.command_line == command
+    assert process.observations[0].nodes[-1].process_name == "WMIC.exe"
+    assert process.observations[0].nodes[-1].command_line == command
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.process.command_line"].selected_from.endswith("message#parsed.event_content")
+    assert provenance["entities.process.observations[0].nodes[1].command_line"].selected_from.endswith("message#parsed.event_content")
 
 
 def test_pingan_hids_preserves_parent_pid_without_inventing_parent_name() -> None:

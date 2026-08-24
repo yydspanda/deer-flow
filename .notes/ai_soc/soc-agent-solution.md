@@ -921,17 +921,19 @@ export SOC_ROLE_VERIFIER_MODEL=deepseek-v4-pro
 export SOC_ROLE_VERIFIER_MIN_CONFIDENCE=0.35
 ```
 
-`soc-analysis-v35` asks the model for compact `soc.analysis_model_output.v4`: verdict, confidence,
+`soc-analysis-v37` asks the model for compact `soc.analysis_model_output.v4`: verdict, confidence,
 summary, reason, recommendation, request-local decision aliases such as `E-001`, and optional
 `S/A/M/C/T-001` aliases. Stable trust/method/reference rules stay in the system message; the bounded
 alert context comes first in the user message, while the task, exact response shape, and final checklist
 remain at the tail. Scenario/direction/role sections use exact key contracts, and role objects copy only
 the selected catalog item's `evidence_ref` into `entity_ref`. The Prompt Builder selects exactly one
-complete machine-validated synthetic example (`network_roles`, `non_network`, or `conflicted`) and
+complete machine-validated synthetic shape example (`context_memory`, `network_roles`, `non_network`,
+or `conflicted`) and
 records `prompt_example_id`; example-only `EX-*` references are forbidden in the response. It does not
 allow example verdict/scenario/direction/role/confidence/action values to substitute for current-alert
-analysis, does not use incomplete pseudo-examples or inject all examples into every request, and never
-asks the model to copy long stable hash IDs. Runtime restores
+analysis and never asks the model to copy long stable hash IDs. A separate compact calibration block
+balances false-positive, true-positive, context-only transfer/non-transfer, and later tenant disposition
+semantics; these are decision examples rather than alternate response schemas. Runtime restores
 each alias through the frozen one-to-one request map before validation, then materializes stable
 references, exact evidence path/value tuples and core reasoning `R-00`. Stable IDs remain the only
 persistence/Grounding/replay identity; exact alias restoration is normal hydration and unknown aliases
@@ -1200,7 +1202,7 @@ mutation-audit boundaries.
 | External system query / 外部系统查询 | MCP or action adapter | Asset ownership, threat-intel reputation, governed security tags |
 | Alert-native endpoint/host evidence / 告警原生终端与主机证据 | Normalizer + bounded evidence | Process tree, command line, login user, host events carried by EDR/HIDS alerts |
 | Governed operational fact / 有治理的运营事实 | Governed context registry + typed source adapter | Exercise participant, approved scanner campaign, maintenance window, asset state |
-| Reviewed tenant-static knowledge / 已评审租户静态知识 | Versioned tenant knowledge profile -> bounded `C-*` | Internal network ownership, application/platform identity, naming convention, collection-point caveat |
+| Reviewed tenant-static knowledge / 已评审租户静态知识 | Versioned tenant knowledge profile -> bounded `C-*` | Internal network ownership, application/platform identity, naming convention, collection-point caveat, reviewed first-alert behavior playbook |
 | Reusable historical lesson / 可复用历史经验 | Memory admission -> candidate -> confirmed `M-*` | Reviewed direction correction for a recurring behavior |
 | Vendor field mapping / 字段映射 | Normalizer adapter | PingAn `zeusRawLogs[].message` mapping |
 | Repeated operational conclusion / 历史处置经验 | Memory candidate then confirmed memory | This rule often flips attacker/victim direction under condition X |
@@ -1332,6 +1334,20 @@ Current contract:
 
 - Read-only investigation actions continue to produce `InvestigationEvidence`; they are not this
   response-automation authority.
+- Analysis-time Memory relevance and post-analysis Memory authority are separate. Every retrieved
+  `M-*` may carry a bounded `AnalysisMemoryContextComparison` containing exact shared facets,
+  current-only facets, Memory-only facets, applicability gaps, exclusions, and one explicit use mode:
+  `directive_applicable`, `exact_context`, or `context_only`.
+- `context_only` means that no deterministic `SocMemoryDecisionDirective` may be applied. It does
+  **not** mean that the reviewed lesson is irrelevant: the LLM may use it in the immutable Base
+  Decision after comparing the current behavior with the lesson's applicability, generalization,
+  and invalidation boundaries. A different IP, host, or account alone must not force
+  `suspicious`; a changed service, vulnerability, behavior family, execution result, authorization
+  scope, or explicit invalidation condition may block transfer.
+- The absence of a Directive or any Memory is not a verdict. The analyzer must still choose the best
+  supported Base verdict from current evidence, generic Skill guidance, reviewed adapter semantics,
+  and selected tenant knowledge. `suspicious` is a positive conclusion, not a fallback for missing
+  optional enrichment.
 - `AnalysisRun.decision` remains immutable. Optional reviewed `SocMemoryDecisionDirective` produces an
   append-only effective-decision transition after exact version/content/facets identity validation;
   ordinary Memory text cannot do so, and no Memory directly
@@ -1851,10 +1867,11 @@ flowchart TD
     G -->|"enable: reason + expected version<br/>valid-until + review period"| P["✅ Governed activation<br/>CAS + mutation audit"]
     G -->|"disable"| NO["🚫 retrieval disabled"]
     P --> RP{"🔎 Retrieval policy<br/>confirmed + current activation<br/>review current + budget + match"}
-    RP -->|"eligible"| CTX["📚 M-* / Investigation Context<br/>free text = reasoning only"]
+    RP -->|"eligible"| CTX["📚 M-* + typed comparison<br/>shared / delta / invalidation"]
+    CTX --> BA["🧠 Base analysis contribution<br/>semantic reasoning only"]
     CTX --> TD{"📎 Reviewed typed directive<br/>exact version + score + facets?"}
     TD -->|"yes"| TR["🔁 Effective Decision Transition<br/>before / after"]
-    TD -->|"no"| RO["🧠 Reasoning context only"]
+    TD -->|"no"| RO["📌 No deterministic transition<br/>Base contribution retained"]
     TR --> U["🧾 Memory Use<br/>exact record/version/match/effect"]
     RO --> U
     U --> F["👤/🔄 Final Outcome Feedback<br/>analyst correction / external disposition"]
@@ -1864,6 +1881,41 @@ flowchart TD
     H -->|"other contradiction"| RR["📝 Revision proposal<br/>human review"]
     RP -->|"direct flag / expired / overdue / weak"| NO
 ```
+
+The comparison is generated by deterministic Runtime code from the resolved tenant Profile's
+canonical facets; the LLM does not invent match metadata. The model sees the comparison and the
+reviewed Business Lesson, then cites the exact `M-*` alias only when it actually contributes to its
+Base Decision. Runtime restores stable Memory IDs and persists both the model contribution and any
+later directive transition. This preserves four independently reviewable layers:
+
+```text
+Base Decision (LLM + current evidence + C/S/M context)
+  -> Memory Decision (optional exact typed directive)
+  -> Tenant Decision (optional governed operational policy)
+  -> Effective Decision (current auditable result)
+```
+
+Old PingAn prompts mixed these concerns. Their stable organization facts become selected `C-*`
+tenant knowledge; reusable investigation method becomes vendor-neutral Skills; reviewed repeated
+case conclusions become `M-*` Business Lessons; operational ignore/transfer rules become PingAn
+Tenant Policy; field aliases stay in the PingAn Adapter. Copying the whole legacy prompt into Memory
+or the generic analyzer would erase these authority and tenant-isolation boundaries.
+
+A reviewed tenant playbook is the bounded exception for a first-seen alert that has no usable
+Memory: it must select only canonical typed multi-signal evidence, state both its positive conditions
+and current-event invalidation conditions, and project `decision_authority=none`. It may support the
+LLM Base Decision as `C-*`; it cannot create a Memory Decision, operational ignore/transfer, or action
+authorization. The PingAn endpoint-playbook Profile covers reviewed group-policy login, connected SCCM
+deployment, PyCharm/WMIC read-only inventory, interactive Notepad++ mapping and exact `net share`
+listing patterns, plus separately reviewed FDMEE UNC event scripts, the Office Assistant-specific NSIS update
+chain and MSI Startup shortcut creation. The last two use canonical direct-parent and single-file-observation
+constraints so Runtime cannot assemble a benign pattern from unrelated process and file paths. Process fragments
+can join only inside one canonical event scope when they form a
+connected component through the same normalized process name plus the same non-null PID; exact
+read-only commands do not match mutating variants. The complete
+source-to-destination status and blocked/review-required cases live in
+`.notes/ai_soc/capabilities/pingan/legacy-knowledge-migration-matrix.md`. None of these rules exposes
+PingAn raw field aliases to generic Runtime or grants disposition/action authority.
 
 ### 10.3 Memory Center / 运营视图
 
@@ -2171,7 +2223,7 @@ Current real-alert Adapter coverage:
 | --- | --- | --- |
 | Raw field quirks, `zeusRawLogs[].message` preference | PingAn normalizer adapter | Vendor-specific parsing belongs at edge |
 | General investigation reasoning | `skills/public/soc-*` | Reusable across customers |
-| Stable reviewed network/domain/application/platform knowledge | Versioned PingAn knowledge profile -> `C-*` | Canonical typed selectors, tenant scope, source/review lineage and no decision authority; not public prompt or Memory spam |
+| Stable reviewed network/domain/application/platform or first-alert playbook knowledge | Versioned PingAn knowledge profile -> `C-*` | Canonical typed selectors, tenant scope, source/review lineage, explicit invalidation and no decision authority; not public prompt or Memory spam |
 | Event-time authorization, exercise participant or maintenance state | Governed Context Fact | Dynamic lifecycle, not static profile or Memory |
 | Remote lookup capability | Mock now, real MCP/action later | External capability boundary |
 | Historical false-positive/true-positive lessons | Memory candidate | Must be reviewed |

@@ -1,6 +1,6 @@
 # PingAn Security Log Analysis Skill Audit
 
-> Updated: 2026-08-13
+> Updated: 2026-08-24
 > Source: `validation/original_works/security-log-analysis/security-log-analysis/`
 > Source ID: `PA-SKILL-DEMO-20260805`
 
@@ -79,11 +79,16 @@ The following candidate groups are discovered but are not automatically activate
 | `dev/stg/test` handling suggestions | PingAn Policy Skill / governed context | environment name remains a hint; no benign/exempt disposition without exact governed confirmation or another reviewed rule |
 | historical APT/EDR/HIDS cases | desensitized labeled eval corpus | analyst truth, rationale, corpus manifest, supersession lineage |
 
-A deliberately reviewed static subset is now active through three tenant-scoped Profiles: network/direction,
-platform context, and internal-system identity. The exact accepted facts, typed selectors, superseded topic
-heuristic and rejected broad rules are recorded in `tenant-static-knowledge-migration.md`. Dynamic scanners,
-authorization, maintenance and historical dispositions remain outside these Profiles. None of these values is
-duplicated into public Skills.
+A deliberately reviewed static subset is now active through four tenant-scoped Profiles: network/direction,
+platform context, internal-system identity, and a separately versioned endpoint-playbook Profile. The endpoint
+Profile uses canonical multi-signal selectors for group-policy login, connected SCCM deployment, PyCharm/WMIC
+read-only inventory, interactive Notepad++ mapping, exact `net share` listing, FDMEE event scripts, the
+Office Assistant-specific NSIS update chain and the MSI Startup shortcut pattern; every item grants no directive or
+action authority. Office Assistant is deliberately separate from the historical agent-updater case, and none of
+`cscript`, NSIS or `msiexec` is treated as broadly benign. The accepted facts and rejected broad rules are recorded in
+`tenant-static-knowledge-migration.md`; the item-by-item source migration status is
+`legacy-knowledge-migration-matrix.md`. Dynamic scanners, authorization, maintenance and historical dispositions
+remain outside these Profiles. None of these values is duplicated into public Skills.
 
 ## 6. Rejected Direct Migrations
 

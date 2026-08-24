@@ -11,6 +11,7 @@ from typing import Any
 from soc_agent.contracts import (
     ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
     AlertSourceType,
+    AnalysisMemoryUseMode,
     LLMAnalysisRequest,
     RoleCoherenceStatus,
     Verdict,
@@ -21,7 +22,7 @@ from soc_agent.model_reference_aliases import (
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v35"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v37"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -32,7 +33,115 @@ _NETWORK_SOURCE_TYPES = frozenset(
         AlertSourceType.F5,
     }
 )
+_MEMORY_REASONING_GUIDANCE = """<memory_reasoning_rules>
+- M-* is reviewed historical experience, not current-alert evidence; current-event claims still require E-* references.
+- memory_comparison is deterministic: shared_facets are exact common conditions; current_only_facets and memory_only_facets are deltas; excluded_facet_hits and lesson invalidation conditions are blockers.
+- context_only forbids a deterministic Memory directive, not semantic use.
+  If core behavior and applicability conditions match, deltas are non-material, and no invalidation condition appears, M-* may support any Base verdict. Cite it in decision_context_refs when used.
+- Material changes in service, vulnerability, behavior family, execution result, or authorization scope block conclusion transfer. Explain the difference and decide from current evidence.
+- directive_applicable only permits a later Runtime stage to apply a reviewed directive. The analyzer still produces an independent Base Decision and never authorizes an action.
+- Never choose suspicious only because Memory is context-only, lacks directive authority, or has another host/account/IP.
+- Keep technical detection truth separate from operational disposition. Authorized real activity can remain true_positive for later Tenant Policy handling; use false_positive when the detector interpretation itself is wrong.
+</memory_reasoning_rules>
+
+<decision_calibration_examples trust="synthetic_reasoning_only">
+- These compact examples calibrate verdict meaning; their EX-* references and facts are synthetic and must never be copied.
+- suspicious is a supported positive judgment, not the default for missing optional enrichment or absent Memory.
+[
+  {
+    "case": "false_positive_without_memory",
+    "observed": "The current process chain, arguments, service identity, and result all establish a normal reviewed software workflow; no contradictory current fact exists.",
+    "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-C-001"]}
+  },
+  {
+    "case": "true_positive_without_memory",
+    "observed": "The current payload and returned effect establish the detector-described exploit behavior even though no Memory or optional tool enrichment exists.",
+    "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": []}
+  },
+  {
+    "case": "context_only_generalizes",
+    "observed": "Current and reviewed Memory share detector, service, protocol, and core behavior; only host/IP differs and no invalidation condition appears.",
+    "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001"], "decision_context_refs": ["EX-M-001"]}
+  },
+  {
+    "case": "context_only_does_not_generalize",
+    "observed": "Some facets match, but the current alert adds a different service, exploit payload, malicious result, authorization scope, or explicit invalidation condition.",
+    "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-M-001"]}
+  },
+  {
+    "case": "true_positive_with_later_benign_disposition",
+    "observed": "Current evidence proves the behavior and governed tenant context proves authorization.",
+    "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001"], "decision_context_refs": ["EX-C-001"]},
+    "later_runtime_stage": "Tenant Policy may choose a benign operational disposition without rewriting detection truth."
+  }
+]
+</decision_calibration_examples>"""
 _ANALYSIS_OUTPUT_EXAMPLES: dict[str, dict[str, Any]] = {
+    "context_memory": {
+        "schema_version": ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
+        "verdict": "false_positive",
+        "confidence": 0.86,
+        "summary": "当前行为与已复核的内部服务误触发模式一致，新增端点差异不改变其业务语义。",
+        "decision_evidence_refs": ["EX-E-001", "EX-E-002"],
+        "decision_context_refs": ["EX-M-001"],
+        "scenario_assessments": [
+            {
+                "scenario_name": "内部服务流量误触发检测",
+                "scenario_key": "reviewed_internal_service_false_positive",
+                "is_primary": True,
+                "origin": "hybrid",
+                "confidence": 0.86,
+                "activity_stage": "detection_hit",
+                "evidence_refs": ["EX-E-001", "EX-E-002"],
+                "context_refs": ["EX-M-001"],
+                "rationale": "当前会话与已复核经验共享检测身份、核心服务和行为族，差异仅为不影响语义的端点值，且没有命中经验失效条件。",
+                "competing_explanations": ["若当前出现不同服务、利用载荷或失陷结果，则该经验不再适用"],
+            }
+        ],
+        "network_direction": {
+            "status": "observed",
+            "observed_flow": "source_to_destination",
+            "boundary_direction": "internal_to_internal",
+            "semantic_direction": "内部端点访问已复核的内部服务",
+            "connection_initiator_ref": "EX-E-001",
+            "intermediaries": [],
+            "confidence": 0.84,
+            "evidence_refs": ["EX-E-001", "EX-E-002"],
+            "context_refs": ["EX-M-001"],
+            "rationale": "当前告警给出了会话方向，已复核经验只用于解释该方向对应的业务语义。",
+            "evidence_gaps": [],
+        },
+        "role_adjudication": {
+            "status": "tentative",
+            "roles": [
+                {
+                    "role": "initiator",
+                    "entity_ref": "EX-E-001",
+                    "status": "resolved_from_evidence",
+                    "confidence": 0.9,
+                    "evidence_refs": ["EX-E-001"],
+                    "context_refs": [],
+                    "rationale": "当前告警明确声明该端点为会话发起方。",
+                },
+                {
+                    "role": "responder",
+                    "entity_ref": "EX-E-002",
+                    "status": "resolved_from_evidence",
+                    "confidence": 0.9,
+                    "evidence_refs": ["EX-E-002"],
+                    "context_refs": [],
+                    "rationale": "当前告警明确声明该端点为会话响应方。",
+                },
+            ],
+            "conflicts": [],
+            "evidence_gaps": [],
+            "rationale": "会话角色由当前事实确定；Memory 只解释业务语义，不替代当前角色事实。",
+        },
+        "evidence_gaps": [],
+        "manual_checks": [],
+        "reason": "该 M-* 虽为 context-only，但确定性比较显示核心条件相同且没有实质差异或失效命中，因此可作为受治理经验支持当前 Base false_positive 判断；无确定性 Directive 权限不等于经验无效。",
+        "recommended_action": "记录本次误触发结论，不执行破坏性响应；若后续出现失效条件则重新研判。",
+    },
     "network_roles": {
         "schema_version": ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
         "verdict": "suspicious",
@@ -277,6 +386,8 @@ def _select_analysis_output_example(request: LLMAnalysisRequest) -> str:
     role_coherence_status = request.fact_reconstruction.role_coherence.status
     if request.conflict_count > 0 or role_coherence_status is RoleCoherenceStatus.CONFLICTED:
         return "conflicted"
+    if any(item.memory_comparison is not None and item.memory_comparison.use_mode is AnalysisMemoryUseMode.CONTEXT_ONLY for item in request.context_catalog):
+        return "context_memory"
     network = request.canonical_entities.network
     if request.source.source_type in _NETWORK_SOURCE_TYPES or any(
         (
@@ -382,12 +493,15 @@ def _user_prompt(
             "Produce open-vocabulary scenario assessments, distinguish activity stage from verdict, and retain plausible competing explanations.",
             "</task>",
             "",
+            _MEMORY_REASONING_GUIDANCE,
+            "",
             "<analysis_order>",
             "1. Establish evidence quality and the trusted detector/provider assertions.",
             "2. Determine the primary and competing scenarios and their activity stages.",
             "3. Determine observed flow, organization-boundary direction, and semantic direction.",
             "4. Adjudicate typed semantic roles without equating source/destination with attacker/victim.",
             "5. Select the verdict, confidence, core evidence/context references, gaps, checks, and safe recommendation.",
+            "   For every relevant M-* item, compare shared_facets with current_only_facets/memory_only_facets and test the lesson's boundaries before deciding whether to cite it.",
             "6. Validate the final JSON against the response shape and checklist below.",
             "</analysis_order>",
             "",

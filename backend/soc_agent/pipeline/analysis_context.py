@@ -298,6 +298,16 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
                     "label": item.label,
                     "source_id": item.source_id,
                     "summary": item.summary,
+                    **(
+                        {
+                            "memory_comparison": item.memory_comparison.model_dump(
+                                mode="json",
+                                exclude_none=True,
+                            )
+                        }
+                        if item.memory_comparison is not None
+                        else {}
+                    ),
                 }
                 for item in request.context_catalog
             ],

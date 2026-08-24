@@ -831,6 +831,7 @@ def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
                 "true_positive",
                 "--reason",
                 "Analyst confirmed malicious follow-up activity.",
+                "--promote-to-memory",
                 "--database-url",
                 database_url,
             ]

@@ -8,6 +8,8 @@ from typing import Any, Literal, Protocol
 from soc_agent.contracts import (
     AnalysisContextCatalogItem,
     AnalysisContextReferenceKind,
+    AnalysisMemoryContextComparison,
+    AnalysisMemoryUseMode,
     LLMAnalysisRequest,
     SocMemoryApplicabilityStatus,
     SocMemoryDecisionImpact,
@@ -27,6 +29,31 @@ logger = logging.getLogger(__name__)
 
 MEMORY_RETRIEVAL_POLICY_V1 = "soc.memory_retrieval_policy.v1"
 MEMORY_RETRIEVAL_POLICY_V2 = "soc.memory_retrieval_policy.v2"
+_MAX_MODEL_COMPARISON_FACETS = 24
+_MAX_MODEL_COMPARISON_VALUES = 8
+_MAX_MODEL_COMPARISON_VALUE_CHARS = 256
+_MODEL_COMPARISON_FACET_PRIORITY = (
+    "detection_key",
+    "rule_code",
+    "rule_name",
+    "detection_signature",
+    "environment",
+    "source_type",
+    "source_system",
+    "product",
+    "category",
+    "scenario_key",
+    "behavior_strength",
+    "attack_behavior_family",
+    "network_service",
+    "vulnerability_id",
+    "behavior_component_strong",
+    "behavior_component_core",
+    "behavior_component",
+    "role_entity",
+    "entity",
+    "behavior_fingerprint",
+)
 
 
 class MemoryRetrievalPort(Protocol):
@@ -70,7 +97,14 @@ class ConfirmedMemoryAnalysisRequestEnricher:
             warning = f"confirmed memory retrieval unavailable ({type(exc).__name__})"
             return request.model_copy(update={"warnings": _dedupe_strings([*request.warnings, warning])})
 
-        memory_items = [_memory_context_item(match, retrieval_policy_version=result.policy_version) for match in result.matches]
+        memory_items = [
+            _memory_context_item(
+                match,
+                query_facets=result.query.facets,
+                retrieval_policy_version=result.policy_version,
+            )
+            for match in result.matches
+        ]
         return request.model_copy(update={"context_catalog": _dedupe_context_items([*request.context_catalog, *memory_items])})
 
 
@@ -175,6 +209,7 @@ def _match_projection(match: SocMemoryMatch) -> dict[str, Any]:
 def _memory_context_item(
     match: SocMemoryMatch,
     *,
+    query_facets: dict[str, list[str]],
     retrieval_policy_version: str,
 ) -> AnalysisContextCatalogItem:
     record = match.record
@@ -184,8 +219,14 @@ def _memory_context_item(
     directive_applicable = bool(
         record.decision_directive is not None and record.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION and record.applicability is not None and applicability_status is SocMemoryApplicabilityStatus.APPLICABLE
     )
+    comparison = _memory_context_comparison(
+        match,
+        query_facets=query_facets,
+        context_only=context_only,
+        directive_applicable=directive_applicable,
+    )
     if context_only:
-        projected_summary = (f"[Context only / 仅作相似模式参考：该 Memory 不具备当前告警的确定性改判权限]\n{projected_summary}")[:4000]
+        projected_summary = (f"[Context-only reviewed experience / 受治理相似经验：可在比较共同条件、差异和失效条件后参与 Base Decision；不可直接应用确定性 Memory Directive 或授权动作]\n{projected_summary}")[:4000]
     projection_hash = stable_hash(
         {
             "memory_id": match.memory_id,
@@ -193,6 +234,7 @@ def _memory_context_item(
             "summary": projected_summary,
             "content_hash": match.content_hash,
             "facets_hash": match.facets_hash,
+            "memory_comparison": comparison.model_dump(mode="json"),
         }
     )
     return AnalysisContextCatalogItem(
@@ -202,6 +244,7 @@ def _memory_context_item(
         source_id=f"{match.memory_id}@v{match.version}",
         summary=projected_summary,
         content_hash=projection_hash,
+        memory_comparison=comparison,
         metadata={
             "memory_id": match.memory_id,
             "memory_version": match.version,
@@ -219,6 +262,72 @@ def _memory_context_item(
             "decision_directive_applicable": directive_applicable,
         },
     )
+
+
+def _memory_context_comparison(
+    match: SocMemoryMatch,
+    *,
+    query_facets: dict[str, list[str]],
+    context_only: bool,
+    directive_applicable: bool,
+) -> AnalysisMemoryContextComparison:
+    record_facets = _normalized_facets(match.record.facets)
+    current_facets = _normalized_facets(query_facets)
+    shared: dict[str, list[str]] = {}
+    current_only: dict[str, list[str]] = {}
+    memory_only: dict[str, list[str]] = {}
+    for key in _ordered_comparison_keys(set(record_facets) | set(current_facets)):
+        record_values = set(record_facets.get(key, []))
+        current_values = set(current_facets.get(key, []))
+        _add_bounded_facet(shared, key, record_values & current_values)
+        _add_bounded_facet(current_only, key, current_values - record_values)
+        _add_bounded_facet(memory_only, key, record_values - current_values)
+
+    report = match.applicability_report
+    use_mode = AnalysisMemoryUseMode.DIRECTIVE_APPLICABLE if directive_applicable else AnalysisMemoryUseMode.CONTEXT_ONLY if context_only else AnalysisMemoryUseMode.EXACT_CONTEXT
+    return AnalysisMemoryContextComparison(
+        use_mode=use_mode,
+        applicability_status=report.status if report is not None else None,
+        decision_directive_applicable=directive_applicable,
+        shared_facets=shared,
+        current_only_facets=current_only,
+        memory_only_facets=memory_only,
+        matched_required_facets=(_bounded_facets(report.matched_required_facets) if report is not None else {}),
+        missing_required_facet_keys=(report.missing_required_facet_keys[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else []),
+        excluded_facet_hits=(_bounded_facets(report.excluded_facet_hits) if report is not None else {}),
+        reason_codes=(report.reason_codes[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else []),
+    )
+
+
+def _normalized_facets(facets: dict[str, list[str]]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    for raw_key, raw_values in facets.items():
+        key = str(raw_key).strip()
+        if not key:
+            continue
+        values = sorted({str(value).strip()[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for value in raw_values if str(value).strip()})
+        if values:
+            normalized[key] = values
+    return normalized
+
+
+def _ordered_comparison_keys(keys: set[str]) -> list[str]:
+    priority = {key: index for index, key in enumerate(_MODEL_COMPARISON_FACET_PRIORITY)}
+    return sorted(keys, key=lambda key: (priority.get(key, len(priority)), key))[:_MAX_MODEL_COMPARISON_FACETS]
+
+
+def _add_bounded_facet(
+    target: dict[str, list[str]],
+    key: str,
+    values: set[str],
+) -> None:
+    if values:
+        target[key] = sorted(values)[:_MAX_MODEL_COMPARISON_VALUES]
+
+
+def _bounded_facets(facets: dict[str, list[str]]) -> dict[str, list[str]]:
+    normalized = _normalized_facets(facets)
+    return {key: normalized[key][:_MAX_MODEL_COMPARISON_VALUES] for key in _ordered_comparison_keys(set(normalized))}
 
 
 def _bounded_memory_summary(summary: str, content: str) -> str:

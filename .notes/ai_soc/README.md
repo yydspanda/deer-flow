@@ -31,6 +31,7 @@
 | 审阅旧方向 Prompt 如何迁成 `S/A/C/M/T/Policy`，以及 Runtime 如何裁决 attacker/victim | `capabilities/pingan/network-direction-knowledge-migration.md` | `soc-agent-solution.md` Section 5.6 |
 | 审阅主分析后的条件式方向/角色反证、触发条件和失败关闭语义 | `alert-lifecycle-flow.md` 的 `role_verification_gate` | `soc-agent-solution.md` 的 AnalysisResult.v4 / conditional verification 章节 |
 | 审阅同事提供的 PingAn `security-log-analysis` Skill Demo | `capabilities/pingan/security-log-analysis-skill-audit.md` | `capabilities/pingan/onboarding.md` 的 PA-13 |
+| 核对旧 Zeus / Security Log Analysis 经验哪些已迁移、拒绝迁移或仍待业务确认 | `capabilities/pingan/legacy-knowledge-migration-matrix.md` | `capabilities/pingan/tenant-static-knowledge-migration.md` |
 | 审阅 PingAn 处置策略来源、200/非200语义、确定性规则与 Policy Skill 分工 | `capabilities/pingan/disposition-policy-extraction.md` | `soc-agent-solution.md` Section 7.4.3 |
 | 重跑 PingAn 租户处置策略与四阶段端到端验证 | `validation/compact_zeus/e2e/README.md` | 本地 `e2e-ten-pingan-policy-current/SUMMARY.md` |
 | 核对旧 Zeus `flows/` 的研判能力迁到哪里、哪些明确不迁 | `capabilities/pingan/legacy-zeus-capability-extraction.md` | `capabilities/pingan/knowledge-decomposition.md` |
@@ -71,6 +72,7 @@ ai_soc/
 │       ├── onboarding.md              # 平安经验输入与能力卡流程
 │       ├── knowledge-decomposition.md # 平安经验拆分规则
 │       ├── legacy-zeus-capability-extraction.md # 旧 Zeus flows 研判能力去向与 D7/D8 验证边界
+│       ├── legacy-knowledge-migration-matrix.md # 旧经验逐项迁移状态、语料证据和人工确认项
 │       ├── disposition-policy-extraction.md # 平安处置经验来源、分层归属、配置与回放边界
 │       ├── network-direction-knowledge-migration.md # 旧方向知识的 S/A/C/M/T/Policy 迁移与角色裁决边界
 │       ├── capability-cards.md        # PingAn capability card 台账
