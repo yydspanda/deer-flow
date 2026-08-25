@@ -1,0 +1,61 @@
+name: SOC Project Governance
+
+on:
+  push:
+    branches: ["main", "yyds-dev"]
+    paths:
+      - ".notes/ai_soc/progress.md"
+      - ".notes/ai_soc/delivery-roadmap.md"
+      - ".notes/archive/ai_soc/progress/**"
+      - "scripts/check_soc_progress.py"
+      - "scripts/check_upstream_drift.py"
+      - ".github/workflows/soc-project-governance.yml"
+  pull_request:
+    paths:
+      - ".notes/ai_soc/progress.md"
+      - ".notes/ai_soc/delivery-roadmap.md"
+      - ".notes/archive/ai_soc/progress/**"
+      - "scripts/check_soc_progress.py"
+      - "scripts/check_upstream_drift.py"
+      - ".github/workflows/soc-project-governance.yml"
+  schedule:
+    - cron: "17 1 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  progress-ledger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate SOC progress ledger
+        run: python scripts/check_soc_progress.py --github-annotations
+
+  upstream-drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch DeerFlow upstream
+        run: |
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/bytedance/deer-flow.git
+          git fetch --no-tags upstream main
+
+      - name: Check ahead and behind counts
+        run: >-
+          python scripts/check_upstream_drift.py
+          --upstream-ref upstream/main
+          --max-behind 10
+          --github-summary

@@ -138,6 +138,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 | `PI-03` | Labels, learning and calibration / 标签、学习与校准 | **PI-03A/B/C Simulation Done / Real Feedback Debt Open**: corpus、统一质量 replay 和反馈型 Skill backlog 均已走通；真实人工标签和 source classifier 仍开放 | 仿真可以验证治理代码，但不能生成真实准确率声明；任何 profile/Skill/parser promotion 仍需人工批准与真实标签 |
 | `PI-04` | Operations and security / 运维与安全 | **PI-04A/B Done / Real Telemetry Debt Open**: Snapshot CLI/API 与薄 Web 已完成；本地/仿真数据性质、无 overall health 和 `not_measured` 缺口显式可见 | Web 只消费冻结 snapshot；Playwright fixture 不冒充 deployed Gateway 或真实 lag/算力/Prometheus/SLO |
 | `PI-05` | Governed rollout / 受治理上线 | **PI-05A/B Simulation Done / PI-05C Real Debt Open**: rollout rehearsal 与五组件 Simulation Completion Gate 均已完成；真实控制器不在外网伪造 | completion report 必须保持 7 个 real gate 为 open、真实 transition/effect 为 0、`pilot_ready=false`、`production_ready=false`；只有 PI-05C 的真实环境证据可推进 stage |
+| `PI-06` | Delivery governance / 交付治理 | **Done 2026-08-26**: 活动进度台账、月度归档、实验 manifest、Roadmap 引用和 upstream 漂移检查已机器化 | `progress.md` 只保留唯一当前指针和最多 10 条近期记录；CI 阻止未知 task、重复 Current/In Progress、缺失实验元数据和长期 upstream 落后 |
 
 ### 6.1 PI-01 Execution Order / 真实能力与调查主线
 
@@ -240,6 +241,13 @@ PI-03 仿真产品轨已完成 A/B/C。每个切片都先用明确的 `simulatio
 PI-05B 的可复跑命令和 artifact 生成顺序见
 `backend/samples/rollout/README.md`。该 Gate 结束产品仿真实现轨，不会自动切换到 PI-05C；只有真实环境输入到位后才恢复对应 integration debt。
 
+### 6.4 Delivery And Fork Governance / 交付与 Fork 治理
+
+| ID | Work / 工作 | Status / 状态 | Gate / 门槛 |
+|---|---|---|---|
+| `UP-SYNC` | Recurring upstream synchronization / 周期性上游同步 | **Recurring; latest Done 2026-08-26**: 已合并 `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c` | 每周测量 ahead/behind；behind 超过 10 个提交时 CI 告警并要求同步或记录显式兼容决策；合并冲突必须保留上游通用层与 SOC 增量层边界 |
+| `PI-06` | Progress and experiment governance / 进度与实验治理 | **Done 2026-08-26** | 活动文件不超过 240 行、只有一个当前 Stage/task、近期记录 task 均存在于 Roadmap、实验记录具备完整可复现 manifest、历史按月归档 |
+
 ### PI Gate / 生产集成门禁
 
 Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关单和高风险自动处置仍需独立治理审批。
@@ -275,71 +283,12 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 11. 任何 PingAn DEV 依赖先交付显式 simulation implementation + evidence；仿真 gate 通过后产品完成轨可以继续，真实 `mocked=false` gate 进入独立债务轨，不得用它反向阻塞无关产品切片。
 12. 仿真只能覆盖已经冻结的 contract；无稳定 contract 的能力保持 data-gated，不用 mock 猜测。所有报告同时给出 simulation status 和 real-integration status，禁止把两者压成一个 Done。
 13. Transfer archive / 迁移包不是切片完成产物。只有用户明确要求打包或已进入实际内网交接窗口时才生成；普通实现、仿真 gate 或阶段报告完成后不得自动打包。过时 archive 立即清理，源码与可复现脚本才是长期交付基础。
+14. `progress.md` 只保留唯一当前指针和最多 10 条近期记录；完成项按月归档，不再复制本 Roadmap 的能力长表。
+15. 模型、Prompt/config、语料、性能和对比实验必须附结构化 `soc-experiment` manifest；没有 upstream SHA、模型、config/data hash、硬件、命令和指标的结果不能成为 Gate 证据。
+16. `python scripts/check_soc_progress.py` 是本地与 CI 共用门禁；每周 upstream drift 检查 behind 上限为 10，超过后必须同步或记录显式兼容决策。
 
-## 9. Current Execution Pointer / 当前执行指针
+## 9. Execution State Ownership / 执行状态归属
 
-```text
-Completed:    BD - Boss Demo v0.1 (BD Gate passed 2026-07-18)
-Completed:    AA - SOC Alpha Completeness Audit (AA Gate passed 2026-07-18; AUD-01..03 done)
-Completed:    BG - Close Blocking Gaps (Alpha Gate passed 2026-07-20)
-Completed:    BG-P0-01 - approval integrity and L3 authorization (AC-22, AC-34)
-Completed:    BG-P0-02 - transactional mutation and durable audit (AC-16, AC-21)
-Completed:    BG-P1-01 - versioned ingestion and feedback (AC-04, AC-08)
-Completed:    BG-P1-02 - API contract stabilization (AC-11)
-Completed:    BG-P1-03 - Runtime recovery and decision provenance (AC-13, AC-17)
-Completed:    BG-P1-04 - Governed memory activation (AC-39)
-Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
-Completed:    BG-03 - Alpha readiness package and scoped accountable approval
-Current Stage: PI - Real Data & Production Integration
-Current:      PI - external product-complete; no additional mock-only product slice is open
-Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
-Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
-Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
-Completed:    PI-01 Checkpoint D-3 - alert 1965449 fact reconstruction and role-resolution review
-Completed:    PI-01 Checkpoint D-4 - alert 1965449 bounded analysis input and EvidenceCoverageReport
-Completed:    PI-01 Checkpoint D-5 - alert 1965449 bounded Skill-package context (3 selected, 387 estimated tokens)
-Completed:    PI-01 Checkpoint D-6 - 212-row Skill route coverage (212/212 processed, 0 failed/missed/misrouted)
-Completed:    PI-01 Checkpoint D-7 - live AnalysisResult.v2 and typed scenario contract (deepseek-v4-pro, no repair)
-Completed:    PI-01 Checkpoint D-8 - current production Grounding lineage (5 grounded, 4 description leakage, quality blocked)
-Completed:    PI-01 Checkpoint D-9 - soc.decision_policy.v3 (degraded from ungrounded evidence, review required, no automation)
-Completed:    PI-01 Checkpoint D-10 - live deepseek-v4-pro 8-topic / 6-source Runtime matrix (10 calls, 167,042 tokens, quality findings fail closed)
-Completed:    PI-01 Checkpoint D-11/D11.1 - 212-row two-pass Runtime compatibility plus evidence-quality semantics (424 runs, 212 stable, 0 failures)
-Completed:    PI-01 Checkpoint D12-A - PingAn asset provider code + fake MCP smoke (`mocked=true`; not real-provider evidence)
-Parked:       PI-01 Checkpoint D12-B - internal real asset-provider smoke (`mocked=false` still required)
-Pending evidence: PI-01A - provider/MCP/evidence code verified externally; internal `mocked=false` smoke pending
-Pending evidence: PI-01B1 - provider/MCP/evidence code verified externally; internal expiry/schema and `mocked=false` smoke pending
-Data-gated:   PI-01B2 - no authoritative change/scanner/maintenance/exercise-roster source contract
-Data-gated:   PI-01C - no stable Zeus/ITSM source event, reason, version and ordering contract
-Completed:    PI-01D1 - versioned deterministic enrichment plan + optional Main Orchestrator bridge
-Completed:    PI-01D2 - strict enrichment composition, exact registry binding and mock/real provenance validation
-Completed:    PI-01D3 - durable investigation ledger, opt-in Kafka/internal-batch bridge, retry/recovery/replay and per-result mode enforcement
-Completed:    PI-01D4 - recomputable shadow report, deterministic investigation addendum, context/CLI/batch projections
-Completed:    PI-01E tooling - dual-mode paired gate, exact composition/action/extensions fingerprints, tenant scope, per-route result coverage and zero-side-effect validation
-Completed:    PI-01E external simulation stage 5 - same 5-row live-LLM cohort; 11 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; report explicitly cannot close real gates
-Completed:    PI-01E external simulation stage 50 - 50/50 paired completion; 157 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; no Provider hit observed and real gates remain open
-Completed:    PI-01E internal-real operator entry - static-by-default, dual-confirm live orchestration of environment/MCP preflight, isolated SQLite, paired batches and gate; no internal evidence produced externally
-Completed:    PI-01F - operator-owned per-agent middleware plus SOC Web/Gateway approval bridge; TUI keeps its outer bridge; stable server IDs and no high-risk auto-execution
-Completed:    PI-01F2 - authenticated direct Web ReviewQueue context, immutable owner-scoped thread binding, per-run fresh bounded artifact, transient middleware injection and exact assistant provenance
-Completed:    PI-01G1 - capability-oriented network/endpoint/web/email profiles, explicit root-config installer and fail-closed runtime doctor
-Completed:    PI-01G2 - lead-only bounded delegation middleware, server-owned case/Skill projection, two-distinct-specialist limit, stable lineage and advisory authority guard
-Completed:    PI-01G3 - native task-event/replay regression plus real-model NIDS network and EDR endpoint representative smoke; Provider acceptance remains false
-Completed:    PI-03F1 - explicit CLI/TUI analyst acceptance of one stable Lead Agent message -> pending review-note candidate; no automatic model-output persistence
-Completed:    PI-03F2 - authenticated Web acceptance resolves the latest terminal SOC assistant message from server-owned current checkpoint state; client sends no model text and result remains pending review
-Completed:    PI-03F3 - opt-in Kafka/batch immutable observations, strongest-dimension cohorts, canonical source-event-time windows, 5/5 thresholds, one frozen pending candidate, manual-only supersession and read-only replay
-Completed:    PI-03A simulation label foundation - five live-LLM runs prepared, sealed and verified with immutable manifest; mocked=true and no real-quality claim
-Completed:    PI-03B simulation quality gate - composed offline/scenario/correlation/manifest-bound confidence evaluation; 8/8 alerts passed and replay semantic diff is stable
-Completed:    PI-03C simulation Skill backlog - four typed synthetic feedback observations produced one versioned pending candidate; SQL/RBAC/audit/freeze/replay passed, with every mutation/activation/quality claim disabled
-Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counters, Kafka readiness projection, CLI/API
-Completed:    PI-04-B - thin Web consumer, explicit local/simulation evidence, not_measured gaps, desktop/mobile Playwright overflow and screenshot evidence
-Completed:    PI-05A - vendor-neutral rollout plan/gate/rollback contract, 16-step virtual rehearsal and stable replay; 0 real transitions/effects
-Completed:    PI-05B - five-component fail-closed completion report SCG-6EEDC5DC3417; stable replay, seven real gates open, pilot_ready/production_ready false
-Completed:    UP-01 - post-upstream compatibility gate on current HEAD: SOC/architecture 842, Lead/Subagent 387, frontend unit 1014 and browser 18 passed; network/endpoint real-model specialist smokes passed while Provider acceptance remained false
-Completed:    External Mock/transfer freeze - RID-01..10 crosswalk audited; clean-worktree gate, 30-file handoff inventory, PingAn DEV config v33 and 142-test migration/provider/batch regression passed
-Next:         At the actual handoff window, build and inspect clean-commit source/private archives; then execute RID-01..10 inside PingAn DEV without changing generic Runtime contracts
-Internal handoff: After the external deliverable is frozen and copied into PingAn DEV, close D12-B / PI-01A / PI-01B1 and the remaining RID items with `mocked=false` evidence
-Quality next: In the internal stage, run PI-03 real labeled evaluation when approved human-reviewed corpus/correlation pairs are supplied; include network direction/role calibration
-Parallel debt: Keep D12-B / PI-01A / PI-01B1 explicitly mocked and open during external development even when partial interface details are known
-Next evidence: PI-05C only after deployed telemetry, accountable owners, cohort enforcement and executable rollback exist; do not implement a disconnected fake controller
-Real Integration Debt: D12-B asset, PI-01A TI, PI-01B1 security-tag and PI-01E internal-real shadow remain open; no local transfer archive is retained or regenerated until explicit internal handoff
-Data-gated:   PI-01B2/C source contracts, real feedback-to-typed-Skill-facet classification, and real Kafka/PostgreSQL/K8s inputs remain separately parked
-```
+当前执行指针只保存在 [`progress.md`](progress.md)，本 Roadmap 不再复制数十条完成状态。这里仅拥有 Stage 顺序、task registry 和 Gate；历史完成证据按月进入 [`../archive/ai_soc/progress/`](../archive/ai_soc/progress/README.md)。
+
+`python scripts/check_soc_progress.py` 会验证活动指针与本文件一致；周期性 upstream ahead/behind 由 `.github/workflows/soc-project-governance.yml` 检查。

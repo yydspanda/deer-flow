@@ -244,11 +244,12 @@ control flow; LLMs handle bounded uncertainty; human or governed policy owns aut
 Do not change DeerFlow core for SOC behavior unless a small generic extension point is
 required and covered by upstream-facing tests.
 
-PingAn internal Apple Silicon DEV uses `scripts/soc_pingan_macos_host_dev.py` when the
-host already provides Python `3.12+`, uv, Node `22+`, the repository-pinned pnpm, nginx
-`1.23+`, and approved PingAn PyPI/NPM registries. It delegates to the normal host launcher
-with dependency sync skipped, Next.js telemetry disabled, local SQLite, and
-`LocalSandboxProvider`; Docker is not required. Its `start` command advertises detected
-private macOS LAN addresses to Next.js DEV by default so authenticated internal coworkers
-can use nginx on port `2026`; use `--local-only` to clear that allowlist. The separate
-CPython `3.12.3` offline bundle remains a fallback rather than a second Runtime path.
+`.notes/ai_soc/progress.md` owns one current Stage/task and at most 10 records; archive
+older records monthly. Experiments use the archive's `soc-experiment` manifest. Run
+`python scripts/check_soc_progress.py` after ledger/Roadmap changes; scheduled CI fails
+above 10 upstream commits behind.
+
+PingAn Apple Silicon DEV uses `scripts/soc_pingan_macos_host_dev.py` with Python `3.12+`,
+uv, Node `22+`, pinned pnpm, nginx `1.23+`, and approved registries. It runs local SQLite
+and `LocalSandboxProvider` without Docker, exposes detected private LAN addresses by
+default, and supports `--local-only`. The offline CPython bundle is only a fallback.

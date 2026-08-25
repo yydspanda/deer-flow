@@ -7,7 +7,7 @@
 | 你要做什么 | 先看 | 再看 |
 |---|---|---|
 | 与颜耀明复盘人工交接、AI自动化机会和数据治理前置要求 | `briefings/yan-yaoming-automation-review-20260814/README.md` | `audits/alpha-journey-inventory.md` 与 `integrations/mock-and-real-register.md` |
-| 判断当前在哪个交付阶段、下一阶段何时开始 | `delivery-roadmap.md` | `progress.md` 的当前执行指针 |
+| 判断当前在哪个交付阶段、正在做什么 | `progress.md` 的唯一当前指针 | `delivery-roadmap.md` 的 Stage、task 与 Gate |
 | 审阅当前代码实际接通的完整 SOC 旅程 | `audits/alpha-journey-inventory.md` | `alert-lifecycle-flow.md` |
 | 核对代码、方案、生命周期、工程契约和 Mock 台账是否一致 | `audits/alpha-consistency-audit.md` | `audits/alpha-journey-inventory.md` |
 | 查看唯一完整性矩阵、P0/P1 阻塞项和冻结实施顺序 | `audits/alpha-completeness-matrix.md` | `delivery-roadmap.md` 的 Stage 3 |
@@ -60,7 +60,7 @@ ai_soc/
 ├── alpha-gate-review.md               # 产品/SOC/安全/平台独立评审意见和正式签字表
 ├── runtime-validation-runbook.md      # Step 01-12 重跑命令、产物与最新审阅结论
 ├── soc-agent-solution.md              # 权威产品/系统方案
-├── progress.md                        # 长期进度台账和当前待办
+├── progress.md                        # 唯一当前指针和最多 10 条近期完成记录
 ├── alert-lifecycle-flow.md            # 当前端到端流程图谱
 ├── architecture/
 │   └── runtime-and-agent-architecture.md # SOC Runtime、Agent Graph、DeerFlow/Codex 对照与分享材料
@@ -113,7 +113,7 @@ ai_soc/
 | `alpha-gate-review.md` | Stage 3 四方评审意见、风险分级、PI 责任角色与具名签字记录；不拥有阶段/能力状态 | 评审建议、具名 decision、PI owner 或 release/change record 变化时更新 |
 | `runtime-validation-runbook.md` | Runtime/eval/governance 本地逐步验证命令、产物契约和审阅结果 | 验证脚本、步骤分类、样本结果或门禁语义变化时更新 |
 | `soc-agent-solution.md` | 当前权威产品/系统方案；决定做什么、为什么做 | 产品方向、架构、服务边界或入口取舍变化时更新 |
-| `progress.md` | 开发进度台账；聊天记录不算进度 | 每个可验证切片完成后更新 |
+| `progress.md` | 唯一活动执行指针；聊天记录不算进度，历史不在此累积 | task 切换或切片完成后更新；超出 10 条的完成记录按月移入 `.notes/archive/ai_soc/progress/` |
 | `alert-lifecycle-flow.md` | 当前系统完整过程说明；只写 as-is flow | 服务边界、状态流转、数据写入、命令入口变化时更新 |
 | `architecture/runtime-and-agent-architecture.md` | 解释 SOC Analysis Runtime、Agent Runtime、Agent Graph 的差异和组合方式；不拥有路线图或实现状态 | 控制流、Runtime/Agent 权限边界或 DeerFlow 装配方式发生实质变化时更新 |
 | `reporting/*` | 当前能力演示、项目介绍、技术摘要和 FAQ；只引用权威状态，不另建路线图 | 演示入口、固定案例、对外口径或能力真实性边界变化时更新 |
@@ -131,9 +131,11 @@ ai_soc/
 ## Maintenance Rules
 
 - 不新增平行版路线图；阶段顺序只改 `delivery-roadmap.md`，产品/架构方向只改 `soc-agent-solution.md`。
-- `progress.md` 当前任务必须引用 `delivery-roadmap.md` 的 task ID，未通过 Gate 不切换阶段。
+- `progress.md` 必须且只能声明一个 Current Stage 和一个 In Progress Task；task 必须存在于 `delivery-roadmap.md`，未通过 Gate 不切换阶段。
 - 不把 `progress.md` 当方案读；它只是状态和下一步台账。
-- 不从 `archive/` 推导当前路线；归档只用于追溯。
+- 不从 `archive/` 推导当前路线；月度进度归档只用于追溯，迁移前 legacy 记录不补造实验元数据。
+- 模型、Prompt/config、语料、性能或对比实验必须使用 `soc-experiment` manifest，记录 upstream commit、模型、config/data hash、硬件、命令与指标。
+- 修改 progress/Roadmap/归档后运行 `python scripts/check_soc_progress.py`；每周 upstream 漂移由 `soc-project-governance` CI 检查。
 - 不把平安 `source-docs/` 原文整体复制进 public skill、Lead Agent prompt 或 node prompt。
 - 专项文档如果改变实现顺序，必须同步更新 `soc-agent-solution.md` 和 `progress.md`。
 - 工程边界、API、事件、权限、测试规则必须同步到 `.notes/reference-index/soc-agent-engineering-contracts.md`。
