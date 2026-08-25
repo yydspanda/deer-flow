@@ -1339,6 +1339,45 @@ export interface SocCorpusWorkbenchGroup {
   memory_hit_count: number;
 }
 
+export type SocLeadershipDemoAvailability = "ready" | "drifted" | "unavailable";
+
+export interface SocLeadershipDemoTarget {
+  target_id: string;
+  label: string;
+  source_type: string;
+  expected_group_id: string;
+  actual_group_id?: string | null;
+  primary_alert_id: string;
+  rehearsal_alert_ids: string[];
+  availability: SocLeadershipDemoAvailability;
+  missing_alert_ids: string[];
+  drifted_alert_ids: string[];
+}
+
+export interface SocLeadershipDemoChapter {
+  chapter_id: string;
+  sequence: number;
+  tier: "primary" | "backup";
+  title: string;
+  objective: string;
+  presenter_note: string;
+  capabilities: string[];
+  operator_steps: string[];
+  success_cues: string[];
+  targets: SocLeadershipDemoTarget[];
+}
+
+export interface SocLeadershipDemoGuide {
+  schema_version: "soc.leadership_demo_guide.v1";
+  guide_version: string;
+  title: string;
+  purpose: string;
+  ready: boolean;
+  primary_chapter_count: number;
+  backup_chapter_count: number;
+  chapters: SocLeadershipDemoChapter[];
+}
+
 export interface SocCorpusWorkbenchState {
   schema_version: "soc.corpus_dev_workbench.v3";
   safety: {
@@ -1408,6 +1447,7 @@ export interface SocCorpusWorkbenchState {
     effective_unscored_count: number;
     effective_match_rate?: number | null;
   };
+  leadership_demo: SocLeadershipDemoGuide;
   groups: SocCorpusWorkbenchGroup[];
   alerts: SocCorpusWorkbenchAlert[];
 }

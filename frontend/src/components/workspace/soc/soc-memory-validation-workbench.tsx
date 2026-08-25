@@ -476,7 +476,9 @@ function AlertDetail({ alert }: { alert: SocMemoryWorkbenchAlert | null }) {
 
       {alert.decision_stages.length > 0 ? (
         <div className="mt-6">
-          <h3 className="text-sm font-semibold">Decision Lineage</h3>
+          <h3 className="text-sm font-semibold">
+            决策来源与演变 / Decision Lineage
+          </h3>
           <div className="bg-border mt-3 grid gap-px border md:grid-cols-2 xl:grid-cols-4">
             {alert.decision_stages.map((stage) => (
               <div
@@ -662,9 +664,9 @@ export function SocMemoryValidationWorkbench() {
         <section className="flex flex-wrap items-center justify-between gap-3 border-b bg-zinc-50 px-5 py-3 text-xs md:px-7">
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             <span>真实历史样本 · operational replay</span>
-            <span>内部 Provider · off/mock</span>
-            <span>Tenant Policy · disabled</span>
-            <span>外部动作 · disabled</span>
+            <span>内网安全能力接口 · 关闭/模拟</span>
+            <span>企业专属策略 · 关闭</span>
+            <span>外部动作 · 关闭</span>
           </div>
           <span className="font-mono">
             {state.source.file_name} · {shortHash(state.source.sha256)}

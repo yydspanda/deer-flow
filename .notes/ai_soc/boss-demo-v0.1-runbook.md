@@ -1,5 +1,9 @@
 # Boss Demo v0.1 Runbook / 老板演示手册
 
+> Historical note: 本文保留 Stage 1 单告警 Boss Demo 的历史验收记录。当前 4,343 条语料、Pattern/Memory
+> 当前完整闭环和能力演示路线请使用
+> [`reporting/capability-demo-runbook.md`](reporting/capability-demo-runbook.md)。
+
 > Delivery stage: `BD` / Stage 1  
 > Current status: `BD-01 Done`, `BD-02 Done`, `BD-03 Done`; **BD Gate Passed**  
 > Route source of truth: [`delivery-roadmap.md`](delivery-roadmap.md)

@@ -119,7 +119,7 @@ contracts
 - `core/` 是唯一 orchestration 层。Headless CLI、TUI、API、Web UI、Channels、Kafka adapter 都只能调用 core service，不能直接拼 pipeline。
 - `pipeline/` 只做纯业务步骤，不直接 import FastAPI、Kafka、Typer、SQLAlchemy、psycopg、具体 LLM SDK。
 - `db/` 只实现 repository，不承载业务决策；SQL row 和 domain/contract model 需要显式转换。
-- `demo/` 只编排现有 service/repository/actions 生成可演示数据，不直接拼接业务 view、不绕过状态机、不冒充真实集成完成。
+- `demo/` 只编排现有 service/repository/actions 或提供只读演示导航元数据，不直接拼接业务 view、不绕过状态机、不冒充真实集成完成。固定语料演示目标必须在服务端校验 `alert_id -> expected group_id`；缺失或重分组时显式 drift/fail closed。演示清单不得预写 verdict、Candidate、Memory 或动作结果。
 - `eval/` 只用于 fixture / replay / regression，不写生产状态，不作为 Web/TUI/Kafka runtime 入口。
 - `memory/` 不能绕过事实状态机写 prompt；只能通过 `MemoryStore`/`LessonStore` 协议读写。
 - `actions/` 是 action proposal、adapter registry、MCP/HTTP/vendor adapter 的唯一归属目录；根目录不保留 `action_adapters.py`、`action_proposals.py`、`mcp_adapters.py` 兼容入口，新代码必须 import `soc_agent.actions.*`。

@@ -70,6 +70,10 @@ file for SOC code. The authoritative product and engineering documents are:
   bounded model context, parsed model result, validation reports, Decision lineage, and
   Pattern/Memory writes. It must never share the live polling response, re-run Runtime,
   read process secrets, mutate state, or be enabled as a production analyst endpoint.
+- A leadership-demo guide on that workbench is navigation metadata only. The server
+  validates every fixed alert against its expected current Pattern group and reports
+  missing/regrouped targets as drift; the guide must not seed results, prescribe a
+  verdict, bypass Runtime/Memory governance, or turn rehearsal state into quality proof.
 - The bounded-input audit artifact must distinguish model-visible projection from the
   frozen Runtime request. Only a matching prompt/builder version may be labeled exact;
   old runs use an explicit partial reconstruction status instead of silently applying a

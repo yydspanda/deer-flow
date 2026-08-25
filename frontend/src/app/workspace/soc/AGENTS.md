@@ -136,6 +136,11 @@ Runtime decisions, construct Memory, or infer action authority.
   the frozen Runtime request in a separate explicit view. Large JSON uses a lazily loaded,
   read-only viewer with syntax highlighting, line numbers, folding, search, wrapping and
   formatted/compact modes; do not render an unbounded full-document `<pre>`.
+- Leadership-demo chapters are server-owned navigation/presentation metadata over the
+  same corpus state. A target action may only set existing filters and selected alert;
+  it must not run an alert, seed Candidate/Memory state, predict a verdict, or hide a
+  server-reported missing/regrouped target. Full group selectors keep the stable Group ID
+  and add a canonical behavior summary so repeated vendor rule names remain distinguishable.
 - Keep environment, isolated SQLite, model/reasoning, role verifier, mock/off providers,
   tenant policy, and action-execution labels visible so screenshots cannot be mistaken
   for STG/production evidence.

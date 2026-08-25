@@ -11,7 +11,8 @@
 | 审阅当前代码实际接通的完整 SOC 旅程 | `audits/alpha-journey-inventory.md` | `alert-lifecycle-flow.md` |
 | 核对代码、方案、生命周期、工程契约和 Mock 台账是否一致 | `audits/alpha-consistency-audit.md` | `audits/alpha-journey-inventory.md` |
 | 查看唯一完整性矩阵、P0/P1 阻塞项和冻结实施顺序 | `audits/alpha-completeness-matrix.md` | `delivery-roadmap.md` 的 Stage 3 |
-| 准备老板演示、查看命令和汇报话术 | `boss-demo-v0.1-runbook.md` | `delivery-roadmap.md` 的 Stage 1 Gate |
+| 准备当前能力演示、技术介绍、话术和答疑 | `reporting/README.md` | `reporting/capability-demo-runbook.md` |
+| 追溯早期单告警 Boss Demo 验收 | `boss-demo-v0.1-runbook.md` | `delivery-roadmap.md` 的 Stage 1 Gate |
 | 重跑 APT/EDR/HIDS Alpha 一键验收并审阅版本化报告 | `alpha-acceptance-runbook.md` | `audits/alpha-completeness-matrix.md` 的 `AC-23/24/49` |
 | 准备 Alpha Gate 评审、部署/回滚和 Stage 4 交接 | `alpha-readiness-package.md` | 本地 `backend/.deer-flow/soc-alpha-readiness/alpha-readiness-report.json` |
 | 查看 Alpha Gate 四方评审、具名批准范围与剩余部署门禁 | `alpha-gate-review.md` | `alpha-readiness-package.md` 的 Owner Review |
@@ -22,7 +23,7 @@
 | 审核本轮 LLM 萃取的知识建议并决定落点 | `validation/compact_zeus/e2e/README.md` 的 Authority Boundary | 本地 `backend/.deer-flow/soc-validation/e2e-ten-current/knowledge-review/REVIEW.md` |
 | 判断产品方向和系统设计 | `soc-agent-solution.md` | `delivery-roadmap.md` 的阶段边界 |
 | 理解 SOC Analysis Runtime、DeerFlow/Codex 类 Agent Runtime 与 Agent Graph 的区别 | `architecture/runtime-and-agent-architecture.md` | `soc-agent-solution.md` Sections 1、5.3、6 |
-| 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `boss-demo-v0.1-runbook.md` | `soc-agent-solution.md` 的核心原则 |
+| 面向管理或技术评审解释为什么 Runtime 控制流程、LLM 只做受控推理 | `reporting/project-brief.md` | `reporting/technical-solution.md` |
 | 开始下一刀开发 | `progress.md` | `.notes/reference-index/soc-agent-engineering-contracts.md` |
 | 理解一条预警从进入到复核的完整过程 | `alert-lifecycle-flow.md` | `soc-agent-solution.md` 的服务章节 |
 | 排查 message 新结构、字段遗漏、决策置信度和复核原因 | `soc-agent-solution.md` 的 Normalizer / Confidence 章节 | `.notes/reference-index/soc-agent-engineering-contracts.md` 的对应契约 |
@@ -63,6 +64,12 @@ ai_soc/
 ├── alert-lifecycle-flow.md            # 当前端到端流程图谱
 ├── architecture/
 │   └── runtime-and-agent-architecture.md # SOC Runtime、Agent Graph、DeerFlow/Codex 对照与分享材料
+├── reporting/
+│   ├── README.md                       # 当前汇报材料入口与真实性口径
+│   ├── capability-demo-runbook.md      # 4,343 条语料的能力演示路线与现场话术
+│   ├── project-brief.md                 # 一页介绍、成熟度、八页汇报结构与确认事项
+│   ├── technical-solution.md           # Runtime/Agent/Memory/Decision 技术方案
+│   └── reporting-faq.md                # 常见追问与建议回答
 ├── audits/
 │   ├── alpha-journey-inventory.md      # AUD-01 as-is 入口/服务/状态/表/可见产物盘点
 │   ├── alpha-consistency-audit.md      # AUD-02 代码/契约/文档/Mock 事实差异审计
@@ -109,6 +116,7 @@ ai_soc/
 | `progress.md` | 开发进度台账；聊天记录不算进度 | 每个可验证切片完成后更新 |
 | `alert-lifecycle-flow.md` | 当前系统完整过程说明；只写 as-is flow | 服务边界、状态流转、数据写入、命令入口变化时更新 |
 | `architecture/runtime-and-agent-architecture.md` | 解释 SOC Analysis Runtime、Agent Runtime、Agent Graph 的差异和组合方式；不拥有路线图或实现状态 | 控制流、Runtime/Agent 权限边界或 DeerFlow 装配方式发生实质变化时更新 |
+| `reporting/*` | 当前能力演示、项目介绍、技术摘要和 FAQ；只引用权威状态，不另建路线图 | 演示入口、固定案例、对外口径或能力真实性边界变化时更新 |
 | `audits/alpha-journey-inventory.md` | AUD-01 代码现状证据清单；为一致性审计和唯一缺口矩阵提供输入 | 入口、service、状态机、持久化表或用户可见 surface 发生实质变化时更新 |
 | `audits/alpha-consistency-audit.md` | AUD-02 代码、权威文档和 Mock/real 性质差异清单；为 AUD-03 提供事实输入 | 被审文档或对应实现发生变化，并且差异已重新核实时更新 |
 | `audits/alpha-completeness-matrix.md` | AUD-03 唯一能力分类、阻塞台账和 Stage 3 冻结输入；禁止从聊天另起任务清单 | Gap 被关闭、外部条件到位或用户明确调整阶段范围时更新 |

@@ -48,8 +48,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCorpusAuditViewer } from "@/components/workspace/soc/soc-corpus-audit-viewer";
+import { SocLeadershipDemoGuidePanel } from "@/components/workspace/soc/soc-leadership-demo-guide";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
+  formatCorpusGroupOption,
   useProcessSocCorpusWorkbenchAlert,
   usePromoteSocRunToMemory,
   useSocCorpusWorkbench,
@@ -62,6 +64,7 @@ import type {
   SocCorpusWorkbenchExecutionPhase,
   SocCorpusWorkbenchReadiness,
   SocCorpusWorkbenchState,
+  SocLeadershipDemoTarget,
   SocVerdict,
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
@@ -1004,7 +1007,9 @@ function AlertDetail({
 
       {alert.decision_stages.length ? (
         <div className="px-5 py-4 md:px-7">
-          <h3 className="text-sm font-semibold">Decision Lineage</h3>
+          <h3 className="text-sm font-semibold">
+            决策来源与演变 / Decision Lineage
+          </h3>
           <div className="mt-3 overflow-x-auto border">
             <table className="w-full min-w-[780px] text-left text-sm">
               <thead className="bg-zinc-50 text-xs">
@@ -1290,6 +1295,18 @@ export function SocCorpusValidationWorkbench() {
     }
   };
 
+  const handleSelectDemoTarget = (target: SocLeadershipDemoTarget) => {
+    if (!target.actual_group_id || target.availability !== "ready") return;
+    setSearch("");
+    setReadiness("all");
+    setComparison("all");
+    setSourceType(target.source_type);
+    setGroupId(target.actual_group_id);
+    setUnprocessedOnly(false);
+    setSelectedAlertId(target.primary_alert_id);
+    setPage(0);
+  };
+
   if (query.isLoading && !state) {
     return (
       <div className="flex size-full min-h-0 flex-col">
@@ -1375,14 +1392,22 @@ export function SocCorpusValidationWorkbench() {
               交互测试 · 任意顺序 / 可重新运行
             </span>
             <span>历史 PKL · exploratory replay</span>
-            <span>内部 Provider · off/mock</span>
-            <span>Tenant Policy · disabled</span>
-            <span>外部动作 · disabled</span>
+            <span>内网安全能力接口 · 关闭/模拟</span>
+            <span>企业专属策略 · 关闭</span>
+            <span>外部动作 · 关闭</span>
           </div>
           <span className="font-mono">
             {state.source.file_name} · {shortHash(state.source.sha256)}
           </span>
         </section>
+
+        <SocLeadershipDemoGuidePanel
+          guide={state.leadership_demo}
+          groups={state.groups}
+          alerts={state.alerts}
+          activeGroupId={groupId}
+          onSelectTarget={handleSelectDemoTarget}
+        />
 
         <SummaryBand state={state} />
 
@@ -1503,10 +1528,7 @@ export function SocCorpusValidationWorkbench() {
                     .filter((group) => group.alert_count >= 2)
                     .map((group) => (
                       <SelectItem key={group.group_id} value={group.group_id}>
-                        {group.rule_name ??
-                          group.detection_key ??
-                          group.group_id}{" "}
-                        · {group.alert_count}
+                        {formatCorpusGroupOption(group)}
                       </SelectItem>
                     ))}
                 </SelectContent>

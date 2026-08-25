@@ -251,6 +251,43 @@ function corpusState(processed = false) {
       effective_unscored_count: 0,
       effective_match_rate: processed ? 1 : null,
     },
+    leadership_demo: {
+      schema_version: "soc.leadership_demo_guide.v1",
+      guide_version: "fixture-demo.v1",
+      title: "SOC Agent 核心能力验证",
+      purpose:
+        "用少量真实语料展示可审计研判、同类分组、Memory 治理与安全边界。",
+      ready: true,
+      primary_chapter_count: 1,
+      backup_chapter_count: 0,
+      chapters: [
+        {
+          chapter_id: "memory-loop",
+          sequence: 1,
+          tier: "primary",
+          title: "EDR 重复误报：从 Pattern 到可复用 Business Lesson",
+          objective: "展示重复告警聚合、Candidate 审核与后续精确匹配改判。",
+          presenter_note: "先展示真实 Run，再展示受治理 Memory。",
+          capabilities: ["Pattern 聚合", "Business Lesson"],
+          operator_steps: ["定位案例。", "运行告警。"],
+          success_cues: ["Runtime 与 Memory 分层留痕。"],
+          targets: [
+            {
+              target_id: "galaxy",
+              label: "GalaxyLab SAM Dump · Windows 更新进程链",
+              source_type: "edr",
+              expected_group_id: "CG-GALAXY",
+              actual_group_id: "CG-GALAXY",
+              primary_alert_id: "1984426",
+              rehearsal_alert_ids: ["1984426"],
+              availability: "ready",
+              missing_alert_ids: [],
+              drifted_alert_ids: [],
+            },
+          ],
+        },
+      ],
+    },
     groups: [
       {
         group_id: "CG-GALAXY",
@@ -625,6 +662,22 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   ).toBeVisible();
   await expect(page.getByText("Weak single alert")).toBeVisible();
   await expect(page.getByText("Runtime 运行后揭示")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "SOC Agent 核心能力验证" }),
+  ).toBeVisible();
+  await expect(page.getByText("语料校验通过", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "定位案例" }).click();
+  await expect(page.getByRole("button", { name: "已定位" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Alert 1984426" }),
+  ).toBeVisible();
+  await page.getByLabel("同类组").click();
+  await expect(
+    page.getByRole("option", {
+      name: /GalaxyLab_T1003-SAM-Dumping.*组 GALAXY.*14 条/,
+    }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(currentNavigationLink).toBeInViewport({ ratio: 1 });

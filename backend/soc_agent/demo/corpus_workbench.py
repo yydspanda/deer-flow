@@ -36,6 +36,10 @@ from soc_agent.core import SocAnalysisService, SocMemoryPatternService
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
+from soc_agent.demo.leadership_guide import (
+    SocLeadershipDemoGuide,
+    build_soc_leadership_demo_guide,
+)
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm import SocLLMSettings
 from soc_agent.normalizers import normalize_alert_payload
@@ -475,6 +479,7 @@ class SocCorpusWorkbenchState(BaseModel):
     model: SocCorpusWorkbenchModelConfig
     readiness: SocCorpusWorkbenchReadiness
     evaluation: SocCorpusWorkbenchEvaluation
+    leadership_demo: SocLeadershipDemoGuide
     groups: list[SocCorpusWorkbenchGroup]
     alerts: list[SocCorpusWorkbenchAlert]
 
@@ -591,6 +596,9 @@ class SocCorpusWorkbenchService:
             ),
             readiness=_readiness(self._cases.values(), alerts),
             evaluation=_evaluation(self._cases.values(), alerts),
+            leadership_demo=build_soc_leadership_demo_guide(
+                alert_groups={alert_id: case.group_id for alert_id, case in self._cases.items()},
+            ),
             groups=_group_views(self._cases.values(), alerts),
             alerts=alerts,
         )
@@ -1356,7 +1364,7 @@ def _audit_bundle(
             artifact_id="decision-lineage",
             file_name="09-decision-lineage.json",
             phase="decision",
-            title="决策沿革 / Decision Lineage",
+            title="决策来源与演变 / Decision Lineage",
             description="展示 Runtime Base Decision、AlertSummary、ReviewQueue，以及后续 Memory/Tenant/Effective 决策变更记录。",
             status="available" if run.decision is not None else "unavailable",
             source="persisted_downstream",

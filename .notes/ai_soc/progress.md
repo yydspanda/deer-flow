@@ -47,6 +47,26 @@
   内网迁移构建器、macOS Host DEV、PingAn profile/smoke/path 专项回归 `70 passed`；前端本轮既有
   ESLint/TypeScript、Rstest `1031 passed` 和 Playwright 修订/台账路径继续通过。
 
+## 2026-08-25 — Capability walkthrough and reporting package
+
+- 全量语料工作台新增服务端版本化 `soc.leadership_demo_guide.v1`，以 `5` 组主线和 `2` 组备选覆盖
+  完整 Runtime 审计、同 rule 不同行为、误报/真实风险 Memory、反弹 Shell 角色裁决、弱证据边界与
+  HIDS Adapter。每个固定告警在返回前核对当前 `group_id`，缺失或指纹重分组会显示 drift，不生成或
+  修改任何 Run/Candidate/Memory。
+- “全部同类组”不再只显示重复的 vendor rule name；前端增加 canonical 行为摘要、稳定 Group ID 后缀和
+  条数。核心能力验证面板只设置现有来源/Group/Alert 筛选，继续复用同一 Workbench、Runtime 和治理入口。
+- 新增 `reporting/` 汇报包：当前能力演示手册、项目摘要、技术解决方案和 FAQ；历史
+  `boss-demo-v0.1-runbook.md` 明确标记为 Stage 1 追溯材料。所有材料区分正式代码路径、DEV 历史回放与
+  尚待 `mocked=false`/Shadow/生产门禁的能力，不以历史处置标签声明模型准确率。
+- 汇报包随后收敛为自包含材料，不再跳转研发台账或源码；项目摘要按“业务问题、核心闭环、五项能力、
+  模型调用次数、已证明/未证明、下一阶段”重排。明确固定告警 Runtime 为主分析 `1` 次、可选角色复核
+  `+1` 次，Candidate 形成不调用模型，运营请求 Business Lesson 草拟时再 `+1` 次。汇报材料进一步将
+  Adapter/Runtime/Agent/Review 作为通用骨架，并把 Skill、企业知识、Memory、MCP/Provider、Policy
+  解释为方法、稳定事实、审核经验、实时能力与处置权限五类独立治理的可插拔能力。
+- 验证：后端 guide/corpus workbench 聚焦回归 `12 passed`，Ruff、前端格式、ESLint 与 TypeScript 通过；
+  canonical group label unit `3 passed`，corpus/Memory/场景导览 Playwright `9 passed`。桌面与移动视口完成
+  截图审阅，无新增文本重叠或布局溢出。
+
 ## 2026-08-24 — Memory record inventory and operator-direct revision
 
 - 新增正式 `/workspace/soc/memory/records` 台账与 `MEM-*` 详情页。Operator inventory 可搜索

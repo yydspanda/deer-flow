@@ -228,7 +228,7 @@ test("runs the first DEV cohort alert through the browser workflow", async ({
   await expect(
     page.getByText("真实历史样本 · operational replay"),
   ).toBeVisible();
-  await expect(page.getByText("Tenant Policy · disabled")).toBeVisible();
+  await expect(page.getByText("企业专属策略 · 关闭")).toBeVisible();
   await expect(page.getByText("0/14 processed")).toBeVisible();
 
   await page.getByRole("button", { name: "运行", exact: true }).first().click();
