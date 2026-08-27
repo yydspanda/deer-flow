@@ -22,6 +22,7 @@ const pattern = {
   current_feature_schema_version: "4",
   profile_state: "current",
   lifecycle_state: "memory_active",
+  future_use_state: "exact_match_decision",
   attention_reasons: [],
   support_count: 8,
   distinct_source_count: 8,
@@ -46,6 +47,7 @@ const pattern = {
     status: "confirmed",
     summary: "Sliver 心跳在该适用范围内已由运营确认",
     retrieval_enabled: true,
+    decision_directive_ready: true,
     retrieval_valid_until: "2026-10-27T18:00:00Z",
     retrieval_review_due_at: "2026-09-27T18:00:00Z",
   },
@@ -60,6 +62,7 @@ const legacyPattern = {
   feature_schema_version: "3",
   profile_state: "legacy",
   lifecycle_state: "terminal_history",
+  future_use_state: "not_ready",
   attention_reasons: ["candidate_superseded"],
   support_count: 5,
   distinct_source_count: 5,
@@ -82,6 +85,7 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
 }) => {
   mockLangGraphAPI(page, { threads: [] });
   const detailRequests: URL[] = [];
+  const overviewRequests: URL[] = [];
   await page.route("**/api/soc/memory/center**", async (route) => {
     const url = new URL(route.request().url());
     const pathname = url.pathname;
@@ -163,6 +167,7 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
       });
       return;
     }
+    overviewRequests.push(url);
     await route.fulfill({
       json: {
         schema_version: "soc.memory_center_overview.v1",
@@ -200,45 +205,65 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
   await page.goto("/workspace/soc/memory");
 
   await expect(
-    page.getByRole("heading", { name: "SOC Memory Center" }),
+    page.getByRole("heading", { name: "SOC 经验中心" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("link", { name: /审核 Memory Candidate/ }),
-  ).toHaveAttribute("data-variant", "default");
+  await expect(page.getByRole("link", { name: /待审核经验/ })).toHaveAttribute(
+    "data-variant",
+    "default",
+  );
+  await expect(page.getByText("沉淀阶段", { exact: true })).toBeVisible();
+  await expect(page.getByText("新告警使用", { exact: true })).toBeVisible();
   await expect(
     page.getByText("Sliver 远控木马心跳重复模式").first(),
   ).toBeVisible();
-  await expect(
-    page.getByText("选择一个 Pattern lineage 查看详情。"),
-  ).toBeVisible();
+  const listStatuses = page.getByTestId("memory-pattern-statuses").first();
+  await expect(listStatuses).toHaveCSS("flex-wrap", "nowrap");
+  await expect(listStatuses.locator('[data-slot="badge"]')).toHaveCount(2);
+  const listRowCenters = await page
+    .locator(
+      '[data-testid="memory-pattern-title"], [data-testid="memory-pattern-statuses"], [data-testid="memory-pattern-count"]',
+    )
+    .evaluateAll((parts) =>
+      parts.slice(0, 3).map((part) => {
+        const bounds = part.getBoundingClientRect();
+        return bounds.y + bounds.height / 2;
+      }),
+    );
+  expect(
+    Math.max(...listRowCenters) - Math.min(...listRowCenters),
+  ).toBeLessThan(1);
+  await expect(page.getByText("选择一个行为模式查看详情。")).toBeVisible();
   expect(detailRequests).toHaveLength(0);
 
   await page.getByRole("link", { name: /Sliver 远控木马心跳重复模式/ }).click();
 
   await expect(
-    page.getByText("8 observations / 8 distinct / 3 windows"),
+    page.getByText("8 条告警 / 8 个独立来源 / 3 个时间窗"),
   ).toBeVisible();
-  await expect(page.getByText("5 frozen + 3 reinforcement")).toBeVisible();
   await expect(
-    page.getByText("MEM-F374BEA6E7B6", { exact: false }),
+    page.getByText("生成时包含 5 条样本，后续新增 3 条"),
+  ).toBeVisible();
+  await expect(page.getByText("沉淀进度", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("MEM-F374BEA6E7B6", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("精确匹配可复用结论", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByText("GalaxyLab Cohort")).toHaveCount(0);
   await expect(
-    page.getByRole("link", { name: "查看治理记录" }),
-  ).toHaveAttribute(
-    "href",
-    "/workspace/soc/review/memory-candidates/MC-93413A392B09",
-  );
+    page.getByRole("link", { name: "查看 / 修订经验" }),
+  ).toHaveAttribute("href", "/workspace/soc/memory/records/MEM-F374BEA6E7B6");
   await expect(
-    page.getByRole("link", { name: "查看治理记录" }),
-  ).toHaveAttribute("data-variant", "secondary");
+    page.getByRole("link", { name: "查看 / 修订经验" }),
+  ).toHaveAttribute("data-variant", "default");
   expect(detailRequests).toHaveLength(1);
   expect(detailRequests[0]?.searchParams.get("include_observations")).toBe(
     "false",
   );
   expect(detailRequests[0]?.searchParams.get("observation_limit")).toBe("20");
   await expect(page.getByText("Alert 1979525")).toHaveCount(0);
-  await page.getByRole("button", { name: "加载来源观察" }).click();
+  await page.getByRole("button", { name: "加载来源告警" }).click();
   await expect(page.getByText("Alert 1979525")).toBeVisible();
   expect(detailRequests).toHaveLength(2);
   expect(detailRequests[1]?.searchParams.get("include_observations")).toBe(
@@ -246,6 +271,41 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
   );
 
   await expect(page.getByText("GalaxyLab T1003 V3 历史候选")).toHaveCount(0);
-  await page.getByRole("button", { name: "历史审计 (1)" }).click();
+  await page.getByLabel("按沉淀阶段筛选").click();
+  await page.getByRole("option", { name: "经验已沉淀" }).click();
+  await expect
+    .poll(() => overviewRequests.at(-1)?.searchParams.get("stage"))
+    .toBe("persisted");
+  await page.getByLabel("按新告警使用方式筛选").click();
+  await page.getByRole("option", { name: "精确匹配可复用结论" }).click();
+  await expect
+    .poll(() => overviewRequests.at(-1)?.searchParams.get("future_use"))
+    .toBe("exact_match_decision");
+  await page.getByRole("switch", { name: "包含已结束模式 (1)" }).click();
   await expect(page.getByText("GalaxyLab T1003 V3 历史候选")).toBeVisible();
+
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const wideLayoutRatio = await page
+    .getByTestId("memory-center-layout")
+    .evaluate((element) => {
+      const workspace = element.closest("main");
+      return (
+        element.getBoundingClientRect().width /
+        (workspace?.getBoundingClientRect().width ?? innerWidth)
+      );
+    });
+  expect(wideLayoutRatio).toBeGreaterThan(0.92);
+
+  const desktopOverflow = await page
+    .getByTestId("memory-center-layout")
+    .evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(desktopOverflow).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel("按沉淀阶段筛选")).toBeVisible();
+  await expect(page.getByLabel("按新告警使用方式筛选")).toBeVisible();
+  const mobileOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(mobileOverflow).toBeLessThanOrEqual(1);
 });

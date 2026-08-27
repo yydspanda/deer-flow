@@ -23,9 +23,14 @@ from soc_agent.contracts import (
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
+    SocMemoryDecisionDirective,
+    SocMemoryDecisionEffect,
     SocMemoryDecisionImpact,
+    SocMemoryFutureUseState,
+    SocMemoryPatternStageFilter,
     SocMemoryProfileState,
     SocMemoryRecord,
+    SocMemoryReviewEffect,
     SocMemoryTargetArtifact,
     Verdict,
 )
@@ -239,6 +244,14 @@ def _manual_memory_record(candidate: SocMemoryCandidate) -> SocMemoryRecord:
         validity=candidate.validity,
         confidence=0.9,
         decision_impact=candidate.decision_impact,
+        decision_directive=SocMemoryDecisionDirective(
+            effect=SocMemoryDecisionEffect.REINFORCE,
+            target_verdict=Verdict.FALSE_POSITIVE,
+            review_effect=SocMemoryReviewEffect.PRESERVE,
+            minimum_match_score=5.0,
+            required_facet_keys=["detection_key"],
+            rationale="Reviewer approved reuse for an exact detector match.",
+        ),
         content_hash=stable_hash({"candidate_id": candidate.candidate_id}),
         facets_hash=stable_hash(candidate.facets),
         retrieval_enabled=True,
@@ -291,11 +304,21 @@ def _assert_center(repository: InMemoryMemoryPatternRepository | SqlAlchemyAlert
     )
     pattern = overview.items[0]
     assert pattern.profile_state is SocMemoryProfileState.CURRENT
+    assert pattern.future_use_state is SocMemoryFutureUseState.NOT_READY
     assert pattern.support_count == 3
     assert pattern.aggregation_window_count == 2
     assert pattern.candidate_snapshot_count == 2
     assert pattern.reinforcement_count == 1
     assert pattern.candidate is not None
+    assert service.overview(stage=SocMemoryPatternStageFilter.AWAITING_REVIEW).total == 1
+    assert service.overview(future_use=SocMemoryFutureUseState.NOT_READY).total == 1
+    assert (
+        service.overview(
+            include_terminal_history=True,
+            stage=SocMemoryPatternStageFilter.TERMINAL,
+        ).total
+        == 1
+    )
 
     detail = service.pattern_detail(_LINEAGE_KEY)
     assert detail.observation_total == 3
@@ -336,6 +359,9 @@ def _assert_manual_promotion_projection(
     assert pattern.candidate.candidate_id == candidate.candidate_id
     assert pattern.memory_record is not None
     assert pattern.memory_record.memory_id == record.memory_id
+    assert pattern.memory_record.decision_directive_ready is True
+    assert pattern.future_use_state is SocMemoryFutureUseState.EXACT_MATCH_DECISION
+    assert service.overview(future_use=SocMemoryFutureUseState.EXACT_MATCH_DECISION).total == 1
     assert pattern.support_count == 1
     assert pattern.candidate_snapshot_count == 0
 

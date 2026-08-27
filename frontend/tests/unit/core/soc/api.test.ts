@@ -18,6 +18,8 @@ import {
   dryRunSocApprovedAction,
   expireSocApprovalRequest,
   executeSocApprovedAction,
+  getSocAlertInvestigationContext,
+  getSocMemoryCenterOverview,
   getSocMemoryLineage,
   getSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
@@ -25,6 +27,7 @@ import {
   getSocOperationsSnapshot,
   getSocReviewContext,
   listSocApprovalRequests,
+  listSocAlertResults,
   listSocDispositionSampleCampaigns,
   listSocMemoryCandidates,
   listSocMemoryRecordInventory,
@@ -67,6 +70,31 @@ beforeEach(() => {
 });
 
 describe("SOC review API", () => {
+  test("lists alert results independently from review tasks", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, { items: [] }));
+
+    await expect(
+      listSocAlertResults({ attentionLevel: "advisory", limit: 25 }),
+    ).resolves.toEqual([]);
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/alerts?limit=25&attention_level=advisory",
+    );
+  });
+
+  test("loads an alert investigation by encoded run id", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        result: {},
+        run: {},
+        audit_records: [],
+      }),
+    );
+
+    await getSocAlertInvestigationContext("RUN/1");
+
+    expect(mockedFetch).toHaveBeenCalledWith("/api/soc/alerts/RUN%2F1/context");
+  });
+
   test("lists review queue items with status and limit", async () => {
     mockedFetch.mockResolvedValueOnce(jsonResponse(200, { items: [] }));
 
@@ -75,6 +103,17 @@ describe("SOC review API", () => {
     ).resolves.toEqual([]);
     expect(mockedFetch).toHaveBeenCalledWith(
       "/api/soc/review/items?status=open&limit=25",
+    );
+  });
+
+  test("requests only server-classified human intervention tasks", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, { items: [] }));
+
+    await expect(
+      listSocReviewItems({ humanInterventionOnly: true }),
+    ).resolves.toEqual([]);
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/review/items?status=open&limit=50&human_intervention_only=true",
     );
   });
 
@@ -627,6 +666,25 @@ describe("SOC approval API", () => {
 });
 
 describe("SOC memory API", () => {
+  test("filters Memory Center by lifecycle stage and future use", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { items: [], total: 0 }),
+    );
+
+    await getSocMemoryCenterOverview({
+      stage: "persisted",
+      futureUse: "exact_match_decision",
+      includeTerminalHistory: true,
+      limit: 25,
+      offset: 50,
+    });
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/memory/center?include_terminal_history=true&stage=persisted&future_use=exact_match_decision&limit=25&offset=50",
+      { headers: expect.any(Headers) },
+    );
+  });
+
   test("lists scoped candidates and records without losing filters", async () => {
     mockedFetch
       .mockResolvedValueOnce(jsonResponse(200, { items: [] }))

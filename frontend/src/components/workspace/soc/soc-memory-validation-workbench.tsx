@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useProcessSocMemoryWorkbenchAlert,
@@ -190,7 +191,7 @@ function CandidateBand({ state }: { state: SocMemoryWorkbenchState }) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <BrainCircuitIcon className="size-4" />
-            <h2 className="text-sm font-semibold">Pattern / Memory 治理</h2>
+            <h2 className="text-sm font-semibold">模式与经验治理</h2>
             <Badge variant="outline">
               {NEXT_ACTION_LABELS[state.progress.next_action]}
             </Badge>
@@ -204,13 +205,13 @@ function CandidateBand({ state }: { state: SocMemoryWorkbenchState }) {
             <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
               <span>状态 {candidate.status}</span>
               <span>一致率 {formatPercent(candidate.consistency_ratio)}</span>
-              <span>Memory {candidate.memory_id ?? "未创建"}</span>
+              <span>经验记录 {candidate.memory_id ?? "未创建"}</span>
               <span>
-                检索 {candidate.retrieval_enabled ? "enabled" : "disabled"}
+                新告警使用 {candidate.retrieval_enabled ? "已开放" : "已暂停"}
               </span>
               <span>
-                Decision Directive{" "}
-                {candidate.decision_directive_ready ? "ready" : "missing"}
+                精确匹配复用结论{" "}
+                {candidate.decision_directive_ready ? "已允许" : "未允许"}
               </span>
             </div>
           ) : null}
@@ -349,14 +350,14 @@ function AlertTable({
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {alert.queue_id && !alert.can_process ? (
+                    {alert.run_id && !alert.can_process ? (
                       <Button variant="ghost" size="sm" asChild>
                         <Link
-                          href={`/workspace/soc/review/alerts?queue_id=${encodeURIComponent(alert.queue_id)}`}
+                          href={`/workspace/soc/alerts?run_id=${encodeURIComponent(alert.run_id)}`}
                           onClick={(event) => event.stopPropagation()}
                         >
                           <ExternalLinkIcon className="size-4" />
-                          复核
+                          查看研判
                         </Link>
                       </Button>
                     ) : (
@@ -665,7 +666,13 @@ export function SocMemoryValidationWorkbench() {
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             <span>真实历史样本 · operational replay</span>
             <span>内网安全能力接口 · 关闭/模拟</span>
-            <span>企业专属策略 · 关闭</span>
+            <span>
+              企业专属策略 ·{" "}
+              {formatSocDevPolicyLabel({
+                tenantPolicy: state.safety.tenant_policy,
+                softwarePathFastPolicy: state.safety.software_path_fast_policy,
+              })}
+            </span>
             <span>外部动作 · 关闭</span>
           </div>
           <span className="font-mono">

@@ -104,7 +104,12 @@ class SocMemoryWorkbenchSafety(BaseModel):
     source_data_class: Literal["operational"] = "operational"
     historical_replay: Literal[True] = True
     internal_providers: Literal["off_or_mock"] = "off_or_mock"
-    tenant_policy: Literal["disabled"] = "disabled"
+    tenant_policy: Literal[
+        "disabled",
+        "deterministic",
+        "deterministic_and_llm",
+    ] = "disabled"
+    software_path_fast_policy: bool = False
     external_action_execution: Literal[False] = False
 
 
@@ -288,6 +293,12 @@ class SocMemoryWorkbenchService:
         source_path: Path,
         settings: SocLLMSettings,
         database_file: str,
+        tenant_policy: Literal[
+            "disabled",
+            "deterministic",
+            "deterministic_and_llm",
+        ] = "disabled",
+        software_path_fast_policy: bool = False,
     ) -> None:
         self._repository = repository
         self._analysis_service = analysis_service
@@ -295,6 +306,8 @@ class SocMemoryWorkbenchService:
         self._source_path = source_path.expanduser().resolve()
         self._settings = settings
         self._database_file = database_file
+        self._tenant_policy = tenant_policy
+        self._software_path_fast_policy = software_path_fast_policy
         self._source_sha256 = _sha256_file(self._source_path)
         self._cases = _load_cases(self._source_path)
         fingerprints = {item.behavior_fingerprint for item in self._cases.values()}
@@ -354,6 +367,8 @@ class SocMemoryWorkbenchService:
         return SocMemoryWorkbenchState(
             safety=SocMemoryWorkbenchSafety(
                 database_file=self._database_file,
+                tenant_policy=self._tenant_policy,
+                software_path_fast_policy=self._software_path_fast_policy,
             ),
             source=SocMemoryWorkbenchSource(
                 file_name=self._source_path.name,

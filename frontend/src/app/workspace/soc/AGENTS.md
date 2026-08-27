@@ -20,15 +20,36 @@ Runtime decisions, construct Memory, or infer action authority.
   governance actions are visually separated from confirmation. Pending Memory Candidate
   rows and links use the primary "审核并决定" treatment; terminal records use the
   secondary "查看治理记录" treatment.
-- Review routes are ownership-specific: alerts under `/review/alerts`, Memory candidates
-  under `/review/memory-candidates[/candidate_id]`, and quality samples under
-  `/review/samples`. A candidate deep link must not fabricate an alert queue item.
+- Operational routes are ownership-specific: every Runtime result is listed under
+  `/alerts`; the rare unresolved-fact task is under `/review/alerts`; Memory candidates
+  are governed under `/review/memory-candidates[/candidate_id]`; high-risk actions are
+  authorized under `/approvals`; quality samples remain under `/review/samples`. A
+  candidate or approval deep link must not fabricate an alert queue item.
 - Enable queries only for the active surface. List pages do not preload the first detail
   or attach all related analyses to navigation; detail and source observations are
   bounded, explicit requests.
 
-## Alert Review And Investigation
+## Alert Results And Human Intervention
 
+- `/alerts` is the primary **告警研判** workspace and is keyed by `run_id`. It lists every
+  persisted Runtime result, including usable, degraded, failed, and corrected runs. A
+  `ReviewQueueItem` is optional and must never be required to open the alert result.
+- Present model uncertainty and evidence gaps as visible advisory information on the
+  result. Do not turn `unknown`, low confidence, missing enrichment, provider failure, or
+  a suggested manual check into analyst work. Only the server-owned `required` attention
+  classification may link to `/review/alerts`.
+- The result page owns two explicit optional commands: correct this run and promote this
+  run into the governed Memory Candidate flow. Correction preserves decision lineage;
+  promotion creates at most a pending Candidate and does not review it inline.
+- `/review/alerts` is the rare **需人工介入** inbox. It resolves only critical current-fact
+  conflicts that Runtime could not adjudicate. Put the conflict, current conclusion,
+  evidence gaps, manual checks, and final analyst judgment on one focused surface. The
+  correction mutation records the judgment and closes the task; do not require a second
+  close command.
+- Memory Candidate governance and action approval are separate jobs. Never embed their
+  forms in a human-intervention task. Link back to the run result, Candidate page, or
+  `/approvals` when cross-workflow navigation is useful. Keep raw contracts and full
+  technical artifacts collapsed behind an explicit audit control.
 - Structured disposition capture is separate from ReviewQueue close. Require the
   server-owned proposal/queue state plus explicit operational disposition, review lane,
   and reason; send append-only revisions with supersession lineage.
@@ -96,6 +117,12 @@ Runtime decisions, construct Memory, or infer action authority.
 - Memory Center is list-first and consumes only the server lineage read model. One row is
   one stable Pattern across windows; observations, distinct sources, window count,
   frozen candidate snapshot, and later reinforcement remain separate values.
+- Render Pattern lifecycle and future-alert use as separate, icon-labelled states; do not
+  collapse them into one compound status or force them into rigid table columns that make
+  the Pattern name unreadable. Lifecycle/use filters must be evaluated by the server over
+  the complete result set before pagination. A pending Candidate may be opened from its
+  Pattern detail or the batch review inbox, but both links must address the same
+  server-owned Candidate and must not create parallel review state.
 - Keep Pattern inventory and confirmed Memory record inventory distinct. `/memory`
   manages Pattern lineages; `/memory/records` searches actual `MEM-*` records by IDs,
   lesson text, source lineage, and facets. Record detail owns Business Lesson,
@@ -136,14 +163,43 @@ Runtime decisions, construct Memory, or infer action authority.
   the frozen Runtime request in a separate explicit view. Large JSON uses a lazily loaded,
   read-only viewer with syntax highlighting, line numbers, folding, search, wrapping and
   formatted/compact modes; do not render an unbounded full-document `<pre>`.
-- Leadership-demo chapters are server-owned navigation/presentation metadata over the
-  same corpus state. A target action may only set existing filters and selected alert;
-  it must not run an alert, seed Candidate/Memory state, predict a verdict, or hide a
-  server-reported missing/regrouped target. Full group selectors keep the stable Group ID
-  and add a canonical behavior summary so repeated vendor rule names remain distinguishable.
+- The user-facing corpus route is the **告警研判演练** workspace. Keep the stable
+  `/corpus-validation` route for compatibility, but do not expose “语料验证” as the
+  primary analyst concept.
+- Its recommended rehearsal manifest contains exactly two server-owned, result-oriented
+  stories over the same vendor rule: one context-only Memory use and one exact-match
+  Decision reuse. Keep full-corpus search below those recommendations; do not turn the
+  recommendation panel back into a general capability catalog.
+- Rehearsal metadata may only set existing filters and selected alert. It must not run an
+  alert, seed Candidate/Memory state, predict a verdict, or hide a server-reported
+  missing/regrouped target. Full behavior-group selectors keep the stable Group ID and
+  add a canonical behavior summary so repeated vendor rule names remain distinguishable.
+- Running an alert must keep the analyst at the initiating row. Show inline/live status
+  and expose an explicit **查看结果** command after completion; never auto-scroll to the
+  lower execution trace.
 - Keep environment, isolated SQLite, model/reasoning, role verifier, mock/off providers,
   tenant policy, and action-execution labels visible so screenshots cannot be mistaken
-  for STG/production evidence.
+  for STG/production evidence. If the explicit PingAn DEV launcher enables all tenant
+  policy layers, show deterministic/advisor/software-path status from the server safety
+  contract; never infer it from client configuration, and continue to show external
+  actions as disabled.
+- A Memory record is not permanently classified as exact or context-only. Show whether
+  it owns a reviewed Decision Directive; exact applicability may use that Directive,
+  while a partial retrieval of the same record remains context-only. Record and revision
+  pages must state this distinction.
+- Keep implementation vocabulary out of primary analyst surfaces. For one alert, render
+  Memory use as `未使用历史经验`, `仅作研判参考`, or `已复用审核结论`. Render record
+  availability as `已开放给新告警` or `暂停用于新告警`; disabled retrieval means the
+  record is not used at all, not context-only. Call a tenant Memory Profile a `匹配规则版本`
+  in user-facing detail and hide the healthy/current profile state from primary lists;
+  preserve Profile, Directive, retrieval, and context-only terms only in explicit technical
+  audit payloads.
+- Memory Center must keep lifecycle and future use separate. Lifecycle says only whether
+  samples are accumulating, a candidate awaits review, or an experience has been persisted.
+  Future use says `尚未开放`, `仅供研判参考`, or `精确匹配可复用结论`; an exact-capable
+  record may still be context-only for a partial match. Pattern inventory is ordered by
+  latest observed sample, while confirmed-record inventory is ordered by latest update;
+  show those sort rules in the UI.
 - Fixed GalaxyLab remains a DEV-only validation route and must not be linked from Memory
   Center or global operational navigation. Memory Center contains only production-facing
   Pattern, Candidate, Memory, and Profile governance. Pattern counts are absolute

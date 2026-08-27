@@ -22,6 +22,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { memoryAvailabilityCopy } from "@/components/workspace/soc/soc-memory-copy";
+import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memory-decision-capability";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useSocMemoryLineage,
@@ -35,18 +37,18 @@ import type {
 } from "@/core/soc";
 
 const USE_EFFECT_LABELS: Record<SocMemoryUseEffect, string> = {
-  context_only: "仅作分析背景",
+  context_only: "仅作研判参考",
   reinforced: "支持原结论",
   overridden: "改变最终结论",
   conflicted: "与当前证据冲突",
 };
 
 const EXCLUSION_LABELS: Record<string, string> = {
-  retrieval_disabled: "该 Memory 当前未启用召回",
-  activation_not_governed: "召回缺少完整治理配置",
-  activation_expired: "召回有效期已结束",
+  retrieval_disabled: "该经验当前暂停用于新告警",
+  activation_not_governed: "该经验缺少完整的使用审批配置",
+  activation_expired: "该经验的使用有效期已结束",
   review_overdue: "定期复核已逾期",
-  record_status_or_validity: "记录状态或经验有效期不允许召回",
+  record_status_or_validity: "记录状态或经验有效期不允许继续使用",
   missing_strong_anchor: "没有命中足够的强匹配条件",
   not_applicable: "适用范围检查未通过",
   below_minimum_score: "相关性分数不足",
@@ -118,7 +120,7 @@ function FacetSection({ record }: { record: SocMemoryRecord }) {
   ];
   return rows.length === 0 ? (
     <p className="text-muted-foreground text-sm">
-      这条历史 Memory 没有结构化适用范围，只能作为非决策背景使用。
+      这条历史经验没有结构化适用范围，只能帮助模型理解告警，不能直接复用结论。
     </p>
   ) : (
     <div className="divide-y border">
@@ -157,6 +159,9 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
   const [locator, setLocator] = useState("");
   const record = lineage?.record ?? null;
   const uses = lineage?.uses ?? [];
+  const availability = record
+    ? memoryAvailabilityCopy(record.retrieval_enabled)
+    : null;
 
   useEffect(() => {
     if (!validUntil) setValidUntil(futureLocalDate(60));
@@ -181,9 +186,13 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
         },
       });
       setGovernanceReason("");
-      toast.success(action === "enable" ? "召回已启用" : "召回已停用");
+      toast.success(
+        action === "enable" ? "已开放给新告警使用" : "已暂停用于新告警",
+      );
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "召回状态更新失败");
+      toast.error(
+        cause instanceof Error ? cause.message : "经验使用状态更新失败",
+      );
     }
   };
 
@@ -206,13 +215,13 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
         icon={DatabaseIcon}
-        title="Memory 详情"
+        title="经验详情"
         description="查看经验、使用历史和版本化治理状态"
         actions={
           <Button size="sm" variant="outline" asChild>
             <Link href="/workspace/soc/memory/records">
               <ArrowLeftIcon className="size-4" />
-              返回 Memory 台账
+              返回经验台账
             </Link>
           </Button>
         }
@@ -227,7 +236,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
           ) : error || !record ? (
             <Alert variant="destructive">
               <AlertTriangleIcon />
-              <AlertTitle>无法加载 Memory</AlertTitle>
+              <AlertTitle>无法加载经验</AlertTitle>
               <AlertDescription>
                 {error instanceof Error ? error.message : `未找到 ${memoryId}`}
               </AlertDescription>
@@ -251,7 +260,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                         record.retrieval_enabled ? "default" : "secondary"
                       }
                     >
-                      {record.retrieval_enabled ? "召回已启用" : "召回未启用"}
+                      {availability?.label}
                     </Badge>
                     <Badge variant="outline">{record.memory_type}</Badge>
                   </div>
@@ -264,7 +273,9 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                     </dd>
                   </div>
                   <div className="border-b px-4 py-3 lg:border-r">
-                    <dt className="text-muted-foreground text-xs">Profile</dt>
+                    <dt className="text-muted-foreground text-xs">
+                      匹配规则版本
+                    </dt>
                     <dd className="mt-1">
                       {record.applicability
                         ? `${record.applicability.profile_id} v${record.applicability.profile_version}`
@@ -285,22 +296,30 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                     <dd className="mt-1">{formatTime(record.updated_at)}</dd>
                   </div>
                 </dl>
+                {availability ? (
+                  <div className="border-t px-4 py-3 text-sm">
+                    <div className="font-medium">{availability.label}</div>
+                    <p className="text-muted-foreground mt-1 text-xs leading-5">
+                      {availability.detail}
+                    </p>
+                  </div>
+                ) : null}
               </section>
+
+              <SocMemoryDecisionCapability record={record} />
 
               {record.metadata.revision_pending === true ? (
                 <Alert className="border-amber-300 bg-amber-50 text-amber-950">
                   <AlertTriangleIcon />
-                  <AlertTitle>该 Memory 正在修订</AlertTitle>
+                  <AlertTitle>该经验正在修订</AlertTitle>
                   <AlertDescription>
-                    旧版本已暂停召回，请先完成现有修订 Candidate 的审核。
+                    旧版本已暂停用于新告警，请先完成修订候选的审核。
                   </AlertDescription>
                 </Alert>
               ) : null}
 
               <section className="border px-5 py-5">
-                <h2 className="text-sm font-semibold">
-                  Business Lesson / 业务经验
-                </h2>
+                <h2 className="text-sm font-semibold">业务经验</h2>
                 <div className="mt-4">
                   {record.business_lesson ? (
                     <LessonSection lesson={record.business_lesson} />
@@ -313,9 +332,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
               </section>
 
               <section className="border px-5 py-5">
-                <h2 className="text-sm font-semibold">
-                  Applicability / 匹配范围
-                </h2>
+                <h2 className="text-sm font-semibold">匹配范围</h2>
                 <p className="text-muted-foreground mt-1 text-xs leading-5">
                   必须条件决定能否精确复用；可选条件只用于收窄和排序，不能单独授权改判。
                 </p>
@@ -327,12 +344,10 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
               <section className="border px-5 py-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-sm font-semibold">
-                      Governance / 版本化治理
-                    </h2>
+                    <h2 className="text-sm font-semibold">版本化治理</h2>
                     <p className="text-muted-foreground mt-1 text-xs">
                       不原地改写已确认经验；修订会暂停旧版本并创建待审
-                      Candidate。
+                      经验候选。
                     </p>
                   </div>
                   <Button
@@ -352,7 +367,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                   <div className="mt-4 grid gap-3 border-t pt-4 lg:grid-cols-[minmax(0,1fr)_13rem_8rem_auto] lg:items-end">
                     <label className="grid gap-1 text-xs">
                       <span className="text-muted-foreground">
-                        召回治理理由
+                        使用状态变更理由
                       </span>
                       <Input
                         value={governanceReason}
@@ -363,7 +378,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       />
                     </label>
                     <label className="grid gap-1 text-xs">
-                      <span className="text-muted-foreground">召回有效至</span>
+                      <span className="text-muted-foreground">开放使用至</span>
                       <Input
                         type="datetime-local"
                         value={validUntil}
@@ -397,7 +412,9 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       ) : (
                         <PowerIcon className="size-4" />
                       )}
-                      {record.retrieval_enabled ? "停用召回" : "启用召回"}
+                      {record.retrieval_enabled
+                        ? "暂停用于新告警"
+                        : "开放给新告警"}
                     </Button>
                   </div>
                 ) : null}
@@ -406,13 +423,10 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
               <section className="border px-5 py-5">
                 <div className="flex items-center gap-2">
                   <FlaskConicalIcon className="size-4" />
-                  <h2 className="text-sm font-semibold">
-                    Match Test / 匹配试算
-                  </h2>
+                  <h2 className="text-sm font-semibold">匹配试算</h2>
                 </div>
                 <p className="text-muted-foreground mt-1 text-xs leading-5">
-                  使用已保存的 Runtime 输入执行生产同款召回门禁；不调用
-                  LLM、不写数据库、不改变结论。
+                  使用已保存的告警输入测试这条经验会不会被使用；不调用模型、不写数据库、不改变原结论。
                 </p>
                 <div className="mt-4 flex flex-wrap items-end gap-3">
                   <ToggleGroup
@@ -458,16 +472,16 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       )}
                       <span className="font-semibold">
                         {matchMutation.data.matched
-                          ? "会命中该 Memory"
-                          : "不会命中该 Memory"}
+                          ? "新告警会找到这条经验"
+                          : "新告警不会找到这条经验"}
                       </span>
                       <Badge variant="outline">
-                        {matchMutation.data.profile_id} v
+                        匹配规则 {matchMutation.data.profile_id} v
                         {matchMutation.data.profile_version}
                       </Badge>
                       {matchMutation.data.match ? (
                         <Badge variant="secondary">
-                          score {matchMutation.data.match.score}
+                          相关度 {matchMutation.data.match.score}
                         </Badge>
                       ) : null}
                     </div>
@@ -499,14 +513,13 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                 <div className="flex items-center justify-between border-b px-5 py-3">
                   <h2 className="flex items-center gap-2 text-sm font-semibold">
                     <HistoryIcon className="size-4" />
-                    Usage History / 使用历史
+                    使用历史
                   </h2>
                   <Badge variant="secondary">{uses.length}</Badge>
                 </div>
                 {uses.length === 0 ? (
                   <p className="text-muted-foreground px-5 py-8 text-center text-sm">
-                    这条 Memory
-                    尚未被后续告警召回。来源告警用于创建它，不计为一次使用。
+                    这条经验尚未被后续告警使用。来源告警用于创建它，不计为一次使用。
                   </p>
                 ) : (
                   <div className="divide-y">
@@ -541,7 +554,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
               <section className="border px-5 py-4 text-xs">
                 <div className="font-semibold">Audit Lineage / 审计来源</div>
                 <div className="text-muted-foreground mt-2 grid gap-1 font-mono break-all">
-                  <span>Candidate: {record.source_candidate_id}</span>
+                  <span>来源候选: {record.source_candidate_id}</span>
                   <span>Content hash: {record.content_hash}</span>
                   <span>Facets hash: {record.facets_hash}</span>
                   {record.revision_lineage ? (
@@ -555,7 +568,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                   <Link
                     href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(record.source_candidate_id)}`}
                   >
-                    查看来源 Candidate 治理记录
+                    查看来源候选的审核记录
                   </Link>
                 </Button>
               </section>

@@ -24,6 +24,10 @@ file for SOC code. The authoritative product and engineering documents are:
   retries, or state transitions.
 - Keep detection truth, tenant disposition, Memory directives, action authorization, and
   external execution as separate decision layers with explicit lineage.
+- Treat `run_id` as the stable investigation identity. Every persisted Runtime run has an
+  alert result and run-scoped investigation context; a `ReviewQueueItem` is an optional
+  human-task attachment, not the identity of the alert or a prerequisite for Web/TUI/API
+  reads.
 
 ## Runtime Contract
 
@@ -70,10 +74,11 @@ file for SOC code. The authoritative product and engineering documents are:
   bounded model context, parsed model result, validation reports, Decision lineage, and
   Pattern/Memory writes. It must never share the live polling response, re-run Runtime,
   read process secrets, mutate state, or be enabled as a production analyst endpoint.
-- A leadership-demo guide on that workbench is navigation metadata only. The server
-  validates every fixed alert against its expected current Pattern group and reports
-  missing/regrouped targets as drift; the guide must not seed results, prescribe a
-  verdict, bypass Runtime/Memory governance, or turn rehearsal state into quality proof.
+- The workbench recommendation guide is navigation metadata only and contains exactly
+  two same-rule Memory rehearsals: context-only reference and exact-match Decision reuse.
+  The server validates every fixed alert against its expected current Pattern group and
+  reports missing/regrouped targets as drift; the guide must not seed results, prescribe
+  a verdict, bypass Runtime/Memory governance, or turn rehearsal state into quality proof.
 - The bounded-input audit artifact must distinguish model-visible projection from the
   frozen Runtime request. Only a matching prompt/builder version may be labeled exact;
   old runs use an explicit partial reconstruction status instead of silently applying a
@@ -106,6 +111,14 @@ file for SOC code. The authoritative product and engineering documents are:
   `soc_agent/db/migrations/`, use `soc db upgrade`, and own `soc_alembic_version`.
 - Persist an analysis run, summary, optional ReviewQueue item, journal, and audit entries
   transactionally. A failed transaction must not leave a visible partial run.
+- `SocAlertResult` separates decision usability from operator attention. Uncertainty,
+  evidence gaps, degraded optional output, and unavailable enrichment stay visible as
+  advisory result metadata. Only unresolved material current-fact conflicts enter
+  ReviewQueue. Do not recreate the old behavior where `needs_review=true` manufactured a
+  task for nearly every alert.
+- Candidate review, action approval, and normalization maintenance own independent
+  repositories and APIs. ReviewQueue resolution must not inline or implicitly perform
+  any of those state transitions.
 - Journal provider requests before invocation. Recovery may resume only when the frozen
   request and config/model lineage still match; otherwise start a new attempt.
 - Kafka topic `soc.alerts.raw.v1` accepts only

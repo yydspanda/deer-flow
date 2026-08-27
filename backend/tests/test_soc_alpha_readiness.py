@@ -123,6 +123,7 @@ def test_authoritative_matrix_and_roadmap_remain_machine_readable() -> None:
         "PI-03",
         "PI-04",
         "PI-05",
+        "PI-06",
     ]
 
 

@@ -404,7 +404,15 @@ def build_start_command(*, daemon: bool) -> list[str]:
         'export SOC_DEV_CORPUS_WORKBENCH_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"; '
         "export SOC_MEMORY_ENVIRONMENT=dev; "
         "export SOC_AUTOMATION_ENVIRONMENT=dev; "
-        "export SOC_TENANT_POLICY_ENABLED=false; "
+        "export SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY=true; "
+        "export SOC_TENANT_POLICY_ENABLED=true; "
+        'export SOC_TENANT_DISPOSITION_POLICY_PATH="$SOC_HOST_DEV_ROOT/backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"; '
+        "export SOC_TENANT_POLICY_ENVIRONMENT=dev; "
+        "export SOC_TENANT_POLICY_EVENT_TIMEZONE=Asia/Shanghai; "
+        "export SOC_TENANT_POLICY_ADVISOR_MODE=llm; "
+        'export SOC_TENANT_POLICY_SKILL_PATH="$SOC_HOST_DEV_ROOT/backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"; '
+        "export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true; "
+        'export SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH="$SOC_HOST_DEV_ROOT/backend/.deer-flow/pingan-context/software-path-catalog.sqlite"; '
         "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false; "
         'if [[ "${SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE+x}" == x ]]; then '
         'export DEER_FLOW_DEV_ALLOWED_ORIGINS="$SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"; '

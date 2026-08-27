@@ -1,5 +1,11 @@
 """Core SOC Agent runtime and service exports."""
 
+from soc_agent.core.alert_results import (
+    SOC_ALERT_ATTENTION_POLICY_VERSION,
+    classify_alert_result,
+    is_required_human_intervention_item,
+    required_human_intervention_reason,
+)
 from soc_agent.core.authorization_enrichment import (
     AuthorizationEnrichmentIdempotencyConflictError,
     SocAuthorizationEnrichmentService,
@@ -77,6 +83,10 @@ from soc_agent.core.tenant_policy import SocTenantPolicyEvaluationService
 from soc_agent.domain import SocDomainTriageService
 
 __all__ = [
+    "SOC_ALERT_ATTENTION_POLICY_VERSION",
+    "classify_alert_result",
+    "is_required_human_intervention_item",
+    "required_human_intervention_reason",
     "DeterministicAnalysisRuntime",
     "AuthorizationEnrichmentIdempotencyConflictError",
     "InMemoryInvestigationEvidenceRepository",

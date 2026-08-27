@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from soc_agent.contracts import (
     ActorContext,
     AnalysisRequestJournalStatus,
+    AnalysisRun,
     AnalysisRunRecoveryCommand,
     AnalysisRunStatus,
     AuditAction,
@@ -89,6 +90,32 @@ def _repository() -> SqlAlchemyAlertRepository:
     create_soc_tables(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     return SqlAlchemyAlertRepository(session_factory)
+
+
+def _analyze_required_review(
+    repository: SqlAlchemyAlertRepository,
+    sample_name: str = "pingan_legacy_apt.json",
+) -> AnalysisRun:
+    class CriticalFactConflictRuntime:
+        def analyze(self, payload: dict) -> AnalysisRun:
+            run = DeterministicAnalysisRuntime().analyze(payload)
+            assert run.decision is not None
+            run.decision = run.decision.model_copy(
+                update={
+                    "needs_review": True,
+                    "review_reasons": [DecisionReviewReason.FACT_CONFLICT],
+                }
+            )
+            run.status = AnalysisRunStatus.NEEDS_REVIEW
+            return run
+
+    return SocAnalysisService(
+        runtime=CriticalFactConflictRuntime(),
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    ).analyze(_sample(sample_name))
 
 
 def _repository_memory_candidate_command(
@@ -522,12 +549,7 @@ def test_sqlalchemy_correlation_service_returns_reusable_evidence() -> None:
 
 def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:
     repository = _repository()
-    run = SocAnalysisService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-    ).analyze(_sample("pingan_legacy_apt.json"))
+    run = _analyze_required_review(repository)
 
     items = repository.list_review_items(status=ReviewQueueStatus.OPEN)
 
@@ -536,11 +558,8 @@ def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:
     assert item.run_id == run.run_id
     assert item.alert_id == "2026494"
     assert item.status == ReviewQueueStatus.OPEN
-    assert item.reason == "uncertain_verdict"
-    assert item.review_reasons == [
-        DecisionReviewReason.UNCERTAIN_VERDICT,
-        DecisionReviewReason.STUB_ANALYZER,
-    ]
+    assert item.reason == "fact_conflict"
+    assert item.review_reasons == [DecisionReviewReason.FACT_CONFLICT]
     assert item.priority.value == "high"
     assert item.rule_code == "RPAADM_002635"
     assert "ip:30.180.248.178" in item.entity_keys
@@ -611,12 +630,7 @@ def test_sqlalchemy_alert_repository_persists_investigation_evidence() -> None:
 
 def test_review_service_context_loads_sqlalchemy_investigation_evidence() -> None:
     repository = _repository()
-    run = SocAnalysisService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-    ).analyze(_sample("pingan_legacy_apt.json"))
+    run = _analyze_required_review(repository)
     item = repository.get_open_review_item_by_run(run.run_id)
     assert item is not None
     repository.save_evidence(
@@ -647,12 +661,7 @@ def test_review_service_context_loads_sqlalchemy_investigation_evidence() -> Non
 
 def test_review_service_context_loads_sqlalchemy_external_dispositions() -> None:
     repository = _repository()
-    run = SocAnalysisService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-    ).analyze(_sample("pingan_legacy_apt.json"))
+    run = _analyze_required_review(repository)
     item = repository.get_open_review_item_by_run(run.run_id)
     assert item is not None
     record = SocExternalDispositionRecord(
@@ -947,12 +956,7 @@ def test_sqlalchemy_memory_candidates_rank_old_text_match_before_recent_type_row
 
 def test_review_service_context_loads_sqlalchemy_memory_candidates() -> None:
     repository = _repository()
-    run = SocAnalysisService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-    ).analyze(_sample("pingan_legacy_apt.json"))
+    run = _analyze_required_review(repository)
     item = repository.get_open_review_item_by_run(run.run_id)
     assert item is not None
     candidate = SocMemoryService(candidate_repository=repository).propose_candidate(
@@ -980,12 +984,7 @@ def test_review_service_context_loads_sqlalchemy_memory_candidates() -> None:
 
 def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> None:
     repository = _repository()
-    run = SocAnalysisService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-    ).analyze(_sample("pingan_legacy_edr.json"))
+    run = _analyze_required_review(repository, "pingan_legacy_edr.json")
     open_item = repository.get_open_review_item_by_run(run.run_id)
     assert open_item is not None
 

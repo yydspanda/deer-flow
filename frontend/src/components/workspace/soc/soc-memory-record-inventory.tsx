@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { memoryFutureUseCopy } from "@/components/workspace/soc/soc-memory-copy";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import { useSocMemoryRecordInventory } from "@/core/soc";
 import type { SocMemoryRecordStatus } from "@/core/soc";
@@ -47,14 +48,10 @@ function formatTime(value?: string | null) {
 }
 
 function recordScope(record: {
-  applicability?: { profile_id: string; profile_version: string } | null;
   tenant_id?: string | null;
   tenant_scope: string;
 }) {
-  const profile = record.applicability
-    ? `${record.applicability.profile_id} v${record.applicability.profile_version}`
-    : "无 Profile";
-  return `${record.tenant_id ?? record.tenant_scope} · ${profile}`;
+  return record.tenant_id ?? record.tenant_scope;
 }
 
 function keyFacets(facets: Record<string, string[]>) {
@@ -97,21 +94,21 @@ export function SocMemoryRecordInventory() {
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
         icon={DatabaseIcon}
-        title="Memory 台账"
-        description="检索、审计和修订已确认的 SOC 经验"
+        title="经验台账"
+        description="查找、审计和修订已经由专家确认的 SOC 经验"
         actions={
           <>
             <Button size="sm" variant="outline" asChild>
               <Link href="/workspace/soc/memory">
                 <BrainCircuitIcon className="size-4" />
-                Pattern 模式中心
+                返回经验中心
               </Link>
             </Button>
             <Button
               size="icon-sm"
               variant="ghost"
-              title="刷新 Memory 台账"
-              aria-label="刷新 Memory 台账"
+              title="刷新经验台账"
+              aria-label="刷新经验台账"
               onClick={() => void refetch()}
               disabled={isFetching}
             >
@@ -136,8 +133,8 @@ export function SocMemoryRecordInventory() {
               <Input
                 value={searchDraft}
                 onChange={(event) => setSearchDraft(event.target.value)}
-                placeholder="Memory / Alert / Run / Rule / 场景 / CVE / 服务"
-                aria-label="搜索 Memory 台账"
+                placeholder="经验 ID、告警 ID、规则、场景、CVE 或服务"
+                aria-label="搜索经验台账"
               />
               <Button type="submit" size="icon" variant="outline" title="搜索">
                 <SearchIcon className="size-4" />
@@ -165,40 +162,50 @@ export function SocMemoryRecordInventory() {
                 setRetrieval(value as "all" | "enabled" | "disabled")
               }
             >
-              <SelectTrigger className="w-36" aria-label="召回状态">
+              <SelectTrigger className="w-40" aria-label="新告警使用状态">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部召回状态</SelectItem>
-                <SelectItem value="enabled">召回已启用</SelectItem>
-                <SelectItem value="disabled">召回未启用</SelectItem>
+                <SelectItem value="all">全部使用状态</SelectItem>
+                <SelectItem value="enabled">已开放给新告警</SelectItem>
+                <SelectItem value="disabled">暂停用于新告警</SelectItem>
               </SelectContent>
             </Select>
+            <span className="text-muted-foreground ml-auto text-xs">
+              排序：最近更新优先
+            </span>
           </section>
 
           <section className="min-h-[34rem] border">
             <div className="bg-muted/30 grid grid-cols-[minmax(0,1fr)_9rem_10rem_10rem] gap-3 border-b px-4 py-2 text-xs font-medium max-lg:hidden">
-              <span>Memory / Business Lesson</span>
+              <span>业务经验</span>
               <span>状态</span>
               <span>来源</span>
               <span className="text-right">更新时间</span>
             </div>
             {isLoading ? (
               <div className="text-muted-foreground flex h-48 items-center justify-center text-sm">
-                正在读取 Memory 台账...
+                正在读取经验台账...
               </div>
             ) : error ? (
               <div className="text-destructive flex h-48 items-center justify-center px-6 text-center text-sm">
-                {error instanceof Error ? error.message : "Memory 台账加载失败"}
+                {error instanceof Error ? error.message : "经验台账加载失败"}
               </div>
             ) : records.length === 0 ? (
               <div className="text-muted-foreground flex h-48 items-center justify-center text-sm">
-                当前筛选条件下没有 Memory Record。
+                当前筛选条件下没有已确认经验。
               </div>
             ) : (
               <div className="divide-y">
                 {records.map((record) => {
                   const facets = keyFacets(record.facets).slice(0, 4);
+                  const futureUse = memoryFutureUseCopy({
+                    hasRecord: true,
+                    retrievalEnabled: record.retrieval_enabled,
+                    decisionDirectiveReady:
+                      record.decision_directive !== null &&
+                      record.decision_directive !== undefined,
+                  });
                   return (
                     <Link
                       key={record.memory_id}
@@ -234,12 +241,12 @@ export function SocMemoryRecordInventory() {
                         </Badge>
                         <Badge
                           variant={
-                            record.retrieval_enabled ? "default" : "secondary"
+                            futureUse.tone === "decision"
+                              ? "default"
+                              : "secondary"
                           }
                         >
-                          {record.retrieval_enabled
-                            ? "召回已启用"
-                            : "召回未启用"}
+                          {futureUse.label}
                         </Badge>
                       </div>
                       <div className="text-muted-foreground min-w-0 text-xs">

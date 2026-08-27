@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-08-20
+> Updated: 2026-08-27
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -33,7 +33,12 @@ flowchart TD
     A["🧾 Alert JSON<br/>预警输入 / Alert input"] --> B["🚪 Entry Surface<br/>CLI / API / Kafka / Demo"]
     B --> C["⚙️ SocAnalysisService<br/>统一分析入口 / analysis entry"]
     C --> D["⚙️ Fixed Runtime Pipeline<br/>固定流水线 / deterministic control flow"]
-    D --> E["🗃️ SOC Business Store<br/>run + summary + queue + decision audit"]
+    D --> E["🗃️ SOC Business Store<br/>run + summary + decision audit<br/>queue is optional"]
+    E --> AR["🔎 Alert Result / 告警研判结果<br/>run_id is investigation identity"]
+    AR --> G["⚙️ Run-scoped Investigation Context<br/>不依赖 ReviewQueue"]
+    AR --> RG{"⚙️ Human Intervention Gate<br/>未解决的关键当前事实冲突?"}
+    RG -->|"no"| RA["🔎 Result Advisory<br/>结论、证据缺口、核查建议可见<br/>不制造人工待办"]
+    RG -->|"yes"| F["🧑‍💻 ReviewQueue / 需人工介入<br/>rare conflict-resolution task"]
     E -.->|"Kafka / batch explicit opt-in"| MR1["🗃️ MemoryPatternObservation<br/>immutable recurrence source"]
     MR1 --> MR2{"⚙️ Recurrence Gate<br/>UTC window + support 5 + distinct 5"}
     MR2 -->|"below threshold"| MR3["🔎 Retain + replay<br/>只保留观察，不创建候选"]
@@ -50,7 +55,6 @@ flowchart TD
     W --> X["🗃️ Maintenance Store<br/>baseline + deduplicated issues"]
     X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
 
-    E --> F["🔎 ReviewQueue<br/>人工复核入口 / analyst review item"]
     E -.->|"SOC_TENANT_POLICY_ENABLED<br/>default off"| TP0["⚙️ Tenant Policy Evaluator<br/>精确规则优先"]
     TP0 -->|"deterministic no-match + advisor enabled"| TP2["🧠 Reviewed Policy Skill<br/>组合运营语义"]
     TP0 --> TP1["🗃️ TenantPolicyDecision<br/>独立运营判断"]
@@ -81,10 +85,10 @@ flowchart TD
     Z9 --> Z10["🚫 Hold or rollout review only<br/>auto-close remains disabled"]
     Z4 --> G
     Z6 --> G
-    F --> G["⚙️ SocReviewService.get_investigation_context<br/>聚合调查上下文 / context assembly"]
+    F --> G
 
     G --> H["🔎 UnifiedInvestigationView<br/>统一调查视图 / unified investigation view"]
-    H --> I["🧑‍💻 Web / TUI / CLI<br/>分析师查看 / analyst surfaces"]
+    H --> I["🧑‍💻 告警研判 / Web / TUI / CLI<br/>查看所有结果；按需修正或提炼经验"]
     H --> J["🧠 SOC Lead Agent bounded context<br/>受限上下文 / bounded context"]
 
     J --> J1{"🛡️ Proposal Governance Bridge<br/>Web/Gateway middleware<br/>or TUI outer service"}
@@ -133,7 +137,10 @@ flowchart TD
    `SocAlertRawEnvelope(soc.alert.raw.v1)` 校验。mapper 完整保留 source `raw`，只补充通用 transport
    fallback 和 `_soc_ingress` provenance，再生成 `SocDaemonMessage`；裸 alert object、错误版本、超限
    payload 或保留键冲突进入现有 DLQ/commit 语义。
-2. Runtime 按固定步骤生成 `AnalysisRun`、`AlertSummary`、`ReviewQueueItem` 和 audit。
+2. Runtime 按固定步骤生成 `AnalysisRun`、`AlertSummary` 和 audit。每条已持久化 Run 都通过
+   `SocAlertResult` 和 run-scoped investigation context 可见；`run_id` 是调查身份。
+   `ReviewQueueItem` 是可选附件，只有 Runtime 无法裁决的关键当前事实冲突才创建。`unknown`、低置信度、
+   evidence gap、provider failure 或建议人工核查只作为结果提示，不自动制造运营待办。
 3. `soc.enrichment_composition.v1` 显式启用并通过 Registry fail-fast 后，D3 workflow 从已持久化的基础
    run 生成不可变 `SocEnrichmentPlan`，保存 execution/attempt，再把 exact allowlisted read-only action
    送入同一 Dispatcher。Kafka 与内网 batch 都是显式 opt-in；默认 composition 关闭时只跑固定 Runtime。
@@ -142,7 +149,9 @@ flowchart TD
 4. D4 reporting service 从同一个 execution/attempt/evidence 快照只读重建 shadow report 和
    investigation addendum。它不调用 Provider、不新增报告表、不产生第二个分析结论；只测量实际
    action-attempt latency，Provider 网络耗时和费用没有来源时明确 `not_measured`。
-5. 分析师通过 ReviewQueue 打开统一调查上下文；Web、TUI、CLI 和 Lead Agent 都读取同一 addendum。
+5. 分析师从“告警研判”按 `run_id` 打开统一调查上下文；Web、TUI 和 CLI 不依赖 ReviewQueue 即可读取
+   结论、缺口、Memory 使用、调查证据和审计。只有关键事实冲突进入独立“需人工介入”收件箱；当前
+   Lead Agent 的受控上下文桥仍绑定这类 queue task。
 6. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。标准 Web/Gateway
    `soc-triage` 运行由 profile v2 的 per-agent middleware 截获 marker；SOC TUI 由现有
    `SocLeadAgentChatService` 外层桥处理。两条入口共用 proposal parser、Policy 和 Approval Service。
@@ -157,8 +166,11 @@ flowchart TD
 9.1 分析师可以独立确认或修订 attacker、victim、proxy 和 action-specific response target。该命令追加
     `RoleAdjudicationRevisionRecord`，保留模型原始 adjudication hash 和前一版本；它不是 correction、
     Memory、Approval 或 action authorization。
-10. 人工 correction、review note、外部处置理由、domain finding 先经过统一 Memory Admission；只有明确
-    人工提升/采纳、足够理由和可复用锚点同时成立才形成 pending candidate，其余为 `observed_only`。
+10. 告警结果上的 correction 只修订当前 Run 并保留 decision lineage；“提炼为经验”是独立、显式的
+    promotion 命令。review note、外部处置理由、domain finding 与显式 promotion 再经过统一 Memory
+    Admission；只有明确人工提升/采纳、足够理由和可复用锚点同时成立才形成 pending candidate，其余为
+    `observed_only`。Candidate 的最终判断、Business Lesson 和检索权限只在经验治理页面审核，不能嵌在
+    告警结果或 ReviewQueue 表单里。
     Lead Agent 输出不会自动落记忆；PI-03F1 允许 `--lead-agent` TUI/CLI 在 open ReviewQueue 上由分析师
     明确采纳一条稳定 assistant message 并填写复用理由。PI-03F2 Web/Gateway 只接收 message ID 和理由，
     从 authenticated server-owned 当前 checkpoint 解析 `soc-triage` 最后一条 terminal assistant 原文，
@@ -201,7 +213,8 @@ flowchart TD
     直接忽略，本身不确定性转交，仍由 Runtime/Policy Skill 结合效果研判。`企图/尝试` 同样保留给组合
     研判。`enforced` 可改变有效复核/disposition，但不改技术 verdict，也不授权动作。
 13. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
-   但不能改变 verdict、ReviewQueue 或分析成功状态。
+   但不能改变 verdict、ReviewQueue 或分析成功状态。高风险动作请求同样进入独立“动作审批”收件箱，
+   不与告警修正或 Memory 审核合并。
 14. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
 15. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
    人工决定是否关单，系统不会自动应用。
@@ -464,8 +477,8 @@ flowchart LR
 | Store | What It Stores | 中文职责 |
 |---|---|---|
 | `soc_analysis_runs` | Full analysis run | 保存完整 run、input payload/hash、pipeline trace、decision、corrections |
-| `soc_alert_summaries` | Query-friendly read model | 面向列表、关联、相似检索和 ReviewQueue 的轻量摘要 |
-| `soc_review_queue` | Human review queue | 分析师复核入口；close 不等于改判 |
+| `soc_alert_summaries` | Query-friendly read model | 面向告警研判列表、关联、相似检索和可选人工任务的轻量摘要 |
+| `soc_review_queue` | Human intervention queue | 仅保存未解决关键事实冲突；close 不等于改判 |
 | `soc_decision_audit_log` | Decision audit records | analyze/replay/correct/external disposition 的审计链 |
 | `soc_mutation_audit_log` | L3 mutation audit records | correction、close/note、memory review/retrieval activation、approval 和 external disposition 的 actor/provenance/reason/idempotency/result 追加式审计；不保存原始敏感 payload |
 | `soc_investigation_evidence` | Read-only action results | 资产归属、威胁情报、安全标签、软件路径等只读调查结果；不包含已删除的外部 EDR/HIDS 查询 mock |
@@ -486,13 +499,13 @@ flowchart LR
 | `soc_normalization_schema_baselines` | Approved parser fingerprints | 人工批准的 tenant/source/adapter/parser/version 基线；新版本 supersede 旧版本 |
 | `soc_normalization_maintenance_issues` | Parser/mapping maintenance queue | 去重保存 missing/novel/degraded/unsupported/gap/truncation，记录出现次数和处理状态 |
 
-## 4. Review Context Assembly / 调查上下文聚合
+## 4. Investigation Context Assembly / 调查上下文聚合
 
 ```mermaid
 flowchart TD
-    A["🧑‍💻 Analyst opens queue_id<br/>分析师打开 ReviewQueue"] --> B["⚙️ SocReviewService.get_investigation_context"]
+    A["🧑‍💻 Analyst opens run_id<br/>分析师打开告警研判结果"] --> B["⚙️ SocReviewService.get_alert_investigation_context"]
 
-    B --> C["🗃️ get ReviewQueueItem<br/>队列基础信息"]
+    B -. "only when admitted" .-> C["🗃️ optional ReviewQueueItem<br/>关键冲突任务"]
     B --> D["🗃️ get AnalysisRun<br/>完整分析结果"]
     B --> E["🗃️ get AlertSummary<br/>摘要读模型"]
     B --> F["🗃️ list AuditRecords<br/>审计记录"]
@@ -504,7 +517,7 @@ flowchart TD
     B --> L["✅ find RelevantMemories<br/>retrieval-enabled confirmed memory"]
     B --> M["🧩 SocDomainTriageService<br/>领域和场景 finding"]
 
-    C --> N["🔎 InvestigationContext"]
+    C --> N["🔎 SocAlertInvestigationContext"]
     D --> N
     E --> N
     F --> N
@@ -525,7 +538,7 @@ flowchart TD
     T --> Q
 ```
 
-`InvestigationContext` 是分析师打开一个 queue item 时的核心只读视图。它不是新的 source of truth，而是把已有数据组合起来：
+`SocAlertInvestigationContext` 是分析师按 `run_id` 打开任意告警结果时的核心只读视图。它不是新的 source of truth，而是把已有数据组合起来；只有确实存在关键事实冲突时才附带 `ReviewQueueItem`：
 
 | Context Field | English | 中文说明 |
 |---|---|---|
@@ -1024,7 +1037,7 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> open: analysis requires review
+    [*] --> open: unresolved material current-fact conflict
     open --> closed: SocReviewService.close_queue_item
     open --> closed: SocReviewService.correct
     closed --> [*]

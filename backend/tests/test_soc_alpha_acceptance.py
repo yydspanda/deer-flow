@@ -42,11 +42,11 @@ def test_core_acceptance_proves_cli_gateway_feedback_audit_and_replay(tmp_path: 
     assert gateway["first_apply"]["correction_applied"] is True
     assert gateway["duplicate_apply"]["idempotent"] is True
     assert gateway["changed_retry_status"] == 409
-    assert gateway["updated_queue_status"] == "closed"
+    assert gateway["updated_verdict"] == "false_positive"
 
     persistence = _read_json(tmp_path / "core" / "persistence-audit.json")
     assert persistence["persisted_verdict"] == "false_positive"
-    assert persistence["persisted_queue_status"] == "closed"
+    assert persistence["persisted_queue_status"] is None
     assert {"analysis", "correction", "external_disposition"} <= set(persistence["decision_audit_actions"])
     assert persistence["mutation_audits"]
 

@@ -37,7 +37,15 @@ services:
       SOC_ANALYZER_MODE: llm
       SOC_MEMORY_ENVIRONMENT: dev
       SOC_AUTOMATION_ENVIRONMENT: dev
-      SOC_TENANT_POLICY_ENABLED: "false"
+      SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY: "true"
+      SOC_TENANT_POLICY_ENABLED: "true"
+      SOC_TENANT_DISPOSITION_POLICY_PATH: /app/backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json
+      SOC_TENANT_POLICY_ENVIRONMENT: dev
+      SOC_TENANT_POLICY_EVENT_TIMEZONE: Asia/Shanghai
+      SOC_TENANT_POLICY_ADVISOR_MODE: "llm"
+      SOC_TENANT_POLICY_SKILL_PATH: /app/backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md
+      SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED: "true"
+      SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH: /app/backend/.deer-flow/pingan-context/software-path-catalog.sqlite
       SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS: "false"
 
 volumes:

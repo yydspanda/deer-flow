@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.routers import (
+    soc_alerts,
     soc_approvals,
     soc_external_dispositions,
     soc_memory,
@@ -59,6 +60,7 @@ async def _request(method: str, path: str, **kwargs) -> httpx.Response:
 def _soc_openapi() -> dict:
     app = FastAPI()
     for module in (
+        soc_alerts,
         soc_approvals,
         soc_external_dispositions,
         soc_memory,

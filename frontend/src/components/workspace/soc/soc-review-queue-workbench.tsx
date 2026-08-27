@@ -45,7 +45,6 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   SocDispositionSampleInbox,
   type SocDispositionSampleReviewTarget,
@@ -53,7 +52,6 @@ import {
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   SocApiError,
-  useCloseSocReviewItem,
   useCorrectSocReviewRun,
   useCreateSocApprovalGrant,
   useDryRunSocApprovedAction,
@@ -101,8 +99,8 @@ import { cn } from "@/lib/utils";
 
 const STATUS_OPTIONS: { value: SocReviewQueueStatus | "all"; label: string }[] =
   [
-    { value: "open", label: "待复核" },
-    { value: "closed", label: "已关闭" },
+    { value: "open", label: "等待确认" },
+    { value: "closed", label: "已完成" },
     { value: "all", label: "全部" },
   ];
 
@@ -131,11 +129,122 @@ const MEMORY_REVISION_ISSUE_LABELS: Record<
 
 const VERDICT_OPTIONS: { value: SocVerdict; label: string }[] = [
   { value: "true_positive", label: "真实攻击" },
-  { value: "suspicious", label: "可疑" },
-  { value: "false_positive", label: "误报" },
-  { value: "unknown", label: "未知" },
-  { value: "needs_review", label: "需复核" },
+  { value: "suspicious", label: "可疑，需要继续调查" },
+  { value: "false_positive", label: "误报或已知安全行为" },
+  { value: "unknown", label: "暂无法判断" },
+  { value: "needs_review", label: "等待人工确认" },
 ];
+
+const ANALYST_VERDICT_OPTIONS = VERDICT_OPTIONS.filter(
+  (item) => item.value !== "needs_review",
+);
+
+const PRIORITY_LABELS: Record<SocReviewQueueItem["priority"], string> = {
+  high: "高优先级",
+  medium: "中优先级",
+  low: "普通",
+};
+
+interface ReviewReasonCopy {
+  title: string;
+  explanation: string;
+  analystAction: string;
+}
+
+const REVIEW_REASON_COPY: Record<string, ReviewReasonCopy> = {
+  confidence_not_calibrated: {
+    title: "置信度尚未校准",
+    explanation: "系统给出了判断，但当前分数不能直接当作稳定概率使用。",
+    analystAction: "结合调查依据确认最终判断，并记录业务依据。",
+  },
+  stub_analyzer: {
+    title: "当前仅完成基础分析",
+    explanation: "本次运行使用了确定性占位分析，没有获得完整模型研判结果。",
+    analystAction: "核对原始告警和行为上下文后给出最终判断。",
+  },
+  raw_confidence_below_threshold: {
+    title: "系统判断把握不足",
+    explanation: "模型已形成初步结论，但置信度低于当前自动通过门槛。",
+    analystAction: "检查关键证据与反证，确认是否需要升级处置。",
+  },
+  false_positive_requires_confirmation: {
+    title: "误报结论需要人工确认",
+    explanation: "系统倾向于无风险，但当前治理策略要求由运营人员确认。",
+    analystAction: "确认业务事实和适用边界，避免错误放行。",
+  },
+  uncertain_verdict: {
+    title: "系统未形成明确结论",
+    explanation: "现有信息同时支持多种判断，系统没有自动选择最终结论。",
+    analystAction: "核对主要证据、反证和环境信息后给出最终判断。",
+  },
+  degraded_message_schema: {
+    title: "原始日志结构异常",
+    explanation: "日志可以部分使用，但部分字段损坏或未按预期结构提供。",
+    analystAction: "优先核对原始日志中的关键行为字段，再确认结论。",
+  },
+  unsupported_message_schema: {
+    title: "当前日志格式尚未适配",
+    explanation: "系统保留了原始输入，但无法稳定投影出完整研判字段。",
+    analystAction: "依据原始日志完成判断，并将格式问题反馈给归一化运维。",
+  },
+  high_value_evidence_gap: {
+    title: "缺少关键原始证据",
+    explanation:
+      "系统只获得了部分告警信息，缺少足以确认真实影响的关键行为证据。",
+    analystAction:
+      "核对原始行为日志、进程、命令行、文件或网络会话后给出最终判断。",
+  },
+  truncated_analysis_evidence: {
+    title: "关键上下文未完整进入分析",
+    explanation: "输入内容超过分析预算，部分高价值信息没有得到完整投影。",
+    analystAction: "打开完整调查依据，确认被省略内容是否影响当前结论。",
+  },
+  fact_conflict: {
+    title: "告警字段存在实质冲突",
+    explanation: "不同证据对攻击方向、角色或关键事实给出了不一致信息。",
+    analystAction: "确认可信来源和实际攻击链路后给出最终判断。",
+  },
+  ungrounded_analysis_evidence: {
+    title: "部分证据引用未通过核验",
+    explanation: "模型引用的部分内容无法精确对应到本次告警的证据目录。",
+    analystAction: "检查被拒绝的引用是否影响核心结论。",
+  },
+  ungrounded_analysis_reasoning: {
+    title: "部分推理依据未通过核验",
+    explanation: "模型给出了推理，但相关证据引用不够完整。",
+    analystAction: "确认核心推理是否仍被现有证据支持。",
+  },
+  unproven_outcome_claim: {
+    title: "影响结果缺少直接证据",
+    explanation: "告警行为可信，但是否已经造成实际影响仍缺少直接依据。",
+    analystAction: "核对主机、账号或业务侧结果后确认影响程度。",
+  },
+  role_verification_challenged: {
+    title: "攻击方向复核发现反证",
+    explanation: "二次角色核验对攻击者、受害者或网络方向提出了有效异议。",
+    analystAction: "核对连接方向和资产角色后确认处置目标。",
+  },
+  role_verification_unresolved: {
+    title: "攻击者与受害者尚未确定",
+    explanation: "现有证据不足以稳定裁决网络角色或处置目标。",
+    analystAction: "核对网络会话、资产归属和当前场景后确认角色。",
+  },
+  role_verifier_unavailable: {
+    title: "角色复核服务不可用",
+    explanation: "主分析已完成，但可选的攻击方向二次复核没有成功运行。",
+    analystAction: "人工确认攻击者、受害者和拟处置目标。",
+  },
+  analysis_output_degraded: {
+    title: "模型结果部分降级",
+    explanation: "核心判断仍可读取，但部分结构化输出没有通过契约校验。",
+    analystAction: "重点确认受影响区块是否改变最终结论或处置目标。",
+  },
+  analysis_failed: {
+    title: "模型研判未完成",
+    explanation: "本次模型调用或结果解析失败，系统未获得可用的完整结论。",
+    analystAction: "依据现有确定性证据完成判断，必要时重新运行分析。",
+  },
+};
 
 const DISPOSITION_OPTIONS: {
   value: SocOperationalDisposition;
@@ -371,6 +480,29 @@ function priorityClass(priority: SocReviewQueueItem["priority"]) {
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
 }
 
+function reviewReasonCodes(item: SocReviewQueueItem) {
+  const codes = item.review_reasons?.filter(Boolean) ?? [];
+  if (codes.length > 0) return Array.from(new Set(codes));
+  return item.reason ? [item.reason] : [];
+}
+
+function reviewReasonCopy(item: SocReviewQueueItem): ReviewReasonCopy {
+  for (const code of reviewReasonCodes(item)) {
+    const copy = REVIEW_REASON_COPY[code];
+    if (copy) return copy;
+  }
+  return {
+    title: "系统需要人工确认",
+    explanation:
+      item.reason || "当前研判没有满足自动完成条件，已转为人工待办。",
+    analystAction: "核对调查依据并记录最终判断与业务依据。",
+  };
+}
+
+function reviewReasonLabel(code: string) {
+  return REVIEW_REASON_COPY[code]?.title ?? "其他人工确认原因";
+}
+
 function verdictLabel(value: string | null | undefined) {
   return VERDICT_OPTIONS.find((item) => item.value === value)?.label ?? "未知";
 }
@@ -381,6 +513,22 @@ function queueItemLabel(item: SocReviewQueueItem) {
 
 function approvalRequestLabel(request: SocAgentApprovalRequest) {
   return `${request.action} / ${request.approval_request_id ?? request.permission_decision_id}`;
+}
+
+function approvalBelongsToReview(
+  request: SocAgentApprovalRequest,
+  item: SocReviewQueueItem | null,
+  proposalIds: Set<string>,
+) {
+  if (!item) return false;
+  const refs = request.context_refs ?? {};
+  return (
+    refs.queue_id === item.queue_id ||
+    refs.run_id === item.run_id ||
+    refs.alert_id === item.alert_id ||
+    (!!request.source_proposal_id &&
+      proposalIds.has(request.source_proposal_id))
+  );
 }
 
 function hasObjectEntries(value: Record<string, unknown> | null | undefined) {
@@ -501,7 +649,7 @@ const MEMORY_FACET_VALUE_LABELS: Record<string, Record<string, string>> = {
   },
   environment: {
     dev: "开发环境",
-    "dev-corpus-eval": "DEV 语料验证",
+    "dev-corpus-eval": "DEV 告警演练",
     local: "本地环境",
     prd: "生产环境",
     stg: "预发布环境",
@@ -609,8 +757,7 @@ const MEMORY_LESSON_BLUEPRINT = [
     title: "适用条件",
     english: "Applicability",
     emphasis: "匹配开关",
-    description:
-      "决定什么样的新告警有资格命中这条 Memory，由系统从候选范围生成。",
+    description: "决定什么样的新告警可以使用这条经验，由系统从候选范围生成。",
   },
   {
     key: "generalization_boundaries",
@@ -1830,7 +1977,7 @@ function MemoryCandidateSection({
                   <div className="mt-4 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
                     <div className="flex flex-wrap items-center gap-2 font-semibold">
                       <AlertTriangleIcon className="size-4" />
-                      这是现有 Memory 的修订候选
+                      这是现有经验的修订候选
                       <Badge variant="outline">
                         {
                           MEMORY_REVISION_ISSUE_LABELS[
@@ -1840,10 +1987,10 @@ function MemoryCandidateSection({
                       </Badge>
                     </div>
                     <p className="mt-2 leading-6">
-                      前置 Memory{" "}
+                      前置经验{" "}
                       {candidate.revision_lineage.predecessor_memory_id} v
                       {candidate.revision_lineage.predecessor_memory_version}
-                      已暂停未来召回。只有本候选审核通过后，系统才会创建替代版本并将旧版本标记为历史记录。
+                      已暂停用于新告警。只有本候选审核通过后，系统才会创建替代版本并将旧版本标记为历史记录。
                     </p>
                     <div className="mt-2 grid gap-1 text-xs md:grid-cols-2">
                       <span className="font-mono break-all">
@@ -1915,7 +2062,7 @@ function MemoryCandidateSection({
                         className="group h-auto w-full justify-between rounded-none px-0 py-3 text-xs"
                       >
                         <span>
-                          高级匹配范围 · {applicability.profile_id}@
+                          匹配规则详情 · {applicability.profile_id}@
                           {applicability.profile_version}
                         </span>
                         <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
@@ -1925,15 +2072,14 @@ function MemoryCandidateSection({
                       <div className="border bg-zinc-50 px-3 py-3 text-xs">
                         <div className="flex flex-wrap items-center gap-2">
                           <KeyRoundIcon className="size-4" />
-                          <span className="font-semibold">
-                            系统锁定条件 / Required
-                          </span>
+                          <span className="font-semibold">系统锁定条件</span>
                           <Badge variant="outline">全部必须命中</Badge>
                         </div>
                         <p className="text-muted-foreground mt-2 leading-5">
-                          这些条件由 {applicability.profile_id}@
-                          {applicability.profile_version}{" "}
-                          根据候选证据生成，保护规则与强行为锚点，审核页不能删除或改写。
+                          系统根据候选证据和匹配规则版本{" "}
+                          {applicability.profile_id}@
+                          {applicability.profile_version}
+                          生成这些条件。它们保护规则与核心行为特征，审核页不能删除或改写。
                         </p>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {Object.entries(applicability.required_facets).map(
@@ -1957,12 +2103,10 @@ function MemoryCandidateSection({
                       </div>
                       {Object.keys(applicability.optional_facets).length > 0 ? (
                         <div className="mt-3 border px-3 py-3 text-xs">
-                          <div className="font-semibold">
-                            可选收窄条件 / Optional Narrowing
-                          </div>
+                          <div className="font-semibold">可选收窄条件</div>
                           <p className="text-muted-foreground mt-1 leading-5">
                             勾选等于增加一项必需条件；取消勾选等于删除本次增加。这里只能收窄，不能扩大，也不能输入
-                            Profile 未提供的任意字段。
+                            系统匹配规则未提供的任意字段。
                           </p>
                           <div className="mt-3 grid gap-2 md:grid-cols-2">
                             {Object.entries(applicability.optional_facets).map(
@@ -2025,9 +2169,7 @@ function MemoryCandidateSection({
                       ) : null}
                       {Object.keys(applicability.excluded_facets).length > 0 ? (
                         <div className="mt-3 border border-red-200 bg-red-50 px-3 py-3 text-xs text-red-950">
-                          <div className="font-semibold">
-                            排除条件 / Exclusions
-                          </div>
+                          <div className="font-semibold">排除条件</div>
                           <div className="mt-2 flex flex-wrap gap-2">
                             {Object.entries(applicability.excluded_facets).map(
                               ([key, values]) => (
@@ -2058,8 +2200,7 @@ function MemoryCandidateSection({
                         {effectiveApplicability?.minimum_optional_matches
                           ? `，并至少命中 ${effectiveApplicability.minimum_optional_matches} 组剩余可选条件`
                           : ""}
-                        。新字段或新的匹配语义必须由租户 Memory Profile
-                        产生并经过后端契约验证，不能在浏览器中临时扩权。
+                        。新字段或新的匹配语义必须由租户匹配规则产生并经过后端契约验证，不能在浏览器中临时扩大适用范围。
                       </div>
                     </CollapsibleContent>
                   </Collapsible>
@@ -2297,8 +2438,7 @@ function MemoryCandidateSection({
                             3. 选择未来用途
                           </div>
                           <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
-                            “启用检索”只决定以后能否搜到这条
-                            Memory；这里决定搜到后是仅供模型参考，还是在全部必需条件精确命中时参与最终结论。
+                            经验开放给新告警后，系统可以找到它；这里决定找到后是仅供模型参考，还是在全部必需条件精确匹配时复用已审核结论。
                           </p>
                         </div>
                         <label className="flex items-center gap-3 border bg-white px-3 py-2 text-xs font-medium dark:bg-zinc-950">
@@ -2318,8 +2458,8 @@ function MemoryCandidateSection({
                           />
                           <span>
                             {draft.applyToFutureMatches
-                              ? "精确匹配后可参与结论"
-                              : "仅供模型参考，不改判"}
+                              ? "精确匹配时复用审核结论"
+                              : "仅供研判参考，不改判"}
                           </span>
                         </label>
                       </div>
@@ -2471,25 +2611,25 @@ function RelevantMemorySection({
       </div>
       {!result ? (
         <div className="text-muted-foreground p-4 text-sm">
-          当前上下文没有 memory retrieval result。
+          当前告警没有历史经验匹配结果。
         </div>
       ) : (
         <div className="divide-y">
           <div className="text-muted-foreground grid gap-2 p-4 text-xs sm:grid-cols-4">
             <span>候选 {result.total_candidate_count}</span>
-            <span>未开启检索 {result.skipped_retrieval_disabled}</span>
-            <span>未治理启用 {result.skipped_ungoverned_activation}</span>
-            <span>启用已过期 {result.skipped_activation_expired}</span>
+            <span>暂停使用 {result.skipped_retrieval_disabled}</span>
+            <span>缺少使用审批 {result.skipped_ungoverned_activation}</span>
+            <span>使用期已过 {result.skipped_activation_expired}</span>
             <span>逾期未复核 {result.skipped_review_overdue}</span>
             <span>状态过滤 {result.skipped_status}</span>
             <span>强锚点过滤 {result.skipped_missing_strong_anchor}</span>
             <span>适用范围过滤 {result.skipped_not_applicable}</span>
             <span>低分过滤 {result.skipped_below_min_score}</span>
-            <span>仅上下文 {result.returned_context_only_count}</span>
+            <span>仅供参考 {result.returned_context_only_count}</span>
           </div>
           {matches.length === 0 ? (
             <div className="text-muted-foreground p-4 text-sm">
-              没有命中 retrieval-enabled 的 confirmed memory。
+              没有找到可用于当前告警的已确认经验。
             </div>
           ) : (
             matches.map((match) => (
@@ -2509,7 +2649,7 @@ function RelevantMemorySection({
                     <Badge variant="secondary">
                       {match.record.target_artifact}
                     </Badge>
-                    <Badge variant="outline">retrieval-enabled</Badge>
+                    <Badge variant="outline">已开放给新告警</Badge>
                     {match.applicability_report ? (
                       <Badge
                         variant={
@@ -2519,7 +2659,7 @@ function RelevantMemorySection({
                         }
                       >
                         {match.applicability_report.context_only_allowed
-                          ? "context-only"
+                          ? "仅供研判参考"
                           : match.applicability_report.status}
                       </Badge>
                     ) : null}
@@ -2616,7 +2756,9 @@ function MemoryRetrievalActivationSection({
                         record.retrieval_enabled ? "secondary" : "outline"
                       }
                     >
-                      {record.retrieval_enabled ? "可检索" : "未启用检索"}
+                      {record.retrieval_enabled
+                        ? "已开放给新告警"
+                        : "暂停用于新告警"}
                     </Badge>
                     <Badge
                       variant={
@@ -2624,23 +2766,21 @@ function MemoryRetrievalActivationSection({
                       }
                     >
                       {record.decision_directive
-                        ? "精确匹配后可参与结论"
-                        : "仅供模型参考"}
+                        ? "精确匹配可复用结论"
+                        : "仅供研判参考"}
                     </Badge>
                     <Button size="sm" variant="outline" asChild>
                       <Link
                         href={`/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}`}
                       >
                         <FilePenLineIcon className="size-4" />
-                        查看 / 修订 Memory
+                        查看 / 修订经验
                       </Link>
                     </Button>
                   </div>
                 </div>
                 <p className="text-muted-foreground mt-2 text-xs leading-5">
-                  检索状态决定这条 Memory
-                  能否进入候选上下文；决策用途决定它在满足全部适用条件后，是否可以形成可审计的
-                  Memory Decision。
+                  使用状态决定新告警能否找到这条经验；未来用途决定它在满足全部适用条件后，是仅作研判参考，还是可以复用已审核结论。
                 </p>
                 <div className="mt-4">
                   {record.business_lesson ? (
@@ -2713,12 +2853,14 @@ function MemoryRetrievalActivationSection({
                       onClick={() => onAction(record, nextAction)}
                     >
                       <PowerIcon className="size-4" />
-                      {nextAction === "enable" ? "启用检索" : "停用检索"}
+                      {nextAction === "enable"
+                        ? "开放给新告警"
+                        : "暂停用于新告警"}
                     </Button>
                   </div>
                 ) : (
                   <div className="text-muted-foreground mt-4 border-y py-3 text-xs">
-                    历史 Memory 为只读状态，不能修改检索开关。
+                    历史经验为只读状态，不能修改新告警使用状态。
                   </div>
                 )}
                 {record.retrieval_updated_at ? (
@@ -2758,6 +2900,7 @@ function QueueItemButton({
   active: boolean;
   onClick: () => void;
 }) {
+  const reason = reviewReasonCopy(item);
   return (
     <button
       type="button"
@@ -2778,18 +2921,23 @@ function QueueItemButton({
           </div>
         </div>
         <Badge className={priorityClass(item.priority)} variant="outline">
-          {item.priority}
+          {PRIORITY_LABELS[item.priority]}
         </Badge>
       </div>
-      <div className="text-muted-foreground mt-3 line-clamp-2 text-xs">
-        {item.reason}
+      <div className="mt-3 flex items-start gap-2 text-xs">
+        {item.status === "open" ? (
+          <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+        ) : (
+          <CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
+        )}
+        <span className="line-clamp-2 font-medium">{reason.title}</span>
       </div>
       <div className="mt-3 flex items-center justify-between gap-2 text-xs">
         <span className="text-muted-foreground">
           {formatTime(item.updated_at)}
         </span>
         <span className="text-muted-foreground">
-          {verdictLabel(item.verdict)}
+          系统判断：{verdictLabel(item.verdict)}
         </span>
       </div>
     </button>
@@ -2818,12 +2966,59 @@ function EmptyDetail() {
         <ShieldAlertIcon className="text-muted-foreground size-6" />
       </div>
       <div>
-        <p className="text-sm font-medium">选择一条复核项</p>
+        <p className="text-sm font-medium">选择一条告警待办</p>
         <p className="text-muted-foreground mt-1 text-sm">
-          查看研判上下文、相似告警和人工纠正入口。
+          查看为什么需要人工处理，并记录最终判断。
         </p>
       </div>
     </div>
+  );
+}
+
+function ReviewDetailGroup({
+  icon: Icon,
+  title,
+  description,
+  defaultOpen = false,
+  forceOpen = false,
+  children,
+}: {
+  icon: typeof SearchCheckIcon;
+  title: string;
+  description: string;
+  defaultOpen?: boolean;
+  forceOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Collapsible
+      defaultOpen={defaultOpen}
+      {...(forceOpen ? { open: true } : {})}
+      className="border-y"
+    >
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="group h-auto w-full justify-between rounded-none px-0 py-4 text-left"
+        >
+          <span className="flex min-w-0 items-start gap-3">
+            <span className="bg-muted flex size-9 shrink-0 items-center justify-center rounded-md">
+              <Icon className="size-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">{title}</span>
+              <span className="text-muted-foreground mt-0.5 block text-xs font-normal whitespace-normal">
+                {description}
+              </span>
+            </span>
+          </span>
+          <ChevronDownIcon className="text-muted-foreground size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-5 pb-5">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -2849,9 +3044,8 @@ export function SocReviewQueueWorkbench({
   );
   const [sampleReviewTarget, setSampleReviewTarget] =
     useState<SocDispositionSampleReviewTarget | null>(null);
-  const [closeReason, setCloseReason] = useState("复核完成");
-  const [correctionReason, setCorrectionReason] = useState("");
-  const [correctedVerdict, setCorrectedVerdict] =
+  const [analystReason, setAnalystReason] = useState("");
+  const [analystVerdict, setAnalystVerdict] =
     useState<SocVerdict>("false_positive");
   const [selectedApprovalRequestId, setSelectedApprovalRequestId] = useState<
     string | null
@@ -2963,17 +3157,26 @@ export function SocReviewQueueWorkbench({
     limit: 50,
     enabled: workspaceView === "queue",
   });
+  const scopedApprovalRequests = useMemo(() => {
+    const proposalIds = new Set(
+      (context?.disposition_proposals ?? []).map(
+        (proposal) => proposal.proposal_id,
+      ),
+    );
+    return approvalRequests.filter((request) =>
+      approvalBelongsToReview(request, fallbackSelectedItem, proposalIds),
+    );
+  }, [approvalRequests, context?.disposition_proposals, fallbackSelectedItem]);
   const fallbackSelectedApprovalRequest = useMemo(
     () =>
-      approvalRequests.find(
+      scopedApprovalRequests.find(
         (request) => request.approval_request_id === selectedApprovalRequestId,
       ) ??
-      approvalRequests[0] ??
+      scopedApprovalRequests[0] ??
       null,
-    [approvalRequests, selectedApprovalRequestId],
+    [scopedApprovalRequests, selectedApprovalRequestId],
   );
   const activeApprovalRequestId =
-    selectedApprovalRequestId ??
     fallbackSelectedApprovalRequest?.approval_request_id;
   const {
     request: selectedApprovalRequest,
@@ -2983,7 +3186,6 @@ export function SocReviewQueueWorkbench({
   );
   const activeApprovalRequest =
     selectedApprovalRequest ?? fallbackSelectedApprovalRequest;
-  const closeMutation = useCloseSocReviewItem();
   const correctMutation = useCorrectSocReviewRun();
   const createApprovalGrantMutation = useCreateSocApprovalGrant();
   const rejectApprovalRequestMutation = useRejectSocApprovalRequest();
@@ -3002,11 +3204,13 @@ export function SocReviewQueueWorkbench({
   };
 
   useEffect(() => {
-    const firstRequestId = approvalRequests[0]?.approval_request_id;
-    if (!selectedApprovalRequestId && firstRequestId) {
-      setSelectedApprovalRequestId(firstRequestId);
-    }
-  }, [approvalRequests, selectedApprovalRequestId]);
+    const firstRequestId = scopedApprovalRequests[0]?.approval_request_id;
+    const selectionIsScoped = scopedApprovalRequests.some(
+      (request) => request.approval_request_id === selectedApprovalRequestId,
+    );
+    if (!selectionIsScoped)
+      setSelectedApprovalRequestId(firstRequestId ?? null);
+  }, [scopedApprovalRequests, selectedApprovalRequestId]);
 
   useEffect(() => {
     if (!activeApprovalRequest) return;
@@ -3015,34 +3219,21 @@ export function SocReviewQueueWorkbench({
     setApprovedActionResult(null);
   }, [activeApprovalRequest]);
 
-  const handleClose = async () => {
-    if (!activeQueueId || closeReason.trim().length === 0) return;
-    try {
-      await closeMutation.mutateAsync({
-        queueId: activeQueueId,
-        request: { reason: closeReason.trim() },
-      });
-      toast.success("复核项已关闭");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "关闭失败");
-    }
-  };
-
-  const handleCorrect = async () => {
+  const handleRecordAnalystDecision = async () => {
     const runId = context?.run.run_id ?? fallbackSelectedItem?.run_id;
-    if (!runId || correctionReason.trim().length === 0) return;
+    if (!runId || analystReason.trim().length === 0) return;
     try {
       await correctMutation.mutateAsync({
         runId,
         request: {
-          verdict: correctedVerdict,
-          reason: correctionReason.trim(),
+          verdict: analystVerdict,
+          reason: analystReason.trim(),
         },
       });
-      toast.success("人工纠正已记录");
-      setCorrectionReason("");
+      toast.success("最终判断已记录，告警待办已完成");
+      setAnalystReason("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "纠正失败");
+      toast.error(err instanceof Error ? err.message : "最终判断记录失败");
     }
   };
 
@@ -3340,42 +3531,37 @@ export function SocReviewQueueWorkbench({
   return (
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
-        icon={ShieldCheckIcon}
-        title="SOC 审核中心"
-        description="分别处理告警结论、Memory Candidate 与抽样质量审核"
+        icon={
+          workspaceView === "memory"
+            ? LibraryBigIcon
+            : workspaceView === "sample"
+              ? FlaskConicalIcon
+              : ShieldCheckIcon
+        }
+        title={
+          workspaceView === "memory"
+            ? "经验审核"
+            : workspaceView === "sample"
+              ? "质量评测"
+              : "需人工介入"
+        }
+        description={
+          workspaceView === "memory"
+            ? "审核待沉淀经验；确认前不会影响新告警"
+            : workspaceView === "sample"
+              ? "抽样评估处置建议，不属于日常告警队列"
+              : "只处理 Runtime 无法解决的关键事实冲突"
+        }
         actions={
           <>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              value={workspaceView}
-              onValueChange={(value) =>
-                value &&
-                setWorkspaceView(value as "queue" | "memory" | "sample")
-              }
-            >
-              <ToggleGroupItem value="queue" aria-label="告警复核队列" asChild>
-                <Link href="/workspace/soc/review/alerts">
-                  <InboxIcon className="size-4" />
-                  告警队列
-                </Link>
-              </ToggleGroupItem>
-              <ToggleGroupItem value="memory" aria-label="候选经验审核" asChild>
-                <Link href="/workspace/soc/review/memory-candidates">
-                  <LibraryBigIcon className="size-4" />
-                  候选经验
-                </Link>
-              </ToggleGroupItem>
-              <ToggleGroupItem value="sample" aria-label="抽样复核批次" asChild>
-                <Link href="/workspace/soc/review/samples">
-                  <FlaskConicalIcon className="size-4" />
-                  抽样复核
-                </Link>
-              </ToggleGroupItem>
-            </ToggleGroup>
             {workspaceView === "queue" ? (
               <>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/workspace/soc/alerts">
+                    <ChevronLeftIcon className="size-4" />
+                    返回告警研判
+                  </Link>
+                </Button>
                 <Select
                   value={statusFilter}
                   onValueChange={(value) =>
@@ -3405,6 +3591,13 @@ export function SocReviewQueueWorkbench({
                   刷新
                 </Button>
               </>
+            ) : workspaceView === "memory" ? (
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/workspace/soc/memory">
+                  <ChevronLeftIcon className="size-4" />
+                  返回经验中心
+                </Link>
+              </Button>
             ) : null}
           </>
         }
@@ -3421,12 +3614,9 @@ export function SocReviewQueueWorkbench({
             <section className="border px-4 py-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-sm font-semibold">
-                    Memory Candidate 治理
-                  </h2>
+                  <h2 className="text-sm font-semibold">经验候选审核</h2>
                   <p className="text-muted-foreground mt-1 text-sm">
-                    审核跨告警模式经验，不会为无需人工复核的单条告警伪造
-                    ReviewQueue 工单。
+                    决定跨告警经验是否值得沉淀，以及未来新告警可以如何使用。
                   </p>
                 </div>
                 {initialCandidateId ? (
@@ -3441,7 +3631,7 @@ export function SocReviewQueueWorkbench({
                   </div>
                 ) : (
                   <Badge variant="secondary">
-                    {standaloneMemoryCandidates.length} 条候选
+                    {standaloneMemoryCandidates.length} 条待审核经验
                   </Badge>
                 )}
               </div>
@@ -3453,7 +3643,7 @@ export function SocReviewQueueWorkbench({
                 : listedMemoryCandidatesLoading
             ) ? (
               <div className="text-muted-foreground flex min-h-48 items-center justify-center border text-sm">
-                正在加载候选经验...
+                正在加载待审核经验...
               </div>
             ) : (
                 initialCandidateId
@@ -3468,7 +3658,7 @@ export function SocReviewQueueWorkbench({
                       ? focusedMemoryCandidateError
                       : listedMemoryCandidatesError
                     )?.message
-                  : "候选经验加载失败"}
+                  : "待审核经验加载失败"}
               </div>
             ) : !initialCandidateId ? (
               <MemoryCandidateInventory
@@ -3480,7 +3670,7 @@ export function SocReviewQueueWorkbench({
               />
             ) : standaloneMemoryCandidates.length === 0 ? (
               <div className="text-muted-foreground flex min-h-48 items-center justify-center border text-sm">
-                未找到该候选经验。
+                未找到该待审核经验。
               </div>
             ) : (
               <>
@@ -3520,8 +3710,13 @@ export function SocReviewQueueWorkbench({
       >
         <aside className="min-h-0 border-r">
           <div className="flex items-center justify-between border-b px-4 py-3">
-            <div className="text-sm font-medium">队列</div>
-            <Badge variant="secondary">{items.length}</Badge>
+            <div>
+              <div className="text-sm font-medium">告警待办</div>
+              <div className="text-muted-foreground mt-0.5 text-xs">
+                按更新时间排序
+              </div>
+            </div>
+            <Badge variant="secondary">{items.length} 条</Badge>
           </div>
           <div className="h-full overflow-y-auto p-3">
             {isLoading ? (
@@ -3534,7 +3729,7 @@ export function SocReviewQueueWorkbench({
               </div>
             ) : items.length === 0 ? (
               <div className="text-muted-foreground flex h-32 items-center justify-center text-sm">
-                当前没有复核项
+                当前没有等待人工确认的告警
               </div>
             ) : (
               <div className="space-y-2">
@@ -3563,7 +3758,7 @@ export function SocReviewQueueWorkbench({
             </div>
           ) : (
             <div className="mx-auto flex max-w-6xl flex-col gap-5 p-6">
-              <section className="rounded-md border">
+              <section className="overflow-hidden rounded-md border">
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -3574,12 +3769,18 @@ export function SocReviewQueueWorkbench({
                         className={priorityClass(fallbackSelectedItem.priority)}
                         variant="outline"
                       >
-                        {fallbackSelectedItem.priority}
+                        {PRIORITY_LABELS[fallbackSelectedItem.priority]}
                       </Badge>
-                      <Badge variant="outline">
+                      <Badge
+                        variant={
+                          fallbackSelectedItem.status === "open"
+                            ? "secondary"
+                            : "outline"
+                        }
+                      >
                         {fallbackSelectedItem.status === "open"
-                          ? "待复核"
-                          : "已关闭"}
+                          ? "等待人工确认"
+                          : "已完成"}
                       </Badge>
                     </div>
                     <p className="text-muted-foreground mt-1 text-sm">
@@ -3594,7 +3795,7 @@ export function SocReviewQueueWorkbench({
                           href={`/workspace/agents/soc-triage/chats/new?queue_id=${encodeURIComponent(fallbackSelectedItem.queue_id)}`}
                         >
                           <BotIcon />
-                          Lead Agent
+                          交给 Lead Agent 调查
                         </Link>
                       </Button>
                     )}
@@ -3608,17 +3809,63 @@ export function SocReviewQueueWorkbench({
                     </div>
                   </div>
                 </div>
-                <dl className="p-4">
+                <div className="grid divide-y lg:grid-cols-[1.15fr_0.85fr_1fr] lg:divide-x lg:divide-y-0">
+                  <div className="p-4">
+                    <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium">
+                      <AlertTriangleIcon className="size-4 text-amber-600" />
+                      为什么需要你处理
+                    </div>
+                    <h3 className="mt-3 text-base font-semibold">
+                      {reviewReasonCopy(fallbackSelectedItem).title}
+                    </h3>
+                    <p className="text-muted-foreground mt-2 text-sm leading-6">
+                      {reviewReasonCopy(fallbackSelectedItem).explanation}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {reviewReasonCodes(fallbackSelectedItem).map((code) => (
+                        <Badge key={code} variant="outline">
+                          {reviewReasonLabel(code)}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="p-4">
+                    <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium">
+                      <ShieldAlertIcon className="size-4" />
+                      系统当前判断
+                    </div>
+                    <div className="mt-3 text-lg font-semibold">
+                      {verdictLabel(fallbackSelectedItem.verdict)}
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-sm">
+                      置信度 {formatPercent(fallbackSelectedItem.confidence)}
+                    </div>
+                    <p className="mt-3 text-sm leading-6">
+                      {fallbackSelectedItem.summary ?? "系统未提供结论摘要。"}
+                    </p>
+                  </div>
+                  <div className="p-4">
+                    <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium">
+                      <ClipboardCheckIcon className="size-4" />
+                      你需要完成什么
+                    </div>
+                    <p className="mt-3 text-sm leading-6 font-medium">
+                      {reviewReasonCopy(fallbackSelectedItem).analystAction}
+                    </p>
+                    <ol className="text-muted-foreground mt-3 space-y-2 text-xs leading-5">
+                      <li>1. 核对下方调查依据。</li>
+                      <li>2. 选择最终判断并填写业务依据。</li>
+                      <li>3. 提交后自动完成待办并保留审计记录。</li>
+                    </ol>
+                  </div>
+                </div>
+                <dl className="bg-muted/30 grid border-t px-4 py-2 text-xs md:grid-cols-2 md:gap-x-8">
                   <DetailRow
-                    label="复核原因"
-                    value={fallbackSelectedItem.reason}
-                  />
-                  <DetailRow
-                    label="来源"
+                    label="告警来源"
                     value={`${fallbackSelectedItem.source_type}${fallbackSelectedItem.source_system ? ` / ${fallbackSelectedItem.source_system}` : ""}`}
                   />
                   <DetailRow
-                    label="规则"
+                    label="检测规则"
                     value={
                       fallbackSelectedItem.rule_code ||
                       fallbackSelectedItem.rule_name
@@ -3626,530 +3873,607 @@ export function SocReviewQueueWorkbench({
                         : "-"
                     }
                   />
-                  <DetailRow
-                    label="定性"
-                    value={`${verdictLabel(fallbackSelectedItem.verdict)} / 置信度 ${formatPercent(fallbackSelectedItem.confidence)}`}
-                  />
-                  <DetailRow
-                    label="实体"
-                    value={
-                      fallbackSelectedItem.entity_keys.length > 0
-                        ? fallbackSelectedItem.entity_keys.join(", ")
-                        : "-"
-                    }
-                  />
-                  <DetailRow
-                    label="摘要"
-                    value={fallbackSelectedItem.summary ?? "-"}
-                  />
                 </dl>
               </section>
 
-              <UnifiedInvestigationViewSection
-                view={context?.investigation_view}
-              />
-
-              <AuthorizationEnrichmentSection
-                records={context?.authorization_enrichments ?? []}
-              />
-
-              <DispositionProposalSection
-                proposals={context?.disposition_proposals ?? []}
-              />
-
-              <DispositionOutcomeCaptureSection
-                queueStatus={fallbackSelectedItem.status}
-                proposals={context?.disposition_proposals ?? []}
-                outcomes={context?.disposition_outcomes ?? []}
-                prefill={activeSampleReviewTarget}
-              />
-
-              <DispositionOutcomeSection
-                outcomes={context?.disposition_outcomes ?? []}
-              />
-
-              <ActionEvidenceSection
-                evidence={context?.action_evidence ?? []}
-              />
-
-              <ExternalDispositionSection
-                records={context?.external_dispositions ?? []}
-              />
-
-              <RelevantMemorySection result={context?.relevant_memories} />
-
-              <MemoryRetrievalActivationSection
-                records={relatedMemoryRecords}
-                drafts={memoryRetrievalDrafts}
-                isUpdating={updateMemoryRetrievalMutation.isPending}
-                onDraftChange={handleMemoryRetrievalDraftChange}
-                onAction={(record, action) =>
-                  void handleMemoryRetrievalAction(record, action)
-                }
-              />
-
-              <MemoryCandidateSection
-                candidates={context?.memory_candidates ?? []}
-                reviewDrafts={memoryReviewDrafts}
-                isReviewing={reviewMemoryCandidateMutation.isPending}
-                isDraftingLesson={draftMemoryLessonMutation.isPending}
-                onReviewDraftChange={handleMemoryReviewDraftChange}
-                onReview={(candidate, decision) =>
-                  void handleReviewMemoryCandidate(candidate, decision)
-                }
-                onDraftLesson={(candidate) =>
-                  void handleDraftMemoryBusinessLesson(candidate)
-                }
-              />
-
-              <section className="rounded-md border">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
-                  <div className="flex items-center gap-2">
-                    <KeyRoundIcon className="text-muted-foreground size-4" />
-                    <h3 className="text-sm font-semibold">审批动作</h3>
+              <section
+                className={cn(
+                  "rounded-md border border-l-4",
+                  fallbackSelectedItem.status === "open"
+                    ? "border-l-amber-500"
+                    : "border-l-emerald-500",
+                )}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <ClipboardCheckIcon className="size-4" />
+                      <h3 className="text-sm font-semibold">
+                        {fallbackSelectedItem.status === "open"
+                          ? "记录最终判断"
+                          : "待办处理结果"}
+                      </h3>
+                    </div>
+                    <p className="text-muted-foreground mt-1 text-sm">
+                      {fallbackSelectedItem.status === "open"
+                        ? "同意系统判断也需要选择相同结论并说明依据；提交后服务端会自动完成此待办。"
+                        : "该待办已经完成，历史判断和处理依据仍可审计。"}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">{approvalRequests.length}</Badge>
-                    {approvalGrant ? (
-                      <Badge variant="outline">{approvalGrant.status}</Badge>
-                    ) : null}
-                  </div>
+                  {fallbackSelectedItem.status === "closed" ? (
+                    <Badge
+                      className="border-emerald-200 bg-emerald-50 text-emerald-700"
+                      variant="outline"
+                    >
+                      <CheckCircle2Icon className="size-3.5" />
+                      已完成
+                    </Badge>
+                  ) : null}
                 </div>
-                <div className="grid grid-cols-1 gap-5 p-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-                  <div className="space-y-4">
-                    <div className="rounded-md border">
-                      <div className="flex items-center justify-between gap-3 border-b p-3">
-                        <div className="flex items-center gap-2 text-sm font-medium">
-                          <InboxIcon className="text-muted-foreground size-4" />
-                          审批收件箱
+                {fallbackSelectedItem.status === "open" ? (
+                  <div className="grid gap-4 p-4 lg:grid-cols-[16rem_minmax(0,1fr)_auto] lg:items-end">
+                    <div className="space-y-2">
+                      <label
+                        className="text-sm font-medium"
+                        htmlFor="analyst-verdict"
+                      >
+                        最终判断
+                      </label>
+                      <Select
+                        value={analystVerdict}
+                        onValueChange={(value) =>
+                          setAnalystVerdict(value as SocVerdict)
+                        }
+                      >
+                        <SelectTrigger
+                          id="analyst-verdict"
+                          className="w-full"
+                          aria-label="最终判断"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ANALYST_VERDICT_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label
+                        className="text-sm font-medium"
+                        htmlFor="analyst-reason"
+                      >
+                        判断依据
+                      </label>
+                      <Textarea
+                        id="analyst-reason"
+                        aria-label="最终判断依据"
+                        placeholder="说明支持该结论的业务事实、调查结果或仍缺少的证据。"
+                        value={analystReason}
+                        onChange={(event) =>
+                          setAnalystReason(event.target.value)
+                        }
+                        className="min-h-20 resize-none"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => void handleRecordAnalystDecision()}
+                      disabled={
+                        correctMutation.isPending ||
+                        analystReason.trim().length === 0
+                      }
+                    >
+                      <CheckCircle2Icon className="size-4" />
+                      提交并完成待办
+                    </Button>
+                  </div>
+                ) : (
+                  <dl className="p-4">
+                    <DetailRow
+                      label="完成时间"
+                      value={formatTime(fallbackSelectedItem.closed_at)}
+                    />
+                    <DetailRow
+                      label="处理人"
+                      value={fallbackSelectedItem.closed_by?.actor_id ?? "-"}
+                    />
+                    <DetailRow
+                      label="处理依据"
+                      value={fallbackSelectedItem.close_reason ?? "-"}
+                    />
+                  </dl>
+                )}
+              </section>
+
+              <ReviewDetailGroup
+                icon={SearchCheckIcon}
+                title="研判依据"
+                description="查看当前告警事实、调查补充和系统实际使用的历史经验。"
+                defaultOpen
+              >
+                <UnifiedInvestigationViewSection
+                  view={context?.investigation_view}
+                />
+
+                <AuthorizationEnrichmentSection
+                  records={context?.authorization_enrichments ?? []}
+                />
+
+                <ActionEvidenceSection
+                  evidence={context?.action_evidence ?? []}
+                />
+
+                <RelevantMemorySection result={context?.relevant_memories} />
+              </ReviewDetailGroup>
+
+              <ReviewDetailGroup
+                icon={LibraryBigIcon}
+                title="处置记录与经验沉淀"
+                description="查看处置建议、执行结果和候选经验；这些内容不会代替上方的最终判断。"
+                defaultOpen={!!activeSampleReviewTarget}
+                forceOpen={!!activeSampleReviewTarget}
+              >
+                <DispositionProposalSection
+                  proposals={context?.disposition_proposals ?? []}
+                />
+
+                <DispositionOutcomeCaptureSection
+                  queueStatus={fallbackSelectedItem.status}
+                  proposals={context?.disposition_proposals ?? []}
+                  outcomes={context?.disposition_outcomes ?? []}
+                  prefill={activeSampleReviewTarget}
+                />
+
+                <DispositionOutcomeSection
+                  outcomes={context?.disposition_outcomes ?? []}
+                />
+
+                <ExternalDispositionSection
+                  records={context?.external_dispositions ?? []}
+                />
+
+                <MemoryRetrievalActivationSection
+                  records={relatedMemoryRecords}
+                  drafts={memoryRetrievalDrafts}
+                  isUpdating={updateMemoryRetrievalMutation.isPending}
+                  onDraftChange={handleMemoryRetrievalDraftChange}
+                  onAction={(record, action) =>
+                    void handleMemoryRetrievalAction(record, action)
+                  }
+                />
+
+                <MemoryCandidateSection
+                  candidates={context?.memory_candidates ?? []}
+                  reviewDrafts={memoryReviewDrafts}
+                  isReviewing={reviewMemoryCandidateMutation.isPending}
+                  isDraftingLesson={draftMemoryLessonMutation.isPending}
+                  onReviewDraftChange={handleMemoryReviewDraftChange}
+                  onReview={(candidate, decision) =>
+                    void handleReviewMemoryCandidate(candidate, decision)
+                  }
+                  onDraftLesson={(candidate) =>
+                    void handleDraftMemoryBusinessLesson(candidate)
+                  }
+                />
+              </ReviewDetailGroup>
+
+              <ReviewDetailGroup
+                icon={KeyRoundIcon}
+                title="动作审批"
+                description="只显示与当前告警关联的高风险动作请求；它与告警最终判断是两个独立任务。"
+              >
+                <section className="rounded-md border">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+                    <div className="flex items-center gap-2">
+                      <KeyRoundIcon className="text-muted-foreground size-4" />
+                      <h3 className="text-sm font-semibold">
+                        当前告警的动作审批
+                      </h3>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary">
+                        {scopedApprovalRequests.length} 条
+                      </Badge>
+                      {approvalGrant ? (
+                        <Badge variant="outline">{approvalGrant.status}</Badge>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-5 p-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+                    <div className="space-y-4">
+                      <div className="rounded-md border">
+                        <div className="flex items-center justify-between gap-3 border-b p-3">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <InboxIcon className="text-muted-foreground size-4" />
+                            审批收件箱
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void refetchApprovalRequests()}
+                            disabled={approvalRequestsFetching}
+                          >
+                            <RefreshCwIcon
+                              className={cn(
+                                "size-4",
+                                approvalRequestsFetching && "animate-spin",
+                              )}
+                            />
+                            刷新
+                          </Button>
                         </div>
+                        <div className="max-h-64 overflow-y-auto p-2">
+                          {approvalRequestsLoading ? (
+                            <div className="text-muted-foreground flex h-24 items-center justify-center text-sm">
+                              加载中...
+                            </div>
+                          ) : approvalRequestsError ? (
+                            <div className="text-destructive flex h-24 items-center justify-center px-4 text-center text-sm">
+                              {approvalRequestsError instanceof Error
+                                ? approvalRequestsError.message
+                                : "加载失败"}
+                            </div>
+                          ) : scopedApprovalRequests.length === 0 ? (
+                            <div className="text-muted-foreground flex h-24 items-center justify-center text-sm">
+                              当前告警没有待审批动作
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {scopedApprovalRequests.map((request) => {
+                                const requestId =
+                                  request.approval_request_id ??
+                                  request.permission_decision_id;
+                                const active =
+                                  activeApprovalRequest?.approval_request_id ===
+                                    request.approval_request_id ||
+                                  selectedApprovalRequestId ===
+                                    request.approval_request_id;
+                                return (
+                                  <button
+                                    key={requestId}
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedApprovalRequestId(
+                                        request.approval_request_id ?? null,
+                                      );
+                                    }}
+                                    className={cn(
+                                      "w-full rounded-md border p-3 text-left transition-colors",
+                                      "hover:bg-accent focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none",
+                                      active
+                                        ? "border-primary bg-accent"
+                                        : "border-border bg-background",
+                                    )}
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <div className="truncate text-sm font-medium">
+                                          {approvalRequestLabel(request)}
+                                        </div>
+                                        <div className="text-muted-foreground mt-1 truncate text-xs">
+                                          {request.route} /{" "}
+                                          {request.requested_by.actor_id}
+                                        </div>
+                                      </div>
+                                      <div className="flex shrink-0 flex-col items-end gap-1">
+                                        <Badge variant="outline">
+                                          {request.risk_level}
+                                        </Badge>
+                                        {request.source_proposal_id ? (
+                                          <Badge variant="secondary">
+                                            proposal
+                                          </Badge>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                    <p className="text-muted-foreground mt-2 line-clamp-2 text-xs">
+                                      {request.reason}
+                                    </p>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <ApprovalProposalSummary
+                        request={activeApprovalRequest}
+                      />
+
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium"
+                          htmlFor="approval-request-json"
+                        >
+                          审批请求详情
+                        </label>
+                        <Textarea
+                          id="approval-request-json"
+                          value={approvalRequestJson}
+                          className="min-h-52 resize-none font-mono text-xs"
+                          readOnly
+                          disabled={approvalRequestLoading}
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                        <div className="space-y-2">
+                          <label
+                            className="text-sm font-medium"
+                            htmlFor="approval-reason"
+                          >
+                            审批原因
+                          </label>
+                          <Input
+                            id="approval-reason"
+                            value={approvalReason}
+                            onChange={(event) =>
+                              setApprovalReason(event.target.value)
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label
+                            className="text-sm font-medium"
+                            htmlFor="approval-expiry"
+                          >
+                            有效期秒
+                          </label>
+                          <Input
+                            id="approval-expiry"
+                            inputMode="numeric"
+                            value={approvalExpirySeconds}
+                            onChange={(event) =>
+                              setApprovalExpirySeconds(event.target.value)
+                            }
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => void handleCreateApprovalGrant()}
+                          disabled={
+                            createApprovalGrantMutation.isPending ||
+                            approvalReason.trim().length === 0 ||
+                            activeApprovalRequest?.status !== "pending"
+                          }
+                        >
+                          <KeyRoundIcon className="size-4" />
+                          生成审批 token
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => void refetchApprovalRequests()}
-                          disabled={approvalRequestsFetching}
+                          onClick={() =>
+                            void handleResolveApprovalRequest("reject")
+                          }
+                          disabled={
+                            rejectApprovalRequestMutation.isPending ||
+                            approvalReason.trim().length === 0 ||
+                            activeApprovalRequest?.status !== "pending"
+                          }
                         >
-                          <RefreshCwIcon
-                            className={cn(
-                              "size-4",
-                              approvalRequestsFetching && "animate-spin",
-                            )}
-                          />
-                          刷新
+                          <XCircleIcon className="size-4" />
+                          驳回
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            void handleResolveApprovalRequest("expire")
+                          }
+                          disabled={
+                            expireApprovalRequestMutation.isPending ||
+                            approvalReason.trim().length === 0 ||
+                            activeApprovalRequest?.status !== "pending"
+                          }
+                        >
+                          <AlertTriangleIcon className="size-4" />
+                          标记过期
                         </Button>
                       </div>
-                      <div className="max-h-64 overflow-y-auto p-2">
-                        {approvalRequestsLoading ? (
-                          <div className="text-muted-foreground flex h-24 items-center justify-center text-sm">
-                            加载中...
-                          </div>
-                        ) : approvalRequestsError ? (
-                          <div className="text-destructive flex h-24 items-center justify-center px-4 text-center text-sm">
-                            {approvalRequestsError instanceof Error
-                              ? approvalRequestsError.message
-                              : "加载失败"}
-                          </div>
-                        ) : approvalRequests.length === 0 ? (
-                          <div className="text-muted-foreground flex h-24 items-center justify-center text-sm">
-                            当前没有审批请求
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {approvalRequests.map((request) => {
-                              const requestId =
-                                request.approval_request_id ??
-                                request.permission_decision_id;
-                              const active =
-                                activeApprovalRequest?.approval_request_id ===
-                                  request.approval_request_id ||
-                                selectedApprovalRequestId ===
-                                  request.approval_request_id;
-                              return (
-                                <button
-                                  key={requestId}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedApprovalRequestId(
-                                      request.approval_request_id ?? null,
-                                    );
-                                  }}
-                                  className={cn(
-                                    "w-full rounded-md border p-3 text-left transition-colors",
-                                    "hover:bg-accent focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none",
-                                    active
-                                      ? "border-primary bg-accent"
-                                      : "border-border bg-background",
-                                  )}
-                                >
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <div className="truncate text-sm font-medium">
-                                        {approvalRequestLabel(request)}
-                                      </div>
-                                      <div className="text-muted-foreground mt-1 truncate text-xs">
-                                        {request.route} /{" "}
-                                        {request.requested_by.actor_id}
-                                      </div>
-                                    </div>
-                                    <div className="flex shrink-0 flex-col items-end gap-1">
-                                      <Badge variant="outline">
-                                        {request.risk_level}
-                                      </Badge>
-                                      {request.source_proposal_id ? (
-                                        <Badge variant="secondary">
-                                          proposal
-                                        </Badge>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                  <p className="text-muted-foreground mt-2 line-clamp-2 text-xs">
-                                    {request.reason}
-                                  </p>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
                     </div>
 
-                    <ApprovalProposalSummary request={activeApprovalRequest} />
-
-                    <div className="space-y-2">
-                      <label
-                        className="text-sm font-medium"
-                        htmlFor="approval-request-json"
-                      >
-                        审批请求详情
-                      </label>
-                      <Textarea
-                        id="approval-request-json"
-                        value={approvalRequestJson}
-                        className="min-h-52 resize-none font-mono text-xs"
-                        readOnly
-                        disabled={approvalRequestLoading}
-                      />
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
-                      <div className="space-y-2">
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor="approval-reason"
-                        >
-                          审批原因
-                        </label>
-                        <Input
-                          id="approval-reason"
-                          value={approvalReason}
-                          onChange={(event) =>
-                            setApprovalReason(event.target.value)
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor="approval-expiry"
-                        >
-                          有效期秒
-                        </label>
-                        <Input
-                          id="approval-expiry"
-                          inputMode="numeric"
-                          value={approvalExpirySeconds}
-                          onChange={(event) =>
-                            setApprovalExpirySeconds(event.target.value)
-                          }
-                        />
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => void handleCreateApprovalGrant()}
-                        disabled={
-                          createApprovalGrantMutation.isPending ||
-                          approvalReason.trim().length === 0 ||
-                          activeApprovalRequest?.status !== "pending"
-                        }
-                      >
-                        <KeyRoundIcon className="size-4" />
-                        生成审批 token
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          void handleResolveApprovalRequest("reject")
-                        }
-                        disabled={
-                          rejectApprovalRequestMutation.isPending ||
-                          approvalReason.trim().length === 0 ||
-                          activeApprovalRequest?.status !== "pending"
-                        }
-                      >
-                        <XCircleIcon className="size-4" />
-                        驳回
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          void handleResolveApprovalRequest("expire")
-                        }
-                        disabled={
-                          expireApprovalRequestMutation.isPending ||
-                          approvalReason.trim().length === 0 ||
-                          activeApprovalRequest?.status !== "pending"
-                        }
-                      >
-                        <AlertTriangleIcon className="size-4" />
-                        标记过期
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="rounded-md border">
-                      <div className="border-b p-3 text-sm font-medium">
-                        Grant
-                      </div>
-                      <pre className="bg-muted max-h-48 overflow-auto p-3 text-xs whitespace-pre-wrap">
-                        {prettyJson(approvalGrant)}
-                      </pre>
-                    </div>
-                    <div className="space-y-2">
-                      <label
-                        className="text-sm font-medium"
-                        htmlFor="approved-action-payload"
-                      >
-                        执行 payload JSON
-                      </label>
-                      <Textarea
-                        id="approved-action-payload"
-                        value={approvedActionPayloadJson}
-                        onChange={(event) =>
-                          setApprovedActionPayloadJson(event.target.value)
-                        }
-                        className="min-h-24 resize-none font-mono text-xs"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void handleDryRunApprovedAction()}
-                        disabled={
-                          !approvalGrant ||
-                          dryRunApprovedActionMutation.isPending ||
-                          approvalGrant.status !== "approved"
-                        }
-                      >
-                        <FlaskConicalIcon className="size-4" />
-                        Dry-run
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => void handleExecuteApprovedAction()}
-                        disabled={
-                          !approvalGrant ||
-                          executeApprovedActionMutation.isPending ||
-                          approvalGrant.status !== "approved"
-                        }
-                      >
-                        <PlayCircleIcon className="size-4" />
-                        Execute
-                      </Button>
-                    </div>
-                    <div className="rounded-md border">
-                      <div className="border-b p-3 text-sm font-medium">
-                        Result
-                      </div>
-                      <pre className="bg-muted max-h-56 overflow-auto p-3 text-xs whitespace-pre-wrap">
-                        {prettyJson(approvedActionResult)}
-                      </pre>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-                <div className="rounded-md border">
-                  <div className="flex items-center gap-2 border-b p-4">
-                    <CircleIcon className="text-muted-foreground size-4" />
-                    <h3 className="text-sm font-semibold">运行上下文</h3>
-                  </div>
-                  <dl className="p-4">
-                    <DetailRow
-                      label="状态"
-                      value={context?.run.status ?? fallbackSelectedItem.status}
-                    />
-                    <DetailRow
-                      label="Pipeline"
-                      value={context?.run.pipeline_version ?? "-"}
-                    />
-                    <DetailRow
-                      label="模型"
-                      value={context?.run.model_name ?? "-"}
-                    />
-                    <DetailRow
-                      label="Prompt"
-                      value={context?.run.prompt_version ?? "-"}
-                    />
-                    <DetailRow
-                      label="开始"
-                      value={formatTime(context?.run.started_at)}
-                    />
-                    <DetailRow
-                      label="结束"
-                      value={formatTime(context?.run.ended_at)}
-                    />
-                  </dl>
-                </div>
-
-                <div className="rounded-md border">
-                  <div className="flex items-center gap-2 border-b p-4">
-                    <AlertTriangleIcon className="text-muted-foreground size-4" />
-                    <h3 className="text-sm font-semibold">复核动作</h3>
-                  </div>
-                  <div className="space-y-4 p-4">
-                    <div className="space-y-2">
-                      <label
-                        className="text-sm font-medium"
-                        htmlFor="close-reason"
-                      >
-                        关闭原因
-                      </label>
-                      <Textarea
-                        id="close-reason"
-                        value={closeReason}
-                        onChange={(event) => setCloseReason(event.target.value)}
-                        className="min-h-20 resize-none"
-                      />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void handleClose()}
-                        disabled={
-                          fallbackSelectedItem.status === "closed" ||
-                          closeMutation.isPending ||
-                          closeReason.trim().length === 0
-                        }
-                      >
-                        <CheckCircle2Icon className="size-4" />
-                        关闭复核项
-                      </Button>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label
-                        className="text-sm font-medium"
-                        htmlFor="correction-reason"
-                      >
-                        纠正研判
-                      </label>
-                      <div className="flex flex-wrap gap-2">
-                        <Select
-                          value={correctedVerdict}
-                          onValueChange={(value) =>
-                            setCorrectedVerdict(value as SocVerdict)
-                          }
-                        >
-                          <SelectTrigger size="sm" className="w-32">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {VERDICT_OPTIONS.map((option) => (
-                              <SelectItem
-                                key={option.value}
-                                value={option.value}
-                              >
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <Textarea
-                        id="correction-reason"
-                        placeholder="说明为什么需要纠正，后续会进入经验沉淀。"
-                        value={correctionReason}
-                        onChange={(event) =>
-                          setCorrectionReason(event.target.value)
-                        }
-                        className="min-h-24 resize-none"
-                      />
-                      <Button
-                        size="sm"
-                        onClick={() => void handleCorrect()}
-                        disabled={
-                          correctMutation.isPending ||
-                          correctionReason.trim().length === 0
-                        }
-                      >
-                        <XCircleIcon className="size-4" />
-                        提交纠正
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-                <div className="rounded-md border">
-                  <div className="border-b p-4">
-                    <h3 className="text-sm font-semibold">相似告警</h3>
-                  </div>
-                  <div className="divide-y">
-                    {(context?.similar_alerts ?? []).length === 0 ? (
-                      <div className="text-muted-foreground p-4 text-sm">
-                        暂无相似告警。
-                      </div>
-                    ) : (
-                      context?.similar_alerts.map((match) => (
-                        <div
-                          key={`${match.summary.run_id}-${match.score}`}
-                          className="p-4"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0 truncate text-sm font-medium">
-                              {match.summary.rule_name ??
-                                match.summary.rule_code ??
-                                match.summary.alert_id}
-                            </div>
-                            <Badge variant="secondary">
-                              {formatPercent(match.score)}
-                            </Badge>
-                          </div>
-                          <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">
-                            {match.summary.summary ?? "-"}
-                          </p>
-                          <p className="text-muted-foreground mt-2 text-xs">
-                            {match.matched_reasons.join(", ") || "-"}
-                          </p>
+                    <div className="space-y-4">
+                      <div className="rounded-md border">
+                        <div className="border-b p-3 text-sm font-medium">
+                          Grant
                         </div>
-                      ))
-                    )}
+                        <pre className="bg-muted max-h-48 overflow-auto p-3 text-xs whitespace-pre-wrap">
+                          {prettyJson(approvalGrant)}
+                        </pre>
+                      </div>
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium"
+                          htmlFor="approved-action-payload"
+                        >
+                          执行 payload JSON
+                        </label>
+                        <Textarea
+                          id="approved-action-payload"
+                          value={approvedActionPayloadJson}
+                          onChange={(event) =>
+                            setApprovedActionPayloadJson(event.target.value)
+                          }
+                          className="min-h-24 resize-none font-mono text-xs"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleDryRunApprovedAction()}
+                          disabled={
+                            !approvalGrant ||
+                            dryRunApprovedActionMutation.isPending ||
+                            approvalGrant.status !== "approved"
+                          }
+                        >
+                          <FlaskConicalIcon className="size-4" />
+                          Dry-run
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => void handleExecuteApprovedAction()}
+                          disabled={
+                            !approvalGrant ||
+                            executeApprovedActionMutation.isPending ||
+                            approvalGrant.status !== "approved"
+                          }
+                        >
+                          <PlayCircleIcon className="size-4" />
+                          Execute
+                        </Button>
+                      </div>
+                      <div className="rounded-md border">
+                        <div className="border-b p-3 text-sm font-medium">
+                          Result
+                        </div>
+                        <pre className="bg-muted max-h-56 overflow-auto p-3 text-xs whitespace-pre-wrap">
+                          {prettyJson(approvedActionResult)}
+                        </pre>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </section>
+              </ReviewDetailGroup>
 
-                <div className="rounded-md border">
-                  <div className="border-b p-4">
-                    <h3 className="text-sm font-semibold">结构化产物</h3>
+              <ReviewDetailGroup
+                icon={CircleIcon}
+                title="技术审计"
+                description="查看运行版本、相似告警和完整结构化产物；日常做结论不必逐项阅读。"
+              >
+                <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                  <div className="rounded-md border">
+                    <div className="flex items-center gap-2 border-b p-4">
+                      <CircleIcon className="text-muted-foreground size-4" />
+                      <h3 className="text-sm font-semibold">运行上下文</h3>
+                    </div>
+                    <dl className="p-4">
+                      <DetailRow
+                        label="状态"
+                        value={
+                          context?.run.status ?? fallbackSelectedItem.status
+                        }
+                      />
+                      <DetailRow
+                        label="Pipeline"
+                        value={context?.run.pipeline_version ?? "-"}
+                      />
+                      <DetailRow
+                        label="模型"
+                        value={context?.run.model_name ?? "-"}
+                      />
+                      <DetailRow
+                        label="Prompt"
+                        value={context?.run.prompt_version ?? "-"}
+                      />
+                      <DetailRow
+                        label="开始"
+                        value={formatTime(context?.run.started_at)}
+                      />
+                      <DetailRow
+                        label="结束"
+                        value={formatTime(context?.run.ended_at)}
+                      />
+                    </dl>
                   </div>
-                  <div className="space-y-3 p-4">
-                    <pre className="bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap">
-                      {prettyJson({
-                        entities: context?.run.entities,
-                        normalization_report: context?.run.normalization_report,
-                        extraction_report: context?.run.extraction_report,
-                        fact_reconstruction: context?.run.fact_reconstruction,
-                        decision: context?.run.decision,
-                      })}
-                    </pre>
+
+                  <div className="rounded-md border">
+                    <div className="flex items-center gap-2 border-b p-4">
+                      <AlertTriangleIcon className="text-muted-foreground size-4" />
+                      <h3 className="text-sm font-semibold">待办技术信息</h3>
+                    </div>
+                    <dl className="p-4">
+                      <DetailRow
+                        label="Queue ID"
+                        value={fallbackSelectedItem.queue_id}
+                      />
+                      <DetailRow
+                        label="原始原因码"
+                        value={
+                          reviewReasonCodes(fallbackSelectedItem).join(", ") ||
+                          "-"
+                        }
+                      />
+                      <DetailRow
+                        label="Tenant"
+                        value={fallbackSelectedItem.tenant_id ?? "-"}
+                      />
+                      <DetailRow
+                        label="实体键"
+                        value={
+                          fallbackSelectedItem.entity_keys.length > 0
+                            ? fallbackSelectedItem.entity_keys.join(", ")
+                            : "-"
+                        }
+                      />
+                    </dl>
                   </div>
-                </div>
-              </section>
+                </section>
+
+                <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                  <div className="rounded-md border">
+                    <div className="border-b p-4">
+                      <h3 className="text-sm font-semibold">相似告警</h3>
+                    </div>
+                    <div className="divide-y">
+                      {(context?.similar_alerts ?? []).length === 0 ? (
+                        <div className="text-muted-foreground p-4 text-sm">
+                          暂无相似告警。
+                        </div>
+                      ) : (
+                        context?.similar_alerts.map((match) => (
+                          <div
+                            key={`${match.summary.run_id}-${match.score}`}
+                            className="p-4"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0 truncate text-sm font-medium">
+                                {match.summary.rule_name ??
+                                  match.summary.rule_code ??
+                                  match.summary.alert_id}
+                              </div>
+                              <Badge variant="secondary">
+                                {formatPercent(match.score)}
+                              </Badge>
+                            </div>
+                            <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">
+                              {match.summary.summary ?? "-"}
+                            </p>
+                            <p className="text-muted-foreground mt-2 text-xs">
+                              {match.matched_reasons.join(", ") || "-"}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border">
+                    <div className="border-b p-4">
+                      <h3 className="text-sm font-semibold">结构化产物</h3>
+                    </div>
+                    <div className="space-y-3 p-4">
+                      <pre className="bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap">
+                        {prettyJson({
+                          entities: context?.run.entities,
+                          normalization_report:
+                            context?.run.normalization_report,
+                          extraction_report: context?.run.extraction_report,
+                          fact_reconstruction: context?.run.fact_reconstruction,
+                          decision: context?.run.decision,
+                        })}
+                      </pre>
+                    </div>
+                  </div>
+                </section>
+              </ReviewDetailGroup>
             </div>
           )}
         </main>

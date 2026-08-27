@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import json
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from soc_agent.cli import main
+from soc_agent.core import SocReviewService
+from soc_agent.db import SqlAlchemyAlertRepository
 
 
-def test_cli_demo_run_seeds_reviewable_investigation(tmp_path, capsys) -> None:
+def test_cli_demo_run_seeds_run_scoped_investigation(tmp_path, capsys) -> None:
     database_url = f"sqlite:///{tmp_path / 'soc_demo.db'}"
 
     code = main(["demo", "run", "apt", "--database-url", database_url, "--init-db", "--pretty"])
@@ -19,8 +24,8 @@ def test_cli_demo_run_seeds_reviewable_investigation(tmp_path, capsys) -> None:
     assert report["failed_count"] == 0
 
     result = report["results"][0]
-    assert result["queue_id"].startswith("REV-")
-    assert result["queue_status"] == "open"
+    assert result.get("queue_id") is None
+    assert result.get("queue_status") is None
     assert result["source_type"] == "ndr"
     assert result["action_count"] == 2
     assert result["evidence_count"] >= 2
@@ -32,34 +37,29 @@ def test_cli_demo_run_seeds_reviewable_investigation(tmp_path, capsys) -> None:
     assert "domain_finding" in result["timeline_kinds"]
     assert "relevant_memory" in result["timeline_kinds"]
 
-    context_code = main(["review", "context", result["queue_id"], "--database-url", database_url, "--pretty"])
-    context_output = capsys.readouterr()
-    context = json.loads(context_output.out)
-
-    assert context_code == 0
-    assert context["queue_item"]["queue_id"] == result["queue_id"]
-    assert context["investigation_view"]["counts"]["action_evidence"] >= 2
-    assert context["investigation_view"]["counts"]["domain_findings"] >= 1
-    assert context["investigation_view"]["counts"]["relevant_memories"] >= 1
-
-    summary_code = main(
-        [
-            "review",
-            "context",
-            result["queue_id"],
-            "--database-url",
-            database_url,
-            "--summary",
-            "--pretty",
-        ]
+    repository = SqlAlchemyAlertRepository(
+        sessionmaker(
+            bind=create_engine(database_url),
+            expire_on_commit=False,
+        )
     )
-    summary_output = capsys.readouterr()
-    summary = json.loads(summary_output.out)
+    context = SocReviewService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        evidence_repository=repository,
+        memory_candidate_repository=repository,
+        memory_record_repository=repository,
+    ).get_alert_investigation_context(result["run_id"])
 
-    assert summary_code == 0
-    assert summary["queue_id"] == result["queue_id"]
-    assert summary["relevant_memories"]
-    assert summary["relevant_memories"][0]["summary"]
+    assert context.result.queue_item is None
+    assert context.investigation_view is not None
+    assert context.investigation_view.counts["action_evidence"] >= 2
+    assert context.investigation_view.counts["domain_findings"] >= 1
+    assert context.investigation_view.counts["relevant_memories"] >= 1
+    assert context.relevant_memories is not None
+    assert context.relevant_memories.matches[0].record.summary
 
 
 def test_cli_demo_run_reuses_existing_sample_chain(tmp_path, capsys) -> None:
@@ -73,7 +73,7 @@ def test_cli_demo_run_reuses_existing_sample_chain(tmp_path, capsys) -> None:
     assert first_code == 0
     assert second_code == 0
     assert second_report["run_ids"] == first_report["run_ids"]
-    assert second_report["queue_ids"] == first_report["queue_ids"]
+    assert second_report["queue_ids"] == first_report["queue_ids"] == []
     assert all(action["skipped_existing"] for action in second_report["results"][0]["actions"])
 
 
@@ -106,11 +106,11 @@ def test_cli_boss_demo_builds_isolated_launch_manifest(tmp_path, capsys) -> None
     assert manifest["database_locator"] == str(database_path)
     assert manifest["analyzer"]["mode"] == "stub"
     assert manifest["analyzer"]["silent_fallback_allowed"] is False
-    assert manifest["web_url"] == "http://localhost:2026/workspace/soc/review"
+    assert manifest["web_url"].startswith("http://localhost:2026/workspace/soc/alerts?run_id=RUN-")
 
     primary = manifest["primary_investigation"]
     assert primary["run_id"].startswith("RUN-")
-    assert primary["queue_id"].startswith("REV-")
+    assert primary.get("queue_id") is None
     assert primary["domain_finding_count"] >= 1
     assert primary["action_evidence_count"] >= 2
     assert primary["relevant_memory_count"] >= 1
@@ -120,8 +120,8 @@ def test_cli_boss_demo_builds_isolated_launch_manifest(tmp_path, capsys) -> None
     assert boundaries["read_only_investigation_actions"]["mode"] == "mock"
     assert boundaries["high_risk_response"]["mode"] == "disabled"
     assert boundaries["governed_disposition"]["mode"] == "shadow_only"
-    assert primary["queue_id"] in manifest["review_context_api_url"]
-    assert primary["queue_id"] in manifest["launch_commands"]["lead_agent_tui"]
+    assert primary["run_id"] in manifest["review_context_api_url"]
+    assert primary["run_id"] in manifest["launch_commands"]["review_context"]
 
 
 def test_cli_boss_demo_reset_replaces_only_sqlite_database(tmp_path, capsys) -> None:
@@ -140,4 +140,4 @@ def test_cli_boss_demo_reset_replaces_only_sqlite_database(tmp_path, capsys) -> 
     assert second_manifest["status"] == "ready"
     assert first_manifest["primary_investigation"]["run_id"].startswith("RUN-")
     assert second_manifest["primary_investigation"]["run_id"].startswith("RUN-")
-    assert second_manifest["primary_investigation"]["queue_id"].startswith("REV-")
+    assert second_manifest["primary_investigation"].get("queue_id") is None

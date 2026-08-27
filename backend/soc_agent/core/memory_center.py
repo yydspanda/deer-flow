@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from soc_agent.contracts import (
     MemoryPatternDataClass,
@@ -17,7 +18,9 @@ from soc_agent.contracts import (
     SocMemoryCenterPatternDetail,
     SocMemoryCenterPatternSummary,
     SocMemoryCenterRecordRef,
+    SocMemoryFutureUseState,
     SocMemoryPatternLifecycleState,
+    SocMemoryPatternStageFilter,
     SocMemoryProfileState,
     SocMemoryRecord,
     SocMemoryRecordStatus,
@@ -60,49 +63,58 @@ class SocMemoryCenterService:
         profile_id: str | None = None,
         search: str | None = None,
         include_terminal_history: bool = False,
+        stage: SocMemoryPatternStageFilter | None = None,
+        future_use: SocMemoryFutureUseState | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> SocMemoryCenterOverview:
         center_repository = self._require_center_repository()
-        page = center_repository.list_memory_pattern_lineage_stats(
+        active_count_page = center_repository.list_memory_pattern_lineage_stats(
             tenant_id=tenant_id,
             environment=environment,
             data_class=data_class,
             profile_id=profile_id,
             search=search,
-            include_terminal_history=include_terminal_history,
-            limit=limit,
-            offset=offset,
-        )
-        comparison_page = center_repository.list_memory_pattern_lineage_stats(
-            tenant_id=tenant_id,
-            environment=environment,
-            data_class=data_class,
-            profile_id=profile_id,
-            search=search,
-            include_terminal_history=not include_terminal_history,
+            include_terminal_history=False,
             limit=1,
             offset=0,
         )
-        all_pattern_count = page.total if include_terminal_history else comparison_page.total
-        active_pattern_count = comparison_page.total if include_terminal_history else page.total
-        candidates = center_repository.find_memory_candidates_by_lineage_keys([item.lineage_key for item in page.items])
-        records = self._require_record_repository().find_memory_records_by_candidate_ids([item.candidate_id for item in candidates])
-        candidates_by_lineage = _candidates_by_lineage(candidates)
-        records_by_candidate = {item.source_candidate_id: item for item in records}
-        items = []
-        for stats in page.items:
-            candidate, record = _select_governance_objects(
-                candidates_by_lineage.get(stats.lineage_key, []),
-                records_by_candidate,
+        all_count_page = center_repository.list_memory_pattern_lineage_stats(
+            tenant_id=tenant_id,
+            environment=environment,
+            data_class=data_class,
+            profile_id=profile_id,
+            search=search,
+            include_terminal_history=True,
+            limit=1,
+            offset=0,
+        )
+        if stage is not None or future_use is not None:
+            filtered = self._filtered_pattern_summaries(
+                tenant_id=tenant_id,
+                environment=environment,
+                data_class=data_class,
+                profile_id=profile_id,
+                search=search,
+                include_terminal_history=include_terminal_history,
+                stage=stage,
+                future_use=future_use,
             )
-            items.append(
-                self._pattern_summary(
-                    stats,
-                    candidate=candidate,
-                    record=record,
-                )
+            total = len(filtered)
+            items = filtered[offset : offset + limit]
+        else:
+            page = center_repository.list_memory_pattern_lineage_stats(
+                tenant_id=tenant_id,
+                environment=environment,
+                data_class=data_class,
+                profile_id=profile_id,
+                search=search,
+                include_terminal_history=include_terminal_history,
+                limit=limit,
+                offset=offset,
             )
+            total = page.total
+            items = self._pattern_summaries(page.items)
 
         inventory = center_repository.get_memory_center_inventory()
         legacy_patterns = 0
@@ -139,12 +151,73 @@ class SocMemoryCenterService:
             items=items,
             terminal_history_count=max(
                 0,
-                all_pattern_count - active_pattern_count,
+                all_count_page.total - active_count_page.total,
             ),
-            total=page.total,
-            limit=page.limit,
-            offset=page.offset,
+            total=total,
+            limit=limit,
+            offset=offset,
         )
+
+    def _filtered_pattern_summaries(
+        self,
+        *,
+        tenant_id: str | None,
+        environment: str | None,
+        data_class: MemoryPatternDataClass | None,
+        profile_id: str | None,
+        search: str | None,
+        include_terminal_history: bool,
+        stage: SocMemoryPatternStageFilter | None,
+        future_use: SocMemoryFutureUseState | None,
+    ) -> list[SocMemoryCenterPatternSummary]:
+        repository = self._require_center_repository()
+        batch_size = 500
+        cursor = 0
+        filtered: list[SocMemoryCenterPatternSummary] = []
+        while True:
+            page = repository.list_memory_pattern_lineage_stats(
+                tenant_id=tenant_id,
+                environment=environment,
+                data_class=data_class,
+                profile_id=profile_id,
+                search=search,
+                include_terminal_history=include_terminal_history,
+                limit=batch_size,
+                offset=cursor,
+            )
+            for summary in self._pattern_summaries(page.items):
+                if stage is not None and _stage_filter(summary.lifecycle_state) is not stage:
+                    continue
+                if future_use is not None and summary.future_use_state is not future_use:
+                    continue
+                filtered.append(summary)
+            cursor += len(page.items)
+            if not page.items or cursor >= page.total:
+                break
+        return filtered
+
+    def _pattern_summaries(
+        self,
+        stats_items: Sequence[MemoryPatternLineageStats],
+    ) -> list[SocMemoryCenterPatternSummary]:
+        candidates = self._require_center_repository().find_memory_candidates_by_lineage_keys([item.lineage_key for item in stats_items])
+        records = self._require_record_repository().find_memory_records_by_candidate_ids([item.candidate_id for item in candidates])
+        candidates_by_lineage = _candidates_by_lineage(candidates)
+        records_by_candidate = {item.source_candidate_id: item for item in records}
+        summaries: list[SocMemoryCenterPatternSummary] = []
+        for stats in stats_items:
+            candidate, record = _select_governance_objects(
+                candidates_by_lineage.get(stats.lineage_key, []),
+                records_by_candidate,
+            )
+            summaries.append(
+                self._pattern_summary(
+                    stats,
+                    candidate=candidate,
+                    record=record,
+                )
+            )
+        return summaries
 
     def pattern_detail(
         self,
@@ -236,6 +309,7 @@ class SocMemoryCenterService:
         if record is not None and not record.retrieval_enabled:
             attention_reasons.append("memory_retrieval_disabled")
 
+        lifecycle_state = _pattern_lifecycle(candidate, record)
         return SocMemoryCenterPatternSummary(
             lineage_key=stats.lineage_key,
             tenant_id=stats.tenant_id,
@@ -250,7 +324,8 @@ class SocMemoryCenterService:
             current_profile_version=current_profile_version,
             current_feature_schema_version=current_feature_schema_version,
             profile_state=profile_state,
-            lifecycle_state=_pattern_lifecycle(candidate, record),
+            lifecycle_state=lifecycle_state,
+            future_use_state=_future_use_state(record, profile_state),
             attention_reasons=attention_reasons,
             support_count=stats.support_count,
             distinct_source_count=stats.distinct_source_count,
@@ -406,6 +481,7 @@ def _record_ref(record: SocMemoryRecord | None) -> SocMemoryCenterRecordRef | No
         status=record.status,
         summary=record.summary,
         retrieval_enabled=record.retrieval_enabled,
+        decision_directive_ready=record.decision_directive is not None,
         retrieval_valid_until=record.retrieval_valid_until,
         retrieval_review_due_at=record.retrieval_review_due_at,
     )
@@ -427,6 +503,44 @@ def _pattern_lifecycle(
     }:
         return SocMemoryPatternLifecycleState.CANDIDATE_INTERMEDIATE
     return SocMemoryPatternLifecycleState.TERMINAL_HISTORY
+
+
+def _stage_filter(
+    lifecycle: SocMemoryPatternLifecycleState,
+) -> SocMemoryPatternStageFilter:
+    if lifecycle is SocMemoryPatternLifecycleState.COLLECTING:
+        return SocMemoryPatternStageFilter.COLLECTING
+    if lifecycle is SocMemoryPatternLifecycleState.CANDIDATE_PENDING:
+        return SocMemoryPatternStageFilter.AWAITING_REVIEW
+    if lifecycle is SocMemoryPatternLifecycleState.CANDIDATE_INTERMEDIATE:
+        return SocMemoryPatternStageFilter.MATERIALIZING
+    if lifecycle in {
+        SocMemoryPatternLifecycleState.MEMORY_INACTIVE,
+        SocMemoryPatternLifecycleState.MEMORY_ACTIVE,
+    }:
+        return SocMemoryPatternStageFilter.PERSISTED
+    return SocMemoryPatternStageFilter.TERMINAL
+
+
+def _future_use_state(
+    record: SocMemoryRecord | None,
+    profile_state: SocMemoryProfileState,
+) -> SocMemoryFutureUseState:
+    if record is None:
+        return SocMemoryFutureUseState.NOT_READY
+    if not record.retrieval_enabled:
+        return SocMemoryFutureUseState.PAUSED
+    now = datetime.now(UTC)
+    if (
+        profile_state is not SocMemoryProfileState.CURRENT
+        or record.status is not SocMemoryRecordStatus.CONFIRMED
+        or (record.retrieval_valid_until is not None and record.retrieval_valid_until <= now)
+        or (record.retrieval_review_due_at is not None and record.retrieval_review_due_at <= now)
+    ):
+        return SocMemoryFutureUseState.BLOCKED
+    if record.decision_directive is not None:
+        return SocMemoryFutureUseState.EXACT_MATCH_DECISION
+    return SocMemoryFutureUseState.REFERENCE_ONLY
 
 
 def _candidate_profile(

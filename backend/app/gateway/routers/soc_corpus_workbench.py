@@ -60,6 +60,8 @@ def get_soc_corpus_workbench_service(
             source_path=source_path,
             settings=runtime.settings,
             database_file=runtime.database_file.name,
+            tenant_policy=runtime.tenant_policy,
+            software_path_fast_policy=runtime.software_path_fast_policy,
         )
     except (OSError, ValueError, SocCorpusWorkbenchError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

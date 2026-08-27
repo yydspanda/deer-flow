@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memory-decision-capability";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useCreateSocMemoryRevisionCandidate,
@@ -97,7 +98,7 @@ export function SocMemoryRevisionWorkbench({
           reason: reason.trim(),
         },
       });
-      toast.success("旧 Memory 已暂停召回，修订候选已创建");
+      toast.success("旧经验已暂停用于新告警，修订候选已创建");
       router.push(
         `/workspace/soc/review/memory-candidates/${result.candidate.candidate_id}`,
       );
@@ -110,7 +111,7 @@ export function SocMemoryRevisionWorkbench({
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
         icon={FilePenLineIcon}
-        title="纠正 Memory"
+        title="纠正经验"
         description="暂停错误经验，创建可审核的新版本"
         actions={
           <Button size="sm" variant="outline" asChild>
@@ -122,7 +123,7 @@ export function SocMemoryRevisionWorkbench({
               }
             >
               <ArrowLeftIcon className="size-4" />
-              {sourceRunId ? "返回语料验证" : "返回 Memory 详情"}
+              {sourceRunId ? "返回告警演练" : "返回经验详情"}
             </Link>
           </Button>
         }
@@ -132,10 +133,9 @@ export function SocMemoryRevisionWorkbench({
         <div className="mx-auto w-full max-w-5xl px-5 py-6 md:px-7">
           <Alert className="rounded-md border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
             <AlertTriangleIcon />
-            <AlertTitle>提交纠错会立即暂停旧 Memory 的未来召回</AlertTitle>
+            <AlertTitle>提交纠错会立即暂停旧经验用于新告警</AlertTitle>
             <AlertDescription>
-              本次告警结论和历史记录不会被改写。新经验只有在 Candidate
-              审核通过后才会替代旧版本；旧版本会作为审计历史保留。
+              本次告警结论和历史记录不会被改写。新经验只有在候选审核通过后才会替代旧版本；旧版本会作为审计历史保留。
             </AlertDescription>
           </Alert>
 
@@ -147,7 +147,7 @@ export function SocMemoryRevisionWorkbench({
           ) : error || !record ? (
             <Alert variant="destructive" className="mt-5 rounded-md">
               <AlertTriangleIcon />
-              <AlertTitle>无法加载 Memory</AlertTitle>
+              <AlertTitle>无法加载经验</AlertTitle>
               <AlertDescription>
                 {error instanceof Error ? error.message : `未找到 ${memoryId}`}
               </AlertDescription>
@@ -157,7 +157,7 @@ export function SocMemoryRevisionWorkbench({
               <section className="border">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-zinc-50 px-4 py-3 dark:bg-zinc-950/40">
                   <div>
-                    <h2 className="text-sm font-semibold">当前 Memory</h2>
+                    <h2 className="text-sm font-semibold">当前经验</h2>
                     <p className="text-muted-foreground mt-1 font-mono text-xs">
                       {record.memory_id} · v{record.version}
                     </p>
@@ -169,7 +169,9 @@ export function SocMemoryRevisionWorkbench({
                         record.retrieval_enabled ? "default" : "secondary"
                       }
                     >
-                      {record.retrieval_enabled ? "召回已启用" : "召回已暂停"}
+                      {record.retrieval_enabled
+                        ? "已开放给新告警"
+                        : "暂停用于新告警"}
                     </Badge>
                   </div>
                 </div>
@@ -205,12 +207,14 @@ export function SocMemoryRevisionWorkbench({
                 </div>
               </section>
 
+              <SocMemoryDecisionCapability record={record} />
+
               {!sourceRunId ? (
                 <Alert className="rounded-md">
                   <BookOpenCheckIcon />
                   <AlertTitle>运营人员直接修订</AlertTitle>
                   <AlertDescription>
-                    本次修订由 Memory 台账直接发起，系统会使用旧 Memory
+                    本次修订由经验台账直接发起，系统会使用旧经验
                     的来源与哈希作为审计依据。若选择“范围过宽”，仍需存在可回放的来源
                     Run。
                   </AlertDescription>
@@ -228,7 +232,7 @@ export function SocMemoryRevisionWorkbench({
                       setIssueType(value as SocMemoryRevisionIssueType);
                   }}
                   className="mt-3 grid w-full grid-cols-1 md:grid-cols-3"
-                  aria-label="Memory 问题类型"
+                  aria-label="经验问题类型"
                 >
                   {ISSUE_OPTIONS.map((item) => {
                     const Icon = item.icon;
@@ -253,7 +257,7 @@ export function SocMemoryRevisionWorkbench({
                   <Textarea
                     value={reason}
                     onChange={(event) => setReason(event.target.value)}
-                    placeholder="例如：本次告警出现了已确认的真实攻击行为，旧 Memory 将其误判为内部服务调用，因此不能继续复用。"
+                    placeholder="例如：本次告警出现了已确认的真实攻击行为，旧经验将其误判为内部服务调用，因此不能继续复用。"
                     rows={6}
                     maxLength={4000}
                     disabled={revisionMutation.isPending}
@@ -265,8 +269,7 @@ export function SocMemoryRevisionWorkbench({
 
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
                   <p className="text-muted-foreground max-w-2xl text-xs leading-5">
-                    下一步会进入现有 Candidate 审核流程，可重新生成或编辑
-                    Business
+                    下一步会进入现有候选审核流程，可重新生成或编辑 Business
                     Lesson、收窄匹配范围，并决定新版本是否用于未来告警。
                   </p>
                   <Button
@@ -279,7 +282,7 @@ export function SocMemoryRevisionWorkbench({
                     ) : (
                       <FilePenLineIcon className="size-4" />
                     )}
-                    暂停旧 Memory 并创建修订候选
+                    暂停旧经验并创建修订候选
                   </Button>
                 </div>
               </section>

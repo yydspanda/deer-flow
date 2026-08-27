@@ -51,6 +51,7 @@ export interface SocReviewQueueItem {
   category?: string | null;
   verdict?: SocVerdict | null;
   confidence?: number | null;
+  review_reasons?: string[];
   entity_keys: string[];
   summary?: string | null;
   created_at: string;
@@ -176,6 +177,24 @@ export interface SocAlertSummary {
   recommended_action?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export type SocAlertAttentionLevel = "none" | "advisory" | "required";
+
+export type SocDecisionUsability = "usable" | "degraded" | "failed";
+
+export interface SocAlertResult {
+  schema_version: "soc.alert_result.v1";
+  summary: SocAlertSummary;
+  attention_level: SocAlertAttentionLevel;
+  attention_reasons: string[];
+  decision_usability: SocDecisionUsability;
+  requires_human_intervention: boolean;
+  queue_item?: SocReviewQueueItem | null;
+}
+
+export interface SocAlertResultListResponse {
+  items: SocAlertResult[];
 }
 
 export interface SocDecisionAuditRecord {
@@ -797,6 +816,20 @@ export interface SocMemoryRecordMatchTestResult {
 
 export type SocMemoryProfileState = "current" | "legacy" | "unregistered";
 
+export type SocMemoryPatternStageFilter =
+  | "collecting"
+  | "awaiting_review"
+  | "materializing"
+  | "persisted"
+  | "terminal";
+
+export type SocMemoryFutureUseState =
+  | "not_ready"
+  | "paused"
+  | "reference_only"
+  | "exact_match_decision"
+  | "blocked";
+
 export type SocMemoryPatternLifecycleState =
   | "collecting"
   | "candidate_pending"
@@ -820,6 +853,7 @@ export interface SocMemoryCenterRecordRef {
   status: SocMemoryRecordStatus;
   summary: string;
   retrieval_enabled: boolean;
+  decision_directive_ready: boolean;
   retrieval_valid_until?: string | null;
   retrieval_review_due_at?: string | null;
 }
@@ -840,6 +874,7 @@ export interface SocMemoryCenterPatternSummary {
   current_feature_schema_version?: string | null;
   profile_state: SocMemoryProfileState;
   lifecycle_state: SocMemoryPatternLifecycleState;
+  future_use_state: SocMemoryFutureUseState;
   attention_reasons: string[];
   support_count: number;
   distinct_source_count: number;
@@ -1028,7 +1063,8 @@ export interface SocMemoryWorkbenchState {
     source_data_class: "operational";
     historical_replay: true;
     internal_providers: "off_or_mock";
-    tenant_policy: "disabled";
+    tenant_policy: "disabled" | "deterministic" | "deterministic_and_llm";
+    software_path_fast_policy: boolean;
     external_action_execution: false;
   };
   source: {
@@ -1358,6 +1394,7 @@ export interface SocLeadershipDemoChapter {
   chapter_id: string;
   sequence: number;
   tier: "primary" | "backup";
+  expected_memory_use: "context_only" | "exact_match";
   title: string;
   objective: string;
   presenter_note: string;
@@ -1368,7 +1405,7 @@ export interface SocLeadershipDemoChapter {
 }
 
 export interface SocLeadershipDemoGuide {
-  schema_version: "soc.leadership_demo_guide.v1";
+  schema_version: "soc.leadership_demo_guide.v2";
   guide_version: string;
   title: string;
   purpose: string;
@@ -1387,7 +1424,8 @@ export interface SocCorpusWorkbenchState {
     source_data_class: "operational";
     historical_replay: true;
     internal_providers: "off_or_mock";
-    tenant_policy: "disabled";
+    tenant_policy: "disabled" | "deterministic" | "deterministic_and_llm";
+    software_path_fast_policy: boolean;
     external_action_execution: false;
     memory_scope: string;
     pattern_window_days: number;
@@ -1652,7 +1690,7 @@ export interface SocInvestigationAddendum {
 export interface SocUnifiedInvestigationView {
   schema_version: string;
   view_id: string;
-  queue_id: string;
+  queue_id?: string | null;
   run_id: string;
   alert_id: string;
   generated_at: string;
@@ -1933,6 +1971,25 @@ export interface SocInvestigationContext {
   queue_item: SocReviewQueueItem;
   run: SocAnalysisRun;
   summary?: SocAlertSummary | null;
+  audit_records: SocDecisionAuditRecord[];
+  similar_alerts: SocSimilarAlertMatch[];
+  action_evidence: SocInvestigationEvidence[];
+  investigation_addenda: SocInvestigationAddendum[];
+  authorization_enrichments: SocAuthorizationEnrichmentRecord[];
+  disposition_proposals: SocDispositionProposalRecord[];
+  disposition_outcomes: SocDispositionOutcomeRecord[];
+  external_dispositions: SocExternalDispositionRecord[];
+  memory_candidates: SocMemoryCandidate[];
+  relevant_memories?: SocMemoryRetrievalResult | null;
+  correlation_result?: SocCorrelationResult | null;
+  domain_triage_results?: SocDomainTriageResult[];
+  investigation_view?: SocUnifiedInvestigationView | null;
+}
+
+export interface SocAlertInvestigationContext {
+  schema_version: "soc.alert_investigation_context.v1";
+  result: SocAlertResult;
+  run: SocAnalysisRun;
   audit_records: SocDecisionAuditRecord[];
   similar_alerts: SocSimilarAlertMatch[];
   action_evidence: SocInvestigationEvidence[];

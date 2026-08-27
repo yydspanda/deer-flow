@@ -34,6 +34,7 @@ from app.gateway.routers import (
     runs,
     scheduled_tasks,
     skills,
+    soc_alerts,
     soc_approvals,
     soc_corpus_workbench,
     soc_external_dispositions,
@@ -857,6 +858,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Stateless Runs API (stream/wait without a pre-existing thread)
     app.include_router(runs.router)
+
+    # SOC alert results are keyed by run and exist independently of human tasks.
+    app.include_router(soc_alerts.router)
 
     # SOC review queue API is mounted at /api/soc/review
     app.include_router(soc_review.router)

@@ -11,6 +11,9 @@ CORPUS_PATH="$PROJECT_ROOT/validation/compact_zeus/data/corpus/full_alert_valida
 CORPUS_EXPLORER_PATH="$PROJECT_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"
 CORPUS_EXPLORER_INDEX_PATH="${CORPUS_EXPLORER_PATH%.pkl}.workbench-index.json"
 CORPUS_EXPLORER_PAYLOAD_STORE_PATH="${CORPUS_EXPLORER_PATH%.pkl}.workbench-payloads.sqlite"
+TENANT_POLICY_PATH="$BACKEND_DIR/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"
+TENANT_POLICY_SKILL_PATH="$BACKEND_DIR/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"
+SOFTWARE_PATH_CATALOG_PATH="$BACKEND_DIR/.deer-flow/pingan-context/software-path-catalog.sqlite"
 DATABASE_URL="sqlite:///$DATABASE_PATH"
 MEMORY_CENTER_URL="http://localhost:2026/workspace/soc/memory"
 WORKBENCH_URL="http://localhost:2026/workspace/soc/dev/memory-validation/galaxylab"
@@ -45,7 +48,15 @@ export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true
 export SOC_ANALYZER_MODE=llm
 export SOC_MEMORY_ENVIRONMENT=dev
 export SOC_AUTOMATION_ENVIRONMENT=dev
-export SOC_TENANT_POLICY_ENABLED=false
+export SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY=true
+export SOC_TENANT_POLICY_ENABLED=true
+export SOC_TENANT_DISPOSITION_POLICY_PATH="$TENANT_POLICY_PATH"
+export SOC_TENANT_POLICY_ENVIRONMENT=dev
+export SOC_TENANT_POLICY_EVENT_TIMEZONE=Asia/Shanghai
+export SOC_TENANT_POLICY_ADVISOR_MODE=llm
+export SOC_TENANT_POLICY_SKILL_PATH="$TENANT_POLICY_SKILL_PATH"
+export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true
+export SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH="$SOFTWARE_PATH_CATALOG_PATH"
 export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false
 
 require_source() {
@@ -65,6 +76,14 @@ require_source() {
     if [ ! -f "$CORPUS_EXPLORER_PAYLOAD_STORE_PATH" ]; then
         echo "Missing local SOC corpus payload store: $CORPUS_EXPLORER_PAYLOAD_STORE_PATH" >&2
         echo "Rebuild it with validation/compact_zeus/corpus/build_dams_labeled_dataset.py." >&2
+        return 1
+    fi
+    if [ ! -f "$TENANT_POLICY_PATH" ] || [ ! -f "$TENANT_POLICY_SKILL_PATH" ]; then
+        echo "Missing reviewed PingAn tenant policy assets." >&2
+        return 1
+    fi
+    if [ ! -f "$SOFTWARE_PATH_CATALOG_PATH" ]; then
+        echo "Missing compiled PingAn software-path catalog: $SOFTWARE_PATH_CATALOG_PATH" >&2
         return 1
     fi
 }

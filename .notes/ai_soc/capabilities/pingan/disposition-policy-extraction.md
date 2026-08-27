@@ -179,6 +179,20 @@ SOC_TENANT_POLICY_MODEL=deepseek-v4-flash
 - 没有 `SOC_AUTOMATION_POLICY_PATH` 时可以形成运营 disposition，但不会授权或执行动作。
 - 真正执行仍需 `SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=true` 和受评审 registry。
 
+本地浏览器验收使用额外的显式安全门：
+
+```bash
+SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY=true
+SOC_TENANT_POLICY_ENABLED=true
+SOC_TENANT_POLICY_ADVISOR_MODE=llm
+SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true
+SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false
+```
+
+该组合表示“确定性规则 + 安全路径策略 + bounded Policy Advisor”均参与 DEV
+研判，但封禁、隔离、抑制等真实外部动作仍不可执行。隔离的完整语料回放作用域
+`dev-corpus-eval` 仅用于复用同一份受评审 PingAn policy 做开发验收，不增加生产权限。
+
 ## 7. Replay And Review / 回放与复盘
 
 每条持久化 run 必须能看到：

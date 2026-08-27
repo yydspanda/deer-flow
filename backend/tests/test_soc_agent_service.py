@@ -303,6 +303,22 @@ class InMemoryReviewQueueRepository:
         return items[:limit]
 
 
+def _open_required_review_item(
+    repository: InMemoryReviewQueueRepository,
+    run: AnalysisRun,
+) -> ReviewQueueItem:
+    item = ReviewQueueItem(
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        reason=DecisionReviewReason.FACT_CONFLICT.value,
+        verdict=run.decision.verdict if run.decision is not None else None,
+        confidence=run.decision.confidence if run.decision is not None else None,
+        review_reasons=[DecisionReviewReason.FACT_CONFLICT],
+    )
+    repository.save_review_item(item)
+    return item
+
+
 class InMemoryApprovalGrantRepository:
     def __init__(self) -> None:
         self.grants: dict[str, SocAgentApprovalGrant] = {}
@@ -602,7 +618,7 @@ def test_retryable_failed_analysis_is_not_queued_or_idempotently_reused() -> Non
     assert runtime.calls == 2
 
 
-def test_non_retryable_failed_analysis_enters_review_queue() -> None:
+def test_non_retryable_failed_analysis_stays_out_of_analyst_queue() -> None:
     summary_repository = InMemorySummaryRepository()
     review_repository = InMemoryReviewQueueRepository()
     run = SocAnalysisService(
@@ -615,9 +631,7 @@ def test_non_retryable_failed_analysis_enters_review_queue() -> None:
     assert summary is not None
     assert summary.needs_review is True
     assert summary.review_reasons == [DecisionReviewReason.ANALYSIS_FAILED]
-    review_item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert review_item is not None
-    assert review_item.reason == DecisionReviewReason.ANALYSIS_FAILED.value
+    assert review_repository.get_open_review_item_by_run(run.run_id) is None
 
 
 def test_analysis_service_reuses_existing_run_for_same_idempotency_key() -> None:
@@ -644,7 +658,7 @@ def test_analysis_service_reuses_existing_run_for_same_idempotency_key() -> None
     assert runtime.calls == 1
     assert list(repository.runs) == [first.run_id]
     assert list(summary_repository.summaries) == [first.run_id]
-    assert len(review_repository.items) == 1
+    assert len(review_repository.items) == 0
     assert len(audit_repository.records) == 1
     assert audit_repository.records[0].payload["idempotency_key"] == "kafka:soc.alerts.raw.v1:0:42"
     assert audit_repository.records[0].payload["analysis_output_quality_status"] == "accepted"
@@ -778,7 +792,7 @@ def test_correlation_service_can_disable_reusable_evidence_loading() -> None:
     assert result.matches[0].reusable_evidence == []
 
 
-def test_analysis_service_enqueues_review_item_from_summary() -> None:
+def test_analysis_service_keeps_uncertain_result_out_of_human_queue() -> None:
     review_repository = InMemoryReviewQueueRepository()
     run = SocAnalysisService(
         repository=InMemoryAlertRepository(),
@@ -786,33 +800,47 @@ def test_analysis_service_enqueues_review_item_from_summary() -> None:
     ).analyze(_sample("pingan_legacy_apt.json"))
 
     items = review_repository.list_review_items()
-    assert len(items) == 1
-    item = items[0]
-    assert item.run_id == run.run_id
-    assert item.alert_id == "2026494"
-    assert item.status == ReviewQueueStatus.OPEN
-    assert item.priority.value == "high"
-    assert item.reason == "uncertain_verdict"
-    assert item.review_reasons == [
-        DecisionReviewReason.UNCERTAIN_VERDICT,
-        DecisionReviewReason.STUB_ANALYZER,
-    ]
-    assert item.rule_code == "RPAADM_002635"
-    assert "ip:30.180.248.178" in item.entity_keys
+    assert run.decision is not None
+    assert run.decision.needs_review is True
+    assert items == []
 
 
-def test_analysis_service_enqueues_stub_false_positive() -> None:
+def test_analysis_service_keeps_stub_false_positive_out_of_human_queue() -> None:
     review_repository = InMemoryReviewQueueRepository()
     run = SocAnalysisService(
         repository=InMemoryAlertRepository(),
         review_queue_repository=review_repository,
     ).analyze(_sample("approved_scanner.json"))
 
+    assert run.decision is not None
+    assert run.decision.review_reasons == [DecisionReviewReason.STUB_ANALYZER]
+    assert review_repository.get_open_review_item_by_run(run.run_id) is None
+
+
+def test_analysis_service_enqueues_unresolved_critical_fact_conflict() -> None:
+    class CriticalFactConflictRuntime:
+        def analyze(self, payload: dict) -> AnalysisRun:
+            run = DeterministicAnalysisRuntime().analyze(payload)
+            assert run.decision is not None
+            run.decision = run.decision.model_copy(
+                update={
+                    "needs_review": True,
+                    "review_reasons": [DecisionReviewReason.FACT_CONFLICT],
+                }
+            )
+            run.status = AnalysisRunStatus.NEEDS_REVIEW
+            return run
+
+    review_repository = InMemoryReviewQueueRepository()
+    run = SocAnalysisService(
+        runtime=CriticalFactConflictRuntime(),
+        repository=InMemoryAlertRepository(),
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+
     item = review_repository.get_open_review_item_by_run(run.run_id)
     assert item is not None
-    assert item.reason == "stub_analyzer"
-    assert item.verdict is Verdict.FALSE_POSITIVE
-    assert item.review_reasons == [DecisionReviewReason.STUB_ANALYZER]
+    assert item.reason == DecisionReviewReason.FACT_CONFLICT.value
 
 
 def test_analysis_service_does_not_enqueue_suspicious_decision_without_review_reason() -> None:
@@ -995,8 +1023,7 @@ def test_review_service_correct_closes_open_review_queue_item() -> None:
         repository=repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_edr.json"))
-    open_item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert open_item is not None
+    open_item = _open_required_review_item(review_repository, run)
 
     SocReviewService(
         repository=repository,
@@ -1026,8 +1053,7 @@ def test_review_service_correct_proposes_pending_memory_candidate() -> None:
         repository=repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_edr.json"))
-    open_item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert open_item is not None
+    open_item = _open_required_review_item(review_repository, run)
 
     corrected = SocReviewService(
         repository=repository,
@@ -1073,8 +1099,7 @@ def test_review_service_add_note_proposes_pending_memory_candidate_idempotently(
         summary_repository=summary_repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_apt.json"))
-    open_item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert open_item is not None
+    open_item = _open_required_review_item(review_repository, run)
 
     service = SocReviewService(
         repository=repository,
@@ -1247,8 +1272,7 @@ def test_review_service_records_explicit_human_acceptance_of_lead_agent_conclusi
         summary_repository=summary_repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_apt.json"))
-    open_item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert open_item is not None
+    open_item = _open_required_review_item(review_repository, run)
     service = SocReviewService(
         repository=repository,
         summary_repository=summary_repository,
@@ -1304,8 +1328,7 @@ def test_review_service_rejects_new_lead_agent_acceptance_after_queue_close() ->
         summary_repository=summary_repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_apt.json"))
-    item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert item is not None
+    item = _open_required_review_item(review_repository, run)
     item.status = ReviewQueueStatus.CLOSED
     review_repository.save_review_item(item)
     service = SocReviewService(
@@ -1361,8 +1384,7 @@ def test_review_service_keeps_ordinary_note_as_observation_only() -> None:
         repository=repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_apt.json"))
-    open_item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert open_item is not None
+    open_item = _open_required_review_item(review_repository, run)
     service = SocReviewService(
         repository=repository,
         review_queue_repository=review_repository,
@@ -1450,8 +1472,7 @@ def test_review_service_lists_and_closes_queue_item() -> None:
         repository=InMemoryAlertRepository(),
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_edr.json"))
-    item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert item is not None
+    item = _open_required_review_item(review_repository, run)
 
     service = SocReviewService(review_queue_repository=review_repository)
     assert service.list_queue() == [item]
@@ -1477,8 +1498,7 @@ def test_review_service_gets_investigation_context() -> None:
         audit_repository=audit_repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_apt.json"))
-    item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert item is not None
+    item = _open_required_review_item(review_repository, run)
 
     context = SocReviewService(
         repository=repository,
@@ -1509,8 +1529,7 @@ def test_review_service_context_includes_similar_alerts() -> None:
     )
     similar_run = service.analyze(_sample("pingan_legacy_apt.json"))
     current_run = service.analyze(_sample("pingan_legacy_apt.json"))
-    item = review_repository.get_open_review_item_by_run(current_run.run_id)
-    assert item is not None
+    item = _open_required_review_item(review_repository, current_run)
 
     context = SocReviewService(
         repository=repository,
@@ -1592,8 +1611,7 @@ def test_agent_chat_service_loads_review_context() -> None:
         review_queue_repository=review_repository,
     )
     run = analysis_service.analyze(_sample("pingan_legacy_apt.json"))
-    item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert item is not None
+    item = _open_required_review_item(review_repository, run)
     review_service = SocReviewService(
         repository=repository,
         summary_repository=summary_repository,
@@ -3439,8 +3457,7 @@ def test_review_context_includes_relevant_memory_result() -> None:
         audit_repository=audit_repository,
         review_queue_repository=review_repository,
     ).analyze(_sample("pingan_legacy_apt.json"))
-    item = review_repository.get_open_review_item_by_run(run.run_id)
-    assert item is not None
+    item = _open_required_review_item(review_repository, run)
     assert run.llm_analysis_request is not None
     detection_key = run.llm_analysis_request.detection.detection_key
     assert detection_key is not None

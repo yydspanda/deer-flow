@@ -1,4 +1,4 @@
-import { SocReviewQueueWorkbench } from "@/components/workspace/soc/soc-review-queue-workbench";
+import { SocHumanInterventionInbox } from "@/components/workspace/soc/soc-human-intervention-inbox";
 
 export default async function SocAlertReviewPage({
   searchParams,
@@ -9,7 +9,5 @@ export default async function SocAlertReviewPage({
   const queueId = Array.isArray(params.queue_id)
     ? params.queue_id[0]
     : params.queue_id;
-  return (
-    <SocReviewQueueWorkbench initialQueueId={queueId} initialView="queue" />
-  );
+  return <SocHumanInterventionInbox initialQueueId={queueId} />;
 }

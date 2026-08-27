@@ -2,16 +2,24 @@
 
 import {
   ArchiveIcon,
+  BookOpenIcon,
   BrainCircuitIcon,
-  CheckCircle2Icon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CircleDashedIcon,
+  CirclePauseIcon,
+  Clock3Icon,
   DatabaseIcon,
   HistoryIcon,
+  Layers3Icon,
   RefreshCwIcon,
+  RouteIcon,
   SearchIcon,
   ShieldCheckIcon,
+  TargetIcon,
   TriangleAlertIcon,
+  WorkflowIcon,
+  XIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -27,6 +35,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import {
+  memoryFutureUseCopy,
+  memoryFutureUseStateCopy,
+  MEMORY_MATCHING_RULE_STATE_LABELS,
+  MEMORY_PATTERN_STAGE_DETAILS,
+  MEMORY_PATTERN_STAGE_LABELS,
+} from "@/components/workspace/soc/soc-memory-copy";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useSocMemoryCenterOverview,
@@ -35,7 +51,9 @@ import {
 } from "@/core/soc";
 import type {
   SocMemoryCenterPatternSummary,
+  SocMemoryFutureUseState,
   SocMemoryPatternLifecycleState,
+  SocMemoryPatternStageFilter,
   SocMemoryProfileState,
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
@@ -43,19 +61,14 @@ import { cn } from "@/lib/utils";
 const PAGE_SIZE = 50;
 const OBSERVATION_PAGE_SIZE = 20;
 
-const PROFILE_LABELS: Record<SocMemoryProfileState, string> = {
-  current: "当前 Profile",
-  legacy: "旧 Profile",
-  unregistered: "未注册 Profile",
-};
-
-const LIFECYCLE_LABELS: Record<SocMemoryPatternLifecycleState, string> = {
-  collecting: "观察聚合中",
-  candidate_pending: "候选待审",
-  candidate_intermediate: "候选处理中",
-  memory_inactive: "Memory 未启用",
-  memory_active: "Memory 已启用",
-  terminal_history: "历史终态",
+const ATTENTION_REASON_LABELS: Record<string, string> = {
+  unregistered_memory_profile: "匹配规则不可用",
+  legacy_memory_profile: "匹配规则版本待升级",
+  legacy_candidate_requires_reconciliation: "旧规则生成的候选需要处理",
+  legacy_memory_requires_revalidation: "旧规则生成的经验需要重新校验",
+  candidate_review_required: "存在待专家审核的经验候选",
+  superseded_history: "该候选已被新版本替代",
+  memory_retrieval_disabled: "已确认经验当前暂停用于新告警",
 };
 
 function formatTime(value?: string | null) {
@@ -79,21 +92,24 @@ function Metric({
   label,
   value,
   tone = "neutral",
+  className,
 }: {
   label: string;
   value: number;
   tone?: "neutral" | "attention" | "positive";
+  className?: string;
 }) {
   return (
     <div
       className={cn(
-        "min-w-0 border-r px-4 py-3 last:border-r-0",
+        "min-w-0 border-r border-b px-4 py-3 lg:border-b-0 lg:last:border-r-0",
         tone === "attention" &&
           value > 0 &&
           "bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100",
         tone === "positive" &&
           value > 0 &&
           "bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100",
+        className,
       )}
     >
       <div className="text-muted-foreground text-xs">{label}</div>
@@ -102,7 +118,7 @@ function Metric({
   );
 }
 
-function ProfileBadge({ state }: { state: SocMemoryProfileState }) {
+function MatchingRuleBadge({ state }: { state: SocMemoryProfileState }) {
   return (
     <Badge
       variant={state === "current" ? "secondary" : "outline"}
@@ -111,21 +127,160 @@ function ProfileBadge({ state }: { state: SocMemoryProfileState }) {
         state === "unregistered" && "border-red-400 text-red-700",
       )}
     >
-      {PROFILE_LABELS[state]}
+      {MEMORY_MATCHING_RULE_STATE_LABELS[state]}
     </Badge>
   );
 }
 
-function LifecycleBadge({ state }: { state: SocMemoryPatternLifecycleState }) {
+function LifecycleBadge({
+  state,
+  compact = false,
+}: {
+  state: SocMemoryPatternLifecycleState;
+  compact?: boolean;
+}) {
+  const Icon =
+    state === "collecting"
+      ? CircleDashedIcon
+      : state === "candidate_pending"
+        ? Clock3Icon
+        : state === "candidate_intermediate"
+          ? WorkflowIcon
+          : state === "terminal_history"
+            ? ArchiveIcon
+            : DatabaseIcon;
   return (
     <Badge
-      variant={state === "memory_active" ? "default" : "outline"}
+      variant={state.startsWith("memory_") ? "secondary" : "outline"}
       className={cn(
+        "max-w-full gap-1 text-left leading-4 whitespace-nowrap",
+        compact && "px-1.5 py-0 text-[11px] 2xl:px-2 2xl:py-0.5 2xl:text-xs",
         state === "candidate_pending" && "border-amber-400 text-amber-700",
       )}
     >
-      {LIFECYCLE_LABELS[state]}
+      <Icon className="size-3.5 shrink-0" />
+      {MEMORY_PATTERN_STAGE_LABELS[state]}
     </Badge>
+  );
+}
+
+function patternFutureUse(pattern: SocMemoryCenterPatternSummary) {
+  if (pattern.future_use_state) {
+    return memoryFutureUseStateCopy(pattern.future_use_state);
+  }
+  const record = pattern.memory_record;
+  return memoryFutureUseCopy({
+    hasRecord: record !== null && record !== undefined,
+    retrievalEnabled: record?.retrieval_enabled ?? false,
+    decisionDirectiveReady: record?.decision_directive_ready ?? false,
+    matchingRuleState: pattern.profile_state,
+  });
+}
+
+function FutureUseBadge({
+  pattern,
+  compact = false,
+}: {
+  pattern: SocMemoryCenterPatternSummary;
+  compact?: boolean;
+}) {
+  const copy = patternFutureUse(pattern);
+  const Icon =
+    copy.tone === "decision"
+      ? TargetIcon
+      : copy.tone === "reference"
+        ? BookOpenIcon
+        : copy.tone === "paused"
+          ? CirclePauseIcon
+          : copy.tone === "blocked"
+            ? TriangleAlertIcon
+            : CircleDashedIcon;
+  return (
+    <Badge
+      variant={copy.tone === "decision" ? "default" : "outline"}
+      className={cn(
+        "max-w-full gap-1 text-left leading-4 whitespace-nowrap",
+        compact && "px-1.5 py-0 text-[11px] 2xl:px-2 2xl:py-0.5 2xl:text-xs",
+        copy.tone === "reference" && "border-sky-400 text-sky-700",
+        copy.tone === "paused" && "text-muted-foreground",
+        copy.tone === "blocked" && "border-amber-400 text-amber-700",
+      )}
+    >
+      <Icon className="size-3.5 shrink-0" />
+      {copy.label}
+    </Badge>
+  );
+}
+
+function MemoryGovernanceStatus({
+  pattern,
+}: {
+  pattern: SocMemoryCenterPatternSummary;
+}) {
+  const record = pattern.memory_record;
+  const copy = patternFutureUse(pattern);
+  const governanceId =
+    pattern.memory_record?.memory_id ?? pattern.candidate?.candidate_id;
+  const LifecycleIcon =
+    pattern.lifecycle_state === "collecting"
+      ? CircleDashedIcon
+      : pattern.lifecycle_state === "candidate_pending"
+        ? Clock3Icon
+        : pattern.lifecycle_state === "candidate_intermediate"
+          ? WorkflowIcon
+          : pattern.lifecycle_state === "terminal_history"
+            ? ArchiveIcon
+            : DatabaseIcon;
+  const FutureUseIcon =
+    copy.tone === "decision"
+      ? TargetIcon
+      : copy.tone === "reference"
+        ? BookOpenIcon
+        : copy.tone === "paused"
+          ? CirclePauseIcon
+          : copy.tone === "blocked"
+            ? TriangleAlertIcon
+            : CircleDashedIcon;
+  return (
+    <div className="grid border-b sm:grid-cols-2">
+      <div className="border-b px-5 py-4 sm:border-r sm:border-b-0">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <LifecycleIcon className="size-4" />
+          沉淀进度
+        </h3>
+        <p className="mt-2 text-sm font-medium">
+          {MEMORY_PATTERN_STAGE_LABELS[pattern.lifecycle_state]}
+        </p>
+        <p className="text-muted-foreground mt-1 text-xs leading-5">
+          {MEMORY_PATTERN_STAGE_DETAILS[pattern.lifecycle_state]}
+        </p>
+        {governanceId ? (
+          <p className="text-muted-foreground mt-2 font-mono text-[11px]">
+            {governanceId}
+          </p>
+        ) : null}
+      </div>
+      <div className="px-5 py-4">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <FutureUseIcon
+            className={cn(
+              "size-4",
+              copy.tone === "decision" && "text-emerald-700",
+            )}
+          />
+          新告警使用
+        </h3>
+        <p className="mt-2 text-sm font-medium">{copy.label}</p>
+        <p className="text-muted-foreground mt-1 text-xs leading-5">
+          {copy.detail}
+        </p>
+        {record ? (
+          <p className="text-muted-foreground mt-2 font-mono text-[11px]">
+            {record.memory_id}
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -145,6 +300,12 @@ export function SocMemoryCenter({
   const [dataClass, setDataClass] = useState<
     "all" | "simulation" | "operational"
   >("all");
+  const [stageFilter, setStageFilter] = useState<
+    "all" | SocMemoryPatternStageFilter
+  >("all");
+  const [futureUseFilter, setFutureUseFilter] = useState<
+    "all" | SocMemoryFutureUseState
+  >("all");
   const [showHistory, setShowHistory] = useState(false);
   const [offset, setOffset] = useState(0);
   const [observationCursor, setObservationCursor] = useState<{
@@ -161,6 +322,8 @@ export function SocMemoryCenter({
       search,
       dataClass: dataClass === "all" ? null : dataClass,
       includeTerminalHistory: showHistory,
+      stage: stageFilter === "all" ? null : stageFilter,
+      futureUse: futureUseFilter === "all" ? null : futureUseFilter,
       limit: PAGE_SIZE,
       offset,
     });
@@ -186,7 +349,24 @@ export function SocMemoryCenter({
 
   useEffect(() => {
     setOffset(0);
-  }, [search, dataClass]);
+  }, [search, dataClass, stageFilter, futureUseFilter, showHistory]);
+
+  const activeFilterCount =
+    Number(Boolean(search)) +
+    Number(dataClass !== "all") +
+    Number(stageFilter !== "all") +
+    Number(futureUseFilter !== "all") +
+    Number(showHistory);
+  const resultStart = (overview?.total ?? 0) > 0 ? offset + 1 : 0;
+
+  const resetFilters = () => {
+    setSearchDraft("");
+    setSearch("");
+    setDataClass("all");
+    setStageFilter("all");
+    setFutureUseFilter("all");
+    setShowHistory(false);
+  };
 
   const handleSupersede = async () => {
     const candidate = detail?.candidates.find(
@@ -200,12 +380,14 @@ export function SocMemoryCenter({
         request: {
           successor_candidate_id: successorId,
           reason:
-            "Memory Center operator reconciled a same-alert candidate created by an older profile contract.",
+            "Memory Center operator reconciled a same-alert candidate created by an older matching-rule contract.",
         },
       });
-      toast.success("旧 Profile 候选已标记为历史替代项");
+      toast.success("旧匹配规则候选已标记为历史替代项");
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Profile 对账失败");
+      toast.error(
+        cause instanceof Error ? cause.message : "匹配规则候选处理失败",
+      );
     }
   };
 
@@ -213,20 +395,20 @@ export function SocMemoryCenter({
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
         icon={BrainCircuitIcon}
-        title="SOC Memory Center"
-        description="管理重复模式、待审经验、确认 Memory 与 Profile 演进"
+        title="SOC 经验中心"
+        description="查看重复告警如何沉淀为经验，以及已确认经验是否开放给新告警使用"
         actions={
           <>
             <Button size="sm" variant="outline" asChild>
               <Link href="/workspace/soc/memory/records">
                 <DatabaseIcon className="size-4" />
-                Memory 台账
+                经验台账
               </Link>
             </Button>
             <Button size="sm" asChild>
               <Link href="/workspace/soc/review/memory-candidates">
                 <ShieldCheckIcon className="size-4" />
-                审核 Memory Candidate
+                待审核经验
                 {(overview?.metrics.pending_candidate_count ?? 0) > 0 ? (
                   <span className="bg-primary-foreground/15 min-w-5 px-1.5 text-center text-xs tabular-nums">
                     {overview?.metrics.pending_candidate_count}
@@ -239,8 +421,8 @@ export function SocMemoryCenter({
               size="icon-sm"
               onClick={() => void refetch()}
               disabled={isFetching}
-              title="刷新 Memory Center"
-              aria-label="刷新 Memory Center"
+              title="刷新经验中心"
+              aria-label="刷新经验中心"
             >
               <RefreshCwIcon
                 className={cn("size-4", isFetching && "animate-spin")}
@@ -251,122 +433,219 @@ export function SocMemoryCenter({
       />
 
       <main className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-4 p-4 md:p-6">
-          <section
-            className="grid overflow-hidden border sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-9"
-            aria-label="Memory inventory metrics"
-          >
-            <Metric
-              label="Pattern Lineages"
-              value={overview?.metrics.pattern_count ?? 0}
-            />
-            <Metric
-              label="24h Windows"
-              value={overview?.metrics.aggregation_window_count ?? 0}
-            />
-            <Metric
-              label="Observations"
-              value={overview?.metrics.observation_count ?? 0}
-            />
-            <Metric
-              label="待审候选"
-              value={overview?.metrics.pending_candidate_count ?? 0}
-              tone="attention"
-            />
-            <Metric
-              label="已确认 Memory"
-              value={overview?.metrics.confirmed_memory_count ?? 0}
-              tone="positive"
-            />
-            <Metric
-              label="检索已启用"
-              value={overview?.metrics.retrieval_enabled_memory_count ?? 0}
-            />
-            <Metric
-              label="已替代候选"
-              value={overview?.metrics.superseded_candidate_count ?? 0}
-            />
-            <Metric
-              label="旧 Profile"
-              value={overview?.metrics.legacy_profile_pattern_count ?? 0}
-            />
-            <Metric
-              label="未注册 Profile"
-              value={overview?.metrics.unregistered_profile_pattern_count ?? 0}
-            />
-          </section>
-
-          <section className="flex flex-wrap items-center gap-2 border px-3 py-3">
-            <form
-              className="flex min-w-0 flex-1 gap-2 sm:min-w-80"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setSearch(searchDraft.trim());
-              }}
-            >
-              <Input
-                value={searchDraft}
-                onChange={(event) => setSearchDraft(event.target.value)}
-                placeholder="搜索模式名称、Alert ID、lineage 或 Profile"
-                aria-label="搜索 Memory patterns"
+        <div className="flex w-full max-w-none flex-col gap-4 p-4 md:p-6 2xl:px-8">
+          <section className="overflow-hidden border" aria-label="经验中心统计">
+            <div className="grid grid-cols-2 lg:grid-cols-5">
+              <Metric
+                label="行为模式"
+                value={overview?.metrics.pattern_count ?? 0}
               />
-              <Button type="submit" variant="outline" size="icon" title="搜索">
-                <SearchIcon className="size-4" />
-              </Button>
-            </form>
-            <Select
-              value={dataClass}
-              onValueChange={(value) =>
-                setDataClass(value as "all" | "simulation" | "operational")
-              }
-            >
-              <SelectTrigger className="w-40" aria-label="数据类型">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部数据</SelectItem>
-                <SelectItem value="operational">Operational</SelectItem>
-                <SelectItem value="simulation">Simulation</SelectItem>
-              </SelectContent>
-            </Select>
-            {(overview?.terminal_history_count ?? 0) > 0 ? (
-              <Button
-                type="button"
-                variant={showHistory ? "secondary" : "outline"}
-                onClick={() => setShowHistory((value) => !value)}
-              >
-                <ArchiveIcon className="size-4" />
-                {showHistory
-                  ? "隐藏历史"
-                  : `历史审计 (${overview?.terminal_history_count ?? 0})`}
-              </Button>
-            ) : null}
-            <div className="text-muted-foreground ml-auto text-xs">
-              {overview ? `${overview.total} patterns` : "-"}
+              <Metric
+                label="告警样本"
+                value={overview?.metrics.observation_count ?? 0}
+              />
+              <Metric
+                label="待审候选"
+                value={overview?.metrics.pending_candidate_count ?? 0}
+                tone="attention"
+              />
+              <Metric
+                label="已确认经验"
+                value={overview?.metrics.confirmed_memory_count ?? 0}
+                tone="positive"
+              />
+              <Metric
+                label="已开放使用"
+                value={overview?.metrics.retrieval_enabled_memory_count ?? 0}
+                className="col-span-2 lg:col-span-1"
+              />
+            </div>
+            <div className="text-muted-foreground flex flex-wrap gap-x-5 gap-y-1 border-t px-4 py-2 text-xs tabular-nums">
+              <span>
+                聚合时间窗 {overview?.metrics.aggregation_window_count ?? 0}
+              </span>
+              <span>
+                已替代候选 {overview?.metrics.superseded_candidate_count ?? 0}
+              </span>
+              <span>
+                匹配规则待升级{" "}
+                {overview?.metrics.legacy_profile_pattern_count ?? 0}
+              </span>
+              <span>
+                匹配规则不可用{" "}
+                {overview?.metrics.unregistered_profile_pattern_count ?? 0}
+              </span>
             </div>
           </section>
 
-          <section className="grid min-h-[38rem] border lg:grid-cols-[minmax(30rem,0.95fr)_minmax(28rem,1.05fr)]">
-            <div className="min-w-0 border-b lg:border-r lg:border-b-0">
-              <div className="bg-muted/30 grid grid-cols-[minmax(0,1fr)_7rem_7rem_6rem] border-b px-3 py-2 text-xs font-medium">
-                <span>模式 / Pattern</span>
-                <span>生命周期</span>
-                <span>Profile</span>
-                <span className="text-right">支持数</span>
+          <section className="border" aria-label="经验模式筛选">
+            <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_10rem_12rem_14rem]">
+              <div className="space-y-1.5 md:col-span-2 xl:col-span-1">
+                <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+                  <SearchIcon className="size-3.5" />
+                  搜索
+                </div>
+                <form
+                  className="flex min-w-0 gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    setSearch(searchDraft.trim());
+                  }}
+                >
+                  <Input
+                    value={searchDraft}
+                    onChange={(event) => setSearchDraft(event.target.value)}
+                    placeholder="模式名称、告警 ID 或经验内容"
+                    aria-label="搜索经验模式"
+                  />
+                  <Button
+                    type="submit"
+                    variant="outline"
+                    size="icon"
+                    title="搜索"
+                    aria-label="执行搜索"
+                  >
+                    <SearchIcon className="size-4" />
+                  </Button>
+                </form>
+              </div>
+              <div className="space-y-1.5">
+                <div className="text-muted-foreground text-xs font-medium">
+                  数据范围
+                </div>
+                <Select
+                  value={dataClass}
+                  onValueChange={(value) =>
+                    setDataClass(value as "all" | "simulation" | "operational")
+                  }
+                >
+                  <SelectTrigger className="w-full" aria-label="数据范围">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部数据</SelectItem>
+                    <SelectItem value="operational">运营数据</SelectItem>
+                    <SelectItem value="simulation">验证数据</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+                  <Layers3Icon className="size-3.5" />
+                  沉淀阶段
+                </div>
+                <Select
+                  value={stageFilter}
+                  onValueChange={(value) => {
+                    const next = value as "all" | SocMemoryPatternStageFilter;
+                    setStageFilter(next);
+                    if (next === "terminal") setShowHistory(true);
+                  }}
+                >
+                  <SelectTrigger className="w-full" aria-label="按沉淀阶段筛选">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部阶段</SelectItem>
+                    <SelectItem value="collecting">积累同类样本</SelectItem>
+                    <SelectItem value="awaiting_review">
+                      等待专家审核
+                    </SelectItem>
+                    <SelectItem value="materializing">正在生成经验</SelectItem>
+                    <SelectItem value="persisted">经验已沉淀</SelectItem>
+                    <SelectItem value="terminal">已结束</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+                  <RouteIcon className="size-3.5" />
+                  新告警使用
+                </div>
+                <Select
+                  value={futureUseFilter}
+                  onValueChange={(value) =>
+                    setFutureUseFilter(value as "all" | SocMemoryFutureUseState)
+                  }
+                >
+                  <SelectTrigger
+                    className="w-full"
+                    aria-label="按新告警使用方式筛选"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部使用方式</SelectItem>
+                    <SelectItem value="not_ready">尚未形成经验</SelectItem>
+                    <SelectItem value="paused">尚未开放</SelectItem>
+                    <SelectItem value="reference_only">仅供研判参考</SelectItem>
+                    <SelectItem value="exact_match_decision">
+                      精确匹配可复用结论
+                    </SelectItem>
+                    <SelectItem value="blocked">匹配规则待处理</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 border-t px-3 py-2">
+              {(overview?.terminal_history_count ?? 0) > 0 ? (
+                <label
+                  htmlFor="memory-center-history"
+                  className="flex cursor-pointer items-center gap-2 text-xs"
+                >
+                  <Switch
+                    id="memory-center-history"
+                    checked={showHistory}
+                    onCheckedChange={(next) => {
+                      setShowHistory(next);
+                      if (!next && stageFilter === "terminal") {
+                        setStageFilter("all");
+                      }
+                    }}
+                  />
+                  包含已结束模式 ({overview?.terminal_history_count ?? 0})
+                </label>
+              ) : null}
+              {activeFilterCount > 0 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={resetFilters}
+                >
+                  <XIcon className="size-4" />
+                  清空筛选 ({activeFilterCount})
+                </Button>
+              ) : null}
+              <div className="text-muted-foreground ml-auto flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs">
+                <span>最近样本优先</span>
+                <span>{overview ? `${overview.total} 个模式` : "-"}</span>
+              </div>
+            </div>
+          </section>
+
+          <section
+            className="grid min-h-[34rem] border xl:grid-cols-[minmax(36rem,0.95fr)_minmax(38rem,1.05fr)]"
+            data-testid="memory-center-layout"
+          >
+            <div className="min-w-0 border-b xl:border-r xl:border-b-0">
+              <div className="bg-muted/30 flex items-center justify-between gap-3 border-b px-4 py-2 text-xs font-medium">
+                <span>行为模式</span>
+                <span className="text-muted-foreground font-normal">
+                  状态与样本
+                </span>
               </div>
               {isLoading ? (
                 <div className="text-muted-foreground flex h-48 items-center justify-center text-sm">
-                  正在读取 Memory inventory...
+                  正在读取经验中心...
                 </div>
               ) : error ? (
                 <div className="text-destructive flex h-48 items-center justify-center px-6 text-center text-sm">
-                  {error instanceof Error
-                    ? error.message
-                    : "Memory Center 加载失败"}
+                  {error instanceof Error ? error.message : "经验中心加载失败"}
                 </div>
               ) : (overview?.items.length ?? 0) === 0 ? (
                 <div className="text-muted-foreground flex h-48 items-center justify-center text-sm">
-                  当前筛选下没有 Pattern lineage。
+                  当前筛选下没有行为模式。
                 </div>
               ) : (
                 <div className="divide-y">
@@ -375,37 +654,40 @@ export function SocMemoryCenter({
                       key={pattern.lineage_key}
                       href={`/workspace/soc/memory/patterns/${pattern.lineage_key}`}
                       className={cn(
-                        "hover:bg-muted/40 grid min-h-20 grid-cols-[minmax(0,1fr)_7rem_7rem_6rem] items-center gap-2 px-3 py-3 text-sm",
+                        "hover:bg-muted/40 flex min-h-16 min-w-0 items-center gap-2 px-4 py-3 text-sm 2xl:gap-3",
                         selectedLineageKey === pattern.lineage_key &&
                           "bg-muted/60",
                       )}
                     >
-                      <div className="min-w-0">
-                        <div
-                          className="truncate font-medium"
-                          title={patternTitle(pattern)}
-                        >
-                          {patternTitle(pattern)}
-                        </div>
-                        <div className="text-muted-foreground mt-1 flex min-w-0 gap-2 text-xs">
-                          <span>{pattern.pattern_dimension}</span>
-                          <span
-                            className="truncate font-mono"
-                            title={pattern.lineage_key}
-                          >
-                            {shortId(pattern.lineage_key)}
-                          </span>
-                        </div>
+                      <div
+                        className="min-w-0 flex-1 truncate font-medium"
+                        title={patternTitle(pattern)}
+                        data-testid="memory-pattern-title"
+                      >
+                        {patternTitle(pattern)}
                       </div>
-                      <LifecycleBadge state={pattern.lifecycle_state} />
-                      <ProfileBadge state={pattern.profile_state} />
-                      <div className="text-right tabular-nums">
-                        <div className="font-medium">
-                          {pattern.support_count}
-                        </div>
-                        <div className="text-muted-foreground text-xs">
-                          {pattern.aggregation_window_count} windows
-                        </div>
+                      <div className="text-muted-foreground hidden shrink-0 text-xs tabular-nums 2xl:block">
+                        {formatTime(pattern.last_observed_at)}
+                      </div>
+                      <div
+                        className="flex shrink-0 flex-nowrap items-center gap-1.5"
+                        data-testid="memory-pattern-statuses"
+                      >
+                        <LifecycleBadge
+                          state={pattern.lifecycle_state}
+                          compact
+                        />
+                        <FutureUseBadge pattern={pattern} compact />
+                      </div>
+                      <div
+                        className="w-9 shrink-0 text-right text-xs font-medium whitespace-nowrap tabular-nums 2xl:w-auto"
+                        title={`${pattern.support_count} 条告警，${pattern.aggregation_window_count} 个时间窗，最近样本 ${formatTime(pattern.last_observed_at)}`}
+                        data-testid="memory-pattern-count"
+                      >
+                        {pattern.support_count} 条
+                        <span className="text-muted-foreground ml-1 hidden font-normal 2xl:inline">
+                          · {pattern.aggregation_window_count} 个时间窗
+                        </span>
                       </div>
                     </Link>
                   ))}
@@ -422,7 +704,7 @@ export function SocMemoryCenter({
                   上一页
                 </Button>
                 <span className="text-muted-foreground text-xs tabular-nums">
-                  {offset + 1}-
+                  {resultStart}-
                   {Math.min(offset + PAGE_SIZE, overview?.total ?? 0)}
                 </span>
                 <Button
@@ -440,17 +722,17 @@ export function SocMemoryCenter({
             <div className="min-w-0">
               {detailLoading ? (
                 <div className="text-muted-foreground flex h-64 items-center justify-center text-sm">
-                  正在加载 Pattern 生命周期...
+                  正在加载模式详情...
                 </div>
               ) : detailError ? (
                 <div className="text-destructive flex h-64 items-center justify-center px-6 text-center text-sm">
                   {detailError instanceof Error
                     ? detailError.message
-                    : "Pattern 加载失败"}
+                    : "模式详情加载失败"}
                 </div>
               ) : !detail ? (
                 <div className="text-muted-foreground flex h-64 items-center justify-center text-sm">
-                  选择一个 Pattern lineage 查看详情。
+                  选择一个行为模式查看详情。
                 </div>
               ) : (
                 <div className="flex flex-col">
@@ -464,12 +746,19 @@ export function SocMemoryCenter({
                           <LifecycleBadge
                             state={detail.pattern.lifecycle_state}
                           />
-                          <ProfileBadge state={detail.pattern.profile_state} />
+                          <FutureUseBadge pattern={detail.pattern} />
+                          {detail.pattern.profile_state !== "current" ? (
+                            <MatchingRuleBadge
+                              state={detail.pattern.profile_state}
+                            />
+                          ) : null}
                           <Badge variant="outline">
                             {detail.pattern.environment}
                           </Badge>
                           <Badge variant="outline">
-                            {detail.pattern.data_class}
+                            {detail.pattern.data_class === "operational"
+                              ? "运营数据"
+                              : "验证数据"}
                           </Badge>
                         </div>
                       </div>
@@ -479,7 +768,7 @@ export function SocMemoryCenter({
                             href={`/workspace/soc/memory/records/${encodeURIComponent(detail.pattern.memory_record.memory_id)}`}
                           >
                             <DatabaseIcon className="size-4" />
-                            查看 / 修订 Memory
+                            查看 / 修订经验
                             <ChevronRightIcon className="size-4" />
                           </Link>
                         </Button>
@@ -518,7 +807,12 @@ export function SocMemoryCenter({
                         <div>
                           <div className="font-medium">需要治理关注</div>
                           <div className="mt-1 text-xs break-words">
-                            {detail.pattern.attention_reasons.join(" · ")}
+                            {detail.pattern.attention_reasons
+                              .map(
+                                (reason) =>
+                                  ATTENTION_REASON_LABELS[reason] ?? reason,
+                              )
+                              .join(" · ")}
                           </div>
                         </div>
                       </div>
@@ -528,7 +822,7 @@ export function SocMemoryCenter({
                   <dl className="grid border-b sm:grid-cols-2">
                     <div className="border-b px-5 py-3 sm:border-r">
                       <dt className="text-muted-foreground text-xs">
-                        Profile Contract
+                        匹配规则版本
                       </dt>
                       <dd className="mt-1 text-sm">
                         {detail.pattern.profile_id} v
@@ -536,32 +830,41 @@ export function SocMemoryCenter({
                       </dd>
                       {detail.pattern.profile_state === "legacy" ? (
                         <div className="text-muted-foreground mt-1 text-xs">
-                          当前版本 v{detail.pattern.current_profile_version}
+                          当前规则版本 v{detail.pattern.current_profile_version}
+                          ，这条模式需要重新校验。
                         </div>
-                      ) : null}
+                      ) : detail.pattern.profile_state === "unregistered" ? (
+                        <div className="mt-1 text-xs text-red-700">
+                          当前系统无法识别该匹配规则，不能用于新告警。
+                        </div>
+                      ) : (
+                        <div className="text-muted-foreground mt-1 text-xs">
+                          用于从告警中提取稳定的同类特征；仅供版本审计。
+                        </div>
+                      )}
                     </div>
                     <div className="border-b px-5 py-3">
                       <dt className="text-muted-foreground text-xs">
-                        Pattern History
+                        样本积累
                       </dt>
                       <dd className="mt-1 text-sm tabular-nums">
-                        {detail.pattern.support_count} observations /{" "}
-                        {detail.pattern.distinct_source_count} distinct /{" "}
-                        {detail.pattern.aggregation_window_count} windows
+                        {detail.pattern.support_count} 条告警 /{" "}
+                        {detail.pattern.distinct_source_count} 个独立来源 /{" "}
+                        {detail.pattern.aggregation_window_count} 个时间窗
                       </dd>
                     </div>
                     <div className="px-5 py-3 sm:border-r">
                       <dt className="text-muted-foreground text-xs">
-                        Candidate Snapshot
+                        候选生成记录
                       </dt>
                       <dd className="mt-1 text-sm tabular-nums">
-                        {detail.pattern.candidate_snapshot_count} frozen +{" "}
-                        {detail.pattern.reinforcement_count} reinforcement
+                        生成时包含 {detail.pattern.candidate_snapshot_count}{" "}
+                        条样本，后续新增 {detail.pattern.reinforcement_count} 条
                       </dd>
                     </div>
                     <div className="px-5 py-3">
                       <dt className="text-muted-foreground text-xs">
-                        Observed
+                        观察时间
                       </dt>
                       <dd className="mt-1 text-sm">
                         {formatTime(detail.pattern.first_observed_at)} →{" "}
@@ -575,10 +878,10 @@ export function SocMemoryCenter({
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
                       <div>
                         <div className="text-sm font-medium">
-                          Profile 候选对账
+                          旧匹配规则候选处理
                         </div>
                         <div className="text-muted-foreground mt-1 text-xs">
-                          同一源告警已有当前 Profile 候选{" "}
+                          同一来源告警已经使用当前匹配规则生成新候选{" "}
                           {detail.suggested_successor_candidate_id}
                         </div>
                       </div>
@@ -594,33 +897,17 @@ export function SocMemoryCenter({
                     </div>
                   ) : null}
 
-                  <div className="border-b px-5 py-4">
-                    <h3 className="flex items-center gap-2 text-sm font-semibold">
-                      {detail.pattern.memory_record?.retrieval_enabled ? (
-                        <CheckCircle2Icon className="size-4" />
-                      ) : (
-                        <DatabaseIcon className="size-4" />
-                      )}
-                      Memory 状态
-                    </h3>
-                    <p className="text-muted-foreground mt-2 text-sm">
-                      {detail.pattern.memory_record
-                        ? `${detail.pattern.memory_record.memory_id} · ${detail.pattern.memory_record.retrieval_enabled ? "已进入检索" : "已确认，尚未启用检索"}`
-                        : detail.pattern.candidate
-                          ? `${detail.pattern.candidate.candidate_id} · ${detail.pattern.candidate.status}`
-                          : "尚未达到候选生成与专家审核阶段。"}
-                    </p>
-                  </div>
+                  <MemoryGovernanceStatus pattern={detail.pattern} />
 
                   <div>
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-3">
                       <h3 className="flex items-center gap-2 text-sm font-semibold">
                         <HistoryIcon className="size-4" />
-                        Source Observations
+                        来源告警
                       </h3>
                       <div className="flex items-center gap-2">
                         <span className="text-muted-foreground text-xs">
-                          {detail.observation_total} total
+                          共 {detail.observation_total} 条
                         </span>
                         {!observationsVisible ? (
                           <Button
@@ -635,7 +922,7 @@ export function SocMemoryCenter({
                               })
                             }
                           >
-                            加载来源观察
+                            加载来源告警
                           </Button>
                         ) : null}
                       </div>
@@ -739,8 +1026,7 @@ export function SocMemoryCenter({
                       </>
                     ) : (
                       <div className="text-muted-foreground px-5 py-4 text-sm">
-                        来源告警及其研判摘要按需加载，不影响 Pattern 与 Memory
-                        治理信息查看。
+                        来源告警及其研判摘要按需加载，不影响当前经验状态查看。
                       </div>
                     )}
                   </div>

@@ -135,9 +135,16 @@ def list_review_items(
     service: ReviewServiceDep,
     status: ReviewQueueStatus | None = Query(default=ReviewQueueStatus.OPEN),
     limit: int = Query(default=50, ge=1, le=200),
+    human_intervention_only: bool = Query(default=False),
 ) -> ReviewQueueListResponse:
     try:
-        return ReviewQueueListResponse(items=service.list_queue(status=status, limit=limit))
+        return ReviewQueueListResponse(
+            items=service.list_queue(
+                status=status,
+                limit=limit,
+                human_intervention_only=human_intervention_only,
+            )
+        )
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

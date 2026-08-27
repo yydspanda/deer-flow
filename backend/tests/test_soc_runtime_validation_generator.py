@@ -11,7 +11,7 @@ from scripts.generate_soc_runtime_validation_report import _write_hardening_arti
 
 
 def test_runtime_validation_generator_writes_input_adapter_contract(tmp_path: Path) -> None:
-    source_path = Path("samples/alerts/pingan_legacy_apt.json")
+    source_path = Path(__file__).resolve().parents[1] / "samples/alerts/pingan_legacy_apt.json"
     payload = json.loads(source_path.read_text(encoding="utf-8"))
 
     _write_runtime_steps(

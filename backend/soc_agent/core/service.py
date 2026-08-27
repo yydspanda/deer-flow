@@ -77,6 +77,9 @@ from soc_agent.contracts import (
     SocAgentRiskLevel,
     SocAgentRouteDecision,
     SocAgentStreamEvent,
+    SocAlertAttentionLevel,
+    SocAlertInvestigationContext,
+    SocAlertResult,
     SocDaemonMessage,
     SocDaemonProcessResult,
     SocDispositionOutcomeRecord,
@@ -127,6 +130,11 @@ from soc_agent.contracts import (
     SocSkillResolution,
     UnifiedInvestigationView,
     Verdict,
+)
+from soc_agent.core.alert_results import (
+    classify_alert_result,
+    is_required_human_intervention_item,
+    required_human_intervention_reason,
 )
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
 from soc_agent.memory import (
@@ -184,7 +192,7 @@ from soc_agent.protocols import (
     SocMutationRepository,
     SocMutationUnitOfWork,
 )
-from soc_agent.skills import SocSkillResolver
+from soc_agent.skills import SocSkillResolver, build_soc_skill_context
 from soc_agent.utils.hashing import stable_hash
 
 from .access_control import SOC_MEMORY_REVIEWER_ROLES, require_actor_roles
@@ -1192,15 +1200,165 @@ class SocReviewService:
         )
         return record
 
+    def list_alert_results(
+        self,
+        *,
+        attention_level: SocAlertAttentionLevel | None = None,
+        limit: int = 50,
+    ) -> list[SocAlertResult]:
+        """List completed alert results independently from human-task admission."""
+
+        if self._summary_repository is None:
+            raise SocServiceNotImplementedError("list_alert_results requires an AlertSummaryRepository")
+        repository_limit = 200 if attention_level is not None else limit
+        results = [
+            classify_alert_result(
+                summary,
+                queue_item=(self._review_queue_repository.get_open_review_item_by_run(summary.run_id) if self._review_queue_repository is not None else None),
+            )
+            for summary in self._summary_repository.list_alert_summaries(limit=repository_limit)
+        ]
+        if attention_level is not None:
+            results = [result for result in results if result.attention_level is attention_level]
+        return results[:limit]
+
+    def get_alert_investigation_context(
+        self,
+        run_id: str,
+    ) -> SocAlertInvestigationContext:
+        """Open one investigation by stable run identity, with or without a task."""
+
+        if self._repository is None:
+            raise SocServiceNotImplementedError("get_alert_investigation_context requires an AlertRepository")
+        if self._summary_repository is None:
+            raise SocServiceNotImplementedError("get_alert_investigation_context requires an AlertSummaryRepository")
+
+        run = self._repository.get_run(run_id)
+        if run is None:
+            raise SocServiceNotFoundError(f"run {run_id} not found")
+        summary = self._summary_repository.get_alert_summary(run_id)
+        if summary is None:
+            raise SocServiceNotFoundError(f"alert summary for run {run_id} not found")
+        queue_item = self._review_queue_repository.get_open_review_item_by_run(run_id) if self._review_queue_repository is not None else None
+        result = classify_alert_result(summary, queue_item=queue_item)
+        audit_records = self._audit_repository.list_audit_records(run_id) if self._audit_repository is not None else []
+        similar_alerts = self._summary_repository.find_similar_alert_summaries(_similar_alert_query_from_summary(summary))
+        action_evidence = (
+            self._evidence_repository.list_evidence(
+                queue_id=queue_item.queue_id if queue_item is not None else None,
+                run_id=run_id,
+                alert_id=run.alert_id,
+                limit=20,
+            )
+            if self._evidence_repository is not None
+            else []
+        )
+        investigation_addenda = (
+            SocInvestigationReportingService(
+                run_repository=self._repository,
+                execution_repository=self._enrichment_execution_repository,
+                evidence_repository=self._evidence_repository,
+            ).list_addenda_for_run(run_id, limit=10)
+            if self._enrichment_execution_repository is not None and self._evidence_repository is not None
+            else []
+        )
+        authorization_enrichments = (
+            self._authorization_enrichment_repository.list_authorization_enrichments(
+                run_id=run_id,
+                alert_id=run.alert_id,
+                queue_id=queue_item.queue_id if queue_item is not None else None,
+                limit=20,
+            )
+            if self._authorization_enrichment_repository is not None
+            else []
+        )
+        disposition_proposals = (
+            self._disposition_proposal_repository.list_disposition_proposals(
+                run_id=run_id,
+                alert_id=run.alert_id,
+                queue_id=queue_item.queue_id if queue_item is not None else None,
+                limit=20,
+            )
+            if self._disposition_proposal_repository is not None
+            else []
+        )
+        disposition_outcomes = _disposition_outcomes_for_alert_result(
+            proposals=disposition_proposals,
+            queue_item=queue_item,
+            repository=self._disposition_evaluation_repository,
+        )
+        external_dispositions = (
+            self._external_disposition_repository.list_external_dispositions(
+                queue_id=queue_item.queue_id if queue_item is not None else None,
+                run_id=run_id,
+                alert_id=run.alert_id,
+                limit=20,
+            )
+            if self._external_disposition_repository is not None
+            else []
+        )
+        memory_candidates = (
+            self._memory_candidate_repository.list_memory_candidates(
+                queue_id=queue_item.queue_id if queue_item is not None else None,
+                run_id=run_id,
+                alert_id=run.alert_id,
+                limit=20,
+            )
+            if self._memory_candidate_repository is not None
+            else []
+        )
+        correlation_result = _correlation_result_for_context(
+            run_id=run_id,
+            summary=summary,
+            summary_repository=self._summary_repository,
+            evidence_repository=self._evidence_repository,
+        )
+        context = SocAlertInvestigationContext(
+            result=result,
+            run=run,
+            audit_records=audit_records,
+            similar_alerts=similar_alerts,
+            action_evidence=action_evidence,
+            investigation_addenda=investigation_addenda,
+            authorization_enrichments=authorization_enrichments,
+            disposition_proposals=disposition_proposals,
+            disposition_outcomes=disposition_outcomes,
+            external_dispositions=external_dispositions,
+            memory_candidates=memory_candidates,
+            correlation_result=correlation_result,
+        )
+        if self._memory_record_repository is not None:
+            relevant_memories = SocMemoryService(
+                record_repository=self._memory_record_repository,
+                profile_registry=self._memory_profile_registry,
+            ).find_relevant_records(
+                _memory_query_from_alert_investigation_context(
+                    context,
+                    profile_registry=self._memory_profile_registry,
+                )
+            )
+            context = context.model_copy(update={"relevant_memories": relevant_memories})
+        domain_triage_results = _domain_triage_results_for_context(context)
+        context = context.model_copy(update={"domain_triage_results": domain_triage_results})
+        return context.model_copy(update={"investigation_view": _unified_investigation_view_from_context(context)})
+
     def list_queue(
         self,
         *,
         status: ReviewQueueStatus | None = ReviewQueueStatus.OPEN,
         limit: int = 50,
+        human_intervention_only: bool = False,
     ) -> list[ReviewQueueItem]:
         if self._review_queue_repository is None:
             raise SocServiceNotImplementedError("list_queue requires a ReviewQueueRepository")
-        return self._review_queue_repository.list_review_items(status=status, limit=limit)
+        repository_limit = 200 if human_intervention_only else limit
+        items = self._review_queue_repository.list_review_items(
+            status=status,
+            limit=repository_limit,
+        )
+        if human_intervention_only:
+            items = [item for item in items if is_required_human_intervention_item(item)]
+        return items[:limit]
 
     def close_queue_item(
         self,
@@ -3519,9 +3677,70 @@ def _retrieval_activation_labels(labels: list[str], *, enabled: bool) -> list[st
     return sorted(result)
 
 
+def _disposition_outcomes_for_alert_result(
+    *,
+    proposals: Sequence[SocDispositionProposalRecord],
+    queue_item: ReviewQueueItem | None,
+    repository: SocDispositionEvaluationRepository | None,
+) -> list[SocDispositionOutcomeRecord]:
+    if repository is None:
+        return []
+    if queue_item is not None:
+        return repository.list_disposition_outcomes(
+            queue_id=queue_item.queue_id,
+            limit=50,
+        )
+    outcomes: dict[str, SocDispositionOutcomeRecord] = {}
+    for proposal in proposals:
+        for outcome in repository.list_disposition_outcomes(
+            proposal_id=proposal.proposal_id,
+            limit=20,
+        ):
+            outcomes[outcome.outcome_id] = outcome
+    return sorted(
+        outcomes.values(),
+        key=lambda item: (item.observed_at, item.created_at, item.outcome_id),
+        reverse=True,
+    )[:50]
+
+
 def _memory_query_from_investigation_context(
     context: InvestigationContext,
     *,
+    profile_registry: SocMemoryProfileRegistry,
+) -> SocMemoryQuery:
+    return _memory_query_from_context_parts(
+        run=context.run,
+        summary=context.summary,
+        queue_item=context.queue_item,
+        action_evidence=context.action_evidence,
+        memory_candidates=context.memory_candidates,
+        profile_registry=profile_registry,
+    )
+
+
+def _memory_query_from_alert_investigation_context(
+    context: SocAlertInvestigationContext,
+    *,
+    profile_registry: SocMemoryProfileRegistry,
+) -> SocMemoryQuery:
+    return _memory_query_from_context_parts(
+        run=context.run,
+        summary=context.result.summary,
+        queue_item=context.result.queue_item,
+        action_evidence=context.action_evidence,
+        memory_candidates=context.memory_candidates,
+        profile_registry=profile_registry,
+    )
+
+
+def _memory_query_from_context_parts(
+    *,
+    run: AnalysisRun,
+    summary: AlertSummary | None,
+    queue_item: ReviewQueueItem | None,
+    action_evidence: Sequence[InvestigationEvidence],
+    memory_candidates: Sequence[SocMemoryCandidate],
     profile_registry: SocMemoryProfileRegistry,
 ) -> SocMemoryQuery:
     facets: dict[str, list[str]] = {}
@@ -3533,22 +3752,25 @@ def _memory_query_from_investigation_context(
         "memory_feature_schema_version": "soc.memory_features.generic.v1",
     }
     policy_version = "soc.memory_retrieval_policy.v2"
-    tenant_scope = context.queue_item.tenant_id or "global"
-    tenant_id = context.queue_item.tenant_id
+    tenant_id = summary.tenant_id if summary is not None else queue_item.tenant_id if queue_item is not None else None
+    tenant_scope = tenant_id or "global"
 
-    item = context.queue_item
-    _add_memory_query_facet(facets, "source_type", item.source_type.value)
-    _add_memory_query_facet(facets, "source_system", item.source_system)
-    _add_memory_query_facet(facets, "rule_code", item.rule_code)
-    _add_memory_query_facet(facets, "rule_name", item.rule_name)
-    _add_memory_query_facet(facets, "severity", item.severity)
-    _add_memory_query_facet(facets, "category", item.category)
-    _add_memory_query_facet(facets, "verdict", item.verdict.value if item.verdict is not None else None)
-    for entity_key in item.entity_keys:
-        _add_memory_query_facet(facets, "entity", entity_key)
+    if queue_item is not None:
+        _add_memory_query_facet(facets, "source_type", queue_item.source_type.value)
+        _add_memory_query_facet(facets, "source_system", queue_item.source_system)
+        _add_memory_query_facet(facets, "rule_code", queue_item.rule_code)
+        _add_memory_query_facet(facets, "rule_name", queue_item.rule_name)
+        _add_memory_query_facet(facets, "severity", queue_item.severity)
+        _add_memory_query_facet(facets, "category", queue_item.category)
+        _add_memory_query_facet(
+            facets,
+            "verdict",
+            queue_item.verdict.value if queue_item.verdict is not None else None,
+        )
+        for entity_key in queue_item.entity_keys:
+            _add_memory_query_facet(facets, "entity", entity_key)
 
-    if context.summary is not None:
-        summary = context.summary
+    if summary is not None:
         _add_memory_query_facet(facets, "detection_key", summary.detection_key)
         _add_memory_query_facet(facets, "rule_code", summary.rule_code)
         _add_memory_query_facet(facets, "rule_name", summary.rule_name)
@@ -3560,11 +3782,11 @@ def _memory_query_from_investigation_context(
         if summary.summary:
             text_terms.extend(_memory_text_terms(summary.summary))
 
-    if context.run.analysis is not None:
-        text_terms.extend(_memory_text_terms(context.run.analysis.summary))
-        text_terms.extend(_memory_text_terms(context.run.analysis.reason))
+    if run.analysis is not None:
+        text_terms.extend(_memory_text_terms(run.analysis.summary))
+        text_terms.extend(_memory_text_terms(run.analysis.reason))
 
-    request = context.run.llm_analysis_request
+    request = run.llm_analysis_request
     if request is not None:
         profile = profile_registry.resolve_request(request)
         canonical_query = memory_query_from_analysis_request(
@@ -3588,11 +3810,11 @@ def _memory_query_from_investigation_context(
         for conflict_type in request.conflict_types:
             _add_memory_query_facet(facets, "conflict_type", conflict_type)
 
-    for evidence in context.action_evidence:
+    for evidence in action_evidence:
         evidence_refs.append(evidence.evidence_id)
         _add_memory_query_facet(facets, "action", evidence.action)
         _add_memory_query_facet(facets, "route", evidence.route)
-    for candidate in context.memory_candidates:
+    for candidate in memory_candidates:
         _add_memory_query_facet(facets, "candidate_type", candidate.candidate_type.value)
         _add_memory_query_facet(facets, "target_artifact", candidate.target_artifact.value)
 
@@ -3607,10 +3829,10 @@ def _memory_query_from_investigation_context(
         max_tokens=900,
         metadata={
             **profile_metadata,
-            "source": "investigation_context",
-            "queue_id": item.queue_id,
-            "run_id": item.run_id,
-            "alert_id": item.alert_id,
+            "source": "alert_investigation_context",
+            "queue_id": queue_item.queue_id if queue_item is not None else None,
+            "run_id": run.run_id,
+            "alert_id": run.alert_id,
         },
     )
 
@@ -5377,18 +5599,33 @@ def _correlation_result_for_context(
         return None
 
 
-def _domain_triage_results_for_context(context: InvestigationContext) -> list[SocDomainTriageResult]:
+def _domain_triage_results_for_context(
+    context: InvestigationContext | SocAlertInvestigationContext,
+) -> list[SocDomainTriageResult]:
     from soc_agent.domain import SocDomainTriageService
 
-    skill_context = skill_context_from_investigation_context(context)
+    summary = _investigation_context_summary(context)
+    queue_item = _investigation_context_queue_item(context)
+    if isinstance(context, InvestigationContext):
+        skill_context = skill_context_from_investigation_context(context)
+    else:
+        request = context.run.llm_analysis_request
+        if request is not None and request.skill_context.selected_skills:
+            skill_context = request.skill_context
+        elif request is not None:
+            skill_context = build_soc_skill_context(SocSkillResolver().resolve_for_analysis_request(request))
+        elif summary is not None:
+            skill_context = build_soc_skill_context(SocSkillResolver().resolve_for_summary(summary))
+        else:
+            skill_context = None
     available_action_routes = sorted({route for evidence in context.action_evidence for route in (evidence.route, evidence.action) if route})
     request = SocDomainTriageRequest(
         run=context.run,
         investigation_evidence=context.action_evidence,
         correlation_result=context.correlation_result,
         metadata={
-            "source": "review_context",
-            "queue_id": context.queue_item.queue_id,
+            "source": "review_context" if queue_item is not None else "alert_result_context",
+            "queue_id": queue_item.queue_id if queue_item is not None else None,
             "similar_alert_count": len(context.similar_alerts),
             "correlation_match_count": len(context.correlation_result.matches) if context.correlation_result is not None else 0,
             "external_disposition_count": len(context.external_dispositions),
@@ -5404,21 +5641,25 @@ def _domain_triage_results_for_context(context: InvestigationContext) -> list[So
     return [SocDomainTriageService().triage(request)]
 
 
-def _unified_investigation_view_from_context(context: InvestigationContext) -> UnifiedInvestigationView:
+def _unified_investigation_view_from_context(
+    context: InvestigationContext | SocAlertInvestigationContext,
+) -> UnifiedInvestigationView:
     run = context.run
     decision = run.decision
     analysis = run.analysis
+    summary = _investigation_context_summary(context)
+    queue_item = _investigation_context_queue_item(context)
     timeline = _investigation_timeline_from_context(context)
     return UnifiedInvestigationView(
-        queue_id=context.queue_item.queue_id,
+        queue_id=queue_item.queue_id if queue_item is not None else None,
         run_id=run.run_id,
         alert_id=run.alert_id,
         runtime_verdict=decision.verdict if decision is not None else _current_verdict(run),
         runtime_confidence=decision.confidence if decision is not None else _current_confidence(run),
         needs_review=decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW,
         automation_allowed=decision.automation_allowed if decision is not None else False,
-        primary_summary=analysis.summary if analysis is not None else context.queue_item.summary,
-        primary_reason=decision.reason if decision is not None else (analysis.reason if analysis is not None else context.queue_item.reason),
+        primary_summary=analysis.summary if analysis is not None else summary.summary if summary is not None else None,
+        primary_reason=(decision.reason if decision is not None else analysis.reason if analysis is not None else queue_item.reason if queue_item is not None else None),
         correlation_result=context.correlation_result,
         domain_triage_results=context.domain_triage_results,
         investigation_addenda=context.investigation_addenda,
@@ -5442,7 +5683,7 @@ def _unified_investigation_view_from_context(context: InvestigationContext) -> U
             "timeline_items": len(timeline),
         },
         metadata={
-            "source": "SocReviewService.get_investigation_context",
+            "source": ("SocReviewService.get_investigation_context" if queue_item is not None else "SocReviewService.get_alert_investigation_context"),
             "view_only": True,
             "writes_db": False,
             "executes_actions": False,
@@ -5450,8 +5691,11 @@ def _unified_investigation_view_from_context(context: InvestigationContext) -> U
     )
 
 
-def _investigation_timeline_from_context(context: InvestigationContext) -> list[InvestigationTimelineItem]:
+def _investigation_timeline_from_context(
+    context: InvestigationContext | SocAlertInvestigationContext,
+) -> list[InvestigationTimelineItem]:
     run = context.run
+    summary = _investigation_context_summary(context)
     items: list[InvestigationTimelineItem] = []
     if run.analysis is not None:
         items.append(
@@ -5460,7 +5704,7 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
                 title="Runtime analysis completed",
                 summary=run.analysis.summary,
                 status=run.analysis.verdict.value,
-                severity=context.summary.severity if context.summary is not None else None,
+                severity=summary.severity if summary is not None else None,
                 source_id=run.run_id,
                 source_refs={"run_id": run.run_id, "alert_id": run.alert_id},
                 occurred_at=run.ended_at or run.started_at,
@@ -5711,6 +5955,22 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
     return sorted(items, key=lambda item: item.occurred_at or datetime.min.replace(tzinfo=UTC), reverse=True)
 
 
+def _investigation_context_summary(
+    context: InvestigationContext | SocAlertInvestigationContext,
+) -> AlertSummary | None:
+    if isinstance(context, SocAlertInvestigationContext):
+        return context.result.summary
+    return context.summary
+
+
+def _investigation_context_queue_item(
+    context: InvestigationContext | SocAlertInvestigationContext,
+) -> ReviewQueueItem | None:
+    if isinstance(context, SocAlertInvestigationContext):
+        return context.result.queue_item
+    return context.queue_item
+
+
 def _disposition_proposal_timeline_item(
     proposal: SocDispositionProposalRecord,
 ) -> InvestigationTimelineItem:
@@ -5906,11 +6166,10 @@ def _review_queue_item_from_summary(
     *,
     existing: ReviewQueueItem | None = None,
 ) -> ReviewQueueItem | None:
-    if summary.status is AnalysisRunStatus.FAILED and not summary.needs_review:
+    required_reason = required_human_intervention_reason(summary)
+    if required_reason is None:
         return None
-    reason = _review_reason(summary)
-    if reason is None:
-        return None
+    reason = required_reason.value
     item = existing or ReviewQueueItem(
         run_id=summary.run_id,
         alert_id=summary.alert_id,
@@ -5950,14 +6209,6 @@ def _close_open_review_item_for_run(
     item.close_reason = reason
     item.updated_at = item.closed_at
     repository.save_review_item(item)
-
-
-def _review_reason(summary: AlertSummary) -> str | None:
-    if summary.review_reasons:
-        return summary.review_reasons[0].value
-    if summary.needs_review:
-        return "summary.needs_review"
-    return None
 
 
 def _review_priority(summary: AlertSummary) -> ReviewQueuePriority:

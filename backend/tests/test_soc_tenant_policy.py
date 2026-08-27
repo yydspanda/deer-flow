@@ -769,8 +769,7 @@ def test_analysis_service_runs_policy_after_persistence_and_deduplicates_retry()
     assert decisions[0].decision_source is TenantPolicyDecisionSource.NO_MATCH
     assert decisions[0].policy_time_source is TenantPolicyTimeSource.ALERT_EVENT_TIME_TIMEZONE_ASSUMED
     review = repository.get_open_review_item_by_run(first.run_id)
-    assert review is not None
-    assert review.status.value == "open"
+    assert review is None
 
 
 def test_post_analysis_observer_failure_does_not_fail_persisted_analysis() -> None:

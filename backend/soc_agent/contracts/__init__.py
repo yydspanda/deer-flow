@@ -1,5 +1,11 @@
 """Public schemas shared by SOC Agent CLI, API, daemon, and core runtime."""
 
+from soc_agent.contracts.alert_results import (
+    SocAlertAttentionLevel,
+    SocAlertInvestigationContext,
+    SocAlertResult,
+    SocDecisionUsability,
+)
 from soc_agent.contracts.authorization import (
     AuthorizationDimension,
     AuthorizationDimensionEvaluation,
@@ -116,7 +122,9 @@ from soc_agent.contracts.memory_center import (
     SocMemoryCenterPatternDetail,
     SocMemoryCenterPatternSummary,
     SocMemoryCenterRecordRef,
+    SocMemoryFutureUseState,
     SocMemoryPatternLifecycleState,
+    SocMemoryPatternStageFilter,
     SocMemoryProfileState,
 )
 from soc_agent.contracts.memory_evolution import (
@@ -572,6 +580,10 @@ from soc_agent.contracts.tenant_policy import (
 )
 
 __all__ = [
+    "SocAlertAttentionLevel",
+    "SocAlertInvestigationContext",
+    "SocAlertResult",
+    "SocDecisionUsability",
     "SocActionAuthorizationDecision",
     "SocActionAuthorizationMode",
     "SocActionAuthorizationRecord",
@@ -1086,7 +1098,9 @@ __all__ = [
     "SocMemoryCenterMetrics",
     "SocMemoryCenterOverview",
     "SocMemoryCenterRecordRef",
+    "SocMemoryFutureUseState",
     "SocMemoryPatternLifecycleState",
+    "SocMemoryPatternStageFilter",
     "SocMemoryProfileState",
     "SocMemoryFeedbackAlignment",
     "SocMemoryFeedbackEvent",

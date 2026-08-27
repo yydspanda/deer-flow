@@ -31,7 +31,9 @@ from soc_agent.contracts import (
     SocMemoryCenterOverview,
     SocMemoryCenterPatternDetail,
     SocMemoryDecisionDirective,
+    SocMemoryFutureUseState,
     SocMemoryLineageReport,
+    SocMemoryPatternStageFilter,
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordMatchTestCommand,
@@ -309,6 +311,8 @@ def get_memory_center_overview(
     profile_id: str | None = Query(default=None),
     search: str | None = Query(default=None, max_length=256),
     include_terminal_history: bool = Query(default=False),
+    stage: SocMemoryPatternStageFilter | None = Query(default=None),
+    future_use: SocMemoryFutureUseState | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> SocMemoryCenterOverview:
@@ -320,6 +324,8 @@ def get_memory_center_overview(
             profile_id=profile_id,
             search=search,
             include_terminal_history=include_terminal_history,
+            stage=stage,
+            future_use=future_use,
             limit=limit,
             offset=offset,
         )

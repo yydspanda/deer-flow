@@ -29,10 +29,11 @@ REPOSITORY_ROOT = BACKEND_ROOT.parent
 DEFAULT_OUTPUT_DIR = BACKEND_ROOT / ".deer-flow" / "soc-alpha-acceptance"
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.gateway.routers import soc_external_dispositions, soc_review  # noqa: E402
+from app.gateway.routers import soc_alerts, soc_external_dispositions, soc_review  # noqa: E402
 from app.gateway.routers.soc_transport import SOC_API_VERSION  # noqa: E402
 from soc_agent.cli import main as soc_main  # noqa: E402
 from soc_agent.contracts import SocExternalDispositionIngressCommand  # noqa: E402
+from soc_agent.core import SocReviewService  # noqa: E402
 from soc_agent.db import SqlAlchemyAlertRepository, to_sync_database_url  # noqa: E402
 
 REPORT_SCHEMA_VERSION = "soc.alpha_acceptance_report.v1"
@@ -105,31 +106,36 @@ def run_core_acceptance(*, output_dir: Path, database_url: str) -> dict[str, Any
     queue_ids = [str(value) for value in demo.get("queue_ids", [])]
     _require(demo.get("failed_count") == 0, "CLI demo reported a failed sample")
     _require(sample_ids == EXPECTED_SAMPLE_IDS, f"unexpected sample coverage: {sorted(sample_ids)}")
-    _require(len(run_ids) == 3 and len(queue_ids) == 3, "expected three runs and three review items")
+    _require(len(run_ids) == 3, "expected three persisted runs")
+    _require(queue_ids == [], "ordinary demo results must not manufacture review tasks")
 
     cli_runs: list[dict[str, Any]] = []
-    cli_contexts: list[dict[str, Any]] = []
+    alert_contexts: list[dict[str, Any]] = []
     replay_runs: list[dict[str, Any]] = []
-    for run_id, queue_id in zip(run_ids, queue_ids, strict=True):
+    context_service = _review_service(database_url)
+    for run_id in run_ids:
         run = _invoke_soc_json(["show", run_id, "--database-url", database_url, "--pretty"])
-        context = _invoke_soc_json(["review", "context", queue_id, "--database-url", database_url, "--pretty"])
+        context = soc_alerts.get_alert_investigation_context(run_id, context_service).model_dump(
+            mode="json",
+            exclude_none=True,
+        )
         replay = _invoke_soc_json(["replay", run_id, "--database-url", database_url, "--analyzer-mode", "stub", "--pretty"])
-        _require(context["queue_item"]["run_id"] == run_id, f"queue {queue_id} points to another run")
+        _require(context["result"]["summary"]["run_id"] == run_id, f"alert context points to another run: {run_id}")
+        _require(context["result"].get("queue_item") is None, f"ordinary demo run unexpectedly created a task: {run_id}")
         _require(replay.get("replay_of_run_id") == run_id, f"replay lineage missing for {run_id}")
         _require(replay.get("run_id") != run_id, f"replay reused original run id {run_id}")
         cli_runs.append(run)
-        cli_contexts.append(context)
+        alert_contexts.append(context)
         replay_runs.append(replay)
 
     _write_json(core_dir / "cli-runs.json", cli_runs)
-    _write_json(core_dir / "cli-review-contexts.json", cli_contexts)
+    _write_json(core_dir / "alert-contexts.json", alert_contexts)
     _write_json(core_dir / "cli-replays.json", replay_runs)
 
     api_journey = _run_gateway_journey(
         database_url=database_url,
         run_id=run_ids[0],
         alert_id=str(demo["results"][0]["alert_id"]),
-        queue_id=queue_ids[0],
     )
     _write_json(core_dir / "gateway-feedback-journey.json", api_journey)
 
@@ -137,10 +143,9 @@ def run_core_acceptance(*, output_dir: Path, database_url: str) -> dict[str, Any
     corrected_run = repository.get_run(run_ids[0])
     decision_audits = repository.list_audit_records(run_ids[0])
     mutation_audits = repository.list_mutation_audits(run_id=run_ids[0], limit=100)
-    review_item = repository.get_review_item(queue_ids[0])
     _require(corrected_run is not None and corrected_run.decision is not None, "feedback target run was not corrected")
     _require(corrected_run.decision.verdict.value == "false_positive", "feedback correction verdict was not persisted")
-    _require(review_item is not None and review_item.status.value == "closed", "feedback did not close the review item")
+    _require(repository.get_open_review_item_by_run(run_ids[0]) is None, "run-scoped feedback unexpectedly created a review item")
     audit_actions = {record.action.value for record in decision_audits}
     _require({"analysis", "correction", "external_disposition"} <= audit_actions, f"missing decision audits: {audit_actions}")
     _require(len(mutation_audits) >= 2, "expected durable mutation audits for external feedback")
@@ -148,9 +153,9 @@ def run_core_acceptance(*, output_dir: Path, database_url: str) -> dict[str, Any
     persistence_evidence = {
         "schema_version": "soc.alpha_persistence_evidence.v1",
         "target_run_id": run_ids[0],
-        "target_queue_id": queue_ids[0],
+        "target_queue_id": None,
         "persisted_verdict": corrected_run.decision.verdict.value,
-        "persisted_queue_status": review_item.status.value,
+        "persisted_queue_status": None,
         "decision_audit_actions": sorted(audit_actions),
         "decision_audits": [item.model_dump(mode="json", exclude_none=True) for item in decision_audits],
         "mutation_audits": [item.model_dump(mode="json", exclude_none=True) for item in mutation_audits],
@@ -176,12 +181,12 @@ def run_core_acceptance(*, output_dir: Path, database_url: str) -> dict[str, Any
         },
         "checks": {
             "cli_all_samples_passed": True,
-            "review_context_loaded_for_each_sample": True,
-            "gateway_review_api_loaded": api_journey["review_context_status"] == 200,
+            "alert_context_loaded_for_each_sample": True,
+            "gateway_alert_api_loaded": api_journey["alert_context_status"] == 200,
             "external_feedback_applied": api_journey["first_apply"]["correction_applied"],
             "external_feedback_exact_retry_idempotent": api_journey["duplicate_apply"]["idempotent"],
             "external_feedback_changed_retry_rejected": api_journey["changed_retry_status"] == 409,
-            "review_state_persisted": review_item.status.value == "closed",
+            "no_spurious_review_task_created": repository.get_open_review_item_by_run(run_ids[0]) is None,
             "decision_and_mutation_audit_persisted": bool(decision_audits and mutation_audits),
             "replay_lineage_verified": all(replay.get("replay_of_run_id") == original for replay, original in zip(replay_runs, run_ids, strict=True)),
         },
@@ -201,7 +206,7 @@ def run_core_acceptance(*, output_dir: Path, database_url: str) -> dict[str, Any
         "evidence_files": [
             "core/cli-demo.json",
             "core/cli-runs.json",
-            "core/cli-review-contexts.json",
+            "core/alert-contexts.json",
             "core/cli-replays.json",
             "core/gateway-feedback-journey.json",
             "core/persistence-audit.json",
@@ -217,7 +222,6 @@ def _run_gateway_journey(
     database_url: str,
     run_id: str,
     alert_id: str,
-    queue_id: str,
 ) -> dict[str, Any]:
     app_state = SimpleNamespace(
         soc_alert_repository=_repository(database_url),
@@ -257,7 +261,6 @@ def _run_gateway_journey(
             "source_version": "1",
             "soc_alert_id": alert_id,
             "soc_run_id": run_id,
-            "soc_queue_id": queue_id,
             "external_status": "false-positive-closed",
             "external_reason": "Alpha fixture analyst confirmed an authorized test.",
             "external_tags": ["alpha_fixture", "authorized_test"],
@@ -268,12 +271,7 @@ def _run_gateway_journey(
         }
     }
     command = SocExternalDispositionIngressCommand.model_validate(event)
-    queue_response = soc_review.list_review_items(
-        review_service,
-        status=None,
-        limit=20,
-    )
-    initial_context = soc_review.get_review_context(queue_id, review_service)
+    initial_context = soc_alerts.get_alert_investigation_context(run_id, review_service)
     first = soc_external_dispositions.apply_external_disposition(
         command,
         request,
@@ -297,40 +295,46 @@ def _run_gateway_journey(
     except HTTPException as exc:
         changed_retry_status = exc.status_code
         changed_retry_problem = {"status": exc.status_code, "detail": str(exc.detail)}
-    updated_context = soc_review.get_review_context(queue_id, review_service)
+    updated_context = soc_alerts.get_alert_investigation_context(run_id, review_service)
 
     first_payload = first.model_dump(mode="json", exclude_none=True)
     duplicate_payload = duplicate.model_dump(mode="json", exclude_none=True)
     updated_payload = updated_context.model_dump(mode="json", exclude_none=True)
-    _require(any(item.queue_id == queue_id for item in queue_response.items), "target queue missing from API")
-    _require(initial_context.queue_item.queue_id == queue_id, "review context handler returned another queue")
+    _require(initial_context.result.summary.run_id == run_id, "alert context handler returned another run")
+    _require(initial_context.result.queue_item is None, "ordinary result unexpectedly has a review task")
     _require(first.correction_applied is True, "trusted feedback did not apply correction")
     _require(duplicate.idempotent is True, "exact feedback retry was not idempotent")
     _require(changed_retry_status == 409, f"changed feedback retry returned {changed_retry_status}")
-    _require(updated_context.queue_item.status.value == "closed", "updated API context did not show closed queue")
+    _require(updated_context.result.summary.verdict is not None, "updated API context omitted corrected verdict")
+    _require(updated_context.result.summary.verdict.value == "false_positive", "updated API context did not show correction")
     _require(updated_context.external_dispositions, "updated API context omitted external disposition")
-    _require(updated_context.memory_candidates, "updated API context omitted feedback memory candidate")
 
-    route_paths = {route.path for route in [*soc_review.router.routes, *soc_external_dispositions.router.routes]}
-    _require("/api/soc/review/items/{queue_id}/context" in route_paths, "review context route is not registered")
+    route_paths = {
+        route.path
+        for route in [
+            *soc_alerts.router.routes,
+            *soc_review.router.routes,
+            *soc_external_dispositions.router.routes,
+        ]
+    }
+    _require("/api/soc/alerts/{run_id}/context" in route_paths, "alert context route is not registered")
     _require("/api/soc/external-dispositions" in route_paths, "external feedback route is not registered")
 
     return {
         "schema_version": "soc.alpha_gateway_journey.v1",
         "execution_mode": "registered_gateway_handlers",
         "transport_contract_evidence": "backend/tests/test_soc_api_transport.py",
-        "queue_list_status": 200,
-        "review_context_status": 200,
+        "alert_context_status": 200,
         "api_version": SOC_API_VERSION,
         "request_id": request.state.soc_request_id,
         "trace_id": request.state.soc_trace_id,
         "registered_routes": sorted(route_paths),
-        "initial_queue_status": initial_context.queue_item.status.value,
+        "initial_attention_level": initial_context.result.attention_level.value,
         "first_apply": first_payload,
         "duplicate_apply": duplicate_payload,
         "changed_retry_status": changed_retry_status,
         "changed_retry_problem": changed_retry_problem,
-        "updated_queue_status": updated_payload["queue_item"]["status"],
+        "updated_verdict": updated_payload["result"]["summary"]["verdict"],
         "external_disposition_count": len(updated_payload["external_dispositions"]),
         "memory_candidate_count": len(updated_payload["memory_candidates"]),
     }
@@ -479,6 +483,20 @@ def _invoke_soc_json(args: list[str]) -> dict[str, Any]:
 def _repository(database_url: str) -> SqlAlchemyAlertRepository:
     engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
     return SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+
+
+def _review_service(database_url: str) -> SocReviewService:
+    repository = _repository(database_url)
+    return SocReviewService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        evidence_repository=repository,
+        external_disposition_repository=repository,
+        memory_candidate_repository=repository,
+        memory_record_repository=repository,
+    )
 
 
 def _core_boundaries() -> list[dict[str, str]]:

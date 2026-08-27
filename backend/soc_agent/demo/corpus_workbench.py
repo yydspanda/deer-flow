@@ -159,7 +159,12 @@ class SocCorpusWorkbenchSafety(BaseModel):
     source_data_class: Literal["operational"] = "operational"
     historical_replay: Literal[True] = True
     internal_providers: Literal["off_or_mock"] = "off_or_mock"
-    tenant_policy: Literal["disabled"] = "disabled"
+    tenant_policy: Literal[
+        "disabled",
+        "deterministic",
+        "deterministic_and_llm",
+    ] = "disabled"
+    software_path_fast_policy: bool = False
     external_action_execution: Literal[False] = False
     memory_scope: str = CORPUS_WORKBENCH_ENVIRONMENT
     pattern_window_days: float = Field(
@@ -511,6 +516,12 @@ class SocCorpusWorkbenchService:
         settings: SocLLMSettings,
         database_file: str,
         index_path: Path | None = None,
+        tenant_policy: Literal[
+            "disabled",
+            "deterministic",
+            "deterministic_and_llm",
+        ] = "disabled",
+        software_path_fast_policy: bool = False,
     ) -> None:
         self._repository = repository
         self._analysis_service = analysis_service
@@ -518,6 +529,8 @@ class SocCorpusWorkbenchService:
         self._source_path = source_path.expanduser().resolve()
         self._settings = settings
         self._database_file = database_file
+        self._tenant_policy = tenant_policy
+        self._software_path_fast_policy = software_path_fast_policy
         self._source_sha256 = _sha256_file(self._source_path)
         self._index_path = index_path.expanduser().resolve() if index_path is not None else self._source_path.with_suffix(".workbench-index.json")
         self._cases = _load_cases(
@@ -573,7 +586,11 @@ class SocCorpusWorkbenchService:
         first_case = ordered_cases[0]
         last_case = ordered_cases[-1]
         return SocCorpusWorkbenchState(
-            safety=SocCorpusWorkbenchSafety(database_file=self._database_file),
+            safety=SocCorpusWorkbenchSafety(
+                database_file=self._database_file,
+                tenant_policy=self._tenant_policy,
+                software_path_fast_policy=self._software_path_fast_policy,
+            ),
             source=SocCorpusWorkbenchSource(
                 file_name=self._source_path.name,
                 sha256=self._source_sha256,

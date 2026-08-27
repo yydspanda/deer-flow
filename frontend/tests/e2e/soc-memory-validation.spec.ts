@@ -89,7 +89,8 @@ function state(processed = false) {
       source_data_class: "operational",
       historical_replay: true,
       internal_providers: "off_or_mock",
-      tenant_policy: "disabled",
+      tenant_policy: "deterministic_and_llm",
+      software_path_fast_policy: true,
       external_action_execution: false,
     },
     source: {
@@ -228,7 +229,9 @@ test("runs the first DEV cohort alert through the browser workflow", async ({
   await expect(
     page.getByText("真实历史样本 · operational replay"),
   ).toBeVisible();
-  await expect(page.getByText("企业专属策略 · 关闭")).toBeVisible();
+  await expect(
+    page.getByText("企业专属策略 · 全开（确定性 + 安全路径 + LLM）"),
+  ).toBeVisible();
   await expect(page.getByText("0/14 processed")).toBeVisible();
 
   await page.getByRole("button", { name: "运行", exact: true }).first().click();

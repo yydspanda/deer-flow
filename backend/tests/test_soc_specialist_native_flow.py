@@ -274,6 +274,7 @@ def _install_native_task_harness(
         task_tool_module,
         "_token_usage_cache_enabled",
         lambda _: False,
+        raising=False,
     )
     monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: object())
     monkeypatch.setattr(task_tool_module, "aemit_custom_event", capture_event)

@@ -41,7 +41,7 @@ _MEMORY_FACET_VALUE_LABELS = {
     ("behavior_strength", "strong"): "强特征",
     ("behavior_strength", "weak_only"): "仅弱特征",
     ("environment", "dev"): "开发环境",
-    ("environment", "dev-corpus-eval"): "DEV 语料验证",
+    ("environment", "dev-corpus-eval"): "DEV 告警演练",
     ("environment", "local"): "本地环境",
     ("environment", "prd"): "生产环境",
     ("environment", "stg"): "预发布环境",

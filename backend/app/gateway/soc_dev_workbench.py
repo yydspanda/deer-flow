@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from fastapi import HTTPException, Request
 from sqlalchemy.engine import make_url
@@ -19,6 +20,14 @@ class SocDevWorkbenchRuntime:
     repository: SqlAlchemyAlertRepository
     settings: SocLLMSettings
     database_file: Path
+    tenant_policy: Literal["disabled", "deterministic", "deterministic_and_llm"]
+    software_path_fast_policy: bool
+
+
+@dataclass(frozen=True)
+class SocDevPolicySafety:
+    tenant_policy: Literal["disabled", "deterministic", "deterministic_and_llm"]
+    software_path_fast_policy: bool
 
 
 def resolve_soc_dev_workbench_runtime(
@@ -33,11 +42,7 @@ def resolve_soc_dev_workbench_runtime(
             status_code=503,
             detail=("SOC DEV workbench requires external action execution to remain disabled"),
         )
-    if strict_env_bool("SOC_TENANT_POLICY_ENABLED", False):
-        raise HTTPException(
-            status_code=503,
-            detail="SOC DEV workbench requires tenant policy evaluation to remain disabled",
-        )
+    policy_safety = resolve_soc_dev_policy_safety()
     require_dev_environment("SOC_MEMORY_ENVIRONMENT", required=False)
     require_dev_environment("SOC_AUTOMATION_ENVIRONMENT", required=True)
 
@@ -71,6 +76,44 @@ def resolve_soc_dev_workbench_runtime(
         repository=get_or_create_soc_repository(request),
         settings=settings,
         database_file=database_file,
+        tenant_policy=policy_safety.tenant_policy,
+        software_path_fast_policy=policy_safety.software_path_fast_policy,
+    )
+
+
+def resolve_soc_dev_policy_safety() -> SocDevPolicySafety:
+    """Resolve an explicit DEV-only policy mode without relaxing action safety."""
+
+    enabled = strict_env_bool("SOC_TENANT_POLICY_ENABLED", False)
+    advisor_mode = os.environ.get("SOC_TENANT_POLICY_ADVISOR_MODE", "off").strip().casefold()
+    if advisor_mode not in {"off", "llm"}:
+        raise HTTPException(
+            status_code=503,
+            detail="SOC_TENANT_POLICY_ADVISOR_MODE must be 'off' or 'llm'",
+        )
+    fast_policy = strict_env_bool(
+        "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED",
+        False,
+    )
+    if not enabled:
+        if advisor_mode == "llm" or fast_policy:
+            raise HTTPException(
+                status_code=503,
+                detail="SOC DEV policy sub-features require SOC_TENANT_POLICY_ENABLED=true",
+            )
+        return SocDevPolicySafety(
+            tenant_policy="disabled",
+            software_path_fast_policy=False,
+        )
+    if not strict_env_bool("SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY", False):
+        raise HTTPException(
+            status_code=503,
+            detail=("SOC DEV workbench tenant policy requires the explicit DEV policy allow switch"),
+        )
+    require_dev_environment("SOC_TENANT_POLICY_ENVIRONMENT", required=True)
+    return SocDevPolicySafety(
+        tenant_policy=("deterministic_and_llm" if advisor_mode == "llm" else "deterministic"),
+        software_path_fast_policy=fast_policy,
     )
 
 
@@ -101,8 +144,10 @@ def require_dev_environment(name: str, *, required: bool) -> None:
 
 
 __all__ = [
+    "SocDevPolicySafety",
     "SocDevWorkbenchRuntime",
     "require_dev_environment",
+    "resolve_soc_dev_policy_safety",
     "resolve_soc_dev_workbench_runtime",
     "strict_env_bool",
 ]

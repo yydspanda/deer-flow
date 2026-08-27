@@ -34,7 +34,7 @@ function queueItem(state: MockSocApiState) {
     tenant_id: "tenant-alpha",
     status: state.queueStatus,
     priority: "high",
-    reason: "LLM evidence requires analyst confirmation",
+    reason: "fact_conflict",
     source_type: "ndr",
     source_system: "alpha-fixture",
     rule_code: "APT-REVERSE-SHELL",
@@ -43,6 +43,7 @@ function queueItem(state: MockSocApiState) {
     category: "command_and_control",
     verdict: "needs_review",
     confidence: 0.72,
+    review_reasons: ["fact_conflict"],
     entity_keys: ["ip:203.0.113.7", "host:workstation-01"],
     summary: "Potential reverse shell with conflicting network roles.",
     created_at: NOW,
@@ -400,6 +401,75 @@ function investigationContext(state: MockSocApiState) {
   };
 }
 
+function alertResult(state: MockSocApiState) {
+  const item = queueItem(state);
+  return {
+    schema_version: "soc.alert_result.v1",
+    summary: {
+      run_id: item.run_id,
+      alert_id: item.alert_id,
+      tenant_id: item.tenant_id,
+      source_type: item.source_type,
+      source_system: item.source_system,
+      detection_key: "pingan:ndr:reverse-shell",
+      rule_code: item.rule_code,
+      rule_name: item.rule_name,
+      severity: item.severity,
+      category: item.category,
+      entity_keys: item.entity_keys,
+      status: "needs_review",
+      verdict: item.verdict,
+      confidence: item.confidence,
+      needs_review: true,
+      review_reasons: item.review_reasons,
+      summary: item.summary,
+      recommended_action: "Investigate current network roles",
+      created_at: NOW,
+      updated_at: NOW,
+    },
+    attention_level: "required",
+    attention_reasons: ["fact_conflict"],
+    decision_usability: "degraded",
+    requires_human_intervention: true,
+    queue_item: item,
+  };
+}
+
+function alertInvestigationContext(state: MockSocApiState) {
+  const legacy = investigationContext(state);
+  const { queue_item, summary, ...context } = legacy;
+  void queue_item;
+  void summary;
+  return {
+    ...context,
+    schema_version: "soc.alert_investigation_context.v1",
+    result: alertResult(state),
+    run: {
+      ...legacy.run,
+      analysis: {
+        verdict: "suspicious",
+        confidence: 0.72,
+        summary: "Potential reverse shell requires role verification.",
+        reason: "Current evidence supports a suspicious network behavior.",
+        recommended_action: "Investigate current network roles",
+        evidence_gaps: ["Missing confirmed asset ownership"],
+        manual_checks: ["Verify the destination host business owner"],
+        scenario_assessments: [
+          {
+            scenario_name: "Reverse shell",
+            is_primary: true,
+          },
+        ],
+      },
+      decision: {
+        verdict: "suspicious",
+        confidence: 0.72,
+        reason: "Current evidence supports a suspicious network behavior.",
+      },
+    },
+  };
+}
+
 function sampleManifest() {
   return {
     schema_version: "soc.disposition_sample_manifest.v1",
@@ -569,6 +639,13 @@ export async function mockSocAPI(
       idempotencyKey: request.headers()["idempotency-key"] ?? null,
     });
 
+    if (method === "GET" && path === "/api/soc/alerts") {
+      return fulfill(route, { items: [alertResult(state)] });
+    }
+    if (method === "GET" && path === "/api/soc/alerts/RUN-ALPHA-001/context") {
+      return fulfill(route, alertInvestigationContext(state));
+    }
+
     if (method === "GET" && path === "/api/soc/review/items") {
       const requestedStatus = url.searchParams.get("status");
       const items =
@@ -595,6 +672,7 @@ export async function mockSocAPI(
       method === "POST" &&
       path === "/api/soc/review/runs/RUN-ALPHA-001/correct"
     ) {
+      state.queueStatus = "closed";
       return fulfill(route, {
         ...investigationContext(state).run,
         decision: { verdict: "false_positive", confidence: 1 },

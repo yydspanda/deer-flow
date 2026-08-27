@@ -5237,7 +5237,7 @@ class UnifiedInvestigationView(BaseModel):
 
     schema_version: str = "soc.unified_investigation_view.v1"
     view_id: str = Field(default_factory=lambda: f"UIV-{uuid4().hex[:12].upper()}")
-    queue_id: str
+    queue_id: str | None = None
     run_id: str
     alert_id: str
     generated_at: datetime = Field(default_factory=utc_now)

@@ -132,7 +132,9 @@ def test_locked_requirements_rejects_non_mirror_inputs(
         _validate_locked_requirements(requirements)
 
 
-def test_start_plan_skips_install_and_disables_network_side_effects() -> None:
+def test_start_plan_skips_install_and_enables_governed_policy_without_network_side_effects() -> (
+    None
+):
     command = build_start_command(daemon=True)
     environment = build_start_environment({"PATH": "/usr/bin"})
 
@@ -148,7 +150,13 @@ def test_start_plan_skips_install_and_disables_network_side_effects() -> None:
     assert "full_alert_dams_labeled_merged.pkl" in command[2]
     assert "export SOC_MEMORY_ENVIRONMENT=dev" in command[2]
     assert "export SOC_AUTOMATION_ENVIRONMENT=dev" in command[2]
-    assert "export SOC_TENANT_POLICY_ENABLED=false" in command[2]
+    assert "export SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY=true" in command[2]
+    assert "export SOC_TENANT_POLICY_ENABLED=true" in command[2]
+    assert "SOC_TENANT_DISPOSITION_POLICY_PATH" in command[2]
+    assert "export SOC_TENANT_POLICY_ADVISOR_MODE=llm" in command[2]
+    assert "SOC_TENANT_POLICY_SKILL_PATH" in command[2]
+    assert "export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true" in command[2]
+    assert "SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH" in command[2]
     assert "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false" in command[2]
 
 

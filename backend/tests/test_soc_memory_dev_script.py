@@ -44,3 +44,27 @@ def test_memory_dev_overlay_avoids_forced_idle_polling_by_default() -> None:
 
     assert "WATCHPACK_POLLING: ${SOC_MEMORY_DEV_WATCHPACK_POLLING:-15000}" in compose
     assert "WATCHFILES_FORCE_POLLING: ${SOC_MEMORY_DEV_WATCHFILES_FORCE_POLLING:-false}" in compose
+
+
+def test_memory_dev_enables_full_pingan_policy_without_external_actions() -> None:
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    for content in (script, compose):
+        assert "SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY" in content
+        assert "SOC_TENANT_POLICY_ENABLED" in content
+        assert "SOC_TENANT_DISPOSITION_POLICY_PATH" in content
+        assert "SOC_TENANT_POLICY_ADVISOR_MODE" in content
+        assert "SOC_TENANT_POLICY_SKILL_PATH" in content
+        assert "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED" in content
+        assert "SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH" in content
+        assert "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS" in content
+
+    assert "export SOC_TENANT_POLICY_ENABLED=true" in script
+    assert "export SOC_TENANT_POLICY_ADVISOR_MODE=llm" in script
+    assert "export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true" in script
+    assert "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false" in script
+    assert 'SOC_TENANT_POLICY_ENABLED: "true"' in compose
+    assert 'SOC_TENANT_POLICY_ADVISOR_MODE: "llm"' in compose
+    assert 'SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED: "true"' in compose
+    assert 'SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS: "false"' in compose

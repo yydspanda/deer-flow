@@ -1,19 +1,6 @@
 {
-  "schema_version": "soc.openapi.snapshot.v1",
   "api_version": "1",
   "base_path": "/api/soc",
-  "success_body": "direct_typed_json",
-  "problem_schema": "#/components/schemas/SocProblemDetails",
-  "request_headers": [
-    "Idempotency-Key",
-    "X-Request-Id",
-    "X-Trace-Id"
-  ],
-  "response_headers": [
-    "X-Request-Id",
-    "X-SOC-API-Version",
-    "X-Trace-Id"
-  ],
   "error_statuses": [
     "400",
     "403",
@@ -23,6 +10,12 @@
     "503"
   ],
   "paths": {
+    "/api/soc/alerts": [
+      "get"
+    ],
+    "/api/soc/alerts/{run_id}/context": [
+      "get"
+    ],
     "/api/soc/approvals/actions/dry-run": [
       "post"
     ],
@@ -54,8 +47,20 @@
     "/api/soc/memory/candidates/{candidate_id}": [
       "get"
     ],
+    "/api/soc/memory/candidates/{candidate_id}/lesson-draft": [
+      "post"
+    ],
     "/api/soc/memory/candidates/{candidate_id}/review": [
       "post"
+    ],
+    "/api/soc/memory/candidates/{candidate_id}/supersession": [
+      "post"
+    ],
+    "/api/soc/memory/center": [
+      "get"
+    ],
+    "/api/soc/memory/center/patterns/{lineage_key}": [
+      "get"
     ],
     "/api/soc/memory/records": [
       "get"
@@ -66,7 +71,13 @@
     "/api/soc/memory/records/{memory_id}/lineage": [
       "get"
     ],
+    "/api/soc/memory/records/{memory_id}/match-test": [
+      "post"
+    ],
     "/api/soc/memory/records/{memory_id}/retrieval": [
+      "post"
+    ],
+    "/api/soc/memory/records/{memory_id}/revision-candidates": [
       "post"
     ],
     "/api/soc/memory/revisions": [
@@ -76,6 +87,9 @@
       "get"
     ],
     "/api/soc/memory/revisions/{proposal_id}/review": [
+      "post"
+    ],
+    "/api/soc/memory/runs/{run_id}/promote": [
       "post"
     ],
     "/api/soc/memory/search": [
@@ -124,5 +138,18 @@
     "/api/soc/review/runs/{run_id}/role-adjudication/confirm": [
       "post"
     ]
-  }
+  },
+  "problem_schema": "#/components/schemas/SocProblemDetails",
+  "request_headers": [
+    "Idempotency-Key",
+    "X-Request-Id",
+    "X-Trace-Id"
+  ],
+  "response_headers": [
+    "X-Request-Id",
+    "X-SOC-API-Version",
+    "X-Trace-Id"
+  ],
+  "schema_version": "soc.openapi.snapshot.v1",
+  "success_body": "direct_typed_json"
 }

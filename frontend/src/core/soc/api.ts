@@ -7,6 +7,10 @@ import type {
   SocAgentApprovalRequest,
   SocAgentApprovalRequestStatus,
   SocAgentApprovedActionCommand,
+  SocAlertAttentionLevel,
+  SocAlertInvestigationContext,
+  SocAlertResult,
+  SocAlertResultListResponse,
   SocAnalysisRun,
   SocCorpusWorkbenchAuditBundle,
   SocCorpusWorkbenchExecution,
@@ -32,8 +36,10 @@ import type {
   SocMemoryCandidateSupersessionResult,
   SocMemoryCenterOverview,
   SocMemoryCenterPatternDetail,
+  SocMemoryFutureUseState,
   SocMemoryQuery,
   SocMemoryLineageReport,
+  SocMemoryPatternStageFilter,
   SocMemoryRecord,
   SocMemoryRecordListResponse,
   SocMemoryRecordMatchTestRequest,
@@ -279,13 +285,53 @@ export async function promoteSocRunToMemory(
   );
 }
 
+export async function listSocAlertResults({
+  attentionLevel = null,
+  limit = 50,
+  context,
+}: {
+  attentionLevel?: SocAlertAttentionLevel | null;
+  limit?: number;
+  context?: SocRequestContext;
+} = {}): Promise<SocAlertResult[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (attentionLevel !== null) {
+    params.set("attention_level", attentionLevel);
+  }
+  const url = `${getBackendBaseURL()}/api/soc/alerts?${params.toString()}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  const data = await readJson<SocAlertResultListResponse>(
+    response,
+    "Failed to load SOC alert results",
+  );
+  return data.items;
+}
+
+export async function getSocAlertInvestigationContext(
+  runId: string,
+  context?: SocRequestContext,
+): Promise<SocAlertInvestigationContext> {
+  const url = `${getBackendBaseURL()}/api/soc/alerts/${encodeURIComponent(runId)}/context`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  return readJson<SocAlertInvestigationContext>(
+    response,
+    "Failed to load SOC alert investigation",
+  );
+}
+
 export async function listSocReviewItems({
   status = "open",
   limit = 50,
+  humanInterventionOnly = false,
   context,
 }: {
   status?: SocReviewQueueStatus | null;
   limit?: number;
+  humanInterventionOnly?: boolean;
   context?: SocRequestContext;
 } = {}): Promise<SocReviewQueueItem[]> {
   const params = new URLSearchParams();
@@ -293,6 +339,9 @@ export async function listSocReviewItems({
     params.set("status", status);
   }
   params.set("limit", String(limit));
+  if (humanInterventionOnly) {
+    params.set("human_intervention_only", "true");
+  }
 
   const url = `${getBackendBaseURL()}/api/soc/review/items?${params.toString()}`;
   const response = context
@@ -696,6 +745,8 @@ export async function getSocMemoryCenterOverview(
     profileId,
     search,
     includeTerminalHistory = false,
+    stage,
+    futureUse,
     limit = 50,
     offset = 0,
   }: {
@@ -705,6 +756,8 @@ export async function getSocMemoryCenterOverview(
     profileId?: string | null;
     search?: string | null;
     includeTerminalHistory?: boolean;
+    stage?: SocMemoryPatternStageFilter | null;
+    futureUse?: SocMemoryFutureUseState | null;
     limit?: number;
     offset?: number;
   } = {},
@@ -717,6 +770,8 @@ export async function getSocMemoryCenterOverview(
   if (profileId) params.set("profile_id", profileId);
   if (search?.trim()) params.set("search", search.trim());
   params.set("include_terminal_history", String(includeTerminalHistory));
+  if (stage) params.set("stage", stage);
+  if (futureUse) params.set("future_use", futureUse);
   params.set("limit", String(limit));
   params.set("offset", String(offset));
   const response = await fetch(

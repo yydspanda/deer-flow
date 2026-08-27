@@ -87,6 +87,7 @@ def test_workbench_loads_the_fixed_real_cohort_without_mutating_it(tmp_path) -> 
     assert all(item.workflow_state == "locked" for item in state.alerts[1:])
     assert state.cohort.detection_key == ("leagsoft-edr:rule_code:rpaadm_002010")
     assert state.cohort.behavior_components == [
+        "attack_family:source_category:可疑操作行为",
         "command_module:updatedeploy.dll",
         "command_switch:classid",
         "command_switch:deploymenthandlerfullpath",

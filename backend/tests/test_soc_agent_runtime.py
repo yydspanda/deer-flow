@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from soc_agent.cli import main
 from soc_agent.contracts import (
@@ -21,10 +23,12 @@ from soc_agent.contracts import (
     EvidenceTrustLevel,
     FieldReasoningStatus,
     FieldTrust,
+    ReviewQueueItem,
     Verdict,
 )
 from soc_agent.core import SocAnalysisService, SocNormalizationService
 from soc_agent.core.runtime import analyze_alert
+from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.normalizers import normalize_alert_payload
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
@@ -926,14 +930,35 @@ def test_cli_list_outputs_persisted_alert_summaries(tmp_path: Path, capsys) -> N
     assert corrected["needs_review"] is False
 
 
-def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None:
+def test_cli_review_queue_lists_and_closes_required_intervention_items(tmp_path: Path, capsys) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
 
     assert main(["db", "upgrade", "--database-url", database_url]) == 0
     capsys.readouterr()
 
     assert main(["analyze", str(SAMPLES / "pingan_legacy_apt.json"), "--persist", "--database-url", database_url]) == 0
-    capsys.readouterr()
+    analyzed = json.loads(capsys.readouterr().out)
+
+    repository = SqlAlchemyAlertRepository(
+        sessionmaker(
+            bind=create_engine(database_url),
+            expire_on_commit=False,
+        )
+    )
+    repository.save_review_item(
+        ReviewQueueItem(
+            run_id=analyzed["run_id"],
+            alert_id=analyzed["alert_id"],
+            reason=DecisionReviewReason.FACT_CONFLICT.value,
+            review_reasons=[DecisionReviewReason.FACT_CONFLICT],
+            source_type=AlertSourceType.NDR,
+            source_system="ndr-apt",
+            rule_code="RPAADM_002635",
+            verdict=Verdict.SUSPICIOUS,
+            confidence=0.45,
+            summary="Critical current facts require analyst adjudication.",
+        )
+    )
 
     assert main(["review", "list", "--database-url", database_url]) == 0
     captured = capsys.readouterr()
@@ -942,9 +967,9 @@ def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None
     item = open_items[0]
     assert item["alert_id"] == "2026494"
     assert item["status"] == "open"
-    assert item["priority"] == "high"
-    assert item["reason"] == "uncertain_verdict"
-    assert item["review_reasons"] == ["uncertain_verdict", "stub_analyzer"]
+    assert item["priority"] == "medium"
+    assert item["reason"] == "fact_conflict"
+    assert item["review_reasons"] == ["fact_conflict"]
     assert item["rule_code"] == "RPAADM_002635"
 
     assert main(["review", "context", item["queue_id"], "--database-url", database_url]) == 0

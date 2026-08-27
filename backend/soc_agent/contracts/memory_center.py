@@ -32,6 +32,22 @@ class SocMemoryPatternLifecycleState(StrEnum):
     TERMINAL_HISTORY = "terminal_history"
 
 
+class SocMemoryPatternStageFilter(StrEnum):
+    COLLECTING = "collecting"
+    AWAITING_REVIEW = "awaiting_review"
+    MATERIALIZING = "materializing"
+    PERSISTED = "persisted"
+    TERMINAL = "terminal"
+
+
+class SocMemoryFutureUseState(StrEnum):
+    NOT_READY = "not_ready"
+    PAUSED = "paused"
+    REFERENCE_ONLY = "reference_only"
+    EXACT_MATCH_DECISION = "exact_match_decision"
+    BLOCKED = "blocked"
+
+
 class MemoryPatternLineageStats(BaseModel):
     """Cross-window aggregate for one stable repeated-behavior lineage."""
 
@@ -110,6 +126,7 @@ class SocMemoryCenterRecordRef(BaseModel):
     status: SocMemoryRecordStatus
     summary: str
     retrieval_enabled: bool
+    decision_directive_ready: bool = False
     retrieval_valid_until: datetime | None = None
     retrieval_review_due_at: datetime | None = None
 
@@ -132,6 +149,7 @@ class SocMemoryCenterPatternSummary(BaseModel):
     current_feature_schema_version: str | None = None
     profile_state: SocMemoryProfileState
     lifecycle_state: SocMemoryPatternLifecycleState
+    future_use_state: SocMemoryFutureUseState
     attention_reasons: list[str] = Field(default_factory=list)
     support_count: int = Field(ge=1)
     distinct_source_count: int = Field(ge=1)
@@ -198,6 +216,8 @@ __all__ = [
     "SocMemoryCenterMetrics",
     "SocMemoryCenterOverview",
     "SocMemoryCenterRecordRef",
+    "SocMemoryFutureUseState",
     "SocMemoryPatternLifecycleState",
+    "SocMemoryPatternStageFilter",
     "SocMemoryProfileState",
 ]

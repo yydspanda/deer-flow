@@ -235,8 +235,14 @@ def review_api() -> tuple[SocReviewService, InMemorySocRepository, ReviewQueueIt
         audit_repository=repository,
         review_queue_repository=repository,
     ).analyze(_sample("pingan_legacy_apt.json"))
-    item = repository.get_open_review_item_by_run(run.run_id)
-    assert item is not None
+    item = ReviewQueueItem(
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        reason="fact_conflict",
+        verdict=run.decision.verdict if run.decision is not None else None,
+        confidence=run.decision.confidence if run.decision is not None else None,
+    )
+    repository.save_review_item(item)
 
     service = SocReviewService(
         repository=repository,
@@ -257,6 +263,7 @@ def test_soc_review_api_lists_open_items(review_api) -> None:
         service=service,
         status=ReviewQueueStatus.OPEN,
         limit=50,
+        human_intervention_only=True,
     )
 
     assert [value.queue_id for value in response.items] == [item.queue_id]

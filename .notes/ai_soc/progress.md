@@ -9,7 +9,7 @@
 - **Current Objective:** 在 PingAn DEV 完成真实只读 Provider 与调查链的 `mocked=false` 验收，不改变通用 SOC Runtime 契约。
 - **Next Gate:** `D12-B` asset Provider direct/MCP/persistence smoke，然后依次关闭 `PI-01A` 与 `PI-01B1` 的真实证据门禁。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-08-26`
+- **Last Updated:** `2026-08-27`
 
 ## Current Constraints / 当前约束
 
@@ -22,6 +22,27 @@
 | Upstream baseline | `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`；2026-08-26 测量为 ahead `261` / behind `0` |
 
 ## Recent Completion Records / 近期完成记录
+
+### 2026-08-27 — Alert result and operator-workflow separation
+
+- **Task:** `BD-02`
+- **Status:** `Done`
+- **Outcome:** 以 `run_id` 建立所有告警可见的研判结果与调查上下文；ReviewQueue 收窄为仅处理未解决关键事实冲突，并将告警修正、经验审核、高风险动作审批和技术审计拆成独立操作路径。
+- **Verification:** Alert-result/attention policy、Gateway API、后端服务回归、前端 lint/type-check、API 单测及 Playwright 告警研判/人工介入/动作审批流程。
+
+### 2026-08-26 — Alert rehearsal UX simplification
+
+- **Task:** `PI-03`
+- **Status:** `Done`
+- **Outcome:** 将用户入口统一为“告警研判演练”，推荐区收敛为同一 `rule_code` 下的 context-only 与精确复用两组真实样本；运行保持在原列表并由用户显式打开结果，不再强制跳转到下方轨迹。
+- **Verification:** 真实语料分组清单、后端 workbench 回归、前端 lint/type-check、桌面/移动端 Playwright 交互与截图检查。
+
+### 2026-08-26 — DEV tenant-policy acceptance and Memory authority clarity
+
+- **Task:** `PI-03`
+- **Status:** `Done`
+- **Outcome:** PingAn DEV 工作台显式开启确定性处置规则、安全软件路径和 bounded Policy Advisor，同时继续禁止真实外部动作；Memory Center 强制重取生命周期投影，详情/修订页区分 exact Directive 与 context-only 使用语义。
+- **Verification:** DEV safety contract、Docker/macOS 启动配置、tenant policy/software-path 回归、前端 lint/type-check 和浏览器验收。
 
 ### 2026-08-26 — Progress ledger governance and monthly archive
 
@@ -70,13 +91,6 @@
 - **Task:** `PI-03`
 - **Status:** `Done`
 - **Outcome:** 行为指纹加入 network service、CVE 和攻击行为族，减少同 rule 不同行为被错误聚合，并改善审核范围的中文可读性。
-- **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
-
-### 2026-08-20 — Corpus full-chain audit surface
-
-- **Task:** `PI-03`
-- **Status:** `Done`
-- **Outcome:** 管理员可按阶段查看原始输入、归一化、事实、LLM 请求/结果、Decision lineage 与 Pattern/Memory 写入；审计读取不重跑 Runtime。
 - **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
 
 ## Update Contract / 更新约定

@@ -11,6 +11,7 @@ import {
   Clock3Icon,
   DatabaseIcon,
   ExternalLinkIcon,
+  EyeIcon,
   FilePenLineIcon,
   FileSearchIcon,
   FilterIcon,
@@ -48,7 +49,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCorpusAuditViewer } from "@/components/workspace/soc/soc-corpus-audit-viewer";
+import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
 import { SocLeadershipDemoGuidePanel } from "@/components/workspace/soc/soc-leadership-demo-guide";
+import { memoryRunUsageCopy } from "@/components/workspace/soc/soc-memory-copy";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   formatCorpusGroupOption,
@@ -85,37 +88,37 @@ const READINESS: Record<
   { label: string; className: string; title: string; rank: number }
 > = {
   candidate_window: {
-    label: "可构建候选",
+    label: "可沉淀经验",
     className: "border-emerald-300 bg-emerald-50 text-emerald-800",
     title: "强指纹且同一固定聚合窗口至少 5 条；仍需运行结果通过一致性质量门",
     rank: 0,
   },
   recurrent_strong: {
-    label: "强指纹重复",
+    label: "同类行为重复",
     className: "border-sky-300 bg-sky-50 text-sky-800",
     title: "长期同类告警至少 2 条，但当前固定聚合窗口不足 5 条",
     rank: 1,
   },
   singleton_strong: {
-    label: "强指纹单例",
+    label: "可识别单例",
     className: "border-zinc-300 bg-zinc-50 text-zinc-700",
     title: "具备决策级行为指纹，但当前语料没有同类重复样本",
     rank: 2,
   },
   recurrent_context_only: {
-    label: "上下文重复",
+    label: "弱特征重复",
     className: "border-amber-300 bg-amber-50 text-amber-800",
-    title: "存在重复模式，但指纹强度不足，只能作为上下文，不能承载决策指令",
+    title: "存在重复行为，但特征不足以直接复用历史结论，只能辅助模型研判",
     rank: 3,
   },
   context_only_singleton: {
-    label: "弱信号单例",
+    label: "弱特征单例",
     className: "border-zinc-300 bg-zinc-50 text-zinc-600",
     title: "只有弱行为信号且没有同类重复样本",
     rank: 4,
   },
   fingerprint_missing: {
-    label: "无行为指纹",
+    label: "无法稳定归类",
     className: "border-red-300 bg-red-50 text-red-800",
     title: "可运行 Runtime，但不适合作为当前 Memory 泛化验证样本",
     rank: 5,
@@ -133,6 +136,12 @@ interface CorpusFilterSnapshot {
   groupId: string;
   unprocessedOnly: boolean;
   selectedAlertId: string | null;
+}
+
+interface RunFeedback {
+  alertId: string;
+  status: "running" | "completed" | "failed";
+  message: string;
 }
 
 function isReadinessFilter(value: unknown): value is ReadinessFilter {
@@ -313,32 +322,32 @@ function SummaryBand({ state }: { state: SocCorpusWorkbenchState }) {
   const evaluation = state.evaluation;
   const items = [
     {
-      label: "Corpus",
+      label: "全部样本",
       value: `${summary.total_alert_count} 条`,
       detail: `${state.source.labeled_alert_count} 有处置标签 · ${state.source.unlabeled_alert_count} 无标签`,
     },
     {
-      label: "Runtime",
+      label: "已完成研判",
       value: `${summary.processed_count} 已完成`,
       detail: `${summary.failed_count} 失败 · ${evaluation.processed_labeled_count} 条已比较`,
     },
     {
-      label: "Base vs Label",
+      label: "基础结论对比",
       value: formatPercent(evaluation.base_match_rate),
       detail: `${evaluation.base_matched_count} 一致 · ${evaluation.base_mismatched_count} 不一致 · ${evaluation.base_unscored_count} 未定`,
     },
     {
-      label: "Effective vs Label",
+      label: "最终结论对比",
       value: formatPercent(evaluation.effective_match_rate),
       detail: `${evaluation.effective_matched_count} 一致 · ${evaluation.effective_mismatched_count} 不一致 · ${evaluation.effective_unscored_count} 未定`,
     },
     {
-      label: "Memory Hits",
+      label: "历史经验命中",
       value: `${summary.memory_hit_alert_count} 条`,
-      detail: "已在真实 Runtime 请求中投影 M-*",
+      detail: "研判时找到相关已审核经验",
     },
     {
-      label: "Chronology",
+      label: "样本时间范围",
       value: `${formatDateTime(state.source.first_event_time)}`,
       detail: `至 ${formatDateTime(state.source.last_event_time)} · 按事件时间升序`,
     },
@@ -616,6 +625,10 @@ function AlertDetail({
     alert.manual_candidate_status ?? alert.candidate_status ?? "pending_review";
   const candidateKind = alert.manual_candidate_id ? "人工提炼" : "同类模式";
   const decision = decisionPresentation(alert.effective_verdict);
+  const memoryUsage = memoryRunUsageCopy(
+    alert.memory_contexts.length,
+    alert.memory_directive_applied,
+  );
   const DecisionIcon = decision.icon;
   const canPromote =
     !!alert.run_id &&
@@ -661,7 +674,7 @@ function AlertDetail({
               {readiness.label}
             </Badge>
             {alert.memory_directive_applied ? (
-              <Badge className="bg-emerald-700">Memory 已应用</Badge>
+              <Badge className="bg-emerald-700">已复用审核结论</Badge>
             ) : null}
           </div>
           <p className="mt-1 text-sm">{alert.rule_name ?? "未命名规则"}</p>
@@ -680,17 +693,17 @@ function AlertDetail({
               提炼 Candidate
             </Button>
           ) : null}
-          {alert.queue_id ? (
+          {alert.run_id ? (
             <Button
               variant={candidateId ? "outline" : "default"}
               size="sm"
               asChild
             >
               <Link
-                href={`/workspace/soc/review/alerts?queue_id=${encodeURIComponent(alert.queue_id)}`}
+                href={`/workspace/soc/alerts?run_id=${encodeURIComponent(alert.run_id)}`}
               >
                 <ShieldCheckIcon className="size-4" />
-                复核告警
+                查看研判
               </Link>
             </Button>
           ) : null}
@@ -778,7 +791,7 @@ function AlertDetail({
               <p className="font-semibold">Memory Candidate 已生成</p>
               <p className="mt-1 text-sm">
                 {candidateKind}候选 {candidateId} · {candidateStatus}
-                。它仍需人工审核，尚未成为可召回 Memory。
+                。它仍需人工审核，尚未成为可供新告警使用的经验。
               </p>
             </div>
           </div>
@@ -840,13 +853,10 @@ function AlertDetail({
           </p>
         </div>
         <div className="px-5 py-4">
-          <p className="text-muted-foreground text-xs">Confirmed Memory</p>
-          <p className="mt-1 text-sm">
-            {alert.memory_contexts.length} 条命中 ·{" "}
-            {alert.memory_directive_applied ? "指令已应用" : "仅上下文/未命中"}
-          </p>
+          <p className="text-muted-foreground text-xs">历史经验使用</p>
+          <p className="mt-1 text-sm font-medium">{memoryUsage.label}</p>
           <p className="text-muted-foreground mt-1 text-xs">
-            {alert.memory_effect ?? alert.memory_status ?? "-"}
+            {memoryUsage.detail}
           </p>
         </div>
       </div>
@@ -973,7 +983,19 @@ function AlertDetail({
 
       {alert.memory_contexts.length ? (
         <div className="border-b px-5 py-4 md:px-7">
-          <h3 className="text-sm font-semibold">本次召回的 Memory</h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">本次使用的历史经验</h3>
+            <Badge
+              variant={
+                memoryUsage.tone === "decision" ? "default" : "secondary"
+              }
+            >
+              {memoryUsage.label}
+            </Badge>
+          </div>
+          <p className="text-muted-foreground mt-2 text-xs">
+            {memoryUsage.detail}
+          </p>
           <div className="mt-3 divide-y border">
             {alert.memory_contexts.map((memory) => (
               <div key={memory.context_ref} className="px-4 py-3">
@@ -1106,6 +1128,7 @@ export function SocCorpusValidationWorkbench() {
   const [groupId, setGroupId] = useState("all");
   const [unprocessedOnly, setUnprocessedOnly] = useState(true);
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
+  const [runFeedback, setRunFeedback] = useState<RunFeedback | null>(null);
   const [filtersHydrated, setFiltersHydrated] = useState(false);
   const [page, setPage] = useState(0);
   const detailRef = useRef<HTMLDivElement>(null);
@@ -1195,7 +1218,10 @@ export function SocCorpusValidationWorkbench() {
       )
       .filter((alert) => groupId === "all" || alert.group_id === groupId)
       .filter(
-        (alert) => !unprocessedOnly || alert.workflow_state !== "completed",
+        (alert) =>
+          !unprocessedOnly ||
+          alert.workflow_state !== "completed" ||
+          alert.alert_id === runFeedback?.alertId,
       )
       .filter((alert) => {
         if (comparison === "all") return true;
@@ -1225,6 +1251,7 @@ export function SocCorpusValidationWorkbench() {
     sourceType,
     state,
     unprocessedOnly,
+    runFeedback?.alertId,
   ]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -1255,8 +1282,10 @@ export function SocCorpusValidationWorkbench() {
       (item) => item.alert_id === alertId,
     )?.candidate_id;
     setSelectedAlertId(alertId);
-    requestAnimationFrame(() => {
-      detailRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+    setRunFeedback({
+      alertId,
+      status: "running",
+      message: "正在执行归一化、模型研判、决策与经验匹配。",
     });
     try {
       const result = await processMutation.mutateAsync(alertId);
@@ -1264,8 +1293,10 @@ export function SocCorpusValidationWorkbench() {
         (item) => item.alert_id === alertId,
       );
       const generatedCandidateId = updatedAlert?.candidate_id;
-      setUnprocessedOnly(false);
+      let feedbackMessage = "完整研判链路已完成，可按需查看详细结果。";
       if (result.execution_mode === "rerun") {
+        feedbackMessage =
+          "重新运行已完成；本次生成了新 Run，但不会重复累计同一告警的模式样本。";
         toast.success("重新运行完成", {
           description:
             "本次已创建新的 Runtime Run；同一原始告警不会重复增加 Pattern 支持数。",
@@ -1275,6 +1306,7 @@ export function SocCorpusValidationWorkbench() {
         generatedCandidateId &&
         generatedCandidateId !== previousCandidateId
       ) {
+        feedbackMessage = `已生成待审核经验候选 ${generatedCandidateId}，可在告警结果中继续审核。`;
         toast.success("Memory Candidate 已生成", {
           description: `${generatedCandidateId} 已通过同类模式质量门，请在当前告警详情中立即审核。`,
           duration: 12_000,
@@ -1286,13 +1318,27 @@ export function SocCorpusValidationWorkbench() {
             : `Alert ${alertId} 已完成 Runtime 与 Pattern 写入`,
         );
       }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "告警处理失败");
-    } finally {
-      requestAnimationFrame(() => {
-        detailRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+      setRunFeedback({
+        alertId,
+        status: "completed",
+        message: feedbackMessage,
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "告警处理失败";
+      setRunFeedback({
+        alertId,
+        status: "failed",
+        message,
+      });
+      toast.error(message);
     }
+  };
+
+  const handleViewResult = (alertId: string) => {
+    setSelectedAlertId(alertId);
+    requestAnimationFrame(() => {
+      detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   const handleSelectDemoTarget = (target: SocLeadershipDemoTarget) => {
@@ -1312,10 +1358,10 @@ export function SocCorpusValidationWorkbench() {
       <div className="flex size-full min-h-0 flex-col">
         <SocWorkspaceHeader
           icon={FileSearchIcon}
-          title="SOC 语料验证"
-          description="全量历史样本的单告警 Runtime 与 Memory 实验"
+          title="SOC 告警研判演练"
+          description="选择历史告警，观察完整研判、经验参考与结论复用"
         />
-        <div className="space-y-4 p-6" aria-label="正在加载 SOC 语料工作台">
+        <div className="space-y-4 p-6" aria-label="正在加载 SOC 告警研判演练">
           <Skeleton className="h-28 w-full rounded-md" />
           <Skeleton className="h-96 w-full rounded-md" />
         </div>
@@ -1328,8 +1374,8 @@ export function SocCorpusValidationWorkbench() {
       <div className="flex size-full min-h-0 flex-col">
         <SocWorkspaceHeader
           icon={FileSearchIcon}
-          title="SOC 语料验证"
-          description="全量历史样本的单告警 Runtime 与 Memory 实验"
+          title="SOC 告警研判演练"
+          description="选择历史告警，观察完整研判、经验参考与结论复用"
         />
         <main className="flex flex-1 items-center justify-center p-6">
           <div className="max-w-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
@@ -1340,7 +1386,7 @@ export function SocCorpusValidationWorkbench() {
                 <p className="mt-2 text-sm leading-6">
                   {query.error instanceof Error
                     ? query.error.message
-                    : "后端未启用本地语料工作台。"}
+                    : "后端未启用本地告警演练工作台。"}
                 </p>
               </div>
             </div>
@@ -1355,8 +1401,8 @@ export function SocCorpusValidationWorkbench() {
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
         icon={FileSearchIcon}
-        title="SOC 语料验证"
-        description="全量历史样本的单告警 Runtime 与 Memory 实验"
+        title="SOC 告警研判演练"
+        description="选择历史告警，观察完整研判、经验参考与结论复用"
         actions={
           <>
             <Badge
@@ -1374,8 +1420,8 @@ export function SocCorpusValidationWorkbench() {
               size="icon-sm"
               onClick={() => void query.refetch()}
               disabled={query.isFetching || processMutation.isPending}
-              aria-label="刷新语料验证状态"
-              title="刷新语料验证状态"
+              aria-label="刷新告警演练状态"
+              title="刷新告警演练状态"
             >
               <RefreshCwIcon
                 className={cn("size-4", query.isFetching && "animate-spin")}
@@ -1389,11 +1435,17 @@ export function SocCorpusValidationWorkbench() {
         <section className="flex flex-wrap items-center justify-between gap-3 border-b bg-zinc-50 px-5 py-3 text-xs md:px-7">
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             <span className="font-medium text-amber-800">
-              交互测试 · 任意顺序 / 可重新运行
+              历史告警样本 · 非生产演练
             </span>
-            <span>历史 PKL · exploratory replay</span>
-            <span>内网安全能力接口 · 关闭/模拟</span>
-            <span>企业专属策略 · 关闭</span>
+            <span>可任意选择 · 可重新运行</span>
+            <span>企业安全能力接口 · 关闭/模拟</span>
+            <span>
+              企业专属策略 ·{" "}
+              {formatSocDevPolicyLabel({
+                tenantPolicy: state.safety.tenant_policy,
+                softwarePathFastPolicy: state.safety.software_path_fast_policy,
+              })}
+            </span>
             <span>外部动作 · 关闭</span>
           </div>
           <span className="font-mono">
@@ -1426,7 +1478,7 @@ export function SocCorpusValidationWorkbench() {
                   id="corpus-search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Alert ID / Rule / Host / IP"
+                  placeholder="告警编号 / 规则 / 主机 / IP"
                   className="pl-9"
                 />
               </div>
@@ -1436,7 +1488,7 @@ export function SocCorpusValidationWorkbench() {
                 htmlFor="corpus-readiness-filter"
                 className="mb-1.5 block text-xs font-medium"
               >
-                适配层级
+                经验分组质量
               </label>
               <Select
                 value={readiness}
@@ -1448,7 +1500,7 @@ export function SocCorpusValidationWorkbench() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">全部层级</SelectItem>
+                  <SelectItem value="all">全部质量</SelectItem>
                   {Object.entries(READINESS).map(([value, item]) => (
                     <SelectItem key={value} value={value}>
                       {item.label}
@@ -1483,7 +1535,7 @@ export function SocCorpusValidationWorkbench() {
                 htmlFor="corpus-comparison-filter"
                 className="mb-1.5 block text-xs font-medium"
               >
-                标签对比
+                历史处置对比
               </label>
               <Select
                 value={comparison}
@@ -1510,7 +1562,7 @@ export function SocCorpusValidationWorkbench() {
                 htmlFor="corpus-group-filter"
                 className="mb-1.5 block text-xs font-medium"
               >
-                同类组
+                行为模式组
               </label>
               <Select
                 value={groupId}
@@ -1523,7 +1575,7 @@ export function SocCorpusValidationWorkbench() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">全部同类组</SelectItem>
+                  <SelectItem value="all">全部行为模式组</SelectItem>
                   {state.groups
                     .filter((group) => group.alert_count >= 2)
                     .map((group) => (
@@ -1565,7 +1617,7 @@ export function SocCorpusValidationWorkbench() {
             <span>·</span>
             <span>筛选条件会在当前浏览器标签页保留</span>
             <span>·</span>
-            <span>结构适配不代表研判准确率或候选质量门已经通过</span>
+            <span>分组质量不代表研判准确率或经验候选已经审核通过</span>
           </div>
         </section>
 
@@ -1577,12 +1629,12 @@ export function SocCorpusValidationWorkbench() {
                   <th className="w-32 px-4 py-2.5 font-medium">序号 / Alert</th>
                   <th className="w-36 px-4 py-2.5 font-medium">时间 / 来源</th>
                   <th className="w-72 px-4 py-2.5 font-medium">规则</th>
-                  <th className="w-40 px-4 py-2.5 font-medium">结构适配</th>
-                  <th className="w-36 px-4 py-2.5 font-medium">Decision</th>
-                  <th className="w-36 px-4 py-2.5 font-medium">标签对比</th>
-                  <th className="w-32 px-4 py-2.5 font-medium">Pattern</th>
-                  <th className="w-32 px-4 py-2.5 font-medium">Memory</th>
-                  <th className="w-24 px-4 py-2.5 text-right font-medium">
+                  <th className="w-40 px-4 py-2.5 font-medium">分组质量</th>
+                  <th className="w-36 px-4 py-2.5 font-medium">最终结论</th>
+                  <th className="w-36 px-4 py-2.5 font-medium">历史处置对比</th>
+                  <th className="w-32 px-4 py-2.5 font-medium">模式样本</th>
+                  <th className="w-32 px-4 py-2.5 font-medium">历史经验</th>
+                  <th className="w-44 px-4 py-2.5 text-right font-medium">
                     操作
                   </th>
                 </tr>
@@ -1704,53 +1756,78 @@ export function SocCorpusValidationWorkbench() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <p>
-                          {alert.memory_contexts.length
-                            ? `命中 ${alert.memory_contexts.length}`
-                            : "-"}
+                        <p className="font-medium">
+                          {
+                            memoryRunUsageCopy(
+                              alert.memory_contexts.length,
+                              alert.memory_directive_applied,
+                            ).label
+                          }
                         </p>
-                        {alert.memory_directive_applied ? (
-                          <p className="mt-1 text-xs text-emerald-700">
-                            指令已应用
+                        {alert.memory_contexts.length ? (
+                          <p className="text-muted-foreground mt-1 text-xs">
+                            参考 {alert.memory_contexts.length} 条经验
                           </p>
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={
-                            !alert.can_process || processMutation.isPending
-                          }
-                          title={
-                            alert.workflow_state === "completed"
-                              ? "创建新的 Runtime Run；不会重复累计同一告警的 Pattern 支持数"
-                              : undefined
-                          }
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleProcess(alert.alert_id);
-                          }}
-                        >
-                          {processing ? (
-                            <RefreshCwIcon className="size-4 animate-spin" />
-                          ) : alert.workflow_state === "running" ? (
-                            <RefreshCwIcon className="size-4 animate-spin" />
-                          ) : alert.workflow_state === "failed" ? (
-                            <RotateCcwIcon className="size-4" />
-                          ) : alert.workflow_state === "completed" ? (
-                            <RotateCcwIcon className="size-4" />
-                          ) : (
-                            <PlayIcon className="size-4" />
-                          )}
-                          {alert.workflow_state === "completed"
-                            ? "重新运行"
-                            : alert.workflow_state === "running"
+                        {alert.workflow_state === "completed" ? (
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`查看 Alert ${alert.alert_id} 结果`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleViewResult(alert.alert_id);
+                              }}
+                            >
+                              <EyeIcon className="size-4" />
+                              查看结果
+                            </Button>
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              disabled={
+                                !alert.can_process || processMutation.isPending
+                              }
+                              title="创建新 Run；不重复累计同一告警的模式样本"
+                              aria-label={`重新运行 Alert ${alert.alert_id}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleProcess(alert.alert_id);
+                              }}
+                            >
+                              <RotateCcwIcon className="size-4" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              !alert.can_process || processMutation.isPending
+                            }
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleProcess(alert.alert_id);
+                            }}
+                          >
+                            {processing ||
+                            alert.workflow_state === "running" ? (
+                              <RefreshCwIcon className="size-4 animate-spin" />
+                            ) : alert.workflow_state === "failed" ? (
+                              <RotateCcwIcon className="size-4" />
+                            ) : (
+                              <PlayIcon className="size-4" />
+                            )}
+                            {processing || alert.workflow_state === "running"
                               ? "运行中"
                               : alert.workflow_state === "failed"
                                 ? "重试"
                                 : "运行"}
-                        </Button>
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -1793,6 +1870,55 @@ export function SocCorpusValidationWorkbench() {
             </div>
           </div>
         </section>
+
+        {runFeedback ? (
+          <section
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3 text-sm md:px-7",
+              runFeedback.status === "completed" &&
+                "border-emerald-200 bg-emerald-50 text-emerald-950",
+              runFeedback.status === "running" &&
+                "border-sky-200 bg-sky-50 text-sky-950",
+              runFeedback.status === "failed" &&
+                "border-red-200 bg-red-50 text-red-950",
+            )}
+            aria-live="polite"
+          >
+            <div className="flex min-w-0 items-start gap-2">
+              {runFeedback.status === "running" ? (
+                <LoaderCircleIcon className="mt-0.5 size-4 shrink-0 animate-spin" />
+              ) : runFeedback.status === "completed" ? (
+                <CheckCircle2Icon className="mt-0.5 size-4 shrink-0" />
+              ) : (
+                <XCircleIcon className="mt-0.5 size-4 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <p className="font-medium">
+                  Alert {runFeedback.alertId}{" "}
+                  {runFeedback.status === "running"
+                    ? "正在研判"
+                    : runFeedback.status === "completed"
+                      ? "研判完成"
+                      : "运行失败"}
+                </p>
+                <p className="mt-0.5 text-xs leading-5 opacity-80">
+                  {runFeedback.message}
+                </p>
+              </div>
+            </div>
+            {runFeedback.status === "completed" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                aria-label={`查看 Alert ${runFeedback.alertId} 结果`}
+                onClick={() => handleViewResult(runFeedback.alertId)}
+              >
+                <EyeIcon className="size-4" />
+                查看结果
+              </Button>
+            ) : null}
+          </section>
+        ) : null}
 
         <div ref={detailRef}>
           <AlertDetail

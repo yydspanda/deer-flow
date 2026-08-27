@@ -32,7 +32,7 @@ class SocBossDemoPrimaryInvestigation(BaseModel):
     sample_id: str
     run_id: str
     alert_id: str
-    queue_id: str
+    queue_id: str | None = None
     source_type: str | None = None
     domain_finding_count: int = 0
     action_evidence_count: int = 0
@@ -102,7 +102,7 @@ def build_boss_demo_manifest(
 
     primary_result = report.results[0] if report.results else None
     primary = None
-    if primary_result is not None and primary_result.queue_id is not None:
+    if primary_result is not None:
         primary = SocBossDemoPrimaryInvestigation(
             sample_id=primary_result.sample_id,
             run_id=primary_result.run_id,
@@ -118,13 +118,12 @@ def build_boss_demo_manifest(
 
     normalized_web_base = web_base_url.rstrip("/")
     queue_id = primary.queue_id if primary is not None else None
+    run_id = primary.run_id if primary is not None else None
     url = make_url(database_url)
     database_backend = url.get_backend_name()
     database_env_value = database_url if database_backend == "sqlite" else "<set-SOC_DATABASE_URL-to-the-same-database>"
     quoted_database_env = shlex.quote(database_env_value)
-    review_command = (
-        f"cd backend && uv run soc review context {queue_id} --database-url {shlex.quote(database_url)} --summary --pretty" if queue_id is not None and database_backend == "sqlite" else "cd backend && uv run soc review list --pretty"
-    )
+    review_command = f"cd backend && uv run soc show {run_id} --database-url {shlex.quote(database_url)} --pretty" if run_id is not None and database_backend == "sqlite" else "cd backend && uv run soc list --pretty"
     tui_command = (
         f"cd backend && uv run soc chat tui --queue-id {queue_id} --lead-agent --database-url {shlex.quote(database_url)}" if queue_id is not None and database_backend == "sqlite" else "cd backend && uv run soc chat tui --lead-agent"
     )
@@ -141,8 +140,8 @@ def build_boss_demo_manifest(
             "silent_fallback_allowed": False,
         },
         primary_investigation=primary,
-        web_url=f"{normalized_web_base}/workspace/soc/review",
-        review_context_api_url=(f"{normalized_web_base}/api/soc/review/items/{queue_id}/context" if queue_id is not None else None),
+        web_url=(f"{normalized_web_base}/workspace/soc/alerts?run_id={run_id}" if run_id is not None else f"{normalized_web_base}/workspace/soc/alerts"),
+        review_context_api_url=(f"{normalized_web_base}/api/soc/alerts/{run_id}/context" if run_id is not None else None),
         launch_commands={
             "start_full_stack": "./scripts/soc-boss-demo.sh start",
             "start_without_docker": f"SOC_DATABASE_URL={quoted_database_env} make dev",
@@ -151,7 +150,7 @@ def build_boss_demo_manifest(
         },
         capability_boundaries=_boss_demo_capability_boundaries(analyzer_mode),
         operator_notes=[
-            "Open web_url after the full stack is running; the first open ReviewQueue item is the demo investigation.",
+            "Open web_url after the full stack is running; the demo is a run-scoped alert result and does not manufacture a ReviewQueue task.",
             "Use --reset to rebuild only the isolated Boss Demo SQLite database.",
             "The launch manifest never silently changes an llm request to deterministic mode.",
             "Boss Demo readiness is not SOC Alpha completeness or production readiness.",
@@ -180,10 +179,10 @@ def _boss_demo_capability_boundaries(analyzer_mode: str) -> list[SocBossDemoCapa
         ),
         analyzer_boundary,
         SocBossDemoCapabilityBoundary(
-            capability="runtime_persistence_review_queue",
+            capability="runtime_persistence_alert_result",
             mode="real",
             production_ready=False,
-            disclosure="Uses production SOC service/repository contracts with an isolated local SQLite database.",
+            disclosure="Uses production SOC service/repository contracts and run-scoped investigation context with an isolated local SQLite database.",
         ),
         SocBossDemoCapabilityBoundary(
             capability="read_only_investigation_actions",

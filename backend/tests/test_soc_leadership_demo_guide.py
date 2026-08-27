@@ -18,22 +18,21 @@ def test_leadership_demo_targets_match_the_frozen_corpus() -> None:
     )
 
     assert guide.ready is True
-    assert guide.primary_chapter_count == 5
-    assert guide.backup_chapter_count == 2
-    assert [item.sequence for item in guide.chapters] == list(range(1, 8))
+    assert guide.primary_chapter_count == 2
+    assert guide.backup_chapter_count == 0
+    assert [item.sequence for item in guide.chapters] == [1, 2]
     assert all(target.availability == "ready" for chapter in guide.chapters for target in chapter.targets)
-
-    same_rule = next(item for item in guide.chapters if item.chapter_id == "same-rule-different-behavior")
-    assert {item.expected_group_id for item in same_rule.targets} == {
+    assert [item.expected_memory_use for item in guide.chapters] == ["context_only", "exact_match"]
+    assert {item.targets[0].expected_group_id for item in guide.chapters} == {
+        "CG-FF9B8E58B0DE",
         "CG-3E54866F029C",
-        "CG-541A6F83A997",
     }
 
 
 def test_leadership_demo_marks_missing_or_regrouped_targets() -> None:
     guide = build_soc_leadership_demo_guide(
         alert_groups={
-            "1965449": "CG-CHANGED",
+            "2480991": "CG-CHANGED",
         },
     )
 
@@ -41,5 +40,5 @@ def test_leadership_demo_marks_missing_or_regrouped_targets() -> None:
     assert guide.ready is False
     assert first_target.availability == "drifted"
     assert first_target.actual_group_id == "CG-CHANGED"
-    assert first_target.drifted_alert_ids == ["1965449"]
+    assert first_target.drifted_alert_ids == ["2480991"]
     assert guide.chapters[1].targets[0].availability == "unavailable"

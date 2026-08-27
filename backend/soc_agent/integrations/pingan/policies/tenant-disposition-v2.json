@@ -1,16 +1,17 @@
 {
   "schema_version": "soc.tenant_disposition_policy.v1",
   "policy_id": "pingan.soc.disposition",
-  "policy_version": "pingan-disposition-v2.4.0",
+  "policy_version": "pingan-disposition-v2.4.1",
   "tenant_id": "pingan",
   "applicable_environments": [
     "dev",
+    "dev-corpus-eval",
     "stg",
     "prd"
   ],
   "owner": "PingAn SOC Operations",
   "source_ref": ".notes/ai_soc/capabilities/pingan/disposition-policy-extraction.md",
-  "change_reason": "Add a default-off PingAn EDR fast disposition signal: when every relevant canonical process/executable path matches a legacy safe_path exactly or through a conservatively inferred safe-path family, tenant policy may directly ignore while preserving Runtime detection truth and complete match lineage.",
+  "change_reason": "Allow the isolated dev-corpus-eval replay scope to exercise the reviewed PingAn policy end to end while external action execution remains disabled; production environments and rule behavior are unchanged.",
   "reviewed_by": "pingan-soc-project-owner",
   "reviewed_at": "2026-08-11T00:00:00+08:00",
   "internal_networks": [

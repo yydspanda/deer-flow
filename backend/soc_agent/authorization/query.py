@@ -68,6 +68,7 @@ class AuthorizationQueryBuilder:
             event_timezone=event_timezone,
             warnings=warnings,
         )
+        _append_canonical_time_policy_warning(alert, warnings)
         subjects = _subject_candidates(alert, entities, fact_reconstruction, warnings=warnings)
         targets = _target_candidates(alert, fact_reconstruction, warnings=warnings)
         behaviors = _behavior_candidates(alert, entities, fact_reconstruction)
@@ -120,6 +121,18 @@ def _event_time(
         raise ValueError(f"unknown authorization event timezone: {event_timezone}") from exc
     warnings.append(f"authorization_event_time_timezone_assumed:{event_timezone}")
     return value.replace(tzinfo=timezone), value.isoformat()
+
+
+def _append_canonical_time_policy_warning(
+    alert: AlertInput,
+    warnings: list[str],
+) -> None:
+    policy = alert.extensions.get("event_time_policy")
+    if not isinstance(policy, dict) or policy.get("event_time_timezone_assumed") is not True:
+        return
+    timezone_name = policy.get("naive_timezone")
+    if isinstance(timezone_name, str) and timezone_name.strip():
+        warnings.append(f"authorization_event_time_timezone_assumed:{timezone_name.strip()}")
 
 
 def _subject_candidates(

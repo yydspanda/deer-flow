@@ -149,6 +149,10 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   action authorization separately. Simulation labels cannot establish rollout quality.
 - Browser workbenches are enabled only with `SOC_DEV_MEMORY_WORKBENCH_ENABLED=true`, an
   isolated SQLite database, dev environment, real LLM analyzer, authenticated admin,
-  disabled tenant policy, and disabled external actions. They orchestrate official
-  services; React must not construct Patterns, approve candidates, or calculate decision
-  lineage.
+  and disabled external actions. Tenant policy remains disabled by default; the local
+  PingAn acceptance launcher may enable deterministic rules, the reviewed bounded policy
+  advisor, and the software-path catalog only with
+  `SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY=true` and an explicit `dev` policy environment.
+  This exception never enables external action execution. Workbenches orchestrate
+  official services; React must not construct Patterns, approve candidates, or calculate
+  decision lineage.

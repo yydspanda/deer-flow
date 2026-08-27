@@ -28,6 +28,7 @@ from soc_agent.contracts import (
     ActorContext,
     ActorType,
     AlertSourceType,
+    AlertSummary,
     AnalysisRun,
     EntrySurface,
     InvestigationEvidence,
@@ -148,7 +149,7 @@ def run_pingan_investigation_demo(
     scenario: Literal["all", "apt", "edr", "hids"] = "all",
     analysis_service: SocAnalysisService | None = None,
 ) -> SocDemoInvestigationReport:
-    """Seed a reviewable PingAn SOC investigation chain into a repository."""
+    """Seed a run-scoped PingAn SOC investigation chain into a repository."""
 
     if repository is None:
         raise ValueError("repository is required for persistent SOC investigation demo")
@@ -174,9 +175,10 @@ def run_pingan_investigation_demo(
         run_ids=[result.run_id for result in results],
         queue_ids=queue_ids,
         next_commands=[
+            *(f"soc show {result.run_id} --pretty" for result in results[:3]),
             *(f"soc review context {queue_id} --pretty" for queue_id in queue_ids[:3]),
-            "soc review list --pretty",
-            "soc chat tui --queue-id <queue_id> --lead-agent",
+            "Open /workspace/soc/alerts to inspect every completed result",
+            "Use /workspace/soc/review/alerts only for unresolved fact conflicts",
         ],
         results=results,
     )
@@ -198,28 +200,35 @@ def _seed_fixture_investigation(
         analysis_persistence=repository,
     )
     run = service.analyze(payload, context=context)
+    summary = repository.get_alert_summary(run.run_id)
+    if summary is None:
+        raise ValueError(f"demo analysis did not persist alert summary for run {run.run_id}")
     review_item = _review_item_for_run(repository, run.run_id)
     failure_reasons: list[str] = []
-    if review_item is None:
-        failure_reasons.append(f"no review queue item found for run {run.run_id}")
 
-    action_results: list[SocDemoInvestigationActionResult] = []
-    memory_record: SocMemoryRecord | None = None
-    evidence_count = 0
-    context_view = None
-    if review_item is not None:
-        action_results = _seed_read_only_evidence(fixture, run=run, review_item=review_item, repository=repository)
-        memory_record = _seed_confirmed_memory(fixture, run=run, review_item=review_item, repository=repository)
-        context_view = _review_context_service(repository).get_investigation_context(review_item.queue_id)
-        evidence_count = len(context_view.action_evidence)
-        if evidence_count < sum(1 for action in fixture.actions if action.expect_evidence):
-            failure_reasons.append(f"expected at least {len(fixture.actions)} read-only evidence records, got {evidence_count}")
-        if sum(len(item.findings) for item in context_view.domain_triage_results) == 0:
-            failure_reasons.append("expected at least one domain finding in review context")
-        if context_view.relevant_memories is None or context_view.relevant_memories.returned_count == 0:
-            failure_reasons.append("expected at least one retrieval-enabled relevant memory")
+    action_results = _seed_read_only_evidence(
+        fixture,
+        run=run,
+        review_item=review_item,
+        repository=repository,
+    )
+    memory_record = _seed_confirmed_memory(
+        fixture,
+        run=run,
+        summary=summary,
+        review_item=review_item,
+        repository=repository,
+    )
+    context_view = _review_context_service(repository).get_alert_investigation_context(run.run_id)
+    evidence_count = len(context_view.action_evidence)
+    if evidence_count < sum(1 for action in fixture.actions if action.expect_evidence):
+        failure_reasons.append(f"expected at least {len(fixture.actions)} read-only evidence records, got {evidence_count}")
+    if sum(len(item.findings) for item in context_view.domain_triage_results) == 0:
+        failure_reasons.append("expected at least one domain finding in alert result context")
+    if context_view.relevant_memories is None or context_view.relevant_memories.returned_count == 0:
+        failure_reasons.append("expected at least one retrieval-enabled relevant memory")
 
-    investigation_view = context_view.investigation_view if context_view is not None else None
+    investigation_view = context_view.investigation_view
     counts = dict(investigation_view.counts) if investigation_view is not None else {}
     timeline_kinds = sorted({item.kind for item in investigation_view.evidence_timeline}) if investigation_view is not None else []
     source_type = run.normalization_report.source_type.value if run.normalization_report is not None else None
@@ -254,7 +263,7 @@ def _seed_read_only_evidence(
     fixture: PingAnCapabilityEvalFixture,
     *,
     run: AnalysisRun,
-    review_item: ReviewQueueItem,
+    review_item: ReviewQueueItem | None,
     repository: InvestigationEvidenceRepository,
 ) -> list[SocDemoInvestigationActionResult]:
     existing = _existing_evidence_by_route(repository, thread_id=_thread_id(fixture.sample_id))
@@ -314,28 +323,31 @@ def _seed_confirmed_memory(
     fixture: PingAnCapabilityEvalFixture,
     *,
     run: AnalysisRun,
-    review_item: ReviewQueueItem,
+    summary: AlertSummary,
+    review_item: ReviewQueueItem | None,
     repository: SocDemoInvestigationRepository,
 ) -> SocMemoryRecord | None:
     evidence_refs = [item.evidence_id for item in repository.list_evidence(thread_id=_thread_id(fixture.sample_id), limit=50)]
     if not evidence_refs:
-        evidence_refs = [review_item.queue_id, run.run_id]
+        evidence_refs = [run.run_id]
+        if review_item is not None:
+            evidence_refs.insert(0, review_item.queue_id)
 
     service = SocMemoryService(candidate_repository=repository, record_repository=repository)
     command = SocMemoryCandidateCreateCommand(
         candidate_type=SocMemoryCandidateType.DETECTION_LESSON,
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
         summary=f"Demo confirmed memory for {fixture.scenario}",
-        content=_memory_content_for_fixture(fixture, review_item=review_item),
-        tenant_scope=review_item.tenant_id or "global",
-        tenant_id=review_item.tenant_id,
+        content=_memory_content_for_fixture(fixture, summary=summary),
+        tenant_scope=summary.tenant_id or "global",
+        tenant_id=summary.tenant_id,
         source=SocMemoryCandidateSource(
             source_type=SocMemoryCandidateSourceType.EVAL_FIXTURE,
             source_surface=EntrySurface.CLI,
             source_id=f"soc-demo:{fixture.sample_id}",
             run_id=run.run_id,
             alert_id=run.alert_id,
-            queue_id=review_item.queue_id,
+            queue_id=review_item.queue_id if review_item is not None else None,
             eval_sample_id=fixture.sample_id,
             metadata={"scenario": fixture.scenario, "source_path": fixture.source_path},
         ),
@@ -343,7 +355,7 @@ def _seed_confirmed_memory(
         validity=SocMemoryCandidateValidity(notes="Local demo seed only; validates retrieval plumbing, not production PingAn policy."),
         idempotency_key=f"soc-demo:memory:{fixture.sample_id}:{DEMO_IDEMPOTENCY_VERSION}",
         confidence=0.82,
-        facets=_memory_facets_for_fixture(fixture, run=run, review_item=review_item),
+        facets=_memory_facets_for_fixture(fixture, run=run, summary=summary),
         decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
         review_owner="soc-demo",
         labels=["soc-demo", "pingan-demo", "confirmed-memory"],
@@ -455,7 +467,7 @@ def _chat_request_for_action(
     action: PingAnCapabilityEvalAction,
     *,
     run: AnalysisRun,
-    review_item: ReviewQueueItem,
+    review_item: ReviewQueueItem | None,
     index: int,
 ) -> SocAgentChatRequest:
     payload = dict(action.payload)
@@ -464,16 +476,17 @@ def _chat_request_for_action(
         {
             "alert_id": run.alert_id,
             "run_id": run.run_id,
-            "queue_id": review_item.queue_id,
             "thread_id": _thread_id(fixture.sample_id),
             "proposal_id": f"SOC-DEMO-{fixture.sample_id}-{index + 1}",
         }
     )
+    if review_item is not None:
+        context_refs["queue_id"] = review_item.queue_id
     payload["context_refs"] = context_refs
     return SocAgentChatRequest(
         message=f"Run SOC demo read-only action {action.route}",
         thread_id=_thread_id(fixture.sample_id),
-        queue_id=review_item.queue_id,
+        queue_id=review_item.queue_id if review_item is not None else None,
         run_id=run.run_id,
         allowed_routes=[action.route],
         metadata={
@@ -488,20 +501,21 @@ def _memory_facets_for_fixture(
     fixture: PingAnCapabilityEvalFixture,
     *,
     run: AnalysisRun,
-    review_item: ReviewQueueItem,
+    summary: AlertSummary,
 ) -> dict[str, list[str]]:
     facets: dict[str, list[str]] = {
         "topic": ["soc-investigation-demo"],
         "demo_sample_id": [fixture.sample_id],
         "scenario": [fixture.scenario],
     }
-    _add_facet(facets, "source_type", review_item.source_type.value)
-    _add_facet(facets, "source_system", review_item.source_system)
-    _add_facet(facets, "rule_code", review_item.rule_code)
-    _add_facet(facets, "rule_name", review_item.rule_name)
-    _add_facet(facets, "severity", review_item.severity)
-    _add_facet(facets, "category", review_item.category)
-    for entity_key in review_item.entity_keys:
+    _add_facet(facets, "source_type", summary.source_type.value)
+    _add_facet(facets, "source_system", summary.source_system)
+    _add_facet(facets, "detection_key", summary.detection_key)
+    _add_facet(facets, "rule_code", summary.rule_code)
+    _add_facet(facets, "rule_name", summary.rule_name)
+    _add_facet(facets, "severity", summary.severity)
+    _add_facet(facets, "category", summary.category)
+    for entity_key in summary.entity_keys:
         _add_facet(facets, "entity", entity_key)
     if run.llm_analysis_request is not None:
         for skill in run.llm_analysis_request.skill_context.selected_skills:
@@ -528,13 +542,13 @@ def _add_facet(facets: dict[str, list[str]], key: str, value: str | None) -> Non
 def _memory_content_for_fixture(
     fixture: PingAnCapabilityEvalFixture,
     *,
-    review_item: ReviewQueueItem,
+    summary: AlertSummary,
 ) -> str:
     action_routes = ", ".join(action.route for action in fixture.actions) or "no read-only routes"
     return (
         f"Demo memory for scenario {fixture.scenario}. "
-        f"When source_type={review_item.source_type.value}, keep raw evidence, read-only action evidence, "
-        f"domain findings, and analyst review context together before changing verdict. "
+        f"When source_type={summary.source_type.value}, keep raw evidence, read-only action evidence, "
+        f"domain findings, and the run-scoped alert context together before changing verdict. "
         f"Expected demo read-only routes: {action_routes}. "
         "This record is retrieval-enabled only for local demo validation."
     )

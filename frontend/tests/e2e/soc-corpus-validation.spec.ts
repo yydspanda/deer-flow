@@ -181,6 +181,25 @@ function corpusState(processed = false) {
     base_projection_basis: null,
     effective_projection_basis: null,
   };
+  const contextOnlyAlert = {
+    ...weakAlert,
+    alert_id: "2480991",
+    source_index: 2,
+    sequence_number: 3,
+    rule_code: "RPAADM_002010",
+    rule_name: "GalaxyLab_T1003-SAM-Dumping",
+    detection_key: "leagsoft-edr:rule_code:rpaadm_002010",
+    source_type: "ndr",
+    topic: "ndr",
+    readiness: "recurrent_strong",
+    decision_eligible: true,
+    group_id: "CG-CONTEXT",
+    group_alert_count: 2,
+    window_alert_count: 2,
+    behavior_fingerprint: "e".repeat(64),
+    behavior_components: ["network_service:sip/5060", "protocol:udp"],
+    behavior_strength: "strong",
+  };
   return {
     schema_version: "soc.corpus_dev_workbench.v3",
     safety: {
@@ -190,7 +209,8 @@ function corpusState(processed = false) {
       source_data_class: "operational",
       historical_replay: true,
       internal_providers: "off_or_mock",
-      tenant_policy: "disabled",
+      tenant_policy: "deterministic_and_llm",
+      software_path_fast_policy: true,
       external_action_execution: false,
       memory_scope: "dev-corpus-eval",
       pattern_window_days: 30,
@@ -252,29 +272,56 @@ function corpusState(processed = false) {
       effective_match_rate: processed ? 1 : null,
     },
     leadership_demo: {
-      schema_version: "soc.leadership_demo_guide.v1",
-      guide_version: "fixture-demo.v1",
-      title: "SOC Agent 核心能力验证",
+      schema_version: "soc.leadership_demo_guide.v2",
+      guide_version: "fixture-demo.v2",
+      title: "历史经验如何参与研判",
       purpose:
-        "用少量真实语料展示可审计研判、同类分组、Memory 治理与安全边界。",
+        "用同一条检测规则下的不同实际行为，对比历史经验何时只作参考、何时可以复用审核结论。",
       ready: true,
-      primary_chapter_count: 1,
+      primary_chapter_count: 2,
       backup_chapter_count: 0,
       chapters: [
         {
-          chapter_id: "memory-loop",
+          chapter_id: "same-rule-context-only",
           sequence: 1,
           tier: "primary",
-          title: "EDR 重复误报：从 Pattern 到可复用 Business Lesson",
-          objective: "展示重复告警聚合、Candidate 审核与后续精确匹配改判。",
-          presenter_note: "先展示真实 Run，再展示受治理 Memory。",
-          capabilities: ["Pattern 聚合", "Business Lesson"],
-          operator_steps: ["定位案例。", "运行告警。"],
-          success_cues: ["Runtime 与 Memory 分层留痕。"],
+          expected_memory_use: "context_only",
+          title: "同一规则、不同场景：经验只作研判参考",
+          objective: "规则相同但行为指纹不同。",
+          presenter_note: "不会仅按 rule_code 套用结论。",
+          capabilities: ["同规则多场景", "Context-only"],
+          operator_steps: ["查看第一组告警。", "运行告警。"],
+          success_cues: ["历史经验不直接改判。"],
           targets: [
             {
-              target_id: "galaxy",
-              label: "GalaxyLab SAM Dump · Windows 更新进程链",
+              target_id: "context",
+              label: "SIP/5060 · 仅作参考",
+              source_type: "ndr",
+              expected_group_id: "CG-CONTEXT",
+              actual_group_id: "CG-CONTEXT",
+              primary_alert_id: "2480991",
+              rehearsal_alert_ids: ["2480991"],
+              availability: "ready",
+              missing_alert_ids: [],
+              drifted_alert_ids: [],
+            },
+          ],
+        },
+        {
+          chapter_id: "same-rule-exact-match",
+          sequence: 2,
+          tier: "primary",
+          expected_memory_use: "exact_match",
+          title: "同一规则、同一场景：复用审核结论",
+          objective: "规则和行为指纹都一致。",
+          presenter_note: "展示审核结论复用。",
+          capabilities: ["强行为指纹", "精确匹配"],
+          operator_steps: ["查看第二组告警。", "运行告警。"],
+          success_cues: ["最终结论保留完整来源。"],
+          targets: [
+            {
+              target_id: "exact",
+              label: "Windows 更新进程链 · 精确复用",
               source_type: "edr",
               expected_group_id: "CG-GALAXY",
               actual_group_id: "CG-GALAXY",
@@ -305,8 +352,24 @@ function corpusState(processed = false) {
         processed_count: processed ? 1 : 0,
         memory_hit_count: processed ? 1 : 0,
       },
+      {
+        group_id: "CG-CONTEXT",
+        source_type: "ndr",
+        detection_key: "leagsoft-edr:rule_code:rpaadm_002010",
+        rule_code: "RPAADM_002010",
+        rule_name: "GalaxyLab_T1003-SAM-Dumping",
+        behavior_fingerprint: "e".repeat(64),
+        behavior_components: contextOnlyAlert.behavior_components,
+        decision_eligible: true,
+        alert_count: 2,
+        window_count: 1,
+        max_window_alert_count: 2,
+        candidate_window_count: 0,
+        processed_count: 0,
+        memory_hit_count: 0,
+      },
     ],
-    alerts: [candidateAlert, weakAlert],
+    alerts: [candidateAlert, weakAlert, contextOnlyAlert],
   };
 }
 
@@ -374,6 +437,27 @@ function activeMemoryRecord() {
     updated_at: "2026-08-01T00:00:00Z",
     labels: ["confirmed-memory", "retrieval-enabled"],
     metadata: {},
+  };
+}
+
+function activeDirectiveMemoryRecord() {
+  return {
+    ...activeMemoryRecord(),
+    decision_directive: {
+      schema_version: "soc.memory_decision_directive.v1",
+      effect: "override",
+      target_verdict: "false_positive",
+      review_effect: "clear",
+      suggested_action: "精确匹配时复用已审核误报结论。",
+      minimum_match_score: 5,
+      required_facet_keys: [
+        "behavior_fingerprint",
+        "detection_key",
+        "environment",
+      ],
+      rationale: "运营审核后的强匹配经验允许改变最终结论。",
+      policy_version: "soc.memory_decision_directive_policy.v1",
+    },
   };
 }
 
@@ -634,20 +718,23 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await page.goto("/workspace/soc/corpus-validation");
 
   await expect(
-    page.getByRole("heading", { name: "SOC 语料验证" }),
+    page.getByRole("heading", { name: "SOC 告警研判演练" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("企业专属策略 · 全开（确定性 + 安全路径 + LLM）"),
   ).toBeVisible();
   const navigation = page.getByRole("navigation", { name: "SOC 运营导航" });
   await expect(
     navigation.getByRole("link", { name: "运营总览" }),
   ).toHaveAttribute("href", "/workspace/soc/operations");
   await expect(
-    navigation.getByRole("link", { name: "审核中心" }),
+    navigation.getByRole("link", { name: "研判待办" }),
   ).toHaveAttribute("href", "/workspace/soc/review/alerts");
   await expect(
     navigation.getByRole("link", { name: "归一化运维" }),
   ).toHaveAttribute("href", "/workspace/soc/normalization");
   const currentNavigationLink = navigation.getByRole("link", {
-    name: /语料验证/,
+    name: /告警演练/,
   });
   await expect(currentNavigationLink).toHaveAttribute("aria-current", "page");
   await expect(
@@ -663,15 +750,25 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(page.getByText("Weak single alert")).toBeVisible();
   await expect(page.getByText("Runtime 运行后揭示")).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "SOC Agent 核心能力验证" }),
+    page.getByRole("heading", { name: "历史经验如何参与研判" }),
   ).toBeVisible();
-  await expect(page.getByText("语料校验通过", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "定位案例" }).click();
-  await expect(page.getByRole("button", { name: "已定位" })).toBeVisible();
+  await expect(page.getByText("两组告警已就绪", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看这组告警" })).toHaveCount(
+    2,
+  );
+  const exactMatchRehearsal = page.getByRole("article").filter({
+    hasText: "精确匹配复用",
+  });
+  await exactMatchRehearsal
+    .getByRole("button", { name: "查看这组告警" })
+    .click();
+  await expect(
+    exactMatchRehearsal.getByRole("button", { name: "已显示这组" }),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Alert 1984426" }),
   ).toBeVisible();
-  await page.getByLabel("同类组").click();
+  await page.getByLabel("行为模式组").click();
   await expect(
     page.getByRole("option", {
       name: /GalaxyLab_T1003-SAM-Dumping.*组 GALAXY.*14 条/,
@@ -683,7 +780,7 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(currentNavigationLink).toBeInViewport({ ratio: 1 });
   await page.setViewportSize({ width: 1280, height: 720 });
 
-  const corpusSearch = page.getByPlaceholder("Alert ID / Rule / Host / IP");
+  const corpusSearch = page.getByPlaceholder("告警编号 / 规则 / 主机 / IP");
   await corpusSearch.fill("1984426");
   await page.reload();
   await expect(corpusSearch).toHaveValue("1984426");
@@ -692,7 +789,9 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(page.getByLabel("当前安全结论")).toContainText(
     "误报 / False Positive",
   );
-  await expect(page.getByText("Memory 已应用", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("已复用审核结论", { exact: true }).first(),
+  ).toBeVisible();
   await expect(page.getByText("Windows 更新部署正常行为")).toBeVisible();
   await expect(page.getByText("可疑", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("误报", { exact: true }).first()).toBeVisible();
@@ -704,12 +803,20 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
+  ).not.toBeInViewport();
+  await expect(page.getByText("Alert 1984426 研判完成")).toBeVisible();
+  await page
+    .getByRole("button", { name: "查看 Alert 1984426 结果" })
+    .last()
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
   ).toBeInViewport();
   await expect(page.getByText(/总 Token:/)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "重新运行", exact: true }),
+    page.getByRole("button", { name: "重新运行 Alert 1984426" }),
   ).toBeEnabled();
-  await page.getByRole("button", { name: "重新运行", exact: true }).click();
+  await page.getByRole("button", { name: "重新运行 Alert 1984426" }).click();
   await expect.poll(() => processCalls).toBe(2);
   await expect(page.getByText("本次已创建新的 Runtime Run")).toBeVisible();
 
@@ -793,7 +900,7 @@ test("announces a newly generated Pattern Candidate in the current alert", async
   });
 
   await page.goto("/workspace/soc/corpus-validation");
-  await page.getByPlaceholder("Alert ID / Rule / Host / IP").fill("1984426");
+  await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
   await page.getByRole("button", { name: "运行", exact: true }).click();
 
   await expect(
@@ -842,20 +949,24 @@ test("opens a used Memory correction and creates a governed revision candidate",
       });
       return;
     }
-    await route.fulfill({ json: activeMemoryRecord() });
+    await route.fulfill({ json: activeDirectiveMemoryRecord() });
   });
 
   await page.goto("/workspace/soc/corpus-validation");
   await page.getByRole("switch", { name: "仅显示未运行告警" }).click();
-  await page.getByPlaceholder("Alert ID / Rule / Host / IP").fill("1984426");
+  await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
   await page.getByRole("link", { name: "纠正此 Memory" }).click();
   await expect(page).toHaveURL(
     /\/workspace\/soc\/memory\/records\/MEM-GALAXY\/revise\?run_id=RUN-CORPUS-1/,
   );
-  await expect(
-    page.getByRole("heading", { name: "纠正 Memory" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "纠正经验" })).toBeVisible();
   await expect(page.getByText("RUN-CORPUS-1", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("精确匹配可复用结论", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/只有部分条件相似时，仅供模型参考/),
+  ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("radio", { name: "范围过宽" })).toBeVisible();
   expect(
@@ -872,9 +983,7 @@ test("opens a used Memory correction and creates a governed revision candidate",
     .fill(
       "本次告警的进程链与旧经验不同，旧 Memory 的适用范围过宽，需要重新收窄。",
     );
-  await page
-    .getByRole("button", { name: "暂停旧 Memory 并创建修订候选" })
-    .click();
+  await page.getByRole("button", { name: "暂停旧经验并创建修订候选" }).click();
 
   await expect.poll(() => revisionRequest).not.toBeNull();
   expect(revisionRequest).toEqual({
@@ -922,15 +1031,14 @@ test("creates an operator-direct revision from the Memory inventory", async ({
 
   await page.goto("/workspace/soc/memory/records/MEM-GALAXY/revise");
   await expect(page.getByText("运营人员直接修订")).toBeVisible();
+  await expect(page.getByText("仅供研判参考", { exact: true })).toBeVisible();
   await page.getByRole("radio", { name: "经验不完整" }).click();
   await page
     .getByLabel("2. 说明本次发现的业务事实或反证")
     .fill(
       "运营人员发现该经验遗漏了明确的适用边界，需要创建新版本补充后再启用。",
     );
-  await page
-    .getByRole("button", { name: "暂停旧 Memory 并创建修订候选" })
-    .click();
+  await page.getByRole("button", { name: "暂停旧经验并创建修订候选" }).click();
 
   await expect.poll(() => revisionRequest).not.toBeNull();
   expect(revisionRequest).toEqual({
@@ -989,7 +1097,7 @@ test("searches confirmed Memory records and opens their usage history", async ({
   );
 
   await page.goto("/workspace/soc/memory/records");
-  await page.getByLabel("搜索 Memory 台账").fill("MEM-GALAXY Windows 更新");
+  await page.getByLabel("搜索经验台账").fill("MEM-GALAXY Windows 更新");
   await page.getByTitle("搜索").click();
   await expect(page.getByText("Windows 更新部署正常行为")).toBeVisible();
   await page.getByText("Windows 更新部署正常行为").click();
@@ -998,5 +1106,5 @@ test("searches confirmed Memory records and opens their usage history", async ({
     page.getByText("该行为属于已确认的 Windows 更新部署活动。"),
   ).toBeVisible();
   await expect(page.getByText("Alert 1984426")).toBeVisible();
-  await expect(page.getByText("改变最终结论")).toBeVisible();
+  await expect(page.getByText("改变最终结论", { exact: true })).toBeVisible();
 });

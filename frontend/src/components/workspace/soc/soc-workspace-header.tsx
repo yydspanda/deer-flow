@@ -4,6 +4,7 @@ import {
   ActivityIcon,
   BrainCircuitIcon,
   FileSearchIcon,
+  KeyRoundIcon,
   ShieldCheckIcon,
   WrenchIcon,
   type LucideIcon,
@@ -16,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 const NAVIGATION: {
   href: string;
-  activePrefix?: string;
+  activePrefixes?: string[];
   label: string;
   icon: LucideIcon;
   section: "operations" | "validation";
@@ -28,16 +29,26 @@ const NAVIGATION: {
     section: "operations",
   },
   {
-    href: "/workspace/soc/review/alerts",
-    activePrefix: "/workspace/soc/review",
-    label: "审核中心",
+    href: "/workspace/soc/alerts",
+    activePrefixes: ["/workspace/soc/alerts", "/workspace/soc/review/alerts"],
+    label: "告警研判",
     icon: ShieldCheckIcon,
     section: "operations",
   },
   {
     href: "/workspace/soc/memory",
-    label: "Memory Center",
+    activePrefixes: [
+      "/workspace/soc/memory",
+      "/workspace/soc/review/memory-candidates",
+    ],
+    label: "经验中心",
     icon: BrainCircuitIcon,
+    section: "operations",
+  },
+  {
+    href: "/workspace/soc/approvals",
+    label: "动作审批",
+    icon: KeyRoundIcon,
     section: "operations",
   },
   {
@@ -48,7 +59,7 @@ const NAVIGATION: {
   },
   {
     href: "/workspace/soc/corpus-validation",
-    label: "语料验证",
+    label: "告警演练",
     icon: FileSearchIcon,
     section: "validation",
   },
@@ -136,7 +147,10 @@ export function SocWorkspaceHeader({
           {NAVIGATION.map((item, index) => {
             const active =
               pathname === item.href ||
-              pathname.startsWith(`${item.activePrefix ?? item.href}/`);
+              (item.activePrefixes ?? [item.href]).some(
+                (prefix) =>
+                  pathname === prefix || pathname.startsWith(`${prefix}/`),
+              );
             const ItemIcon = item.icon;
             const beginsValidation =
               item.section === "validation" &&

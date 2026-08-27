@@ -13,10 +13,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SOC_LEADERSHIP_DEMO_GUIDE_VERSION = "pingan-corpus-leadership-demo.v1"
+SOC_LEADERSHIP_DEMO_GUIDE_VERSION = "pingan-memory-rehearsal.v2"
 
 SocLeadershipDemoTier = Literal["primary", "backup"]
 SocLeadershipDemoAvailability = Literal["ready", "drifted", "unavailable"]
+SocLeadershipDemoExpectedMemoryUse = Literal["context_only", "exact_match"]
 
 
 class SocLeadershipDemoTarget(BaseModel):
@@ -44,6 +45,7 @@ class SocLeadershipDemoChapter(BaseModel):
     chapter_id: str
     sequence: int = Field(ge=1)
     tier: SocLeadershipDemoTier
+    expected_memory_use: SocLeadershipDemoExpectedMemoryUse
     title: str
     objective: str
     presenter_note: str
@@ -58,10 +60,10 @@ class SocLeadershipDemoGuide(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.leadership_demo_guide.v1"] = "soc.leadership_demo_guide.v1"
+    schema_version: Literal["soc.leadership_demo_guide.v2"] = "soc.leadership_demo_guide.v2"
     guide_version: str = SOC_LEADERSHIP_DEMO_GUIDE_VERSION
-    title: str = "SOC Agent 核心能力验证"
-    purpose: str = "按代表性真实语料验证可审计研判、同类分组、Memory 治理与安全边界。"
+    title: str = "历史经验如何参与研判"
+    purpose: str = "用同一条检测规则下的不同实际行为，对比历史经验何时只作参考、何时可以复用审核结论。"
     ready: bool
     primary_chapter_count: int = Field(ge=1)
     backup_chapter_count: int = Field(ge=0)
@@ -83,6 +85,7 @@ class _ChapterSpec:
     chapter_id: str
     sequence: int
     tier: SocLeadershipDemoTier
+    expected_memory_use: SocLeadershipDemoExpectedMemoryUse
     title: str
     objective: str
     presenter_note: str
@@ -94,213 +97,69 @@ class _ChapterSpec:
 
 _CHAPTERS: tuple[_ChapterSpec, ...] = (
     _ChapterSpec(
-        chapter_id="runtime-audit",
+        chapter_id="same-rule-context-only",
         sequence=1,
         tier="primary",
-        title="APT 弱口令：一条告警如何形成可审计结论",
-        objective="展示原始输入经过 PingAn Adapter、通用 Runtime、LLM 和确定性校验后的完整证据链。",
-        presenter_note="先讲系统如何可靠处理一条告警，再讲批量同类经验；不要从 Memory 页面开场。",
-        capabilities=("原始数据保留", "规范化", "实体与事实", "有界 LLM 输入", "Grounding", "Decision 留痕"),
+        expected_memory_use="context_only",
+        title="同一规则、不同场景：经验只作研判参考",
+        objective=("OpenVPN+SIP 告警与已确认的纯 OpenVPN 经验具有相同 rule_code，但行为指纹不同，因此经验可以帮助模型理解背景，不能直接改判。"),
+        presenter_note="重点看‘仅作研判参考’，证明系统不会因为 rule_code 相同就套用历史结论。",
+        capabilities=("同规则多场景", "Context-only", "防止错误改判"),
         operator_steps=(
-            "定位并运行 1965449。",
-            "展开运行轨迹，说明每一步都有状态和耗时。",
-            "打开完整审计，重点看原始输入、规范化、模型输入、模型输出、Decision 和 Pattern 写入。",
+            "确认纯 OpenVPN 经验已经审核并开放使用。",
+            "定位并运行 2480991，保持在当前列表观察运行状态。",
+            "完成后点击‘查看结果’，核对经验为‘仅作研判参考’，且未应用决策指令。",
         ),
         success_cues=(
-            "十份阶段产物来自同一个持久化 Run。",
-            "原始 payload 完整保留，模型只接收裁剪后的类型化证据。",
-            "模型结论、引用校验和最终 Decision 分层可追溯。",
+            "两条告警都属于 RPAADM_000558 / 红队IP监控。",
+            "目标行为包含 SIP/5060，和纯 OpenVPN 指纹不完全一致。",
+            "Memory 可进入上下文，但不能覆盖 Base Decision。",
         ),
         targets=(
             _TargetSpec(
-                target_id="apt-weak-password",
-                label="天眼 APT · HTTP 弱口令行为",
+                target_id="red-team-openvpn-sip-context",
+                label="OpenVPN + SIP/5060 · 仅作参考",
                 source_type="ndr",
-                expected_group_id="CG-1CE3748F0E64",
-                primary_alert_id="1965449",
-                rehearsal_alert_ids=("1965449",),
+                expected_group_id="CG-FF9B8E58B0DE",
+                primary_alert_id="2480991",
+                rehearsal_alert_ids=("2480991", "2488405"),
             ),
         ),
     ),
     _ChapterSpec(
-        chapter_id="same-rule-different-behavior",
+        chapter_id="same-rule-exact-match",
         sequence=2,
         tier="primary",
-        title="同一规则不等于同一经验",
-        objective="对比同属“红队IP监控”的 OpenVPN 与 PLC 漏洞组，证明系统不会按 rule_code 一刀切。",
-        presenter_note="这是解释行为指纹价值的关键页面：规则负责粗定位，规范化行为负责可复用边界。",
-        capabilities=("同规则细分", "行为指纹", "跨 IP 泛化", "Memory 防误用"),
+        expected_memory_use="exact_match",
+        title="同一规则、同一场景：复用审核结论",
+        objective=("纯 OpenVPN UDP/1194 告警同时命中相同 rule_code 和强行为指纹；经验经人工审核并开放后，后续同类告警可以复用结论。"),
+        presenter_note="重点看 Base、Memory 和 Effective Decision，说明最终变化来自哪条已审核经验。",
+        capabilities=("强行为指纹", "精确匹配", "Decision 留痕"),
         operator_steps=(
-            "先定位 OpenVPN 组，展示 UDP/1194 与代理隧道特征。",
-            "再定位 PLC 组，展示 UDP/44818、CVE-2017-7924 与漏洞利用特征。",
-            "对比两个不同 Group ID，强调二者不会共享同一条决策型 Memory。",
+            "如尚无经验，运行前五条样本并审核生成的 Candidate。",
+            "开启未来复用后运行第六条 2455998。",
+            "点击‘查看结果’，核对已复用审核结论及完整 Decision lineage。",
         ),
         success_cues=(
-            "两个目标具有相同 rule_code 和规则名。",
-            "行为摘要、Group ID 和演示名称均不同。",
-            "相同规则下仍可形成不同 Business Lesson。",
+            "后续告警与经验同时命中 detection_key 和 behavior_fingerprint。",
+            "本次只采用一种 Memory 用法：精确匹配，不重复记为 context-only。",
+            "Base、Memory、Effective Decision 和来源 Memory ID 均可追溯。",
         ),
         targets=(
             _TargetSpec(
-                target_id="red-team-openvpn",
-                label="红队IP监控 A · OpenVPN UDP/1194",
+                target_id="red-team-openvpn-exact",
+                label="OpenVPN UDP/1194 · 精确复用",
                 source_type="ndr",
                 expected_group_id="CG-3E54866F029C",
-                primary_alert_id="2448168",
-                rehearsal_alert_ids=("2448168", "2457097", "2457177", "2457581"),
-            ),
-            _TargetSpec(
-                target_id="red-team-plc-cve",
-                label="红队IP监控 B · PLC CVE-2017-7924",
-                source_type="ndr",
-                expected_group_id="CG-541A6F83A997",
-                primary_alert_id="2445525",
-                rehearsal_alert_ids=("2445525", "2456140", "2461301", "2473700", "2475852"),
-            ),
-        ),
-    ),
-    _ChapterSpec(
-        chapter_id="benign-memory-loop",
-        sequence=3,
-        tier="primary",
-        title="EDR 重复误报：从 Pattern 到可复用 Business Lesson",
-        objective="展示重复告警聚合、Candidate 审核、AI 辅助生成经验以及后续精确匹配改判。",
-        presenter_note="现场只实时运行一条；完整五条聚合和审核最好在彩排中预置，避免模型延迟占满汇报时间。",
-        capabilities=("Pattern 聚合", "Candidate 治理", "Business Lesson", "精确 Memory", "Base→Effective 对比"),
-        operator_steps=(
-            "按顺序运行前五条样本，观察支持数达到质量门并生成 Candidate。",
-            "审核为误报，生成并确认 Windows 更新部署 Business Lesson，开启未来精确复用。",
-            "运行第六条，查看命中的 M-*、Memory Decision 和 Effective Decision。",
-        ),
-        success_cues=(
-            "重复 replay 不重复增加 Pattern 次数。",
-            "未经审核的 Candidate 不会直接改变后续结论。",
-            "确认后的 Memory 会记录前后 Decision、来源、版本与适用条件。",
-        ),
-        targets=(
-            _TargetSpec(
-                target_id="galaxylab-sam-dumping",
-                label="GalaxyLab SAM Dump · Windows 更新进程链",
-                source_type="edr",
-                expected_group_id="CG-D80334698F0C",
-                primary_alert_id="1974113",
-                rehearsal_alert_ids=("1974113", "1980607", "1980502", "1980722", "1982981", "1984426"),
-            ),
-        ),
-    ),
-    _ChapterSpec(
-        chapter_id="risk-memory-loop",
-        sequence=4,
-        tier="primary",
-        title="Sliver C2：高风险经验也能受治理复用",
-        objective="证明 Memory 不是只会忽略误报；确认的真实风险经验同样可以支持后续转交与处置决策。",
-        presenter_note="强调 Memory 负责复用已审核判断，但外部封禁、隔离仍经过独立授权与执行层。",
-        capabilities=("真实风险经验", "证据引用", "决策指令", "动作授权分层"),
-        operator_steps=(
-            "运行前五条 Sliver 心跳样本并形成候选。",
-            "审核为真实风险，确认 C2 心跳 Business Lesson。",
-            "运行第六条，展示精确命中与决策来源、变化记录。",
-        ),
-        success_cues=(
-            "同一 Memory 可以承载真实风险而非只处理误报。",
-            "Memory 改变研判与自动动作授权是两套独立记录。",
-            "高风险副作用不会由模型或 Memory 单独越权触发。",
-        ),
-        targets=(
-            _TargetSpec(
-                target_id="sliver-c2-heartbeat",
-                label="Sliver 远控木马 · HTTP C2 心跳",
-                source_type="nids",
-                expected_group_id="CG-5734139D64DA",
-                primary_alert_id="1979525",
-                rehearsal_alert_ids=("1979525", "1979543", "1979582", "1979692", "1979731", "1979722"),
-            ),
-        ),
-    ),
-    _ChapterSpec(
-        chapter_id="network-role-adjudication",
-        sequence=5,
-        tier="primary",
-        title="反弹 Shell：连接方向不等于攻击角色",
-        objective="展示网络 source/destination、attacker/victim 与响应目标分别裁决，避免反连场景方向翻转。",
-        presenter_note="说明系统信任上游规则命中和已声明字段语义，但不会把 source 永久硬编码成 attacker。",
-        capabilities=("网络方向", "攻击者/受害者", "反向连接", "响应目标", "角色复核"),
-        operator_steps=(
-            "定位并运行 2452775。",
-            "在模型结果和完整审计中查看 Network Direction、Role Adjudication 与 Response Target。",
-            "说明可选 Role Verifier 只复核关键角色主张，不重新跑整条研判。",
-        ),
-        success_cues=(
-            "连接发起方与攻击者角色可以不同。",
-            "每个角色结论都有来源证据和置信边界。",
-            "角色不确定只阻断依赖精确目标的动作，不拖垮有效风险结论。",
-        ),
-        targets=(
-            _TargetSpec(
-                target_id="reverse-shell-direction",
-                label="Linux 反弹 Shell · TCP/9092",
-                source_type="ndr",
-                expected_group_id="CG-A9FFA42B4E59",
-                primary_alert_id="2452775",
-                rehearsal_alert_ids=("2452775", "2460276"),
-            ),
-        ),
-    ),
-    _ChapterSpec(
-        chapter_id="weak-evidence-boundary",
-        sequence=6,
-        tier="backup",
-        title="可疑邮件：证据不足时不制造伪经验",
-        objective="展示 Runtime 仍会给出当前判断，但弱指纹样本不会因为数量多就自动获得决策型 Memory。",
-        presenter_note="用于回答‘系统会不会把每条告警都记住’：不会，重复次数不能替代行为特征和人工治理。",
-        capabilities=("弱证据边界", "Memory Admission", "人工核查项", "防知识污染"),
-        operator_steps=(
-            "定位 1965802 并运行。",
-            "查看 Runtime 当前结论和 evidence gaps。",
-            "查看 Pattern 区域，说明 fingerprint_missing 不能进入决策型候选。",
-        ),
-        success_cues=(
-            "Runtime 有结论，Memory 准入可以同时拒绝沉淀。",
-            "六条同规则告警不会自动变成六条 Memory。",
-            "系统明确显示缺口，不用 suspicious 掩盖工程失败。",
-        ),
-        targets=(
-            _TargetSpec(
-                target_id="siem-suspicious-email",
-                label="SIEM 可疑邮件 · 弱行为信号",
-                source_type="siem",
-                expected_group_id="CG-61EC01772108",
-                primary_alert_id="1965802",
-                rehearsal_alert_ids=("1965802",),
-            ),
-        ),
-    ),
-    _ChapterSpec(
-        chapter_id="cross-source-hids",
-        sequence=7,
-        tier="backup",
-        title="HIDS 进程链：厂商字段止于 Adapter",
-        objective="展示 HIDS 进程、主机和命令行为如何进入通用实体/事实契约。",
-        presenter_note="用于回答‘换一个日志供应商还能不能工作’：新增 Adapter，不修改通用 Runtime。",
-        capabilities=("HIDS Adapter", "进程观察", "事实溯源", "跨厂商扩展"),
-        operator_steps=(
-            "定位并运行 1965448。",
-            "查看原始 message、规范化结果和进程事实。",
-            "指出 PingAn 字段名只存在于 Adapter provenance，通用层只消费 typed contract。",
-        ),
-        success_cues=(
-            "java、systemd、chattr 等观察带原始路径溯源。",
-            "上游原始 payload 仍完整保留。",
-            "接入新厂商只需实现同一 Normalizer/Provider 协议。",
-        ),
-        targets=(
-            _TargetSpec(
-                target_id="hids-process-chain",
-                label="HIDS Web 命令执行 · java/systemd/chattr",
-                source_type="hids",
-                expected_group_id="CG-C6D5EC376E28",
-                primary_alert_id="1965448",
-                rehearsal_alert_ids=("1965448",),
+                primary_alert_id="2455998",
+                rehearsal_alert_ids=(
+                    "2445395",
+                    "2448168",
+                    "2457097",
+                    "2457177",
+                    "2457581",
+                    "2455998",
+                ),
             ),
         ),
     ),
@@ -345,6 +204,7 @@ def build_soc_leadership_demo_guide(
                 chapter_id=chapter.chapter_id,
                 sequence=chapter.sequence,
                 tier=chapter.tier,
+                expected_memory_use=chapter.expected_memory_use,
                 title=chapter.title,
                 objective=chapter.objective,
                 presenter_note=chapter.presenter_note,
@@ -365,6 +225,7 @@ def build_soc_leadership_demo_guide(
 __all__ = [
     "SOC_LEADERSHIP_DEMO_GUIDE_VERSION",
     "SocLeadershipDemoChapter",
+    "SocLeadershipDemoExpectedMemoryUse",
     "SocLeadershipDemoGuide",
     "SocLeadershipDemoTarget",
     "build_soc_leadership_demo_guide",

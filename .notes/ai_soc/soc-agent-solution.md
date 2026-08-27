@@ -101,6 +101,8 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、带来源证据；默认脱敏，批准环境可显式保留原值，不等于完整 raw payload |
 | Skill 选择上下文 | Skill Context | `SocSkillContext.v2` | 当前选择清单、原因、命中特征、包内 bounded guidance、package/projection hash 与 token budget；不是完整 `SKILL.md` 正文 |
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
+| 告警研判结果 | Alert Result | `SocAlertResult` | 以 `run_id` 为身份的主读模型；每条持久化 Run 都可查看，不依赖人工任务 |
+| 人工关注级别 | Human Attention Level | `SocAlertAttentionLevel` | 区分结论可用、可见提示和真正需人工介入，不等同于模型置信度 |
 | 决策审计 | Decision Audit | `DecisionAuditRecord` | analyze/replay/correct 的判定沿革和证据策略摘要，不替代完整 run |
 | 基础研判 | Base Detection Decision | `AnalysisRun.decision` | 固定 Runtime 对当前告警形成的不可变基础判断 |
 | 租户策略判断 | Tenant Policy Decision | `TenantPolicyDecision` | 完整 Runtime/Memory 之后的独立运营判断；确定性规则优先，可选 bounded Policy Skill |
@@ -110,8 +112,8 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 动作执行 | Action Execution | `SocActionExecutionRecord` | 保存真实调用 attempt、幂等键、外部 request ID、前后状态和错误 |
 | 业务变更审计 | Mutation Audit | `SocMutationAuditRecord` | L3 服务命令的追加式审计；记录 actor、来源、原因、幂等和有界结果，不保存原始敏感 payload |
 | 预警摘要 | Alert Summary | `AlertSummary` | 轻量读模型，用于列表、关联、复核和 demo |
-| 复核队列 | Review Queue | `ReviewQueueItem` | 需要分析师看的工作项 |
-| 调查上下文 | Investigation Context | `InvestigationContext` | Review/Lead Agent/TUI/Web 共享的受控上下文 |
+| 人工介入队列 | Human Intervention Queue | `ReviewQueueItem` | 仅用于 Runtime 无法裁决的关键当前事实冲突；不是所有告警的入口 |
+| 调查上下文 | Investigation Context | `SocAlertInvestigationContext` | 以 `run_id` 聚合的受控上下文；可选附带 queue task |
 | 统一调查视图 | Unified Investigation View | `UnifiedInvestigationView` | 将分析、证据、相似预警、记忆、外部反馈拼成可读视图 |
 | 调查证据 | Investigation Evidence | `InvestigationEvidence` | 只读工具/MCP 查询结果，不直接改变 verdict |
 | 受治理上下文事实 | Governed Context Fact | `GovernedContextFact` | 共享租户、时效、来源、状态和审计信封的强类型运营事实 |
@@ -151,10 +153,10 @@ SOC Agent 有多个入口，但不能各写一套业务逻辑：
 | Entry / 入口 | User / 用户 | Purpose / 用途 | Rule / 约束 |
 | --- | --- | --- | --- |
 | CLI | Developer, maintainer | Demo, smoke, replay, correction | Thin wrapper over services |
-| TUI / terminal workbench | Analyst, operator | Queue review, context view, agent chat | DeerFlow-aligned, no independent business logic |
-| Web UI | Analyst, team lead | Review inbox, approval inbox, investigation view | Reads Gateway APIs backed by services |
-| Kafka daemon | Background ingestion | Consume strict versioned alert envelopes and create review items | Validate/unwrap only; raw source payload remains intact |
-| DeerFlow Lead Agent | Analyst chat | Ask questions around a review item, propose next steps | Uses bounded review context |
+| TUI / terminal workbench | Analyst, operator | Alert results, rare intervention, agent chat | DeerFlow-aligned, no independent business logic |
+| Web UI | Analyst, team lead | Alert investigation, Memory governance, approval inbox | Reads Gateway APIs backed by services; workflows stay separate |
+| Kafka daemon | Background ingestion | Consume strict versioned alert envelopes and create analysis runs | Validate/unwrap only; raw source payload remains intact |
+| DeerFlow Lead Agent | Analyst chat | Investigate selected work and propose next steps | Uses bounded server-owned context |
 | External systems | Zeus, old SOC platform, ticketing | Push status/reason back into SOC Agent | Source adapter maps to canonical command, then authenticated Gateway/service boundary |
 
 Gateway compatibility contract:
@@ -178,7 +180,7 @@ flowchart TB
 
     subgraph Core["🧠 SOC Core Services / 核心服务层"]
         ANALYSIS["SocAnalysisService"]
-        REVIEW["SocReviewService"]
+        REVIEW["SocReviewService<br/>alert results + rare intervention"]
         MEMORY["SocMemoryService"]
         DAEMON["SocDaemonService"]
         CHAT["SocAgentChatService<br/>deterministic chat"]
@@ -203,6 +205,8 @@ flowchart TB
     CLI --> ANALYSIS
     TUI --> REVIEW
     WEB --> REVIEW
+    WEB --> MEMORY
+    WEB --> APPROVAL
     KAFKA --> DAEMON
     LEAD --> LEAD_CHAT
     EXT --> DISPOSITION
@@ -213,7 +217,6 @@ flowchart TB
     LEAD_CHAT --> REVIEW
     LEAD_CHAT --> APPROVAL
     DISPOSITION --> REVIEW
-    REVIEW --> MEMORY
     ANALYSIS --> PIPELINE
     ANALYSIS -. "post-Runtime observer" .-> AUTOMATION
     MEMORY --> AUTOMATION
@@ -230,7 +233,7 @@ flowchart TB
 Product conclusion:
 
 - Build a full SOC work system, not only a CLI parser.
-- Keep the first usable path narrow: one alert in, reviewable investigation out.
+- Keep the first usable path narrow: one alert in, a visible run-scoped investigation out.
 - Keep all user-facing surfaces thin: CLI/Web/TUI/daemon call the same service layer.
 - Keep DeerFlow reusable: SOC Lead Agent should use DeerFlow `lead_agent` profile/skills/MCP path, not a separate LangGraph clone unless proven necessary.
 
@@ -253,18 +256,20 @@ flowchart TD
     F --> A1["🪪 7. Governed Context Enrichment<br/>campaign / participant / authorization"]
     A1 --> G["📚 8. Context Assembly<br/>similar alerts / evidence / memory / external feedback"]
     G --> D1["⚖️ 9. Disposition Reconciliation<br/>detection truth != operational disposition"]
-    D1 --> H{"⚙️ 10. Effective Decision + Routing<br/>Memory directive optional"}
-    H -->|"yes"| H1["Review Queue<br/>conclusion + gaps + checklist"]
+    D1 --> H["⚙️ 10. Effective Decision<br/>Memory directive optional"]
+    H --> R["🔎 Alert Result<br/>run_id + conclusion + gaps + checklist"]
+    R --> C{"⚙️ Critical current-fact conflict<br/>仍无法裁决?"}
+    C -->|"no"| C0["✅ Result remains usable/advisory<br/>不制造人工待办"]
+    C -->|"yes"| H1["🧑‍💻 Human Intervention Queue<br/>只解决关键事实冲突"]
+    R -->|"optional correction"| J["📝 11. Audit + State Update<br/>decision lineage"]
+    H1 -->|"final judgment"| J
     H -->|"exact governed match"| H2["Shadow / policy-gated disposition<br/>closed_benign_true_positive candidate"]
-    H1 --> I{"✅ Analyst action<br/>复核动作"}
-    H2 --> I
-    I -->|"correct / close / note"| J["📝 11. Audit + State Update<br/>status / reason / trace"]
     H -->|"reviewed automatic policy"| K0["🔐 Automatic Authorization<br/>Memory not required"]
-    I -->|"human-approval policy"| K["🛂 Approval Inbox<br/>request -> grant -> action boundary"]
-    J --> L["🧬 12. Memory Candidate<br/>pending_review only"]
-    K --> J
+    H -->|"human-approval policy"| K["🛂 Approval Inbox<br/>independent request -> grant -> action boundary"]
     K0 --> K1["⚡ Exact Action Adapter<br/>idempotent execution"]
     K1 --> J
+    R -->|"explicit promote"| L["🧬 12. Memory Candidate<br/>pending_review only"]
+    H2 --> J
     L --> M{"👤 Memory Review<br/>人工确认"}
     M -->|"confirm"| N["📖 Confirmed Memory<br/>default retrieval-disabled"]
     N --> P["🛡️ Governed Activation<br/>role + reason + version + validity + review"]
@@ -275,7 +280,12 @@ flowchart TD
 Important behavior:
 
 - A result must still be produced even when tools are unavailable.
-- Missing evidence should become explicit evidence gaps and human checklist items.
+- Missing evidence should become explicit evidence gaps and human checklist items on the result; it
+  does not automatically become a human task.
+- Every persisted run is accessible through `SocAlertResult` and run-scoped context. ReviewQueue is
+  optional and only admits unresolved material current-fact conflicts.
+- Correction, Memory Candidate review, high-risk action approval, quality sampling, and parser
+  maintenance are separate operator jobs with separate commands and audit trails.
 - Historical similar alerts, external feedback, and confirmed memory are not fallback-only;
   they are part of the normal investigation context.
 - Tool results are evidence. They do not silently mutate verdict, memory, or status.
@@ -311,7 +321,7 @@ Important behavior:
 | Service / 服务 | Public role / 对外角色 | Review focus / 评审重点 |
 | --- | --- | --- |
 | `SocAnalysisService` | Analyze alert, replay run, update summary | Runtime determinism, trace, validation |
-| `SocReviewService` | Review queue, correction, notes, investigation context | State transition, audit, memory candidate bridge |
+| `SocReviewService` | Alert-result reads by `run_id`, rare human-intervention queue, correction, notes, investigation context | Optional-task semantics, state transition, audit, memory candidate bridge |
 | `SocMemoryService` | Candidate review, governed retrieval activation, confirmed memory retrieval | Human confirmation, optimistic concurrency, validity/review and audit boundary |
 | `SocAutomationService` | Reconcile base/effective decision, disposition, action authorization and execution after Runtime | Default-off policy, Memory directive gates, exact adapter, before/after lineage, idempotency |
 | `SocDaemonService` | Background ingestion orchestration | Idempotency, backoff, worker result |
@@ -343,7 +353,7 @@ flowchart TD
     L --> V["8. schema_validate<br/>JSON + Pydantic + domain"]
     V --> G["9. evidence_grounding<br/>claim value -> bounded context path"]
     G --> R["10. SocDecisionPolicy<br/>immutable base decision guards"]
-    R --> P["🔒 Atomic analysis bundle<br/>run + summary + review + audit"]
+    R --> P["🔒 Atomic analysis bundle<br/>run + summary + optional review + audit"]
     L -->|failure| E["⚠️ RuntimeFailure<br/>typed + sanitized + retryable"]
     E --> P
     J -->|process loss| I["⏸️ Discoverable running run<br/>stale -> interrupted -> recover/replay"]
@@ -460,7 +470,8 @@ Runtime rules:
   new replay run and records `replay_of_run_id`; it never turns the original run into the new result.
 - Runtime failures are stored as `RuntimeFailure(kind, step_name, retryable, safe message)`. Retryable
   Kafka failures do not commit the offset or open a duplicate analyst queue; non-retryable failures
-  are dead-lettered and enter ReviewQueue.
+  are dead-lettered and remain visible as failed alert results plus operational diagnostics. A
+  transport/runtime failure does not manufacture analyst work.
 - The primary business write is one transaction through `AnalysisPersistence.save_analysis_bundle()`:
   `AnalysisRun`, `AlertSummary`, optional `ReviewQueueItem`, and `DecisionAuditRecord` either all
   commit or all roll back. Normalization maintenance remains a fail-open post-write side path.
@@ -725,7 +736,7 @@ The system has several confidence-like values, but they are not interchangeable 
 | `Decision.confidence_source` | Provenance of the raw decision score | Distinguishes stub heuristic, LLM self-report, human confirmation, and external disposition |
 | Correction confirmation strength | Human/external categorical confirmation, optionally supplied by an analyst | Always uncalibrated; policy/explanation/source travel with the number |
 | `Decision.calibrated_probability` | Versioned calibrated probability, when an approved profile exists | Currently `null`; it must never be fabricated from raw analyzer confidence |
-| `Decision.evidence_state` / `review_reasons` | Operational evidence guard and structured review causes | Drives ReviewQueue/audit explanations independently of the numeric score |
+| `Decision.evidence_state` / `review_reasons` | Operational evidence guard and structured attention causes | Drives result usability, capability guards and audit explanations; only unresolved material current-fact conflict admits a ReviewQueue task |
 | `AnalysisEvidenceGroundingReport` | Whether each analyzer evidence/reasoning reference resolves to the exact bounded catalog tuple | Validates reference integrity only; it does not re-judge the model's supported security inference |
 | `AnalysisMaterialityReport` | Whether a defect affects the decision core or only a downstream capability | Core defects force review; optional defects block only scenario/direction/target/action capabilities that depend on them |
 | `AuthorizationMatchResult` | Deterministic applicability of governed authorization facts | Drives disposition eligibility; it is not an LLM probability |
@@ -796,18 +807,17 @@ Rules:
   uncalibrated and is retained for audit/evaluation, but low or uncalibrated confidence is not itself
   a review blocker. `suspicious` and `false_positive` are complete current conclusions rather than
   automatic ReviewQueue reasons.
-- Review is reserved for explicit `unknown|needs_review` verdicts and material reliability blockers:
-  unusable/fallback core, high-value evidence gaps, critical unresolved fact conflicts, decision-core
-  reference failures, or challenged role verification. Optional-section damage and verifier
-  unresolved/unavailable preserve the current verdict while blocking only dependent capabilities.
-  The deterministic stub remains a review
-  blocker because it is not the production reasoning node.
+- Structured attention reasons remain visible for `unknown|needs_review`, unusable/fallback core,
+  high-value evidence gaps, critical unresolved fact conflicts, decision-core reference failures,
+  challenged role verification, and deterministic-stub output. They may degrade result usability or
+  block only the dependent capability. Only an unresolved material current-fact conflict creates a
+  `ReviewQueueItem`; the other conditions remain alert-result advisories or operational diagnostics.
 - Final lifecycle disposition is a separate deterministic reconciliation boundary. It may consume
   the detection decision plus `AuthorizationMatchResult`, but neither an LLM statement nor a memory
   match may directly close or suppress an alert.
-- Review reasons remain structured (`fact_conflict`, `high_value_evidence_gap`,
-  `analysis_output_degraded`, and so on), persisted in the summary/queue/audit trail, and must not be
-  replaced by one free-text reason. Historical `confidence_not_calibrated`,
+- Attention reasons remain structured (`fact_conflict`, `high_value_evidence_gap`,
+  `analysis_output_degraded`, and so on), persisted in the summary/audit trail and in an optional
+  queue item when admitted, and must not be replaced by one free-text reason. Historical `confidence_not_calibrated`,
   `raw_confidence_below_threshold`, and `false_positive_requires_confirmation` enum values remain
   readable for old records but are not emitted by v6 merely from a score or verdict label.
 - Domain/scenario findings are advisory projections, not a second review policy. When the immutable
@@ -1131,8 +1141,8 @@ D12-A cannot substitute for D12-B or close the real-provider gate.
 
 The current daily full-journey validation is the fixed ten-alert runner under
 `validation/compact_zeus/e2e/`. It uses production `SocAnalysisService`, the configured live model,
-an isolated SQLite database, simulated read-only PingAn Providers, ReviewQueue, and bounded Lead
-Agent context. It also compiles each result's `K-*` items into one
+an isolated SQLite database, simulated read-only PingAn Providers, persisted alert results, and
+bounded investigation context. It also compiles each result's `K-*` items into one
 `knowledge-review/REVIEW.md`. Exact-statement deduplication is review ergonomics only: every item
 remains `pending_review`, unresolved support is visible, and no automatic Memory/Skill/adapter/policy
 write occurs. This current v3 path supersedes the old citation shape for new runs; the D7-D11 numbers
@@ -1146,6 +1156,10 @@ and five dependent `R-*` items. The review package contains 20 `K-*` candidates;
 grounded support and three remain unresolved. This is the intended distinction between usable LLM
 reasoning and production authority: quality defects stay visible, while no candidate, mock result, or
 uncalibrated model score can authorize automation.
+
+The ten ReviewQueue rows above are historical evidence from the former admission policy. Current
+product behavior keeps those model-quality findings on the run-scoped alert result and creates a
+human-intervention task only for an unresolved material current-fact conflict.
 
 ---
 
@@ -1295,21 +1309,27 @@ All agents share SOC contracts, service boundaries, approval, and memory policy.
 
 ## 7. Review, Approval, and External Feedback / 复核、审批、外部反馈
 
-### 7.1 Review Queue / 复核队列
+### 7.1 Alert Results and Human Intervention / 告警研判与人工介入
 
-Review queue is the analyst's primary work surface.
+The primary analyst surface is the run-scoped alert result, not ReviewQueue. Every completed,
+degraded, failed, replayed, or corrected Run remains discoverable under **告警研判** with its
+current conclusion, evidence gaps, manual checks, Memory use, investigation evidence, and audit.
 
-It should show:
+`ReviewQueueItem` is a rare optional attachment. The current admission policy creates it only when
+a material current-fact conflict remains unresolved after Adapter semantics and Runtime
+adjudication. `unknown`, low confidence, missing optional enrichment, provider failure, degraded
+optional output, or a manual-check suggestion stays visible as advisory information and does not
+manufacture analyst work.
 
-- Current conclusion with confidence.
-- Evidence used and evidence gaps.
-- Scenario findings and domain triage.
-- Similar historical alerts.
-- Relevant confirmed memory.
-- Pending memory candidates.
-- External disposition history.
-- Read-only investigation evidence.
-- Human checklist and suggested next steps.
+The operator workflow is intentionally split:
+
+- **告警研判**: inspect any `run_id`, correct the current conclusion when necessary, or explicitly
+  promote the run for later experience governance.
+- **需人工介入**: resolve one critical fact conflict and close that task with one final judgment.
+- **经验审核**: review the Candidate, Business Lesson, applicability, and future retrieval/directive
+  authority. It never runs inside the alert task.
+- **动作审批**: authorize or reject a high-risk external action independently of the alert verdict.
+- **技术审计**: inspect raw contracts and lineage only when needed; it is collapsed by default.
 
 ### 7.2 Decision, Authorization, and Execution / 决策、授权与执行边界
 
@@ -2010,9 +2030,16 @@ Rules:
 - Manual promotion of a run that already owns a Pattern observation joins that exact stable Pattern lineage.
   New candidates persist the link; legacy candidates are reconciled only by exact run plus tenant/Profile/environment
   compatibility in the server read model. The link never fabricates recurrence support or rewrites stored history.
+  The recurrence threshold controls automatic Candidate creation only. Once an explicitly promoted Candidate is
+  reviewed, confirmed and retrieval-enabled, Memory Center projects that lineage as `memory_active` even when the
+  Pattern has fewer than five observations; a stale client projection must be refetched rather than changing this rule.
 - Manual promotion and correction use the same resolved tenant Profile projection as automatic Pattern learning;
   server-owned Pattern environment is frozen into applicability. This prevents a manually created candidate from
   degrading into broad `detection_key + environment` matching while automatic candidates remain behavior-scoped.
+- Exact-vs-context-only is a query-time use result, not a permanent Memory-record type. A confirmed record with a
+  reviewed `DecisionDirective` may reinforce or override only after exact typed applicability and score gates pass;
+  partial retrieval of that same record remains `context_only`. Inventory and revision pages expose the Directive
+  capability and both possible lanes so operators can review the actual authority before changing a record.
 - Candidate and query facets come from the same vendor-neutral builder. Alert/run IDs remain lineage metadata,
   never retrieval facets; a missing `rule_code` is supported through detection key, scenario, behavior fingerprint,
   role/entity and other available facets.

@@ -4,7 +4,7 @@ import { mockLangGraphAPI } from "./utils/mock-api";
 import { mockSocAPI } from "./utils/mock-soc-api";
 
 test.describe("SOC review workbench", () => {
-  test("renders the investigation and preserves mutation boundaries", async ({
+  test("resolves a critical fact conflict without mixing other workflows", async ({
     page,
   }) => {
     mockLangGraphAPI(page, { threads: [] });
@@ -13,202 +13,52 @@ test.describe("SOC review workbench", () => {
     await page.goto("/workspace/soc/review");
 
     await expect(
-      page.getByRole("heading", { name: "SOC 审核中心" }),
+      page.getByRole("heading", { name: "需人工介入" }),
     ).toBeVisible();
+    await expect(page.getByText("关键事实冲突").first()).toBeVisible();
     await expect(
       page.getByText("Reverse shell activity").first(),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "统一调查视图" }),
-    ).toBeVisible();
+      page.getByRole("link", { name: "返回完整研判" }),
+    ).toHaveAttribute("href", "/workspace/soc/alerts?run_id=RUN-ALPHA-001");
     await expect(
-      page.getByText(
-        "Local fixture returned an explicit mock reputation result.",
-      ),
-    ).toBeVisible();
-    await expect(page.getByText("只读调查附录")).toBeVisible();
-    await expect(
-      page.getByText(/Read-only investigation completed: 1 hit/),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Lead Agent" }),
+      page.getByRole("link", { name: "交给 Lead Agent 调查" }),
     ).toHaveAttribute(
       "href",
       "/workspace/agents/soc-triage/chats/new?queue_id=REV-ALPHA-001",
     );
-
-    const memorySection = page.locator("section").filter({
-      has: page.getByRole("heading", { name: "候选记忆" }),
-    });
-    await expect(memorySection.getByText("可形成决策经验")).toBeVisible();
-    await memorySection.getByRole("button", { name: /高级匹配范围/ }).click();
     await expect(
-      memorySection.getByText("系统锁定条件 / Required"),
-    ).toBeVisible();
-    await expect(
-      memorySection.getByText("可选收窄条件 / Optional Narrowing"),
-    ).toBeVisible();
-    await expect(
-      memorySection.getByText("检测键：pingan:ndr:reverse-shell"),
-    ).toBeVisible();
-    await memorySection
-      .locator("#memory-scope-MC-ALPHA-001-source_type")
-      .check();
-    await expect(
-      memorySection.getByLabel("增加匹配条件 告警来源类型"),
-    ).toBeChecked();
-    await expect(memorySection.getByText(/当前匹配公式：/)).toBeVisible();
-    await memorySection.getByRole("combobox", { name: "最终业务判断" }).click();
-    await page.getByRole("option", { name: "误报" }).click();
-    await memorySection
-      .getByLabel("业务事实（可选）")
-      .fill("Alpha reviewer confirmed the bounded lesson.");
-    await expect(
-      memorySection.getByRole("button", {
-        name: "确认并沉淀 Memory",
-        exact: true,
-      }),
+      page.getByRole("button", { name: "提交并完成介入" }),
     ).toBeDisabled();
-    const generateLessonButton = memorySection.getByRole("button", {
-      name: "AI 生成 Business Lesson",
-    });
-    await expect(generateLessonButton).toHaveAttribute(
-      "data-variant",
-      "default",
-    );
-    await generateLessonButton.click();
-    await expect(
-      page.getByText("AI 经验草稿已生成，请审核后确认"),
-    ).toBeVisible();
-    await expect(
-      memorySection.getByText(
-        "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
-      ),
-    ).toBeVisible();
-    await expect(
-      memorySection.getByText(
-        "必须匹配「检测键（detection_key）」：pingan:ndr:reverse-shell",
-      ),
-    ).toBeVisible();
-    await expect(
-      memorySection.getByText(/Required canonical facet/),
-    ).toHaveCount(0);
-    await expect(memorySection.getByText(/fixture-lesson-model/)).toBeVisible();
-    await expect(
-      memorySection.getByRole("textbox", { name: "经验结论" }),
-    ).toHaveCount(0);
-    await memorySection.getByRole("button", { name: "编辑" }).click();
-    await expect(
-      memorySection.getByRole("textbox", { name: "经验结论" }),
-    ).toHaveValue("该模式是已确认的内部服务调用，应按审核范围复用误报结论。");
-    await memorySection.getByRole("button", { name: "完成编辑" }).click();
-    await memorySection
-      .getByRole("switch", { name: "未来精确匹配改判" })
-      .click();
-    await memorySection
-      .getByRole("button", { name: "确认并沉淀 Memory", exact: true })
-      .click();
-    await expect(page.getByText("候选记忆已更新")).toBeVisible();
-
-    const retrievalSection = page.locator("section").filter({
-      has: page.getByRole("heading", {
-        name: "已沉淀 Memory / 检索治理",
-      }),
-    });
-    await retrievalSection
-      .getByLabel("治理理由")
-      .fill("Enable bounded retrieval for Alpha regression.");
-    await retrievalSection.getByRole("button", { name: "启用检索" }).click();
-    await expect(page.getByText("确认记忆检索已启用")).toBeVisible();
-
-    const approvalSection = page.locator("section").filter({
-      has: page.getByRole("heading", { name: "审批动作" }),
-    });
-    await approvalSection
-      .getByRole("button", { name: "生成审批 token" })
-      .click();
-    await expect(approvalSection.getByText("SAT-ALPHA-001")).toBeVisible();
-    await approvalSection.getByRole("button", { name: "Dry-run" }).click();
-    await expect(
-      approvalSection.getByText("Dry-run validated without side effects."),
-    ).toBeVisible();
+    await expect(page.getByText("候选记忆")).toHaveCount(0);
+    await expect(page.getByText("当前告警的动作审批")).toHaveCount(0);
 
     await page
-      .getByLabel("纠正研判")
-      .fill("Fixture confirms this is an authorized test.");
-    await page.getByRole("button", { name: "提交纠正" }).click();
-    await expect(page.getByText("人工纠正已记录")).toBeVisible();
-
-    await page.getByRole("button", { name: "关闭复核项" }).click();
-    await expect(page.getByText("复核项已关闭")).toBeVisible();
+      .getByLabel("最终判断依据")
+      .fill("Fixture resolves the conflicting current fact.");
+    await page.getByRole("button", { name: "提交并完成介入" }).click();
+    await expect(
+      page.getByText("最终判断已记录，人工介入任务已完成"),
+    ).toBeVisible();
 
     const mutationRequests = state.requests.filter((request) =>
       ["POST", "PATCH"].includes(request.method),
     );
     expect(
-      mutationRequests.find((request) =>
-        request.path.endsWith("/MC-ALPHA-001/lesson-draft"),
-      )?.body,
-    ).toMatchObject({
-      reviewer_verdict: "false_positive",
-      reviewer_context: "Alpha reviewer confirmed the bounded lesson.",
-      promoted_facet_keys: ["source_type"],
-    });
-    expect(
-      mutationRequests.find((request) =>
-        request.path.endsWith("/MC-ALPHA-001/review"),
-      )?.body,
-    ).toMatchObject({
-      decision: "confirm",
-      apply_to_future_matches: true,
-      confirmed_verdict: "false_positive",
-      clear_review_on_match: true,
-      record_lesson: {
-        schema_version: "soc.memory_business_lesson.v1",
-        conclusion: "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
-        business_rationale: ["运营专家已核对当前告警证据和内部服务登记信息。"],
-        applicability_conditions: [
-          "必须匹配「检测键（detection_key）」：pingan:ndr:reverse-shell",
-          "必须匹配「行为指纹（behavior_fingerprint）」：behavior-alpha",
-          "必须匹配「运行环境（environment）」：生产环境（prd）",
-          "必须匹配「告警来源类型（source_type）」：网络入侵检测（nids）",
-        ],
-        generalization_boundaries: ["审核范围未约束的源和目的 IP 可以变化。"],
-        invalidation_conditions: [
-          "必需 facet 不匹配或当前证据出现反证时失效。",
-        ],
-        handling_guidance: ["全部适用条件命中时复用误报结论，否则重新研判。"],
-      },
-      record_applicability: {
-        required_facets: {
-          source_type: ["nids"],
-          detection_key: ["pingan:ndr:reverse-shell"],
-          behavior_fingerprint: ["behavior-alpha"],
-          environment: ["prd"],
-        },
-      },
-    });
-    expect(
-      mutationRequests.find((request) =>
-        request.path.endsWith("/MEM-ALPHA-001/retrieval"),
-      )?.body,
-    ).toMatchObject({ action: "enable", expected_record_version: 1 });
-    expect(
-      mutationRequests.find((request) =>
-        request.path.endsWith("/approvals/grants"),
-      )?.body,
-    ).toMatchObject({ approval_request_id: "APR-ALPHA-001" });
-    expect(
       mutationRequests.find((request) => request.path.endsWith("/correct"))
         ?.body,
-    ).toMatchObject({ verdict: "false_positive" });
+    ).toMatchObject({ verdict: "suspicious" });
     expect(
-      mutationRequests
-        .filter(
-          (request) => request.path !== "/api/soc/approvals/actions/dry-run",
-        )
-        .every((request) => request.idempotencyKey),
-    ).toBe(true);
+      mutationRequests.some(
+        (request) =>
+          request.path.includes("/memory/") ||
+          request.path.includes("/approvals/"),
+      ),
+    ).toBe(false);
+    expect(mutationRequests.every((request) => request.idempotencyKey)).toBe(
+      true,
+    );
   });
 
   test("opens only manifest-selected sample work and records an explicit outcome", async ({
@@ -217,8 +67,7 @@ test.describe("SOC review workbench", () => {
     mockLangGraphAPI(page, { threads: [] });
     const state = await mockSocAPI(page, { queueStatus: "closed" });
 
-    await page.goto("/workspace/soc/review");
-    await page.getByRole("radio", { name: "抽样复核批次" }).click();
+    await page.goto("/workspace/soc/review/samples");
 
     await expect(page.getByText("DSAMPLE-ALPHA-001").first()).toBeVisible();
     await expect(page.getByText("#1 DPROP-ALPHA-001")).toBeVisible();
@@ -298,14 +147,12 @@ test.describe("SOC review workbench", () => {
 
     await page.goto("/workspace/soc/review?candidate_id=MC-ALPHA-001");
 
+    await expect(page.getByRole("heading", { name: "经验审核" })).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "SOC 审核中心" }),
+      page.getByRole("link", { name: "返回经验中心" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("radio", { name: "候选经验审核" }),
-    ).toBeChecked();
-    await expect(
-      page.getByRole("heading", { name: "Memory Candidate 治理" }),
+      page.getByRole("heading", { name: "经验候选审核" }),
     ).toBeVisible();
     await expect(page.getByText("MC-ALPHA-001", { exact: true })).toBeVisible();
     await expect(
@@ -359,13 +206,13 @@ test.describe("SOC review workbench", () => {
       candidateSection.getByText("3. 选择未来用途", { exact: true }),
     ).toBeVisible();
     await expect(
-      candidateSection.getByText("仅供模型参考，不改判", { exact: true }),
+      candidateSection.getByText("仅供研判参考，不改判", { exact: true }),
     ).toBeVisible();
     await candidateSection
       .getByRole("switch", { name: "允许精确匹配时参与最终结论" })
       .click();
     await expect(
-      candidateSection.getByText("精确匹配后可参与结论", { exact: true }),
+      candidateSection.getByText("精确匹配时复用审核结论", { exact: true }),
     ).toBeVisible();
     await expect(
       candidateSection.getByRole("button", { name: "确认并沉淀 Memory" }),
@@ -396,7 +243,7 @@ test.describe("SOC review workbench", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(
-      page.getByRole("heading", { name: "Memory Candidate 治理" }),
+      page.getByRole("heading", { name: "经验候选审核" }),
     ).toBeVisible();
     await expect(
       page.evaluate(
