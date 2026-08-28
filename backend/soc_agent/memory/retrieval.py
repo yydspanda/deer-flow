@@ -288,6 +288,7 @@ def _memory_context_comparison(
     return AnalysisMemoryContextComparison(
         use_mode=use_mode,
         applicability_status=report.status if report is not None else None,
+        reviewed_verdict=match.record.reviewed_verdict,
         decision_directive_applicable=directive_applicable,
         shared_facets=shared,
         current_only_facets=current_only,

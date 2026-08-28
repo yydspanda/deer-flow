@@ -1172,6 +1172,9 @@ export interface SocCorpusWorkbenchMemoryContext {
   label: string;
   source_id: string;
   summary: string;
+  use_mode?: "directive_applicable" | "exact_context" | "context_only" | null;
+  applicability_status?: "applicable" | "partial" | "inapplicable" | null;
+  reviewed_verdict?: SocVerdict | null;
 }
 
 export interface SocCorpusWorkbenchDecisionStage {
@@ -1316,6 +1319,7 @@ export interface SocCorpusWorkbenchAlert {
     | "failed";
   can_process: boolean;
   blocked_by_alert_id?: string | null;
+  active_execution?: SocCorpusWorkbenchActiveExecution | null;
   run_id?: string | null;
   replay_of_run_id?: string | null;
   analysis_status?: string | null;
@@ -1364,6 +1368,25 @@ export interface SocCorpusWorkbenchAlert {
   effective_label_comparison: SocCorpusComparisonStatus;
   base_projection_basis?: string | null;
   effective_projection_basis?: string | null;
+}
+
+export interface SocCorpusWorkbenchActiveExecution {
+  execution_id: string;
+  alert_id: string;
+  status: "running";
+  actor_id: string;
+  actor_surface: string;
+  request_id: string;
+  started_at: string;
+  elapsed_ms: number;
+}
+
+export interface SocCorpusWorkbenchActivity {
+  schema_version: "soc.corpus_dev_activity.v1";
+  active_count: number;
+  max_concurrent_executions: number;
+  available_slots: number;
+  executions: SocCorpusWorkbenchActiveExecution[];
 }
 
 export interface SocCorpusWorkbenchGroup {

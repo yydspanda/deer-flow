@@ -11,7 +11,6 @@ from typing import Any
 from soc_agent.contracts import (
     ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
     AlertSourceType,
-    AnalysisMemoryUseMode,
     LLMAnalysisRequest,
     RoleCoherenceStatus,
     Verdict,
@@ -22,7 +21,7 @@ from soc_agent.model_reference_aliases import (
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v37"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v38"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -36,8 +35,12 @@ _NETWORK_SOURCE_TYPES = frozenset(
 _MEMORY_REASONING_GUIDANCE = """<memory_reasoning_rules>
 - M-* is reviewed historical experience, not current-alert evidence; current-event claims still require E-* references.
 - memory_comparison is deterministic: shared_facets are exact common conditions; current_only_facets and memory_only_facets are deltas; excluded_facet_hits and lesson invalidation conditions are blockers.
+- reviewed_verdict is the human-confirmed outcome of the historical lesson. It is a strong prior when the typed applicability contract is fully satisfied, but it is not proof that an uncited current event occurred.
 - context_only forbids a deterministic Memory directive, not semantic use.
   If core behavior and applicability conditions match, deltas are non-material, and no invalidation condition appears, M-* may support any Base verdict. Cite it in decision_context_refs when used.
+- exact_context with applicability_status=applicable, no missing required facets, and no excluded facet hit means every reviewer-approved machine condition matches.
+  Start from reviewed_verdict in that case. Depart from it only when exact current E-* evidence establishes a material behavior difference or triggers a stated invalidation condition, and identify that evidence in the reason.
+  A changed IP/host/account, repeated connection count, or detector wording already represented by shared facets is not by itself a contradiction.
 - Material changes in service, vulnerability, behavior family, execution result, or authorization scope block conclusion transfer. Explain the difference and decide from current evidence.
 - directive_applicable only permits a later Runtime stage to apply a reviewed directive. The analyzer still produces an independent Base Decision and never authorizes an action.
 - Never choose suspicious only because Memory is context-only, lacks directive authority, or has another host/account/IP.
@@ -320,6 +323,27 @@ _ANALYSIS_OUTPUT_EXAMPLES: dict[str, dict[str, Any]] = {
     },
 }
 
+_CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE = deepcopy(_ANALYSIS_OUTPUT_EXAMPLES["context_memory"])
+_CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE.update(
+    {
+        "verdict": "true_positive",
+        "confidence": 0.9,
+        "summary": "当前行为与已复核的恶意活动模式及其适用条件一致，当前证据没有显示失效条件。",
+        "reason": "该 M-* 的人工确认结论为真实风险，确定性比较显示全部必需条件命中且没有实质差异或失效命中；当前 E-* 证据与该经验一致，因此支持 Base true_positive 判断。",
+        "recommended_action": "保留真实风险结论，并由后续 Runtime 根据角色、租户策略和动作权限决定处置。",
+    }
+)
+_CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE["scenario_assessments"][0].update(
+    {
+        "scenario_name": "已复核恶意活动模式再次出现",
+        "scenario_key": "reviewed_malicious_pattern_recurrence",
+        "confidence": 0.9,
+        "rationale": "当前行为与已复核真实风险经验共享检测身份、核心服务和行为族，差异仅为不影响语义的端点值，且没有命中经验失效条件。",
+        "competing_explanations": ["若当前存在有效授权事实或经验失效条件，则需重新判断"],
+    }
+)
+_ANALYSIS_OUTPUT_EXAMPLES["context_memory_true_positive"] = _CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE
+
 
 class AnalysisPromptSizeError(ValueError):
     """Raised when bounded projections still exceed the model context guard."""
@@ -386,8 +410,13 @@ def _select_analysis_output_example(request: LLMAnalysisRequest) -> str:
     role_coherence_status = request.fact_reconstruction.role_coherence.status
     if request.conflict_count > 0 or role_coherence_status is RoleCoherenceStatus.CONFLICTED:
         return "conflicted"
-    if any(item.memory_comparison is not None and item.memory_comparison.use_mode is AnalysisMemoryUseMode.CONTEXT_ONLY for item in request.context_catalog):
-        return "context_memory"
+    memory_comparisons = [item.memory_comparison for item in request.context_catalog if item.memory_comparison is not None]
+    if memory_comparisons:
+        reviewed_verdicts = {item.reviewed_verdict for item in memory_comparisons if item.reviewed_verdict is not None}
+        if reviewed_verdicts == {Verdict.TRUE_POSITIVE}:
+            return "context_memory_true_positive"
+        if not reviewed_verdicts or reviewed_verdicts == {Verdict.FALSE_POSITIVE}:
+            return "context_memory"
     network = request.canonical_entities.network
     if request.source.source_type in _NETWORK_SOURCE_TYPES or any(
         (

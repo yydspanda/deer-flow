@@ -12,6 +12,7 @@ import type {
   SocAlertResult,
   SocAlertResultListResponse,
   SocAnalysisRun,
+  SocCorpusWorkbenchActivity,
   SocCorpusWorkbenchAuditBundle,
   SocCorpusWorkbenchExecution,
   SocCorpusWorkbenchProcessResult,
@@ -265,6 +266,19 @@ export async function getSocCorpusWorkbenchState(
   return readJson<SocCorpusWorkbenchState>(
     response,
     "Failed to load SOC Corpus DEV workbench",
+  );
+}
+
+export async function getSocCorpusWorkbenchActivity(
+  context?: SocRequestContext,
+): Promise<SocCorpusWorkbenchActivity> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/activity`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocCorpusWorkbenchActivity>(
+    response,
+    "Failed to load SOC corpus activity",
   );
 }
 

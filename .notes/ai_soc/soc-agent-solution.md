@@ -932,14 +932,14 @@ export SOC_ROLE_VERIFIER_MODEL=deepseek-v4-pro
 export SOC_ROLE_VERIFIER_MIN_CONFIDENCE=0.35
 ```
 
-`soc-analysis-v37` asks the model for compact `soc.analysis_model_output.v4`: verdict, confidence,
+`soc-analysis-v38` asks the model for compact `soc.analysis_model_output.v4`: verdict, confidence,
 summary, reason, recommendation, request-local decision aliases such as `E-001`, and optional
 `S/A/M/C/T-001` aliases. Stable trust/method/reference rules stay in the system message; the bounded
 alert context comes first in the user message, while the task, exact response shape, and final checklist
 remain at the tail. Scenario/direction/role sections use exact key contracts, and role objects copy only
 the selected catalog item's `evidence_ref` into `entity_ref`. The Prompt Builder selects exactly one
-complete machine-validated synthetic shape example (`context_memory`, `network_roles`, `non_network`,
-or `conflicted`) and
+complete machine-validated synthetic shape example (`context_memory`,
+`context_memory_true_positive`, `network_roles`, `non_network`, or `conflicted`) and
 records `prompt_example_id`; example-only `EX-*` references are forbidden in the response. It does not
 allow example verdict/scenario/direction/role/confidence/action values to substitute for current-alert
 analysis and never asks the model to copy long stable hash IDs. A separate compact calibration block
@@ -950,6 +950,13 @@ references, exact evidence path/value tuples and core reasoning `R-00`. Stable I
 persistence/Grounding/replay identity; exact alias restoration is normal hydration and unknown aliases
 still fail. The compact response always carries scenario, direction, role, gap and manual-check sections;
 valid empty/not-assessed forms are used when a section has no applicable finding.
+For every reviewed Memory, `AnalysisMemoryContextComparison` now exposes the reviewer-confirmed
+`reviewed_verdict` beside typed applicability. A fully applicable `exact_context` is a strong semantic
+prior for the model-owned Base Decision: the model may depart from it only when current `E-*` evidence
+shows a material difference or a Business Lesson invalidation condition. This does not create a
+Directive, change Tenant Policy priority, or authorize an action. Prompt example selection applies to
+all Memory use modes rather than only partial `context_only` matches, and balances reviewed
+false-positive and true-positive lessons to avoid a default-suspicious or default-benign anchor.
 `reference_catalogs.role_entities` separately exposes only Runtime-typed canonical/extracted entities;
 raw vendor field names, ports, counters, timestamps and event IDs remain ordinary evidence.
 The model-visible projection presents parsed JSON evidence as objects instead of escaped strings and starts

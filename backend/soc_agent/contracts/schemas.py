@@ -546,6 +546,7 @@ class AnalysisMemoryContextComparison(BaseModel):
     schema_version: Literal["soc.analysis_memory_context_comparison.v1"] = "soc.analysis_memory_context_comparison.v1"
     use_mode: AnalysisMemoryUseMode
     applicability_status: SocMemoryApplicabilityStatus | None = None
+    reviewed_verdict: Verdict | None = None
     decision_directive_applicable: bool = False
     shared_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
     current_only_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)

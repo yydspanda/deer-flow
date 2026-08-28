@@ -10,11 +10,14 @@ import re
 import sqlite3
 import zlib
 from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -109,6 +112,31 @@ class SocCorpusWorkbenchError(ValueError):
     """Base error for an invalid local corpus workbench operation."""
 
 
+class SocCorpusWorkbenchBusyError(SocCorpusWorkbenchError):
+    """Raised when another request already owns the alert execution slot."""
+
+    def __init__(
+        self,
+        active_execution: SocCorpusWorkbenchActiveExecution,
+    ) -> None:
+        self.active_execution = active_execution
+        super().__init__(f"alert {active_execution.alert_id} is already running for actor {active_execution.actor_id}")
+
+
+class SocCorpusWorkbenchCapacityError(SocCorpusWorkbenchError):
+    """Raised when the bounded DEV execution capacity is exhausted."""
+
+
+@dataclass(frozen=True)
+class _ActiveExecutionClaim:
+    execution_id: str
+    alert_id: str
+    actor_id: str
+    actor_surface: str
+    request_id: str
+    started_at: datetime
+
+
 @dataclass(frozen=True)
 class _CorpusCase:
     alert_id: str
@@ -148,6 +176,33 @@ class _CorpusCase:
     group_alert_count: int = 1
     window_alert_count: int = 1
     readiness: CorpusReadiness = "fingerprint_missing"
+
+
+class SocCorpusWorkbenchActiveExecution(BaseModel):
+    """Lightweight DEV projection of one currently claimed alert run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    execution_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    status: Literal["running"] = "running"
+    actor_id: str = Field(min_length=1, max_length=128)
+    actor_surface: str = Field(min_length=1, max_length=32)
+    request_id: str = Field(min_length=1, max_length=256)
+    started_at: str
+    elapsed_ms: int = Field(ge=0)
+
+
+class SocCorpusWorkbenchActivity(BaseModel):
+    """Small polling contract for cross-session DEV execution visibility."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.corpus_dev_activity.v1"] = "soc.corpus_dev_activity.v1"
+    active_count: int = Field(ge=0)
+    max_concurrent_executions: int = Field(ge=1)
+    available_slots: int = Field(ge=0)
+    executions: list[SocCorpusWorkbenchActiveExecution] = Field(default_factory=list)
 
 
 class SocCorpusWorkbenchSafety(BaseModel):
@@ -371,6 +426,9 @@ class SocCorpusWorkbenchMemoryContext(BaseModel):
     label: str
     source_id: str
     summary: str
+    use_mode: str | None = None
+    applicability_status: str | None = None
+    reviewed_verdict: str | None = None
 
 
 class SocCorpusWorkbenchDecisionStage(BaseModel):
@@ -425,6 +483,7 @@ class SocCorpusWorkbenchAlert(BaseModel):
     ]
     can_process: bool
     blocked_by_alert_id: str | None = None
+    active_execution: SocCorpusWorkbenchActiveExecution | None = None
     run_id: str | None = None
     replay_of_run_id: str | None = None
     analysis_status: str | None = None
@@ -539,10 +598,22 @@ class SocCorpusWorkbenchService:
             index_path=self._index_path,
         )
         self._payload_cache: OrderedDict[str, dict[str, Any]] = OrderedDict((item.alert_id, item.payload) for item in self._cases.values() if item.payload is not None)
+        self._payload_cache_lock = Lock()
         self._payload_store_path, self._payload_store_sha256 = _resolve_payload_store(self._index_path) if self._index_path.is_file() else (None, None)
         self._index_sha256 = _sha256_file(self._index_path) if self._index_path.is_file() else None
+        self._execution_lock = Lock()
+        self._active_executions: dict[str, _ActiveExecutionClaim] = {}
+        self._max_concurrent_executions = settings.max_concurrency
 
     def get_state(self) -> SocCorpusWorkbenchState:
+        return self._get_state()
+
+    def _get_state(
+        self,
+        *,
+        exclude_active_alert_id: str | None = None,
+    ) -> SocCorpusWorkbenchState:
+        active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
         observations_by_alert = self._observations_by_alert()
         runs = self._runs_by_alert()
         queues_by_run = {item.run_id: item for item in self._repository.list_review_items(status=None, limit=10_000)}
@@ -576,8 +647,9 @@ class SocCorpusWorkbenchService:
                 candidate_by_source=candidate_by_source,
                 manual_candidate_by_run=manual_candidate_by_run,
                 record_by_candidate=record_by_candidate,
-                can_process=(runs.get(case.alert_id) is None or runs[case.alert_id].status is not AnalysisRunStatus.RUNNING),
+                can_process=(case.alert_id not in active_executions and (runs.get(case.alert_id) is None or runs[case.alert_id].status is not AnalysisRunStatus.RUNNING)),
                 blocked_by_alert_id=None,
+                active_execution=active_executions.get(case.alert_id),
             )
             for case in self._cases.values()
         ]
@@ -620,6 +692,106 @@ class SocCorpusWorkbenchService:
             alerts=alerts,
         )
 
+    def get_activity(self) -> SocCorpusWorkbenchActivity:
+        """Return active alert claims without rebuilding the complete corpus view."""
+
+        now = datetime.now(UTC)
+        with self._execution_lock:
+            claims = tuple(self._active_executions.values())
+        executions = [
+            self._active_execution_view(claim, now=now)
+            for claim in sorted(
+                claims,
+                key=lambda item: (item.started_at, item.alert_id),
+            )
+        ]
+        active_count = len(executions)
+        return SocCorpusWorkbenchActivity(
+            active_count=active_count,
+            max_concurrent_executions=self._max_concurrent_executions,
+            available_slots=max(
+                0,
+                self._max_concurrent_executions - active_count,
+            ),
+            executions=executions,
+        )
+
+    @contextmanager
+    def _claim_execution(
+        self,
+        alert_id: str,
+        *,
+        context: ServiceRequestContext,
+    ) -> Iterator[_ActiveExecutionClaim]:
+        claim = _ActiveExecutionClaim(
+            execution_id=f"CWE-{uuid4().hex[:12].upper()}",
+            alert_id=alert_id,
+            actor_id=context.actor.actor_id,
+            actor_surface=context.actor.surface.value,
+            request_id=context.request_id,
+            started_at=datetime.now(UTC),
+        )
+        with self._execution_lock:
+            existing = self._active_executions.get(alert_id)
+            if existing is not None:
+                raise SocCorpusWorkbenchBusyError(
+                    self._active_execution_view(
+                        existing,
+                        now=datetime.now(UTC),
+                    )
+                )
+            if len(self._active_executions) >= self._max_concurrent_executions:
+                raise SocCorpusWorkbenchCapacityError("SOC DEV corpus execution capacity is full; wait for an active alert to finish")
+            self._active_executions[alert_id] = claim
+        try:
+            yield claim
+        finally:
+            with self._execution_lock:
+                current = self._active_executions.get(alert_id)
+                if current is not None and current.execution_id == claim.execution_id:
+                    self._active_executions.pop(alert_id, None)
+
+    @staticmethod
+    def _active_execution_view(
+        claim: _ActiveExecutionClaim,
+        *,
+        now: datetime,
+    ) -> SocCorpusWorkbenchActiveExecution:
+        return SocCorpusWorkbenchActiveExecution(
+            execution_id=claim.execution_id,
+            alert_id=claim.alert_id,
+            actor_id=claim.actor_id,
+            actor_surface=claim.actor_surface,
+            request_id=claim.request_id,
+            started_at=claim.started_at.isoformat(),
+            elapsed_ms=max(
+                0,
+                int((now - claim.started_at).total_seconds() * 1000),
+            ),
+        )
+
+    def _persisted_running_execution(
+        self,
+        alert: SocCorpusWorkbenchAlert,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocCorpusWorkbenchActiveExecution:
+        run = self._repository.get_run(alert.run_id) if alert.run_id is not None else None
+        journal = run.request_journal if run is not None else None
+        started_at = run.started_at if run is not None else datetime.now(UTC)
+        return SocCorpusWorkbenchActiveExecution(
+            execution_id=(run.run_id if run is not None else f"CWE-{alert.alert_id}"),
+            alert_id=alert.alert_id,
+            actor_id=(journal.actor.actor_id if journal is not None else context.actor.actor_id),
+            actor_surface=(journal.actor.surface.value if journal is not None else context.actor.surface.value),
+            request_id=(journal.request_id if journal is not None else context.request_id),
+            started_at=started_at.isoformat(),
+            elapsed_ms=max(
+                0,
+                int((datetime.now(UTC) - started_at).total_seconds() * 1000),
+            ),
+        )
+
     def process_alert(
         self,
         alert_id: str,
@@ -631,74 +803,73 @@ class SocCorpusWorkbenchService:
             raise SocCorpusWorkbenchError(f"alert {alert_id!r} is not part of the configured DEV corpus")
         if "soc_admin" not in context.actor.roles:
             raise SocCorpusWorkbenchError("the DEV corpus workbench requires the soc_admin role")
-        before = self.get_state()
-        current = next(item for item in before.alerts if item.alert_id == alert_id)
-        if not current.can_process:
-            raise SocCorpusWorkbenchError(f"alert {alert_id} already has a running Runtime execution")
+        observation_id: str | None = None
+        pattern_observation_reused = False
+        idempotent = False
+        with self._claim_execution(alert_id, context=context):
+            before = self._get_state(exclude_active_alert_id=alert_id)
+            current = next(item for item in before.alerts if item.alert_id == alert_id)
+            if not current.can_process:
+                raise SocCorpusWorkbenchBusyError(self._persisted_running_execution(current, context=context))
 
-        if current.run_id is None:
-            execution_mode: Literal["initial", "rerun", "pattern_resume"] = "initial"
-            request_context = context.model_copy(update={"idempotency_key": self._analysis_idempotency_key(alert_id)})
-            run = self._analysis_service.analyze(
-                copy.deepcopy(self._payload_for_case(case)),
-                context=request_context,
-            )
-        elif current.workflow_state == "analysis_only":
-            execution_mode = "pattern_resume"
-            request_context = context
-            run = self._repository.get_run(current.run_id)
-            if run is None:
-                raise SocCorpusWorkbenchError(f"alert {alert_id} Runtime run {current.run_id} no longer exists")
-        else:
-            execution_mode = "rerun"
-            request_context = context.model_copy(
-                update={
-                    "idempotency_key": self._rerun_idempotency_key(
-                        alert_id,
-                        context=context,
+            if current.run_id is None:
+                execution_mode: Literal[
+                    "initial",
+                    "rerun",
+                    "pattern_resume",
+                ] = "initial"
+                request_context = context.model_copy(update={"idempotency_key": self._analysis_idempotency_key(alert_id)})
+                run = self._analysis_service.analyze(
+                    copy.deepcopy(self._payload_for_case(case)),
+                    context=request_context,
+                )
+            elif current.workflow_state == "analysis_only":
+                execution_mode = "pattern_resume"
+                request_context = context
+                run = self._repository.get_run(current.run_id)
+                if run is None:
+                    raise SocCorpusWorkbenchError(f"alert {alert_id} Runtime run {current.run_id} no longer exists")
+            else:
+                execution_mode = "rerun"
+                request_context = context.model_copy(
+                    update={
+                        "idempotency_key": self._rerun_idempotency_key(
+                            alert_id,
+                            context=context,
+                        )
+                    }
+                )
+                run = self._analysis_service.replay(
+                    current.run_id,
+                    context=request_context,
+                )
+
+            if run.status is not AnalysisRunStatus.FAILED:
+                if execution_mode == "rerun" and current.observation_id is not None:
+                    observation_id = current.observation_id
+                    pattern_observation_reused = True
+                    idempotent = True
+                else:
+                    aggregation = self._pattern_service.observe_run(
+                        run,
+                        source_type=MemoryPatternSourceType.BATCH_ALERT,
+                        transport_ref=(f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:v1"),
+                        environment=CORPUS_WORKBENCH_ENVIRONMENT,
+                        data_class=MemoryPatternDataClass.OPERATIONAL,
+                        context=request_context,
                     )
-                }
-            )
-            run = self._analysis_service.replay(
-                current.run_id,
-                context=request_context,
-            )
-        if run.status is AnalysisRunStatus.FAILED:
-            return SocCorpusWorkbenchProcessResult(
-                alert_id=alert_id,
-                run_id=run.run_id,
-                replay_of_run_id=run.replay_of_run_id,
-                execution_mode=execution_mode,
-                idempotent=False,
-                state=self.get_state(),
-            )
-        if execution_mode == "rerun" and current.observation_id is not None:
-            return SocCorpusWorkbenchProcessResult(
-                alert_id=alert_id,
-                run_id=run.run_id,
-                replay_of_run_id=run.replay_of_run_id,
-                observation_id=current.observation_id,
-                execution_mode=execution_mode,
-                pattern_observation_reused=True,
-                idempotent=True,
-                state=self.get_state(),
-            )
-        aggregation = self._pattern_service.observe_run(
-            run,
-            source_type=MemoryPatternSourceType.BATCH_ALERT,
-            transport_ref=(f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:v1"),
-            environment=CORPUS_WORKBENCH_ENVIRONMENT,
-            data_class=MemoryPatternDataClass.OPERATIONAL,
-            context=request_context,
-        )
+                    observation_id = aggregation.observation.observation_id
+                    pattern_observation_reused = aggregation.idempotent
+                    idempotent = aggregation.idempotent
+
         return SocCorpusWorkbenchProcessResult(
             alert_id=alert_id,
             run_id=run.run_id,
             replay_of_run_id=run.replay_of_run_id,
-            observation_id=aggregation.observation.observation_id,
+            observation_id=observation_id,
             execution_mode=execution_mode,
-            pattern_observation_reused=aggregation.idempotent,
-            idempotent=aggregation.idempotent,
+            pattern_observation_reused=pattern_observation_reused,
+            idempotent=idempotent,
             state=self.get_state(),
         )
 
@@ -805,22 +976,24 @@ class SocCorpusWorkbenchService:
     def _payload_for_case(self, case: _CorpusCase) -> dict[str, Any]:
         if case.payload is not None:
             return case.payload
-        payload = self._payload_cache.get(case.alert_id)
-        if payload is not None:
-            self._payload_cache.move_to_end(case.alert_id)
+        with self._payload_cache_lock:
+            payload = self._payload_cache.get(case.alert_id)
+            if payload is not None:
+                self._payload_cache.move_to_end(case.alert_id)
         if payload is None and self._payload_store_path is not None:
             payload = _load_payload_from_store(self._payload_store_path, case)
-            self._payload_cache[case.alert_id] = payload
-            while len(self._payload_cache) > _PAYLOAD_CACHE_SIZE:
-                self._payload_cache.popitem(last=False)
+            with self._payload_cache_lock:
+                self._payload_cache[case.alert_id] = payload
+                while len(self._payload_cache) > _PAYLOAD_CACHE_SIZE:
+                    self._payload_cache.popitem(last=False)
         if payload is None:
-            self._payload_cache.update(
-                _load_payloads(
-                    self._source_path,
-                    self._cases,
-                )
+            loaded = _load_payloads(
+                self._source_path,
+                self._cases,
             )
-            payload = self._payload_cache.get(case.alert_id)
+            with self._payload_cache_lock:
+                self._payload_cache.update(loaded)
+                payload = self._payload_cache.get(case.alert_id)
         if payload is None:
             raise SocCorpusWorkbenchError(f"alert {case.alert_id} payload is missing from the configured corpus")
         return payload
@@ -899,6 +1072,7 @@ class SocCorpusWorkbenchService:
         record_by_candidate: Mapping[str, Any],
         can_process: bool,
         blocked_by_alert_id: str | None,
+        active_execution: SocCorpusWorkbenchActiveExecution | None,
     ) -> SocCorpusWorkbenchAlert:
         transition = transition_by_run.get(run.run_id) if run is not None else None
         queue = None
@@ -917,12 +1091,16 @@ class SocCorpusWorkbenchService:
             for item in run.llm_analysis_request.context_catalog:
                 if item.kind.value != "confirmed_memory":
                     continue
+                comparison = item.memory_comparison
                 memory_contexts.append(
                     SocCorpusWorkbenchMemoryContext(
                         context_ref=item.context_ref,
                         label=item.label,
                         source_id=item.source_id,
                         summary=item.summary,
+                        use_mode=(comparison.use_mode.value if comparison is not None else None),
+                        applicability_status=(comparison.applicability_status.value if comparison is not None and comparison.applicability_status is not None else None),
+                        reviewed_verdict=(comparison.reviewed_verdict.value if comparison is not None and comparison.reviewed_verdict is not None else None),
                     )
                 )
         stages: list[SocCorpusWorkbenchDecisionStage] = []
@@ -941,14 +1119,17 @@ class SocCorpusWorkbenchService:
                 )
                 for item in transition.stages
             ]
-        if run is not None and run.status is AnalysisRunStatus.RUNNING:
-            workflow_state: Literal[
-                "ready",
-                "running",
-                "analysis_only",
-                "completed",
-                "failed",
-            ] = "running"
+        workflow_state: Literal[
+            "ready",
+            "running",
+            "analysis_only",
+            "completed",
+            "failed",
+        ]
+        if active_execution is not None:
+            workflow_state = "running"
+        elif run is not None and run.status is AnalysisRunStatus.RUNNING:
+            workflow_state = "running"
         elif run is not None and run.status is AnalysisRunStatus.FAILED:
             workflow_state = "failed"
         elif observation is not None:
@@ -1008,6 +1189,7 @@ class SocCorpusWorkbenchService:
             workflow_state=workflow_state,
             can_process=can_process,
             blocked_by_alert_id=blocked_by_alert_id,
+            active_execution=active_execution,
             run_id=(run.run_id if run is not None else None),
             replay_of_run_id=(run.replay_of_run_id if run is not None else None),
             analysis_status=(run.status.value if run is not None else None),
@@ -1068,7 +1250,7 @@ class SocCorpusWorkbenchService:
 
 
 _EXECUTION_PHASES: tuple[tuple[str, str], ...] = (
-    ("normalize", "归一化 / Normalize"),
+    ("normalize", "来源适配与标准化 / Adapter & Normalize"),
     ("facts", "实体与事实 / Entities & Facts"),
     ("context", "上下文与 Skills / Context & Skills"),
     ("reasoning", "模型研判 / LLM Analysis"),
@@ -2726,7 +2908,11 @@ __all__ = [
     "CORPUS_WORKBENCH_ENVIRONMENT",
     "CORPUS_WORKBENCH_INDEX_VERSION",
     "CORPUS_WORKBENCH_VERSION",
+    "SocCorpusWorkbenchActivity",
+    "SocCorpusWorkbenchActiveExecution",
     "SocCorpusWorkbenchAuditBundle",
+    "SocCorpusWorkbenchBusyError",
+    "SocCorpusWorkbenchCapacityError",
     "SocCorpusWorkbenchError",
     "SocCorpusWorkbenchExecution",
     "SocCorpusWorkbenchProcessResult",

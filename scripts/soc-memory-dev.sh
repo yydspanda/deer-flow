@@ -46,6 +46,8 @@ export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true
 export SOC_DEV_CORPUS_WORKBENCH_PATH="$CORPUS_EXPLORER_PATH"
 export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true
 export SOC_ANALYZER_MODE=llm
+export SOC_DEV_LLM_MAX_CONCURRENCY="${SOC_DEV_LLM_MAX_CONCURRENCY:-3}"
+export SOC_DEV_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_DEV_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"
 export SOC_MEMORY_ENVIRONMENT=dev
 export SOC_AUTOMATION_ENVIRONMENT=dev
 export SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY=true
@@ -162,6 +164,13 @@ start() {
     echo "Database: $DATABASE_PATH"
 }
 
+demo_start() {
+    export SOC_DEMO_AUTH_DISABLED=1
+    echo "WARNING: SOC demo authentication is disabled. All visitors share one synthetic administrator identity."
+    echo "Use only for trusted DEV demonstrations; real external action execution remains disabled."
+    start
+}
+
 rebuild() {
     require_docker
     require_source
@@ -221,13 +230,14 @@ usage() {
 Usage: ./scripts/soc-memory-dev.sh COMMAND
 
 Commands:
-  start   Migrate SQLite and start the persistent Docker DEV stack.
-  rebuild Rebuild Docker images, then start the persistent DEV stack.
-  warm    Precompile the common SOC routes and print first-request timings.
-  status  Probe the browser workbench.
-  logs    Follow Gateway and Frontend logs.
-  stop    Stop this checkout's DEV services.
-  reset   Stop services and delete only the isolated workbench database.
+  start       Migrate SQLite and start the persistent Docker DEV stack.
+  demo-start  Start the DEV stack without registration/login for a trusted demo.
+  rebuild     Rebuild Docker images, then start the persistent DEV stack.
+  warm        Precompile the common SOC routes and print first-request timings.
+  status      Probe the browser workbench.
+  logs        Follow Gateway and Frontend logs.
+  stop        Stop this checkout's DEV services.
+  reset       Stop services and delete only the isolated workbench database.
 
 Open: $MEMORY_CENTER_URL
 DEV fixed cohort: $WORKBENCH_URL
@@ -237,6 +247,7 @@ EOF
 
 case "${1:-help}" in
     start) start ;;
+    demo-start) demo_start ;;
     rebuild) rebuild ;;
     warm) warm_soc_routes ;;
     status) status ;;

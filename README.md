@@ -32,15 +32,24 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > rejects only the reusable Memory candidate. A mistaken rejection can be returned to `pending_review` through the
 > audited `重新打开审核` action; it is never repaired by editing SQLite directly.
 > A browser-driven local lifecycle is available for the reviewed 14-alert
-> `GalaxyLab_T1003-SAM-Dumping` cohort. Run `./scripts/soc-memory-dev.sh start`, then open
-> `http://localhost:2026/workspace/soc/memory-validation`. It uses an isolated SQLite database,
-> requires the real LLM analyzer and an administrator login, and keeps tenant policy plus external
-> action execution disabled. The first five alerts build a Pattern Candidate; candidate review,
+> `GalaxyLab_T1003-SAM-Dumping` cohort. For a trusted shared demonstration, run
+> `./scripts/soc-memory-dev.sh demo-start`, then open
+> `http://localhost:2026/workspace/soc/dev/memory-validation/galaxylab`. It uses an isolated SQLite
+> database and the real LLM analyzer. Registration/login is bypassed only for this explicit demo
+> command, and every visitor shares one synthetic administrator identity; use the normal `start`
+> command when identity and permission attribution need to be tested. Reviewed tenant policy is
+> enabled, while real external action execution remains disabled. The alert rehearsal permits up
+> to three different alert IDs to run concurrently by default; the server rejects a duplicate active
+> alert without a second model call. Override the bounded demo capacity with
+> `SOC_DEV_LLM_MAX_CONCURRENCY`, not by removing admission control. The first five alerts build a Pattern Candidate; candidate review,
 > Business Lesson drafting, and retrieval activation continue through the `SOC 复核 > 候选经验` view
 > before the held-out alert is unlocked. After generation, the candidate view keeps all six final Business Lesson
-> sections visible, while clearly separating machine-derived applicability from analyst-owned
-> conclusion, rationale, boundaries, invalidation conditions, and handling guidance. This
-> workbench scopes displayed runs and Pattern progress to the active Memory Profile generation. A
+> sections visible: conclusion, rationale, boundaries, invalidation conditions, and handling
+> guidance, while clearly separating machine-derived applicability from analyst-owned facts.
+> Confirmed Memory keeps temporary pause/reopen under `管理使用状态`; the terminal
+> `废止这条经验` action requires an explicit audited reason and disables both reference and
+> decision reuse without deleting historical evidence.
+> This workbench scopes displayed runs and Pattern progress to the active Memory Profile generation. A
 > profile/schema upgrade therefore starts a fresh validation sequence without deleting historical
 > runs or observations, and Pattern idempotency remains stable only within that profile contract. This
 > page renders each behavior component as an independently wrapping label and keeps model status on a

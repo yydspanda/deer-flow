@@ -252,4 +252,8 @@ above 10 upstream commits behind.
 PingAn Apple Silicon DEV uses `scripts/soc_pingan_macos_host_dev.py` with Python `3.12+`,
 uv, Node `22+`, pinned pnpm, nginx `1.23+`, and approved registries. It runs local SQLite
 and `LocalSandboxProvider` without Docker, exposes detected private LAN addresses by
-default, and supports `--local-only`. The offline CPython bundle is only a fallback.
+default, and supports `--local-only`. Trusted demonstrations may explicitly add
+`--demo-no-auth`; that mode maps every visitor to one synthetic administrator and must
+never be used for identity/RBAC acceptance or production. Docker SOC DEV exposes the
+equivalent explicit `./scripts/soc-memory-dev.sh demo-start`; ordinary `start` keeps
+authentication enabled. The offline CPython bundle is only a fallback.

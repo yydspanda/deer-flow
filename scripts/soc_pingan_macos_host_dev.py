@@ -367,6 +367,7 @@ def start_runtime(
     daemon: bool,
     allowed_origins: tuple[str, ...] = (),
     local_only: bool = False,
+    demo_no_auth: bool = False,
 ) -> None:
     inspect_host(python_executable=python_executable)
     validate_runtime_files()
@@ -378,11 +379,21 @@ def start_runtime(
         print("PingAn SOC LAN DEV access enabled:", flush=True)
         for origin in resolved_origins:
             print(f"  http://{_origin_host(origin)}:2026", flush=True)
+    if demo_no_auth:
         print(
-            "Keep authentication enabled and allow nginx through the macOS firewall.",
+            "WARNING: demo authentication is disabled; every visitor shares one synthetic administrator identity.",
             flush=True,
         )
-    command = build_start_command(daemon=daemon)
+        print(
+            "Use only on a trusted DEV network. Real external action execution remains disabled.",
+            flush=True,
+        )
+    elif resolved_origins:
+        print(
+            "Authentication remains enabled; allow nginx through the macOS firewall.",
+            flush=True,
+        )
+    command = build_start_command(daemon=daemon, demo_no_auth=demo_no_auth)
     os.execve(
         command[0],
         command,
@@ -393,13 +404,15 @@ def start_runtime(
     )
 
 
-def build_start_command(*, daemon: bool) -> list[str]:
-    command = [
-        "/bin/bash",
-        "-c",
+def build_start_command(*, daemon: bool, demo_no_auth: bool = False) -> list[str]:
+    auth_setup = "export DEER_FLOW_AUTH_DISABLED=1; " if demo_no_auth else ""
+    shell_command = (
         'set -a; source "$SOC_HOST_DEV_ROOT/.env.soc-dev.local"; set +a; '
-        "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true; "
+        + auth_setup
+        + "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true; "
         "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true; "
+        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-3}"; '
+        'export SOC_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"; '
         'export SOC_DEV_MEMORY_CORPUS_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"; '
         'export SOC_DEV_CORPUS_WORKBENCH_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"; '
         "export SOC_MEMORY_ENVIRONMENT=dev; "
@@ -417,7 +430,12 @@ def build_start_command(*, daemon: bool) -> list[str]:
         'if [[ "${SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE+x}" == x ]]; then '
         'export DEER_FLOW_DEV_ALLOWED_ORIGINS="$SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"; '
         "fi; "
-        'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" --dev --skip-install "$@"',
+        'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" --dev --skip-install "$@"'
+    )
+    command = [
+        "/bin/bash",
+        "-c",
+        shell_command,
         "soc-pingan-macos-host-dev",
     ]
     if daemon:
@@ -666,6 +684,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="disable automatic trusted-LAN access and bind browser use to localhost",
     )
+    start.add_argument(
+        "--demo-no-auth",
+        action="store_true",
+        help=(
+            "disable registration/login and map trusted demo visitors to one "
+            "synthetic administrator; rejected in production environments"
+        ),
+    )
     subparsers.add_parser("stop", help="stop native DEV services")
     return parser.parse_args(argv)
 
@@ -683,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
                 daemon=args.daemon,
                 allowed_origins=tuple(args.allowed_origin),
                 local_only=args.local_only,
+                demo_no_auth=args.demo_no_auth,
             )
             return 0
         else:

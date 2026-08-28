@@ -27,6 +27,7 @@ COMPOSE_PATHS = {
     "prod": REPO_ROOT / "docker" / "docker-compose.yaml",
     "dev": REPO_ROOT / "docker" / "docker-compose-dev.yaml",
 }
+SOC_MEMORY_DEV_OVERLAY = REPO_ROOT / "docker" / "docker-compose.soc-memory-dev.yaml"
 
 EXPECTED_NGINX_PORT_MAPPING = "${BIND_HOST:-127.0.0.1}:${PORT:-2026}:2026"
 
@@ -131,3 +132,19 @@ def test_dev_compose_env_files_are_optional():
     for service_name, path in expected.items():
         entries = compose["services"][service_name]["env_file"]
         assert entries == [{"path": path, "required": False}], f"{service_name} env_file must be optional; got: {entries!r}"
+
+
+def test_soc_memory_demo_auth_requires_explicit_operator_opt_in() -> None:
+    compose = yaml.safe_load(SOC_MEMORY_DEV_OVERLAY.read_text(encoding="utf-8"))
+
+    for service_name in ("frontend", "gateway"):
+        environment = compose["services"][service_name]["environment"]
+        assert environment["DEER_FLOW_AUTH_DISABLED"] == "${SOC_DEMO_AUTH_DISABLED:-0}"
+
+
+def test_soc_corpus_demo_has_bounded_parallel_llm_capacity() -> None:
+    compose = yaml.safe_load(SOC_MEMORY_DEV_OVERLAY.read_text(encoding="utf-8"))
+    environment = compose["services"]["gateway"]["environment"]
+
+    assert environment["SOC_LLM_MAX_CONCURRENCY"] == ("${SOC_DEV_LLM_MAX_CONCURRENCY:-3}")
+    assert environment["SOC_LLM_ADMISSION_TIMEOUT_SECONDS"] == ("${SOC_DEV_LLM_ADMISSION_TIMEOUT_SECONDS:-180}")

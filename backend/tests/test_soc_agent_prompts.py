@@ -10,6 +10,7 @@ from soc_agent.contracts import (
     AnalysisMemoryContextComparison,
     AnalysisMemoryUseMode,
     SocMemoryApplicabilityStatus,
+    Verdict,
 )
 from soc_agent.core import SocAnalysisService
 from soc_agent.llm import parse_analysis_result_output
@@ -177,6 +178,63 @@ def test_analysis_prompt_exposes_context_only_memory_as_semantic_input_without_d
     assert '"case": "context_only_does_not_generalize"' in prompt.user
 
 
+def test_analysis_prompt_uses_reviewed_outcome_for_exact_memory_context_example() -> None:
+    request = _analysis_request("pingan_legacy_apt.json")
+    memory = AnalysisContextCatalogItem(
+        context_ref="M-A1B2C3D4E5F6",
+        kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
+        label="Reviewed OpenVPN false-positive lesson",
+        source_id="MEM-PROMPT-EXACT@v4",
+        summary="The exact reviewed behavior is normal OpenVPN traffic mislabeled as SIP.",
+        memory_comparison=AnalysisMemoryContextComparison(
+            use_mode=AnalysisMemoryUseMode.EXACT_CONTEXT,
+            applicability_status=SocMemoryApplicabilityStatus.APPLICABLE,
+            reviewed_verdict=Verdict.FALSE_POSITIVE,
+            shared_facets={
+                "detection_key": ["sample:red-team-ip"],
+                "behavior_fingerprint": ["a" * 64],
+            },
+            matched_required_facets={
+                "detection_key": ["sample:red-team-ip"],
+                "behavior_fingerprint": ["a" * 64],
+            },
+            reason_codes=["typed_applicability_satisfied"],
+        ),
+    )
+
+    prompt = build_analysis_prompt(request.model_copy(update={"context_catalog": [*request.context_catalog, memory]}))
+
+    assert prompt.example_id == "context_memory"
+    memory_projection = next(item for item in prompt.context["reference_catalogs"]["reasoning_context"] if item["kind"] == "confirmed_memory")
+    assert memory_projection["memory_comparison"]["reviewed_verdict"] == "false_positive"
+    assert "Start from reviewed_verdict" in prompt.user
+
+
+def test_analysis_prompt_balances_exact_true_positive_memory_example() -> None:
+    request = _analysis_request("pingan_legacy_apt.json")
+    memory = AnalysisContextCatalogItem(
+        context_ref="M-A1B2C3D4E5F6",
+        kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
+        label="Reviewed malicious behavior",
+        source_id="MEM-PROMPT-TP@v1",
+        summary="The exact reviewed behavior is a confirmed attack.",
+        memory_comparison=AnalysisMemoryContextComparison(
+            use_mode=AnalysisMemoryUseMode.EXACT_CONTEXT,
+            applicability_status=SocMemoryApplicabilityStatus.APPLICABLE,
+            reviewed_verdict=Verdict.TRUE_POSITIVE,
+            shared_facets={"behavior_fingerprint": ["b" * 64]},
+            matched_required_facets={"behavior_fingerprint": ["b" * 64]},
+            reason_codes=["typed_applicability_satisfied"],
+        ),
+    )
+
+    prompt = build_analysis_prompt(request.model_copy(update={"context_catalog": [*request.context_catalog, memory]}))
+
+    assert prompt.example_id == "context_memory_true_positive"
+    assert 'id="context_memory_true_positive"' in prompt.user
+    assert '"verdict": "true_positive"' in prompt.user
+
+
 def test_analysis_prompt_balances_false_positive_and_true_positive_without_memory() -> None:
     prompt = build_analysis_prompt(_analysis_request("missing_fields.json"))
 
@@ -230,6 +288,7 @@ def test_all_analysis_output_examples_pass_current_parser_contract() -> None:
     examples = analysis_output_examples()
     assert set(examples) == {
         "context_memory",
+        "context_memory_true_positive",
         "network_roles",
         "non_network",
         "conflicted",

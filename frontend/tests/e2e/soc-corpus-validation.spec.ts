@@ -506,7 +506,7 @@ function corpusExecution(processed = false) {
     phases: [
       phase(
         "normalize",
-        "归一化 / Normalize",
+        "来源适配与标准化 / Adapter & Normalize",
         processed ? "success" : "pending",
       ),
       phase(
@@ -661,6 +661,130 @@ function corpusStateWithPatternCandidate() {
   };
 }
 
+function corpusActivity(alertIds: string[] = [], actorId = "fixture-analyst") {
+  return {
+    schema_version: "soc.corpus_dev_activity.v1",
+    active_count: alertIds.length,
+    max_concurrent_executions: 3,
+    available_slots: Math.max(0, 3 - alertIds.length),
+    executions: alertIds.map((alertId, index) => ({
+      execution_id: `CWE-${index + 1}`,
+      alert_id: alertId,
+      status: "running",
+      actor_id: actorId,
+      actor_surface: "web",
+      request_id: `REQ-${index + 1}`,
+      started_at: "2026-08-28T08:00:00Z",
+      elapsed_ms: 1_000,
+    })),
+  };
+}
+
+test("runs distinct alerts concurrently without enabling a duplicate click", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const current = corpusState();
+  const activeAlertIds = new Set<string>();
+  let releaseRequests: () => void = () => undefined;
+  const releaseGate = new Promise<void>((resolve) => {
+    releaseRequests = resolve;
+  });
+  let processCalls = 0;
+
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity")) {
+      await route.fulfill({ json: corpusActivity([...activeAlertIds]) });
+      return;
+    }
+    if (url.endsWith("/execution")) {
+      await route.fulfill({ json: corpusExecution(false) });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      processCalls += 1;
+      const alertId = decodeURIComponent(
+        /\/alerts\/([^/]+)\/process$/.exec(url)?.[1] ?? "",
+      );
+      activeAlertIds.add(alertId);
+      await releaseGate;
+      activeAlertIds.delete(alertId);
+      await route.fulfill({
+        json: {
+          schema_version: "soc.corpus_dev_workbench_process.v3",
+          alert_id: alertId,
+          run_id: `RUN-${alertId}`,
+          observation_id: `MPO-${alertId}`,
+          idempotent: false,
+          execution_mode: "initial",
+          replay_of_run_id: null,
+          pattern_observation_reused: false,
+          state: current,
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: current });
+  });
+
+  await page.goto("/workspace/soc/corpus-validation");
+  const firstRow = page.locator('[data-alert-id="1984426"]');
+  const secondRow = page.locator('[data-alert-id="1965449"]');
+
+  await firstRow.getByRole("button", { name: "运行", exact: true }).click();
+  await expect(
+    firstRow.getByRole("button", { name: "本会话运行中" }),
+  ).toBeDisabled();
+  await expect(
+    secondRow.getByRole("button", { name: "运行", exact: true }),
+  ).toBeEnabled();
+
+  await secondRow.getByRole("button", { name: "运行", exact: true }).click();
+  await expect(
+    secondRow.getByRole("button", { name: "本会话运行中" }),
+  ).toBeDisabled();
+  await expect(page.getByText("运行中 2/3")).toBeVisible({ timeout: 3_000 });
+  expect(processCalls).toBe(2);
+
+  releaseRequests();
+});
+
+test("shows an alert claimed by another session and does not post it again", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  let processCalls = 0;
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity")) {
+      await route.fulfill({
+        json: corpusActivity(["1984426"], "another-analyst"),
+      });
+      return;
+    }
+    if (url.endsWith("/execution")) {
+      await route.fulfill({ json: corpusExecution(false) });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      processCalls += 1;
+    }
+    await route.fulfill({ json: corpusState() });
+  });
+
+  await page.goto("/workspace/soc/corpus-validation");
+  const claimedRow = page.locator('[data-alert-id="1984426"]');
+  const availableRow = page.locator('[data-alert-id="1965449"]');
+  await expect(
+    claimedRow.getByRole("button", { name: "其他会话运行中" }),
+  ).toBeDisabled();
+  await expect(
+    availableRow.getByRole("button", { name: "运行", exact: true }),
+  ).toBeEnabled();
+  expect(processCalls).toBe(0);
+});
+
 test("filters the corpus by Memory readiness and runs one alert", async ({
   page,
 }) => {
@@ -728,8 +852,8 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
     navigation.getByRole("link", { name: "运营总览" }),
   ).toHaveAttribute("href", "/workspace/soc/operations");
   await expect(
-    navigation.getByRole("link", { name: "研判待办" }),
-  ).toHaveAttribute("href", "/workspace/soc/review/alerts");
+    navigation.getByRole("link", { name: "告警研判" }),
+  ).toHaveAttribute("href", "/workspace/soc/alerts");
   await expect(
     navigation.getByRole("link", { name: "归一化运维" }),
   ).toHaveAttribute("href", "/workspace/soc/normalization");
@@ -738,7 +862,7 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   });
   await expect(currentNavigationLink).toHaveAttribute("aria-current", "page");
   await expect(
-    navigation.getByRole("link", { name: "Memory Center" }),
+    navigation.getByRole("link", { name: "经验中心" }),
   ).toHaveAttribute("href", "/workspace/soc/memory");
   await expect(page.getByRole("link", { name: "GalaxyLab 闭环" })).toHaveCount(
     0,
@@ -812,6 +936,11 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(
     page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
   ).toBeInViewport();
+  await expect(
+    page
+      .getByText("来源适配与标准化 / Adapter & Normalize", { exact: true })
+      .first(),
+  ).toBeVisible();
   await expect(page.getByText(/总 Token:/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "重新运行 Alert 1984426" }),
@@ -905,13 +1034,67 @@ test("announces a newly generated Pattern Candidate in the current alert", async
 
   await expect(
     page.getByText("同类模式候选 MC-PATTERN-1", { exact: false }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("status").getByText("同类经验待审核", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "立即审核" })).toHaveAttribute(
+  await expect(
+    page.getByRole("link", { name: "审核这条经验" }).first(),
+  ).toHaveAttribute(
     "href",
     "/workspace/soc/review/memory-candidates/MC-PATTERN-1",
   );
   await expect(page.getByRole("link", { name: "审核并决定" })).toHaveCount(0);
-  await expect(page.getByText("Memory Candidate 已生成").first()).toBeVisible();
+  await expect(page.getByText("同类经验待审核").first()).toBeVisible();
+});
+
+test("explains when tenant policy changes the operational action", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const state = corpusState(true);
+  Object.assign(state.alerts[0]!, {
+    workflow_state: "ready",
+    base_verdict: "false_positive",
+    effective_verdict: "false_positive",
+    base_operational_projection: "ignore",
+    effective_operational_projection: "transfer",
+    operational_label: "转交",
+    base_label_comparison: "mismatched",
+    effective_label_comparison: "matched",
+    base_projection_basis: "verdict:false_positive",
+    effective_projection_basis: "disposition:escalated",
+    decision_stages: [
+      {
+        stage: "tenant_policy",
+        status: "applied",
+        verdict: "false_positive",
+        confidence: 0.77,
+        needs_review: true,
+        suggested_action: "transfer",
+        disposition: "escalated",
+        source_id: "pingan.soc.disposition",
+        summary: "命中企业强制转交规则；技术误报结论保持不变。",
+      },
+    ],
+  });
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    if (route.request().url().endsWith("/execution")) {
+      await route.fulfill({ json: corpusExecution(true) });
+      return;
+    }
+    await route.fulfill({ json: state });
+  });
+
+  await page.goto("/workspace/soc/corpus-validation");
+
+  await expect(page.getByText("企业策略调整了运营动作")).toBeVisible();
+  await expect(page.getByText("模型判断：误报")).toBeVisible();
+  await expect(page.getByText("基础动作：忽略")).toBeVisible();
+  await expect(page.getByText("最终动作：转交")).toBeVisible();
+  await expect(
+    page.getByText("本次 转交 · 历史 转交", { exact: true }),
+  ).toBeVisible();
 });
 
 test("opens a used Memory correction and creates a governed revision candidate", async ({
@@ -1107,4 +1290,10 @@ test("searches confirmed Memory records and opens their usage history", async ({
   ).toBeVisible();
   await expect(page.getByText("Alert 1984426")).toBeVisible();
   await expect(page.getByText("改变最终结论", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "查看来源候选审核" }),
+  ).toHaveAttribute(
+    "href",
+    "/workspace/soc/review/memory-candidates/MC-GALAXY",
+  );
 });

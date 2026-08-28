@@ -115,7 +115,21 @@ Host DEV 路径。它验证内部 registry，执行一次锁定安装，后续�
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
-python3.12 scripts/soc_pingan_macos_host_dev.py start
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+```
+
+`--demo-no-auth` 仅用于可信内网演示：页面不再进入注册/登录，所有访问者共享合成管理员身份，
+因此无法按同事区分审计 actor。真实外部动作仍保持关闭。需要验收真实账号和权限时，先停止服务，
+再去掉该参数启动；无需修改代码或数据库：
+
+Host DEV 默认允许 3 条不同告警并行研判，同一 `alert_id` 的重复点击由服务端占用直接拒绝，不会重复调用
+Runtime/LLM。需要按内网模型容量调整时，在 `.env.soc-dev.local` 设置
+`SOC_LLM_MAX_CONCURRENCY`；不要取消并发上限。该占用是单进程 DEV 演示边界，不替代生产 Kafka/API 的
+持久化幂等和多副本租约。
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon
 ```
 
 停止服务：
@@ -138,7 +152,7 @@ stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
 ```
 
 原生 Host DEV 启动器会显式启用隔离 SQLite 下的 Memory/Corpus DEV Workbench，固定
-`SOC_MEMORY_ENVIRONMENT=dev`、`SOC_AUTOMATION_ENVIRONMENT=dev`，同时关闭租户处置和真实外部动作执行；
+`SOC_MEMORY_ENVIRONMENT=dev`、`SOC_AUTOMATION_ENVIRONMENT=dev`，启用已评审的 DEV 租户策略并关闭真实外部动作执行；
 因此内网无需再手工追加这些环境变量，也不会出现 Workbench disabled/environment mismatch。
 
 原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源。canonical `backend/uv.lock` 记录的是公网

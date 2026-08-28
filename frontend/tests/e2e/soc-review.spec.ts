@@ -287,6 +287,13 @@ test.describe("SOC review workbench", () => {
         "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
       ),
     ).toBeVisible();
+    await expect(page.getByText("当前使用状态依据")).toBeVisible();
+    await expect(
+      page.getByText(/下方说明只用于下一次暂停或重新开放/),
+    ).toBeVisible();
+    await expect(page.getByText("重新开放原因（必填）")).toHaveCount(0);
+    await page.getByRole("button", { name: "管理使用状态" }).click();
+    await expect(page.getByText("重新开放原因（必填）")).toBeVisible();
     await expect(
       page.getByRole("combobox", { name: "最终业务判断" }),
     ).toHaveCount(0);
@@ -302,6 +309,48 @@ test.describe("SOC review workbench", () => {
         (request) => request.path === "/api/soc/memory/records",
       ),
     ).toHaveLength(1);
+  });
+
+  test("requires an explicit reason before deprecating a confirmed Memory", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { threads: [] });
+    const state = await mockSocAPI(page, {
+      includeQueueItem: false,
+      standaloneMemoryCandidate: true,
+      candidateStatus: "confirmed",
+    });
+
+    await page.goto("/workspace/soc/review/memory-candidates/MC-ALPHA-001");
+    await page.getByRole("button", { name: "废止这条经验" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "废止这条经验" });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByText(/后续告警将无法再检索或复用它/),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: "确认废止" }),
+    ).toBeDisabled();
+    await dialog
+      .getByLabel("废止原因")
+      .fill("业务事实已失效，该经验不应继续参与后续告警研判。");
+    await dialog.getByRole("button", { name: "确认废止" }).click();
+
+    await expect
+      .poll(() =>
+        state.requests.find(
+          (request) =>
+            request.path === "/api/soc/memory/candidates/MC-ALPHA-001/review" &&
+            request.method === "POST",
+        ),
+      )
+      .toMatchObject({
+        body: {
+          decision: "deprecate",
+          reason: "业务事实已失效，该经验不应继续参与后续告警研判。",
+        },
+      });
   });
 
   test("reopens a rejected standalone Memory Candidate before editing", async ({

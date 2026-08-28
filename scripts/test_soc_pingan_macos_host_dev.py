@@ -146,6 +146,13 @@ def test_start_plan_skips_install_and_enables_governed_policy_without_network_si
     assert environment["UV_OFFLINE"] == "1"
     assert "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true" in command[2]
     assert "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true" in command[2]
+    assert (
+        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-3}"' in command[2]
+    )
+    assert (
+        'export SOC_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"'
+        in command[2]
+    )
     assert "full_alert_validation_corpus.pkl" in command[2]
     assert "full_alert_dams_labeled_merged.pkl" in command[2]
     assert "export SOC_MEMORY_ENVIRONMENT=dev" in command[2]
@@ -158,6 +165,16 @@ def test_start_plan_skips_install_and_enables_governed_policy_without_network_si
     assert "export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true" in command[2]
     assert "SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH" in command[2]
     assert "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false" in command[2]
+    assert "export DEER_FLOW_AUTH_DISABLED=1" not in command[2]
+
+
+def test_demo_no_auth_start_is_explicit_and_does_not_change_secure_default() -> None:
+    command = build_start_command(daemon=True, demo_no_auth=True)
+
+    assert "export DEER_FLOW_AUTH_DISABLED=1" in command[2]
+
+    secure_command = build_start_command(daemon=True)
+    assert "export DEER_FLOW_AUTH_DISABLED=1" not in secure_command[2]
 
 
 def test_start_plan_applies_explicit_lan_origin_after_private_env() -> None:
@@ -268,6 +285,23 @@ def test_start_cli_accepts_local_only() -> None:
 
     assert args.daemon is True
     assert args.local_only is True
+
+
+def test_start_cli_accepts_demo_no_auth() -> None:
+    args = parse_args(["start", "--daemon", "--demo-no-auth"])
+
+    assert args.daemon is True
+    assert args.demo_no_auth is True
+
+
+def test_docker_soc_demo_start_is_explicit() -> None:
+    script = (Path(__file__).resolve().parent / "soc-memory-dev.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "demo-start) demo_start ;;" in script
+    assert "export SOC_DEMO_AUTH_DISABLED=1" in script
+    assert "start) start ;;" in script
 
 
 def test_nginx_check_overrides_homebrew_compiled_error_log(tmp_path: Path) -> None:

@@ -821,18 +821,29 @@ backend/.venv/bin/python backend/scripts/soc_pingan_litellm_smoke.py \
 
 ```bash
 cd "$TARGET_REPO"
-python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 ```
 
-Host DEV 驱动会启用隔离 SQLite、LLM analyzer 和两个 SOC DEV Workbench，关闭
-Tenant Policy 与真实外部动作执行，并自动发现内网地址配置 Next.js/HMR。仅本机
-使用时加 `--local-only`。
+Host DEV 驱动会启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant Policy 和两个 SOC DEV
+Workbench，关闭真实外部动作执行，并自动发现内网地址配置 Next.js/HMR。仅本机使用时加
+`--local-only`。
+
+`--demo-no-auth` 仅用于可信内网演示：页面跳过注册/登录，所有访问者共享一个合成管理员身份，
+因此不能区分个人审计 actor。需要验收账号与权限时，先停止服务，再去掉该参数启动；无需改代码或数据库：
+
+Host DEV 默认允许 3 条不同告警并行研判；同一告警的重复点击不会再次进入 Runtime/LLM。
+按内网模型容量调整时，在 `.env.soc-dev.local` 设置 `SOC_LLM_MAX_CONCURRENCY`，不得取消并发上限。
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon
+```
 
 ```bash
 curl -fsS http://localhost:2026/health
 ```
 
-首次打开 `http://localhost:2026` 会进入 `/setup`，由操作者创建管理员账号。
+演示模式首次打开 `http://localhost:2026` 会直接进入工作区，不创建账号。
 常用页面：
 
 ```text
@@ -903,8 +914,12 @@ internal package registries and starts without repeating dependency resolution:
 ```bash
 python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
-python3.12 scripts/soc_pingan_macos_host_dev.py start
+python3.12 scripts/soc_pingan_macos_host_dev.py start --demo-no-auth
 ```
+
+`--demo-no-auth` 仅用于可信 DEV 演示；全部访问者共享一个合成管理员身份。正式身份与权限验收时去掉该参数。
+告警演练默认支持 3 条不同告警并行，同一告警由服务端防重；可通过
+`.env.soc-dev.local` 的 `SOC_LLM_MAX_CONCURRENCY` 调整有界容量。
 
 The separately transferred Apple Silicon offline toolchain remains a fallback
 for a Mac without a usable Python/uv or internal Python package registry:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from threading import Lock
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
@@ -16,7 +17,10 @@ from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
 from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
+    SocCorpusWorkbenchActivity,
     SocCorpusWorkbenchAuditBundle,
+    SocCorpusWorkbenchBusyError,
+    SocCorpusWorkbenchCapacityError,
     SocCorpusWorkbenchError,
     SocCorpusWorkbenchExecution,
     SocCorpusWorkbenchProcessResult,
@@ -31,6 +35,7 @@ router = create_soc_router(
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_CORPUS = _REPO_ROOT / "validation" / "compact_zeus" / "data" / "corpus" / "full_alert_dams_labeled_merged.pkl"
+_SERVICE_INIT_LOCK = Lock()
 
 
 def get_soc_corpus_workbench_service(
@@ -39,35 +44,48 @@ def get_soc_corpus_workbench_service(
     injected = getattr(request.app.state, "soc_corpus_workbench_service", None)
     if injected is not None:
         return injected
-    runtime = resolve_soc_dev_workbench_runtime(
-        request,
-        enabled_flag="SOC_DEV_CORPUS_WORKBENCH_ENABLED",
-    )
-    source_path = Path(os.environ.get("SOC_DEV_CORPUS_WORKBENCH_PATH", str(_DEFAULT_CORPUS)))
-    try:
-        service = SocCorpusWorkbenchService(
-            repository=runtime.repository,
-            analysis_service=build_soc_analysis_service(
-                runtime.repository,
-                settings=runtime.settings,
-                runtime_environment=CORPUS_WORKBENCH_ENVIRONMENT,
-                pattern_observation_enabled=False,
-            ),
-            pattern_service=SocMemoryPatternService(
-                repository=runtime.repository,
-                candidate_repository=runtime.repository,
-                profile_registry=build_soc_memory_profile_registry(),
-            ),
-            source_path=source_path,
-            settings=runtime.settings,
-            database_file=runtime.database_file.name,
-            tenant_policy=runtime.tenant_policy,
-            software_path_fast_policy=runtime.software_path_fast_policy,
+    with _SERVICE_INIT_LOCK:
+        injected = getattr(
+            request.app.state,
+            "soc_corpus_workbench_service",
+            None,
         )
-    except (OSError, ValueError, SocCorpusWorkbenchError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    request.app.state.soc_corpus_workbench_service = service
-    return service
+        if injected is not None:
+            return injected
+        runtime = resolve_soc_dev_workbench_runtime(
+            request,
+            enabled_flag="SOC_DEV_CORPUS_WORKBENCH_ENABLED",
+        )
+        source_path = Path(
+            os.environ.get(
+                "SOC_DEV_CORPUS_WORKBENCH_PATH",
+                str(_DEFAULT_CORPUS),
+            )
+        )
+        try:
+            service = SocCorpusWorkbenchService(
+                repository=runtime.repository,
+                analysis_service=build_soc_analysis_service(
+                    runtime.repository,
+                    settings=runtime.settings,
+                    runtime_environment=CORPUS_WORKBENCH_ENVIRONMENT,
+                    pattern_observation_enabled=False,
+                ),
+                pattern_service=SocMemoryPatternService(
+                    repository=runtime.repository,
+                    candidate_repository=runtime.repository,
+                    profile_registry=build_soc_memory_profile_registry(),
+                ),
+                source_path=source_path,
+                settings=runtime.settings,
+                database_file=runtime.database_file.name,
+                tenant_policy=runtime.tenant_policy,
+                software_path_fast_policy=runtime.software_path_fast_policy,
+            )
+        except (OSError, ValueError, SocCorpusWorkbenchError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        request.app.state.soc_corpus_workbench_service = service
+        return service
 
 
 CorpusWorkbenchServiceDep = Annotated[
@@ -85,6 +103,17 @@ def get_corpus_workbench_state(
     service: CorpusWorkbenchServiceDep,
 ) -> SocCorpusWorkbenchState:
     return service.get_state()
+
+
+@router.get(
+    "/activity",
+    response_model=SocCorpusWorkbenchActivity,
+    response_model_exclude_none=True,
+)
+def get_corpus_workbench_activity(
+    service: CorpusWorkbenchServiceDep,
+) -> SocCorpusWorkbenchActivity:
+    return service.get_activity()
 
 
 @router.get(
@@ -142,6 +171,8 @@ def process_corpus_workbench_alert(
         )
     try:
         return service.process_alert(alert_id, context=context)
+    except (SocCorpusWorkbenchBusyError, SocCorpusWorkbenchCapacityError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocServiceConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocCorpusWorkbenchError as exc:

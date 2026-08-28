@@ -18,6 +18,7 @@ services:
         volume:
           nocopy: true
     environment:
+      DEER_FLOW_AUTH_DISABLED: "${SOC_DEMO_AUTH_DISABLED:-0}"
       NPM_CONFIG_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
       # Docker Desktop/WSL can drop bind-mount events, so keep polling but at a
       # lower cadence than Watchpack's ~5 second boolean default.
@@ -25,6 +26,7 @@ services:
 
   gateway:
     environment:
+      DEER_FLOW_AUTH_DISABLED: "${SOC_DEMO_AUTH_DISABLED:-0}"
       # watchfiles enables polling automatically under WSL. The SOC validation
       # stack uses native bind-mount events by default to avoid a permanently
       # busy reload supervisor; set this override to true if events are lost.
@@ -35,6 +37,8 @@ services:
       SOC_DEV_CORPUS_WORKBENCH_PATH: /app/project/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl
       SOC_DEV_CORPUS_WORKBENCH_ENABLED: "true"
       SOC_ANALYZER_MODE: llm
+      SOC_LLM_MAX_CONCURRENCY: "${SOC_DEV_LLM_MAX_CONCURRENCY:-3}"
+      SOC_LLM_ADMISSION_TIMEOUT_SECONDS: "${SOC_DEV_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"
       SOC_MEMORY_ENVIRONMENT: dev
       SOC_AUTOMATION_ENVIRONMENT: dev
       SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY: "true"

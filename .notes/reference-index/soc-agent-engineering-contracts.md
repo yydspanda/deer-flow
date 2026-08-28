@@ -1706,16 +1706,16 @@ normalizers/hids.py
   replay；精确别名恢复属于 hydration，不计 repair，未知别名不得模糊匹配。
 - `reference_catalogs.role_entities` 只暴露 Runtime 已类型化的 canonical/extracted 实体；raw vendor
   字段名、端口、计数器、时间戳和事件 ID 仍只是普通证据，不能因为名字像实体就成为角色目标。
-- `soc-analysis-v37` 将稳定的信任、分析方法和引用规则放在 system message；bounded alert context 位于
+- `soc-analysis-v38` 将稳定的信任、分析方法和引用规则放在 system message；bounded alert context 位于
   user message 前部，任务、精确响应结构和 final checklist 位于尾部。scenario/direction/role 使用精确
   key 契约，角色只能把 `reference_catalogs.role_entities` 中选中项的 `evidence_ref` 复制为
-  `entity_ref`。Prompt Builder 按 `conflicted -> context-only Memory -> typed network evidence/network source -> non-network`
+  `entity_ref`。Prompt Builder 按 `conflicted -> reviewed Memory（覆盖 exact/context-only/directive use mode，并按 reviewed_verdict 平衡示例） -> typed network evidence/network source -> non-network`
   选择且只注入一个完整、
   机器校验的 synthetic Golden Demo，并把 `prompt_example_id` 写入 trace；示例专用 `EX-*` 绝不能进入
   模型输出，示例 verdict/scenario/direction/role/confidence/action 也只能用于 shape guidance，不得复制为
   当前结论。另提供 compact decision calibration，必须对称覆盖无 Memory 的 false-positive/true-positive、
   context-only 可迁移/不可迁移，以及技术真阳性但后续 Tenant Policy 可忽略；它不构成第二套 output shape。
-- `soc-analysis-v37` / `soc-analysis-json-parser-v24` 只允许有日志、无安全语义的机械恢复；仅当完整字段
+- `soc-analysis-v38` / `soc-analysis-json-parser-v24` 只允许有日志、无安全语义的机械恢复；仅当完整字段
   集合可无歧义判定为紧凑模型输出时，允许恢复缺失的顶层 `soc.analysis_model_output.v4` 版本。允许把
   严格十进制 confidence 字符串转为数值；core/optional 引用只能按冻结目录过滤、去重并保持原顺序截到
   契约上限 20；可用显式 `scenario_key` 补缺失展示名；可用同一可选对象已有字段生成缺失 rationale，
@@ -2028,6 +2028,12 @@ Observation 写入状态构造只读投影。前端只轮询当前选中且正�
 全量语料 state，也不得在浏览器推测 phase。投影可包含 step/phase 状态、起止时间、耗时、warning/error
 摘要、模型名、token、Schema/Grounding 计数、Decision 和 Observation/Candidate ID；不得返回原始 payload、
 Evidence/Context 内容、Prompt、模型原文、Provider response 或 secret。
+
+DEV 告警演练的提交并发采用 `alert_id` 粒度的服务端原子占用：不同告警可并行，同一告警的第二个请求
+必须立即 `409` 且不得再次进入 Runtime/LLM。跨浏览器状态只轮询轻量 `/activity` 投影；完整 corpus state
+只在活动集合变化或运行完成后重新读取。并发完成的 POST 响应内嵌快照不具备覆盖其他 Run 的权威性，
+前端不得用它直接替换全局缓存。该占用仅服务单进程 DEV 演练；生产 API/Kafka 和多副本部署必须继续使用
+持久化 source identity、idempotency 与 lease/worker 契约，不能把进程内占用冒充为生产防重。
 
 完整 DEV 审计不得扩大上述轮询契约，而使用独立、显式加载、认证 `soc_admin` 且受
 `SOC_DEV_CORPUS_WORKBENCH_ENABLED` 与隔离 SQLite 约束的 audit endpoint。其只读 bundle 按固定顺序投影
@@ -2447,7 +2453,7 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
-当前 `soc-analysis-v37` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费
+当前 `soc-analysis-v38` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费
 `LLMAnalysisRequest.v6` 和受控 context catalogs，输出 compact `soc.analysis_model_output.v4`；Runtime
 将其 hydration 为 `AnalysisResult.v4`，再依次经过 schema/domain validation、evidence grounding、
 analysis materiality 和 Decision Policy v7。模型不能决定后续状态或动作权限。

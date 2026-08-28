@@ -153,6 +153,12 @@ Runtime decisions, construct Memory, or infer action authority.
   execution endpoint. Render the server projection of persisted Runtime steps, provider
   journal, durations, bounded counts, decision, and Pattern write; do not estimate phase
   progress in React or expose raw evidence, prompts, model responses, or secrets.
+- Do not use one mutation's global pending state to lock the corpus table. Keep local
+  pending state by alert ID and poll the server's lightweight `/activity` projection so
+  different alerts can run concurrently while duplicate clicks across browser sessions
+  remain disabled. A process response's embedded corpus snapshot may be stale relative
+  to another concurrent completion; invalidate and refetch the authoritative state rather
+  than overwriting the query cache with that snapshot.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
   The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,
   canonical normalization, bounded model context/output, validation, Decision, and
@@ -200,6 +206,18 @@ Runtime decisions, construct Memory, or infer action authority.
   record may still be context-only for a partial match. Pattern inventory is ordered by
   latest observed sample, while confirmed-record inventory is ordered by latest update;
   show those sort rules in the UI.
+- Record and revision surfaces must make the future-use mode a visually primary state,
+  especially `仅供研判参考`. Candidate confirmation may open retrieval immediately with
+  a server-audited reason; any empty reason input shown afterward belongs only to the next
+  pause/reopen transition and must be labeled that way.
+- Keep pause/reopen controls collapsed behind an explicit `管理使用状态` command so they
+  do not look like unfinished confirmation fields. Deprecation is the terminal
+  `废止这条经验` action: require an explicit reason and confirmation, and keep it distinct
+  from temporary retrieval pause. Make the source-Candidate review a visible command on
+  the Memory record page rather than a low-emphasis audit link.
+- In DEV Runtime traces, name the first phase `来源适配与标准化 / Adapter & Normalize`:
+  the active tenant/vendor Adapter parses and projects source data into the canonical SOC
+  contract; the label must not imply generic field cleanup only or hard-code PingAn.
 - Fixed GalaxyLab remains a DEV-only validation route and must not be linked from Memory
   Center or global operational navigation. Memory Center contains only production-facing
   Pattern, Candidate, Memory, and Profile governance. Pattern counts are absolute
@@ -222,3 +240,8 @@ Runtime decisions, construct Memory, or infer action authority.
 - Do not actively probe Kafka, recompute aggregates, infer overall health, or turn
   `not_measured` into healthy zero. Label SQLite and fixture/Playwright evidence as
   local/test, separate from deployed Gateway, production telemetry, and SLO proof.
+- Candidate and Memory technical IDs are secondary audit identifiers, never the primary
+  completion message. A completed run must link directly to the pending Candidate review
+  or confirmed Memory record. When Tenant Policy changes the operational action without
+  changing the technical verdict, show the model verdict, base action, policy reason, and
+  final action as separate steps; do not compress them into an unexplained slash pair.

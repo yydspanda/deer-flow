@@ -35,6 +35,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -1952,9 +1960,19 @@ function MemoryCandidateSection({
   onReview: (
     candidate: SocMemoryCandidate,
     decision: SocMemoryCandidateReviewDecision,
+    reason?: string,
   ) => void;
   onDraftLesson: (candidate: SocMemoryCandidate) => void;
 }) {
+  const [deprecationTarget, setDeprecationTarget] =
+    useState<SocMemoryCandidate | null>(null);
+  const [deprecationReason, setDeprecationReason] = useState("");
+
+  const closeDeprecationDialog = () => {
+    setDeprecationTarget(null);
+    setDeprecationReason("");
+  };
+
   return (
     <section className="rounded-md border">
       <div className="bg-muted/30 flex flex-wrap items-center justify-between gap-3 border-b p-4">
@@ -2654,9 +2672,13 @@ function MemoryCandidateSection({
                         size="sm"
                         variant="destructive"
                         disabled={isReviewing}
-                        onClick={() => onReview(candidate, "deprecate")}
+                        onClick={() => {
+                          setDeprecationTarget(candidate);
+                          setDeprecationReason("");
+                        }}
                       >
-                        停用候选与关联 Memory
+                        <XCircleIcon className="size-4" />
+                        废止这条经验
                       </Button>
                     ) : null}
                   </div>
@@ -2666,6 +2688,61 @@ function MemoryCandidateSection({
           })
         )}
       </div>
+      <Dialog
+        open={deprecationTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !isReviewing) closeDeprecationDialog();
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>废止这条经验</DialogTitle>
+            <DialogDescription>
+              这不是临时暂停。关联 Candidate 和 Memory
+              将被标记为已废止，后续告警将无法再检索或复用它；历史告警、使用记录与审计证据仍会保留。
+            </DialogDescription>
+          </DialogHeader>
+          <label className="grid gap-2 text-sm">
+            <span className="font-medium">废止原因</span>
+            <Textarea
+              value={deprecationReason}
+              onChange={(event) => setDeprecationReason(event.target.value)}
+              placeholder="说明这条经验为什么已经错误、过时或不应继续使用"
+              rows={4}
+              disabled={isReviewing}
+            />
+            <span className="text-muted-foreground text-xs">
+              至少 10 个字符；该说明会进入治理审计。
+            </span>
+          </label>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isReviewing}
+              onClick={closeDeprecationDialog}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isReviewing || deprecationReason.trim().length < 10}
+              onClick={() => {
+                if (!deprecationTarget) return;
+                onReview(
+                  deprecationTarget,
+                  "deprecate",
+                  deprecationReason.trim(),
+                );
+                closeDeprecationDialog();
+              }}
+            >
+              确认废止
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -2865,6 +2942,19 @@ function MemoryRetrievalActivationSection({
                 <p className="text-muted-foreground mt-2 text-xs leading-5">
                   使用状态决定新告警能否找到这条经验；未来用途决定它在满足全部适用条件后，是仅作研判参考，还是可以复用已审核结论。
                 </p>
+                <div className="mt-3 border-l-2 border-sky-500 pl-3 text-xs leading-5">
+                  <div className="flex items-center gap-1.5 font-semibold text-sky-800 dark:text-sky-200">
+                    <CheckCircle2Icon className="size-3.5" />
+                    当前使用状态依据
+                  </div>
+                  <p className="text-foreground mt-1">
+                    {record.retrieval_reason ??
+                      "当前状态已由候选审核或最近一次使用状态操作确认。"}
+                  </p>
+                  <p className="text-muted-foreground mt-1">
+                    下方说明只用于下一次暂停或重新开放，不是当前状态生效的前置条件。
+                  </p>
+                </div>
                 <div className="mt-4">
                   {record.business_lesson ? (
                     <MemoryLessonReadView lesson={record.business_lesson} />
@@ -2884,66 +2974,108 @@ function MemoryRetrievalActivationSection({
                   )}
                 </div>
                 {retrievalMutable ? (
-                  <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem_8rem_auto] lg:items-end">
-                    <label className="grid gap-1 text-xs">
-                      <span className="text-muted-foreground">
-                        使用状态变更说明
-                      </span>
-                      <Input
-                        value={draft.reason}
-                        placeholder="说明本次开放或暂停的原因"
-                        onChange={(event) =>
-                          onDraftChange(record, "reason", event.target.value)
-                        }
+                  <Collapsible className="mt-4">
+                    <CollapsibleTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="group"
                         disabled={isUpdating}
-                      />
-                    </label>
-                    <label className="grid gap-1 text-xs">
-                      <span className="text-muted-foreground">有效至</span>
-                      <Input
-                        type="datetime-local"
-                        value={draft.validUntil}
-                        onChange={(event) =>
-                          onDraftChange(
-                            record,
-                            "validUntil",
-                            event.target.value,
-                          )
-                        }
-                        disabled={isUpdating || nextAction === "disable"}
-                      />
-                    </label>
-                    <label className="grid gap-1 text-xs">
-                      <span className="text-muted-foreground">复核天数</span>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={365}
-                        value={draft.reviewAfterDays}
-                        onChange={(event) =>
-                          onDraftChange(
-                            record,
-                            "reviewAfterDays",
-                            event.target.value,
-                          )
-                        }
-                        disabled={isUpdating || nextAction === "disable"}
-                      />
-                    </label>
-                    <Button
-                      size="sm"
-                      variant={nextAction === "enable" ? "default" : "outline"}
-                      disabled={
-                        isUpdating || !draft.reason.trim() || invalidEnable
-                      }
-                      onClick={() => onAction(record, nextAction)}
-                    >
-                      <PowerIcon className="size-4" />
-                      {nextAction === "enable"
-                        ? "开放给新告警"
-                        : "暂停用于新告警"}
-                    </Button>
-                  </div>
+                      >
+                        <PowerIcon className="size-4" />
+                        管理使用状态
+                        <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="mt-3 border-t pt-3">
+                      <div className="mb-3">
+                        <div className="text-sm font-semibold">
+                          {nextAction === "disable"
+                            ? "暂停用于新告警"
+                            : "重新开放给新告警"}
+                        </div>
+                        <p className="text-muted-foreground mt-1 text-xs">
+                          {nextAction === "disable"
+                            ? "执行后新告警将完全检索不到这条经验；需要时仍可重新开放。"
+                            : "执行后新告警可以找到这条经验，并按上方标明的未来用途使用。"}
+                        </p>
+                      </div>
+                      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem_8rem_auto] lg:items-end">
+                        <label className="grid gap-1 text-xs">
+                          <span className="text-muted-foreground">
+                            {nextAction === "disable"
+                              ? "暂停原因（必填）"
+                              : "重新开放原因（必填）"}
+                          </span>
+                          <Input
+                            value={draft.reason}
+                            placeholder={
+                              nextAction === "disable"
+                                ? "说明为什么暂停用于新告警"
+                                : "说明为什么重新开放给新告警"
+                            }
+                            onChange={(event) =>
+                              onDraftChange(
+                                record,
+                                "reason",
+                                event.target.value,
+                              )
+                            }
+                            disabled={isUpdating}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs">
+                          <span className="text-muted-foreground">有效至</span>
+                          <Input
+                            type="datetime-local"
+                            value={draft.validUntil}
+                            onChange={(event) =>
+                              onDraftChange(
+                                record,
+                                "validUntil",
+                                event.target.value,
+                              )
+                            }
+                            disabled={isUpdating || nextAction === "disable"}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs">
+                          <span className="text-muted-foreground">
+                            复核天数
+                          </span>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={365}
+                            value={draft.reviewAfterDays}
+                            onChange={(event) =>
+                              onDraftChange(
+                                record,
+                                "reviewAfterDays",
+                                event.target.value,
+                              )
+                            }
+                            disabled={isUpdating || nextAction === "disable"}
+                          />
+                        </label>
+                        <Button
+                          size="sm"
+                          variant={
+                            nextAction === "enable" ? "default" : "outline"
+                          }
+                          disabled={
+                            isUpdating || !draft.reason.trim() || invalidEnable
+                          }
+                          onClick={() => onAction(record, nextAction)}
+                        >
+                          <PowerIcon className="size-4" />
+                          {nextAction === "enable"
+                            ? "确认重新开放"
+                            : "确认暂停"}
+                        </Button>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 ) : (
                   <div className="text-muted-foreground mt-4 border-y py-3 text-xs">
                     历史经验为只读状态，不能修改新告警使用状态。
@@ -3449,19 +3581,26 @@ export function SocReviewQueueWorkbench({
   const handleReviewMemoryCandidate = async (
     candidate: SocMemoryCandidate,
     decision: SocMemoryCandidateReviewDecision,
+    explicitReason?: string,
   ) => {
     const draft =
       memoryReviewDrafts[candidate.candidate_id] ??
       defaultMemoryCandidateReviewDraft(candidate);
     const reviewerVerdict = draft.confirmedVerdict;
+    if (decision === "deprecate" && (explicitReason?.trim().length ?? 0) < 10) {
+      toast.error("请填写至少 10 个字符的废止原因");
+      return;
+    }
     const reason =
-      decision === "reject"
-        ? "审核人决定放弃沉淀该候选，未形成可复用 Memory。"
-        : decision === "reopen"
-          ? "审核人重新打开此前被放弃的候选，返回待审核状态。"
-          : decision === "confirm" && reviewerVerdict
-            ? `审核人确认研判经验，最终判断为${verdictLabel(reviewerVerdict)}；未来用途为${draft.applyToFutureMatches ? "精确匹配时复用结论" : "仅作研判参考"}。`
-            : `审核人执行候选状态变更：${decision}。`;
+      decision === "deprecate" && explicitReason?.trim()
+        ? explicitReason.trim()
+        : decision === "reject"
+          ? "审核人决定放弃沉淀该候选，未形成可复用 Memory。"
+          : decision === "reopen"
+            ? "审核人重新打开此前被放弃的候选，返回待审核状态。"
+            : decision === "confirm" && reviewerVerdict
+              ? `审核人确认研判经验，最终判断为${verdictLabel(reviewerVerdict)}；未来用途为${draft.applyToFutureMatches ? "精确匹配时复用结论" : "仅作研判参考"}。`
+              : `审核人执行候选状态变更：${decision}。`;
     const narrowedApplicability = reviewedMemoryApplicability(candidate, draft);
     const effectiveApplicability =
       narrowedApplicability ?? candidate.applicability;
@@ -3774,8 +3913,12 @@ export function SocReviewQueueWorkbench({
                   isReviewing={reviewMemoryCandidateMutation.isPending}
                   isDraftingLesson={draftMemoryLessonMutation.isPending}
                   onReviewDraftChange={handleMemoryReviewDraftChange}
-                  onReview={(candidate, decision) =>
-                    void handleReviewMemoryCandidate(candidate, decision)
+                  onReview={(candidate, decision, reason) =>
+                    void handleReviewMemoryCandidate(
+                      candidate,
+                      decision,
+                      reason,
+                    )
                   }
                   onDraftLesson={(candidate) =>
                     void handleDraftMemoryBusinessLesson(candidate)
@@ -4145,8 +4288,12 @@ export function SocReviewQueueWorkbench({
                   isReviewing={reviewMemoryCandidateMutation.isPending}
                   isDraftingLesson={draftMemoryLessonMutation.isPending}
                   onReviewDraftChange={handleMemoryReviewDraftChange}
-                  onReview={(candidate, decision) =>
-                    void handleReviewMemoryCandidate(candidate, decision)
+                  onReview={(candidate, decision, reason) =>
+                    void handleReviewMemoryCandidate(
+                      candidate,
+                      decision,
+                      reason,
+                    )
                   }
                   onDraftLesson={(candidate) =>
                     void handleDraftMemoryBusinessLesson(candidate)

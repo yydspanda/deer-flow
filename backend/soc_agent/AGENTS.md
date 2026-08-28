@@ -79,6 +79,12 @@ file for SOC code. The authoritative product and engineering documents are:
   The server validates every fixed alert against its expected current Pattern group and
   reports missing/regrouped targets as drift; the guide must not seed results, prescribe
   a verdict, bypass Runtime/Memory governance, or turn rehearsal state into quality proof.
+- Corpus DEV execution uses a process-local, bounded claim registry owned by the
+  workbench service. Different alert IDs may run concurrently up to the configured LLM
+  admission capacity; one alert ID may have only one active claim, and a duplicate
+  request fails immediately without invoking Runtime. `/activity` is the lightweight
+  cross-session polling contract. This DEV claim is not a production multi-instance
+  lease; Kafka/API production ingress continues to require durable source idempotency.
 - The bounded-input audit artifact must distinguish model-visible projection from the
   frozen Runtime request. Only a matching prompt/builder version may be labeled exact;
   old runs use an explicit partial reconstruction status instead of silently applying a
@@ -136,6 +142,10 @@ file for SOC code. The authoritative product and engineering documents are:
   Memory uses must not inherit the current record version's label or activation state,
   and wrong-auto-ignore requires an actually applied ignore disposition plus trusted
   final risk truth.
+- Confirmed Memory context exposes typed applicability and the reviewer-confirmed verdict
+  to the bounded analyzer. Fully applicable `exact_context` is a strong semantic prior,
+  but remains non-authoritative without a Decision Directive: deviating requires cited
+  current evidence, while Tenant Policy and action authority remain separate stages.
 - Journal provider requests before invocation. Recovery may resume only when the frozen
   request and config/model lineage still match; otherwise start a new attempt.
 - Kafka topic `soc.alerts.raw.v1` accepts only

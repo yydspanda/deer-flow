@@ -17,6 +17,7 @@ import {
   executeSocApprovedAction,
   expireSocApprovalRequest,
   getSocAlertInvestigationContext,
+  getSocCorpusWorkbenchActivity,
   getSocCorpusWorkbenchAudit,
   getSocCorpusWorkbenchExecution,
   getSocCorpusWorkbenchState,
@@ -225,6 +226,7 @@ export const socMemoryWorkbenchQueryKeys = {
 export const socCorpusWorkbenchQueryKeys = {
   all: ["soc-corpus-workbench"] as const,
   state: () => [...socCorpusWorkbenchQueryKeys.all, "state"] as const,
+  activity: () => [...socCorpusWorkbenchQueryKeys.all, "activity"] as const,
   execution: (alertId: string | null | undefined) =>
     [...socCorpusWorkbenchQueryKeys.all, "execution", alertId] as const,
   audit: (alertId: string | null | undefined) =>
@@ -601,6 +603,19 @@ export function useSocCorpusWorkbench() {
   return { state: query.data ?? null, ...query };
 }
 
+export function useSocCorpusWorkbenchActivity() {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socCorpusWorkbenchQueryKeys.activity(),
+    queryFn: () => getSocCorpusWorkbenchActivity(context),
+    retry: false,
+    refetchInterval: 1_000,
+    refetchIntervalInBackground: false,
+    staleTime: 0,
+  });
+  return { activity: query.data ?? null, ...query };
+}
+
 export function useSocCorpusWorkbenchExecution(
   alertId: string | null | undefined,
   { live = false }: { live?: boolean } = {},
@@ -644,6 +659,12 @@ export function useProcessSocCorpusWorkbenchAlert() {
         result.state,
       );
       void queryClient.invalidateQueries({
+        queryKey: socCorpusWorkbenchQueryKeys.state(),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: socCorpusWorkbenchQueryKeys.activity(),
+      });
+      void queryClient.invalidateQueries({
         queryKey: socCorpusWorkbenchQueryKeys.execution(result.alert_id),
       });
       void queryClient.invalidateQueries({
@@ -653,6 +674,11 @@ export function useProcessSocCorpusWorkbenchAlert() {
       void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
       void queryClient.invalidateQueries({
         queryKey: socOperationsQueryKeys.all,
+      });
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: socCorpusWorkbenchQueryKeys.activity(),
       });
     },
   });

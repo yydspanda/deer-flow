@@ -27,6 +27,7 @@ from soc_agent.contracts import (
     SocMemoryRecord,
     SocMemoryRetrievalResult,
     SocMemoryTargetArtifact,
+    Verdict,
 )
 from soc_agent.core import SocMemoryPatternPostAnalysisObserver
 from soc_agent.core.runtime import analyze_alert
@@ -127,6 +128,7 @@ def _record() -> SocMemoryRecord:
             notes="Reviewed tenant lesson.",
         ),
         confidence=0.9,
+        reviewed_verdict=Verdict.FALSE_POSITIVE,
         content_hash="sha256:" + "a" * 64,
         facets_hash="sha256:" + "b" * 64,
         retrieval_enabled=True,
@@ -181,6 +183,7 @@ def test_confirmed_memory_is_projected_as_stable_m_reference() -> None:
     assert "does not prove a click" in item.summary
     assert item.memory_comparison is not None
     assert item.memory_comparison.use_mode.value == "exact_context"
+    assert item.memory_comparison.reviewed_verdict is Verdict.FALSE_POSITIVE
     assert item.memory_comparison.decision_directive_applicable is False
     assert retriever.queries[0].require_retrieval_enabled is True
 
@@ -206,6 +209,7 @@ def test_context_only_memory_projection_is_explicitly_non_authoritative() -> Non
     assert item.summary.startswith("[Context-only reviewed experience / 受治理相似经验")
     assert item.memory_comparison is not None
     assert item.memory_comparison.use_mode.value == "context_only"
+    assert item.memory_comparison.reviewed_verdict is Verdict.FALSE_POSITIVE
     assert item.memory_comparison.decision_directive_applicable is False
     assert item.memory_comparison.shared_facets["detection_key"] == ["sample:rule"]
     assert item.memory_comparison.current_only_facets["rule_code"] == ["RULE-001"]

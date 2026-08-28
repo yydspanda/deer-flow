@@ -4,6 +4,7 @@ import {
   AlertTriangleIcon,
   ArrowLeftIcon,
   CheckCircle2Icon,
+  ClipboardCheckIcon,
   DatabaseIcon,
   FilePenLineIcon,
   FlaskConicalIcon,
@@ -697,13 +698,24 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                     </span>
                   ) : null}
                 </div>
-                <Button variant="link" size="sm" className="mt-2 px-0" asChild>
-                  <Link
-                    href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(record.source_candidate_id)}`}
-                  >
-                    查看来源候选的审核记录
-                  </Link>
-                </Button>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+                  <div>
+                    <div className="text-foreground font-semibold">
+                      来源候选审核
+                    </div>
+                    <p className="text-muted-foreground mt-1 font-sans text-xs">
+                      查看这条经验最初由谁确认、依据什么业务事实，以及当时选择的使用方式。
+                    </p>
+                  </div>
+                  <Button variant="secondary" size="sm" asChild>
+                    <Link
+                      href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(record.source_candidate_id)}`}
+                    >
+                      <ClipboardCheckIcon className="size-4" />
+                      查看来源候选审核
+                    </Link>
+                  </Button>
+                </div>
               </section>
             </>
           )}
