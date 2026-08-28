@@ -57,6 +57,7 @@ def get_soc_memory_workbench_service(
                 runtime.repository,
                 settings=runtime.settings,
                 memory_environment=MEMORY_WORKBENCH_ENVIRONMENT,
+                pattern_observation_enabled=False,
             ),
             pattern_service=SocMemoryPatternService(
                 repository=runtime.repository,

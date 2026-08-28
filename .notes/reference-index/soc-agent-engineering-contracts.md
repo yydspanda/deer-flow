@@ -2711,9 +2711,10 @@ tool permission denial rate
 - Memory eval 必须调用生产 `SocMemoryProfile`、`SocMemoryService`、`M-*` enricher 和
   `SocAutomationService`；禁止复制匹配或 directive 算法。retrieval relevance、Profile lesson
   applicability 和实际 directive eligibility 必须独立计量，不能把“召回”当作“改判已获准”。
-- 任何携带 decision directive 的 confirmed Memory 必须保存 `soc.memory_business_lesson.v1`；该结构
-  脱离 source alert 仍可独立理解，分别表达业务结论、业务依据、精确适用条件、允许泛化范围、
-  失效/反证条件和处置建议。`SocMemoryService.review_candidate()` 是唯一确认边界：决策型确认必须显式
+- 任何新携带 decision directive 的 confirmed Memory 必须保存 `soc.memory_business_lesson.v2`；v1
+  保持只读兼容。v2 脱离 source alert 仍可独立理解，分别表达检测场景、实际业务事件、审核结论、
+  判断依据、精确适用条件、允许泛化范围、失效/反证条件和处置建议。
+  `SocMemoryService.review_candidate()` 是唯一确认边界：决策型确认必须显式
   提交 reviewer-owned `record_lesson`；服务只负责契约校验、确定性渲染和持久化，不得从自由文本
   review reason、candidate caption 或测试夹具猜出业务经验。缺少 Lesson 必须在 candidate 状态迁移前拒绝；
   `Reviewed simulation lesson for ...` 这类看似够长但没有业务含义的占位语句同样不能获得改判权。
@@ -2731,8 +2732,8 @@ tool permission denial rate
 - 候选级 AI 辅助使用独立的 `soc.memory_business_lesson_draft.v1`，只允许在已有
   `SocMemoryApplicabilitySpec` 的可评审候选上调用。`SocMemoryLessonDraftService` 从服务端候选构建
   有界 `D-*` 目录，并要求当前审核人显式选择最终 verdict；历史 candidate/cohort verdict 只是模型观察，
-  不得覆盖该人工选择。模型只能返回业务结论、逐条引用的业务依据、泛化边界、失效条件、处置建议和
-  uncertainties；每条草稿依据必须保留到精确 `D-*` 来源的映射，供审核人逐条核验。机器适用条件由服务端从
+  不得覆盖该人工选择。模型只能返回检测场景、实际事件、业务结论、逐条引用的判断依据、泛化边界、
+  失效条件、处置建议和 uncertainties；每条草稿依据必须保留到精确 `D-*` 来源的映射，供审核人逐条核验。机器适用条件由服务端从
   applicability 确定性补齐。未知引用、超长上下文或 schema
   不合格必须拒绝，普通 JSON 解析失败只允许记录在 provenance 中的保守 `json_repair`。
   Provider JSON-object mode 不是前置条件；Prompt 尾部必须提供带 `required`/
@@ -2870,7 +2871,7 @@ tool permission denial rate
   均可缺失；generic Memory Kernel 不得规定一个所有厂商必填的多维联合硬键。Tenant Profile 可以基于
   已存在的 canonical facets 定义版本化 compound cohort/applicability，但必须保留 ruleless fallback 和
   context-only/decision-authority 边界。
-- PingAn Profile v6（feature schema v5）把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
+- PingAn Profile v7（feature schema v5）把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
   `detection_key`，但该 key 只表示规则大类，不得单独复制历史 verdict。Profile 必须从 canonical
   rule name 生成版本化 `detection_signature`；不得用 `alert_id/run_id` 合成任一检测身份。
   `detection_key`、`detection_signature` 与 deterministic `behavior_fingerprint` 同时存在时，必须使用三者的
@@ -2881,7 +2882,7 @@ tool permission denial rate
   并从 bounded current-alert evidence 提取标准 CVE 为 `vulnerability_id`；不得把 source/destination IP 或
   ephemeral source port 编入 behavior fingerprint。Pattern signature 必须冻结有界 facet 白名单，不能因新
   facet 超过 `MemoryPatternSignature` 的 20-group contract。
-- PingAn Profile v6（feature schema v5）必须从 canonical typed entities 生成 core/detail 两层 behavior component。Core 可包含
+- PingAn Profile v7（feature schema v5）必须从 canonical typed entities 生成 core/detail 两层 behavior component。Core 可包含
   process image/path、稳定 command module/switch 名、parent service 和 typed target class；detail 可保留
   `target_file:SAM|SYSTEM` 等精确观察；network service、CVE 和版本化 `attack_behavior_family` 可参与
   同类拆分。`IP/host/account`、alert/run lineage 和 ClassId 等随机参数不得进入
@@ -2926,7 +2927,7 @@ tool permission denial rate
   继承 directive；必须重新聚合、审核和激活。Profile 投影若同一 IP 同时存在于 generic `entity=ip:*` 与
   typed `role_entity`，只移除重复 generic facet；不得把 IP 变成 required facet，跨 IP 行为泛化必须保留。
 - Memory 的 fixed window 只定义重复 observation 的候选聚合范围，不是 Memory 生命周期。Generic Profile
-  默认 24h；tenant profile 可声明版本化 bounded default，PingAn Profile v6 默认 30d。显式 operator/eval
+  默认 24h；tenant profile 可声明版本化 bounded default，PingAn Profile v7 默认 30d。显式 operator/eval
   policy 可覆盖 Profile 默认值，但必须冻结进 observation；Profile 变更不得静默重写旧窗口。当前
   `window_start/window_end` 只保存在 source metadata；pattern candidate 的 90 天治理有效期从候选生成
   时开始，人工确认后 repeated-pattern record 再从确认时间获得独立的 90 天有效期，review interval
@@ -3030,3 +3031,32 @@ tool permission denial rate
 - `soc automation lineage --run-id|--alert-id` 是当前 read-only operator surface。输出必须同时暴露
   decision before/after、disposition、authorization reason/mode 和每次 execution；不得输出 credential、
   provider header、rendered prompt 或完整敏感 response。
+
+### 23.5 效能遥测、最终真值与规则建议
+
+- `SocEffectivenessService` 是质量、自动化、规则和算力指标的唯一 Core read service。API/Web 不得直接
+  扫描 JSON payload、在浏览器拼分母或复制聚合算法。SQL Repository 只读取索引列与既有 append-only
+  lineage，返回 `SocRuleEffectivenessAggregate[]`；Core 再生成 `soc.effectiveness_snapshot.v1`。
+- 统计窗口内同一 `alert_id` 只选择最新 `AnalysisRun`；旧 Run 计入 `superseded_run_count`，不得重复扩大
+  告警量。aggregation mode 固定记录为 `latest_run_per_alert_sql_v1`。
+- 质量真值只能来自高可信人工 correction/outcome、通过 mapping/trust/target gate 的外部 disposition，或
+  sealed independent sample label。模型自报 verdict/confidence、自由文本 reason、close status 和无来源
+  fixture 不得进入准确率、漏报率或规则误报率分母。分母为零时必须返回 `not_measured + value=null`，
+  禁止返回看似优秀的 `0%` 或 `100%`。
+- Detection truth 与 operational disposition 分开。`true_positive + ignored` 可以表达已授权测试；
+  applied ignore 不能反向把技术真值改成 false-positive。技术漏报和错误自动忽略必须分别统计。
+- Rule/detection group 使用 tenant、source type/system 与 canonical detection identity；`rule_code`、
+  `rule_name` 均可缺失，只是供应商 alias。每组必须分别暴露 confirmed-risk share、rule false-positive
+  share、AI triage accuracy/miss、自动忽略与错误忽略、模型用量/质量及 Memory use/contradiction。
+  Confirmed-risk share 不是 detector recall；缺少未告警的攻击总体时不得宣称规则召回率。
+- migration `0026_effectiveness_telemetry` 为 Run 增加 nullable verdict、duration、provider usage、Token 和
+  output-quality 索引。它不回写历史 payload；旧数据 coverage 为空是合法状态。Provider 不返回 usage 时
+  `usage_measurement_status=unavailable`，禁止按字符数估算并冒充 Token。
+- `SocRuleOptimizationPolicy` 必须版本化。`SocRuleImprovementRecommendation.authority` 固定为
+  `advisory`；推荐可以指向补标签、修 Adapter/Prompt、拆场景、调上游规则、保留完整研判或评估快速路径，
+  但不得自动修改 Flink rule、Prompt、Memory、Tenant Policy、Automation Policy 或动作权限。
+- 任何快速路径都不得仅匹配 `rule_code`。至少需要高量稳定 outcome、足够标签、实际模型消耗、精确
+  behavior/applicability、已审核 Memory/Policy、无已知 wrong-auto-ignore 和抽样完整研判。新行为、反证、
+  schema/Profile/模型版本变化或 Memory suspension 必须 fail back to full analysis。
+- 规则改进的效果声明必须绑定旧/新版本、冻结 cohort、数据/配置/模型 hash 和 before/after 或 A/B 指标；
+  必须同时验证误报下降、漏报不升、错误自动忽略不升。仅观察调整后的单周期相关性不能声称因果收益。

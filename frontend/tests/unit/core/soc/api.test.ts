@@ -23,6 +23,8 @@ import {
   getSocMemoryLineage,
   getSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
+  getSocEffectivenessSnapshot,
+  getSocRuleEffectivenessDetail,
   getSocNormalizationMetrics,
   getSocOperationsSnapshot,
   getSocReviewContext,
@@ -975,5 +977,71 @@ describe("SOC operations API", () => {
     const headers = firstFetchInit().headers as Headers;
     expect(headers.get("x-soc-actor-id")).toBe("operator-1");
     expect(headers.get("x-soc-surface")).toBe("web");
+  });
+
+  test("loads denominator-visible effectiveness metrics for one window", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        schema_version: "soc.effectiveness_snapshot.v1",
+        generated_at: "2026-08-28T08:00:00Z",
+        availability: "not_configured",
+        scope: {
+          schema_version: "soc.effectiveness_scope.v1",
+          window_start: "2026-07-29T08:00:00Z",
+          window_end: "2026-08-28T08:00:00Z",
+          tenant_id: "pingan",
+          source_type: "nids",
+        },
+        rules: [],
+        recommendation_policy_version: "soc.rule_optimization_policy.v1",
+        aggregation_mode: "latest_run_per_alert_sql_v1",
+        measurement_notes: [],
+      }),
+    );
+
+    await expect(
+      getSocEffectivenessSnapshot(
+        { windowDays: 30, tenantId: "pingan", sourceType: "nids" },
+        { actorId: "operator-1", surface: "web" },
+      ),
+    ).resolves.toMatchObject({
+      schema_version: "soc.effectiveness_snapshot.v1",
+      availability: "not_configured",
+    });
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/effectiveness/snapshot?window_days=30&tenant_id=pingan&source_type=nids",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+  });
+
+  test("loads one encoded rule drill-down for the same window", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        schema_version: "soc.rule_effectiveness_detail.v1",
+        generated_at: "2026-08-28T08:00:00Z",
+        scope: {},
+        rule: {},
+        behavior_groups: [],
+        memories: [],
+        relationship_note: "memory_rule_relationship_derived_from_actual_runs",
+      }),
+    );
+
+    await expect(
+      getSocRuleEffectivenessDetail(
+        "rule/key",
+        { windowDays: 7, tenantId: "pingan" },
+        { actorId: "operator-1", surface: "web" },
+      ),
+    ).resolves.toMatchObject({
+      schema_version: "soc.rule_effectiveness_detail.v1",
+      behavior_groups: [],
+    });
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/effectiveness/rules/rule%2Fkey?window_days=7&tenant_id=pingan",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
   });
 });

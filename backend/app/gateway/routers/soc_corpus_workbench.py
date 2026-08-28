@@ -51,6 +51,7 @@ def get_soc_corpus_workbench_service(
                 runtime.repository,
                 settings=runtime.settings,
                 runtime_environment=CORPUS_WORKBENCH_ENVIRONMENT,
+                pattern_observation_enabled=False,
             ),
             pattern_service=SocMemoryPatternService(
                 repository=runtime.repository,

@@ -37,6 +37,7 @@ from app.gateway.routers import (
     soc_alerts,
     soc_approvals,
     soc_corpus_workbench,
+    soc_effectiveness,
     soc_external_dispositions,
     soc_memory,
     soc_memory_workbench,
@@ -885,6 +886,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # SOC operational visibility API is mounted at /api/soc/operations
     app.include_router(soc_operations.router)
+
+    # SOC quality, automation, cost and rule-effectiveness read model.
+    app.include_router(soc_effectiveness.router)
 
     # GitHub webhooks API is mounted at /api/webhooks/github
     # Exempt from auth and CSRF middleware (see auth_middleware._PUBLIC_PATH_PREFIXES

@@ -506,7 +506,11 @@ export interface SocMemoryDecisionDirective {
 }
 
 export interface SocMemoryBusinessLesson {
-  schema_version: "soc.memory_business_lesson.v1";
+  schema_version:
+    | "soc.memory_business_lesson.v1"
+    | "soc.memory_business_lesson.v2";
+  detection_scenario?: string | null;
+  observed_event?: string | null;
   conclusion: string;
   business_rationale: string[];
   applicability_conditions: string[];
@@ -657,6 +661,7 @@ export interface SocMemoryRecord {
   summary: string;
   content: string;
   business_lesson?: SocMemoryBusinessLesson | null;
+  reviewed_verdict?: SocVerdict | null;
   facets: Record<string, string[]>;
   evidence_refs: string[];
   validity: SocMemoryCandidateValidity;
@@ -745,7 +750,10 @@ export interface SocMemoryFeedbackEvent {
   source: string;
   trust: string;
   final_verdict: SocVerdict;
+  memory_reviewed_verdict?: SocVerdict | null;
   memory_target_verdict?: SocVerdict | null;
+  directive_was_active: boolean;
+  applicability_status?: string | null;
   alignment: string;
   reason: string;
   source_ref: string;
@@ -2264,4 +2272,196 @@ export interface SocOperationsSnapshot {
   kafka: SocOperationsKafkaSnapshot;
   measurement_gaps: SocOperationsMeasurementGap[];
   production_slo_evidence_available: false;
+}
+
+export type SocRuleRecommendationKind =
+  | "insufficient_labels"
+  | "upstream_rule_tuning"
+  | "rule_split"
+  | "fast_path_candidate"
+  | "keep_full_analysis"
+  | "improve_adapter_or_enrichment"
+  | "detection_gap"
+  | "monitor";
+
+export type SocRuleRecommendationPriority = "info" | "low" | "medium" | "high";
+
+export interface SocEffectivenessScope {
+  schema_version: "soc.effectiveness_scope.v1";
+  window_start: string;
+  window_end: string;
+  tenant_id?: string | null;
+  source_type?: string | null;
+}
+
+export interface SocRateMetric {
+  metric_id: string;
+  availability: SocOperationsAvailability;
+  numerator: number;
+  denominator: number;
+  value?: number | null;
+  formula: string;
+  interpretation: string;
+}
+
+export interface SocEffectivenessCoverage {
+  total_alert_count: number;
+  completed_alert_count: number;
+  superseded_run_count: number;
+  labeled_alert_count: number;
+  high_trust_labeled_alert_count: number;
+  label_coverage: SocRateMetric;
+  high_trust_label_coverage: SocRateMetric;
+}
+
+export interface SocEffectivenessSummary {
+  triage_accuracy: SocRateMetric;
+  detection_miss_rate: SocRateMetric;
+  operational_miss_rate: SocRateMetric;
+  transfer_precision: SocRateMetric;
+  attack_transfer_recall: SocRateMetric;
+  auto_ignore_rate: SocRateMetric;
+  wrong_auto_ignore_rate: SocRateMetric;
+  human_touch_rate: SocRateMetric;
+}
+
+export interface SocComputeEffectiveness {
+  run_count: number;
+  provider_run_count: number;
+  provider_call_count: number;
+  token_measured_run_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  average_tokens_per_measured_run?: number | null;
+  duration_measured_run_count: number;
+  average_total_duration_ms?: number | null;
+  repair_run_count: number;
+  fallback_run_count: number;
+  degraded_run_count: number;
+  token_measurement_coverage: SocRateMetric;
+  repair_rate: SocRateMetric;
+  fallback_rate: SocRateMetric;
+  degraded_rate: SocRateMetric;
+}
+
+export interface SocRuleImprovementRecommendation {
+  schema_version: "soc.rule_improvement_recommendation.v1";
+  kind: SocRuleRecommendationKind;
+  priority: SocRuleRecommendationPriority;
+  title: string;
+  rationale: string[];
+  suggested_next_step: string;
+  reason_codes: string[];
+  policy_version: string;
+  authority: "advisory";
+  status: "candidate";
+}
+
+export interface SocRuleEffectiveness {
+  schema_version: "soc.rule_effectiveness.v1";
+  group_key: string;
+  tenant_id?: string | null;
+  source_type: string;
+  source_system?: string | null;
+  detection_identity: string;
+  detection_key?: string | null;
+  rule_code?: string | null;
+  rule_name?: string | null;
+  alert_count: number;
+  completed_count: number;
+  labeled_count: number;
+  high_trust_labeled_count: number;
+  label_coverage: number;
+  final_risk_count: number;
+  final_false_positive_count: number;
+  confirmed_risk_rate?: number | null;
+  false_positive_rate?: number | null;
+  triage_accuracy?: number | null;
+  miss_rate?: number | null;
+  transfer_precision?: number | null;
+  auto_ignore_rate: number;
+  wrong_auto_ignore_count: number;
+  provider_call_count: number;
+  provider_run_count: number;
+  total_tokens: number;
+  average_total_duration_ms?: number | null;
+  repair_run_count: number;
+  fallback_run_count: number;
+  degraded_run_count: number;
+  memory_context_use_count: number;
+  memory_directive_use_count: number;
+  memory_contradiction_count: number;
+  recommendation: SocRuleImprovementRecommendation;
+}
+
+export interface SocBehaviorGroupEffectiveness {
+  schema_version: "soc.behavior_group_effectiveness.v1";
+  lineage_key: string;
+  behavior_label: string;
+  environment: string;
+  data_class: string;
+  sample_count: number;
+  distinct_alert_count: number;
+  window_count: number;
+  verdict_counts: Record<string, number>;
+  first_observed_at: string;
+  last_observed_at: string;
+  candidate_id?: string | null;
+  candidate_status?: string | null;
+  memory_id?: string | null;
+  memory_version?: number | null;
+  memory_status?: string | null;
+  retrieval_enabled: boolean;
+}
+
+export interface SocMemoryEffectiveness {
+  schema_version: "soc.memory_effectiveness.v1";
+  memory_id: string;
+  memory_version: number;
+  summary?: string | null;
+  record_status?: string | null;
+  retrieval_enabled: boolean;
+  use_alert_count: number;
+  context_only_count: number;
+  directive_count: number;
+  high_trust_feedback_count: number;
+  support_count: number;
+  contradiction_count: number;
+  not_applicable_count: number;
+  helpful_correction_count: number;
+  harmful_override_count: number;
+  wrong_auto_ignore_count: number;
+  final_outcome_coverage: SocRateMetric;
+  directive_accuracy: SocRateMetric;
+  source_rule_codes: string[];
+  actual_rule_codes: string[];
+  last_use_at?: string | null;
+  last_feedback_at?: string | null;
+  causal_note: "directive_effects_attributable_context_effects_non_causal";
+}
+
+export interface SocRuleEffectivenessDetail {
+  schema_version: "soc.rule_effectiveness_detail.v1";
+  generated_at: string;
+  scope: SocEffectivenessScope;
+  rule: SocRuleEffectiveness;
+  behavior_groups: SocBehaviorGroupEffectiveness[];
+  memories: SocMemoryEffectiveness[];
+  relationship_note: "memory_rule_relationship_derived_from_actual_runs";
+}
+
+export interface SocEffectivenessSnapshot {
+  schema_version: "soc.effectiveness_snapshot.v1";
+  generated_at: string;
+  availability: SocOperationsAvailability;
+  scope: SocEffectivenessScope;
+  coverage?: SocEffectivenessCoverage | null;
+  summary?: SocEffectivenessSummary | null;
+  compute?: SocComputeEffectiveness | null;
+  rules: SocRuleEffectiveness[];
+  recommendation_policy_version: string;
+  aggregation_mode: "latest_run_per_alert_sql_v1";
+  error_code?: string | null;
+  measurement_notes: string[];
 }

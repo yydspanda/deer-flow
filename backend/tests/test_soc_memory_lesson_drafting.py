@@ -15,6 +15,7 @@ from soc_agent.contracts import (
     EntrySurface,
     ServiceRequestContext,
     SocMemoryApplicabilitySpec,
+    SocMemoryBusinessLesson,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
@@ -93,7 +94,7 @@ def test_memory_lesson_prompt_uses_bounded_sources_and_tail_contract() -> None:
     assert any(item.source_kind == "reviewer_verdict" and item.value == "false_positive" for item in prompt.source_catalog)
     assert "Do not output applicability_conditions" in prompt.system
     assert prompt.user.rstrip().endswith("</final_checklist>")
-    assert '"schema_version": "soc.memory_business_lesson_model_output.v2"' in (prompt.user)
+    assert '"schema_version": "soc.memory_business_lesson_model_output.v3"' in (prompt.user)
     assert '"additionalProperties": false' in prompt.user
     assert '"required": [' in prompt.user
 
@@ -116,8 +117,10 @@ def test_memory_lesson_drafter_builds_high_quality_askbob_draft_without_persiste
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "false_positive",
+                "detection_scenario": "反向连接检测规则报告了疑似反弹 Shell 行为。",
+                "observed_event": "实际流量访问平安内部 AskBob LLM 服务。",
                 "conclusion": ("该流量实际访问平安内部 AskBob LLM 服务，并非真实反弹 Shell；仅在相同服务和行为模式命中时复用误报结论。"),
                 "supporting_source_refs": [verdict_ref, reviewer_ref, candidate_ref],
                 "business_rationale": [
@@ -204,6 +207,7 @@ def test_memory_lesson_drafter_builds_high_quality_askbob_draft_without_persiste
     )
     assert reviewed.memory_record is not None
     assert reviewed.memory_record.business_lesson == draft.lesson
+    assert reviewed.memory_record.reviewed_verdict is Verdict.FALSE_POSITIVE
 
 
 def test_memory_lesson_drafter_rejects_unknown_source_alias() -> None:
@@ -211,8 +215,10 @@ def test_memory_lesson_drafter_rejects_unknown_source_alias() -> None:
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "false_positive",
+                "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                "observed_event": "候选记录了经过审核的重复业务事件模式。",
                 "conclusion": "该结论引用了当前候选中不存在的来源，因此必须拒绝。",
                 "supporting_source_refs": ["D-999"],
                 "business_rationale": [{"statement": "这是无法解析的伪造来源。", "source_refs": ["D-999"]}],
@@ -237,8 +243,10 @@ def test_memory_lesson_drafter_drops_only_empty_unknown_top_level_field() -> Non
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "false_positive",
+                "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                "observed_event": "候选记录了经过审核的重复业务事件模式。",
                 "conclusion": "该重复模式仅在审核后的精确范围内可复用无风险结论。",
                 "supporting_source_refs": ["D-001"],
                 "business_rationale": [
@@ -281,8 +289,10 @@ def test_memory_lesson_drafter_canonicalizes_supporting_refs_to_rationale_union(
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "false_positive",
+                "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                "observed_event": "候选记录了经过审核的重复业务事件模式。",
                 "conclusion": "该重复模式经审核为无风险业务行为，仅在精确适用条件命中时复用误报结论。",
                 "supporting_source_refs": [f"D-{index:03d}" for index in range(1, 50)],
                 "business_rationale": [
@@ -316,8 +326,10 @@ def test_memory_lesson_drafter_rejects_nonempty_unknown_top_level_field() -> Non
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "false_positive",
+                "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                "observed_event": "候选记录了经过审核的重复业务事件模式。",
                 "conclusion": "该重复模式仅在审核后的精确范围内可复用无风险结论。",
                 "supporting_source_refs": ["D-001"],
                 "business_rationale": [
@@ -356,8 +368,10 @@ def test_memory_lesson_drafter_repairs_one_incomplete_provider_output() -> None:
             ),
             json.dumps(
                 {
-                    "schema_version": "soc.memory_business_lesson_model_output.v2",
+                    "schema_version": "soc.memory_business_lesson_model_output.v3",
                     "reviewer_verdict": "false_positive",
+                    "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                    "observed_event": "候选记录了经过审核的重复业务事件模式。",
                     "conclusion": "该重复模式仅在审核后的精确范围内可复用无风险结论。",
                     "supporting_source_refs": ["D-001"],
                     "business_rationale": [
@@ -399,8 +413,10 @@ def test_memory_lesson_drafter_repairs_action_instruction_in_conclusion() -> Non
         [
             json.dumps(
                 {
-                    "schema_version": "soc.memory_business_lesson_model_output.v2",
+                    "schema_version": "soc.memory_business_lesson_model_output.v3",
                     "reviewer_verdict": "false_positive",
+                    "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                    "observed_event": "候选记录了经过审核的重复业务事件模式。",
                     "conclusion": "该重复模式是已确认的无风险业务行为，命中后不做阻断。",
                     "supporting_source_refs": ["D-001"],
                     "business_rationale": [
@@ -418,8 +434,10 @@ def test_memory_lesson_drafter_repairs_action_instruction_in_conclusion() -> Non
             ),
             json.dumps(
                 {
-                    "schema_version": "soc.memory_business_lesson_model_output.v2",
+                    "schema_version": "soc.memory_business_lesson_model_output.v3",
                     "reviewer_verdict": "false_positive",
+                    "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                    "observed_event": "候选记录了经过审核的重复业务事件模式。",
                     "conclusion": "该重复模式是已确认的无风险业务行为，技术结论为误报。",
                     "supporting_source_refs": ["D-001"],
                     "business_rationale": [
@@ -462,8 +480,10 @@ def test_memory_lesson_drafter_allows_factual_authorization_status_in_conclusion
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "true_positive",
+                "detection_scenario": "安全检测规则报告了真实攻击尝试。",
+                "observed_event": "审核确认攻击行为已经发生，授权状态仅影响处置方式。",
                 "conclusion": "该模式代表真实攻击尝试；授权状态不改变攻击行为已经发生的技术结论。",
                 "supporting_source_refs": [verdict_ref, reviewer_ref],
                 "business_rationale": [
@@ -515,8 +535,10 @@ def test_memory_lesson_drafter_rejects_ungrounded_identifier_or_action_conclusio
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "false_positive",
+                "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                "observed_event": "候选记录了经过审核的重复业务事件模式。",
                 "conclusion": conclusion,
                 "supporting_source_refs": ["D-001"],
                 "business_rationale": [
@@ -548,8 +570,10 @@ def test_memory_lesson_api_returns_review_only_draft() -> None:
     client = FakeChatClient(
         json.dumps(
             {
-                "schema_version": "soc.memory_business_lesson_model_output.v2",
+                "schema_version": "soc.memory_business_lesson_model_output.v3",
                 "reviewer_verdict": "false_positive",
+                "detection_scenario": "安全检测规则报告了受治理的可疑行为模式。",
+                "observed_event": "候选记录了经过审核的重复业务事件模式。",
                 "conclusion": "重复样本呈现一致无风险模式，可在精确适用条件命中且无反证时复用。",
                 "supporting_source_refs": ["D-001", "D-002"],
                 "business_rationale": [
@@ -599,6 +623,41 @@ def test_memory_lesson_api_returns_review_only_draft() -> None:
     assert draft.persistence_performed is False
     assert draft.uncertainties == ["内部服务归属仍需专家在确认前核对。"]
     assert repository.list_memory_records() == []
+
+
+def test_confirmed_context_only_memory_keeps_the_reviewed_outcome() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+    )
+    candidate = service.propose_candidate(_candidate_command())
+
+    reviewed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="运营确认经验内容，但暂不允许其直接覆盖新告警结论。",
+            record_lesson=SocMemoryBusinessLesson(
+                schema_version="soc.memory_business_lesson.v2",
+                detection_scenario="反向连接检测规则报告疑似反弹 Shell 行为。",
+                observed_event="实际事件是访问经过确认的内部 AskBob LLM 服务。",
+                conclusion="该精确模式经运营确认属于正常内部服务访问，技术结论为误报。",
+                business_rationale=["运营人员核对了服务归属和当前事件行为。"],
+                applicability_conditions=["仅在机器适用条件全部命中时使用。"],
+                generalization_boundaries=["非必需源地址可以变化，服务和行为模式必须一致。"],
+                invalidation_conditions=["出现新的攻击影响证据时立即失效。"],
+                handling_guidance=["作为研判上下文使用，不自动授权处置动作。"],
+            ),
+            confirmed_verdict=Verdict.FALSE_POSITIVE,
+        ),
+        context=_review_context(),
+    )
+
+    assert reviewed.memory_record is not None
+    assert reviewed.memory_record.reviewed_verdict is Verdict.FALSE_POSITIVE
+    assert reviewed.memory_record.decision_directive is None
+    assert reviewed.memory_record.retrieval_enabled is False
 
 
 def _candidate():

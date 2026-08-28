@@ -365,7 +365,7 @@ def test_pingan_v5_behavior_fingerprint_generalizes_host_class_id_and_hive_subse
         )
     )
 
-    assert profile.identity.profile_version == "6"
+    assert profile.identity.profile_version == "7"
     assert profile.identity.feature_schema_version == "pingan.soc.memory_features.v5"
     assert first["behavior_fingerprint"] == second["behavior_fingerprint"]
     assert first["behavior_component_core"] == second["behavior_component_core"]
@@ -481,6 +481,8 @@ def test_pingan_v5_network_behavior_splits_same_rule_by_service_and_vulnerabilit
 
     assert len(openvpn_signatures) == 1
     assert plc_signature not in openvpn_signatures
+    assert {item.label for item in openvpn_signature_items} == {"OpenVPN / UDP 1194"}
+    assert plc_signature_item.label == "CVE-2017-7924 / 拒绝服务 / UDP 44818"
     assert all(len(item.facets) <= 20 for item in [*openvpn_signature_items, plc_signature_item])
     assert all(facets["network_service"] == ["udp/1194"] for facets in openvpn_facets)
     assert all(facets["attack_behavior_family"] == ["proxy_tunnel_activity"] for facets in openvpn_facets)
@@ -490,6 +492,22 @@ def test_pingan_v5_network_behavior_splits_same_rule_by_service_and_vulnerabilit
         "denial_of_service",
         "vulnerability_exploitation",
     }
+
+
+def test_pingan_endpoint_pattern_label_explains_the_behavior() -> None:
+    run = _windows_update_run(
+        1,
+        entities=_windows_update_entities(
+            class_id="11111111-1111-1111-1111-111111111111",
+            host_name="ENDPOINT-001",
+        ),
+    )
+    profile = build_soc_memory_profile_registry().resolve_run(run)
+    facets = profile.project_run_facets(run)
+
+    signature = profile.build_pattern_signature(run, facets=facets)
+
+    assert signature.label == ("wuaucltcore.exe / wuauserv 服务 / Windows 受保护注册表配置单元")
 
 
 def test_pingan_profile_rejects_cross_behavior_memory_retrieval_for_same_rule() -> None:
@@ -884,7 +902,7 @@ def test_pingan_profile_defaults_to_thirty_day_fixed_window() -> None:
 
     result = _observe(service, _run(1), "batch:thirty-day-window")
 
-    assert result.observation.profile_version == "6"
+    assert result.observation.profile_version == "7"
     assert result.observation.window_end - result.observation.window_start == timedelta(days=30)
     assert result.observation.aggregation_policy.window_seconds == 30 * 24 * 60 * 60
 

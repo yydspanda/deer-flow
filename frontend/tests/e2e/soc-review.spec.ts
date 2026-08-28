@@ -396,6 +396,19 @@ test.describe("SOC review workbench", () => {
     );
     await expect(page.getByText("Analysis runs / 分析运行")).toBeVisible();
     await expect(page.getByText("18", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Effectiveness / 研判效能" }),
+    ).toBeVisible();
+    await expect(page.getByText("RC-ALPHA-001")).toBeVisible();
+    await expect(page.getByText("评估受治理快速路径")).toBeVisible();
+    await page.getByRole("button", { name: "展开规则详情" }).click();
+    await expect(page.getByText("OpenVPN / UDP 1194")).toBeVisible();
+    await expect(page.getByText("CVE-2017-7924 / UDP 44818")).toBeVisible();
+    await expect(
+      page.getByText("内部 OpenVPN 服务访问的稳定误报经验"),
+    ).toBeVisible();
+    await expect(page.getByText("直接复用 6")).toBeVisible();
+    await expect(page.getByText("错误覆盖 0")).toBeVisible();
     await expect(page.getByText("kafka.consumer_lag")).toBeVisible();
     await expect(
       page.getByText("缺少测量不等于健康，也不等于故障。"),
@@ -407,6 +420,17 @@ test.describe("SOC review workbench", () => {
     expect(
       state.requests.filter(
         (request) => request.path === "/api/soc/operations/snapshot",
+      ),
+    ).toEqual([expect.objectContaining({ method: "GET", body: null })]);
+    expect(
+      state.requests.filter(
+        (request) => request.path === "/api/soc/effectiveness/snapshot",
+      ),
+    ).toEqual([expect.objectContaining({ method: "GET", body: null })]);
+    expect(
+      state.requests.filter(
+        (request) =>
+          request.path === "/api/soc/effectiveness/rules/0123456789abcdef",
       ),
     ).toEqual([expect.objectContaining({ method: "GET", body: null })]);
 

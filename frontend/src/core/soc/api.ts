@@ -20,6 +20,8 @@ import type {
   SocDispositionOutcomeRecordRequest,
   SocDispositionSampleManifestListResponse,
   SocDispositionSampleReviewInbox,
+  SocEffectivenessSnapshot,
+  SocRuleEffectivenessDetail,
   SocApprovalGrantRequest,
   SocApprovalResolutionRequest,
   SocApprovalRequestListResponse,
@@ -175,6 +177,51 @@ export async function getSocOperationsSnapshot(
   return readJson<SocOperationsSnapshot>(
     response,
     "Failed to load SOC operations snapshot",
+  );
+}
+
+export async function getSocEffectivenessSnapshot(
+  options: {
+    windowDays?: number;
+    tenantId?: string | null;
+    sourceType?: string | null;
+  } = {},
+  context?: SocRequestContext,
+): Promise<SocEffectivenessSnapshot> {
+  const params = new URLSearchParams();
+  params.set("window_days", String(options.windowDays ?? 30));
+  if (options.tenantId) params.set("tenant_id", options.tenantId);
+  if (options.sourceType) params.set("source_type", options.sourceType);
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/effectiveness/snapshot?${params.toString()}`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocEffectivenessSnapshot>(
+    response,
+    "Failed to load SOC effectiveness snapshot",
+  );
+}
+
+export async function getSocRuleEffectivenessDetail(
+  groupKey: string,
+  options: {
+    windowDays?: number;
+    tenantId?: string | null;
+    sourceType?: string | null;
+  } = {},
+  context?: SocRequestContext,
+): Promise<SocRuleEffectivenessDetail> {
+  const params = new URLSearchParams();
+  params.set("window_days", String(options.windowDays ?? 30));
+  if (options.tenantId) params.set("tenant_id", options.tenantId);
+  if (options.sourceType) params.set("source_type", options.sourceType);
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/effectiveness/rules/${encodeURIComponent(groupKey)}?${params.toString()}`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocRuleEffectivenessDetail>(
+    response,
+    "Failed to load SOC rule effectiveness detail",
   );
 }
 

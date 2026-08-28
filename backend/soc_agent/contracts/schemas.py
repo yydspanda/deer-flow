@@ -574,7 +574,12 @@ class SocMemoryBusinessLesson(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.memory_business_lesson.v1"] = "soc.memory_business_lesson.v1"
+    schema_version: Literal[
+        "soc.memory_business_lesson.v1",
+        "soc.memory_business_lesson.v2",
+    ] = "soc.memory_business_lesson.v1"
+    detection_scenario: str | None = Field(default=None, min_length=5, max_length=2000)
+    observed_event: str | None = Field(default=None, min_length=5, max_length=4000)
     conclusion: str = Field(min_length=10, max_length=2000)
     business_rationale: list[str] = Field(min_length=1, max_length=12)
     applicability_conditions: list[str] = Field(min_length=1, max_length=20)
@@ -588,6 +593,16 @@ class SocMemoryBusinessLesson(BaseModel):
         normalized = " ".join(value.split())
         if len(normalized) < 10:
             raise ValueError("memory business lesson conclusion must be substantive")
+        return normalized
+
+    @field_validator("detection_scenario", "observed_event")
+    @classmethod
+    def normalize_memory_lesson_event_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        if len(normalized) < 5:
+            raise ValueError("memory experience event fields must be substantive")
         return normalized
 
     @field_validator(
@@ -605,6 +620,12 @@ class SocMemoryBusinessLesson(BaseModel):
         if any(len(value) < 5 or len(value) > 4000 for value in normalized):
             raise ValueError("memory business lesson items must be 5-4000 characters")
         return normalized
+
+    @model_validator(mode="after")
+    def require_v2_experience_summary(self) -> SocMemoryBusinessLesson:
+        if self.schema_version == "soc.memory_business_lesson.v2" and (self.detection_scenario is None or self.observed_event is None):
+            raise ValueError("memory business lesson v2 requires detection_scenario and observed_event")
+        return self
 
 
 class SocMemoryLessonDraftSource(BaseModel):
@@ -2000,8 +2021,10 @@ class SocMemoryCandidateReviewCommand(BaseModel):
                 raise ValueError("apply_to_future_matches requires confirmed_verdict")
             if self.decision_directive is not None:
                 raise ValueError("use either apply_to_future_matches or an explicit decision_directive")
-        elif self.confirmed_verdict is not None or self.clear_review_on_match:
-            raise ValueError("confirmed_verdict and clear_review_on_match require apply_to_future_matches")
+        elif self.clear_review_on_match:
+            raise ValueError("clear_review_on_match requires apply_to_future_matches")
+        if self.confirmed_verdict is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+            raise ValueError("confirmed_verdict is allowed only when confirming a memory candidate")
         if (self.apply_to_future_matches or self.decision_directive is not None) and self.record_lesson is None:
             raise ValueError("decision-bearing Memory requires an explicit reviewed record_lesson")
         if self.activate_retrieval:
@@ -2094,6 +2117,7 @@ class SocMemoryRecord(BaseModel):
     summary: str = Field(min_length=1)
     content: str = Field(min_length=1)
     business_lesson: SocMemoryBusinessLesson | None = None
+    reviewed_verdict: Verdict | None = None
     facets: dict[str, list[str]] = Field(default_factory=dict)
     applicability: SocMemoryApplicabilitySpec | None = None
     evidence_refs: list[str] = Field(min_length=1)

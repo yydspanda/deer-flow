@@ -27,6 +27,7 @@ from soc_agent.core.disposition_proposal import (
     DispositionProposalIneligibleError,
     SocDispositionProposalService,
 )
+from soc_agent.core.effectiveness import SocEffectivenessService
 from soc_agent.core.enrichment import SocEnrichmentPlanner
 from soc_agent.core.enrichment_repository import InMemorySocEnrichmentExecutionRepository
 from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
@@ -49,7 +50,10 @@ from soc_agent.core.memory_evolution import (
     SocMemoryEvolutionService,
 )
 from soc_agent.core.memory_lesson_drafting import SocMemoryLessonDraftService
-from soc_agent.core.memory_patterns import SocMemoryPatternService
+from soc_agent.core.memory_patterns import (
+    SocMemoryPatternPostAnalysisObserver,
+    SocMemoryPatternService,
+)
 from soc_agent.core.normalization_maintenance import SocNormalizationMaintenanceService
 from soc_agent.core.operations import SocOperationsService
 from soc_agent.core.orchestrator import SocMainOrchestratorService
@@ -114,6 +118,7 @@ __all__ = [
     "SocDispositionProposalService",
     "SocDomainTriageService",
     "SocEnrichmentPlanner",
+    "SocEffectivenessService",
     "SocEnrichmentWorkflowBusyError",
     "SocEnrichmentWorkflowConflictError",
     "SocEnrichmentWorkflowError",
@@ -129,6 +134,7 @@ __all__ = [
     "SocMemoryCenterService",
     "SocMemoryEvolutionError",
     "SocMemoryEvolutionService",
+    "SocMemoryPatternPostAnalysisObserver",
     "SocMemoryPatternService",
     "SocNormalizationService",
     "SocNormalizationMaintenanceService",

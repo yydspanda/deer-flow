@@ -55,7 +55,7 @@ class PingAnSocMemoryProfile:
 
     identity = SocMemoryProfileIdentity(
         profile_id="pingan.soc",
-        profile_version="6",
+        profile_version="7",
         feature_schema_version="pingan.soc.memory_features.v5",
         aggregation_window_seconds=30 * 24 * 60 * 60,
     )
@@ -109,7 +109,7 @@ class PingAnSocMemoryProfile:
             return MemoryPatternSignature(
                 dimension=MemoryPatternDimension.COMPOUND,
                 value=f"compound:{stable_hash({'detection_key': detection_key, 'detection_signature': detection_signature, 'behavior_fingerprint': behavior_fingerprint})}",
-                label=f"{request.detection.rule_name or detection_key} + canonical behavior",
+                label=_pingan_behavior_label(request, facets),
                 origin=self.identity.feature_schema_version,
                 facets=signature_facets,
             )
@@ -129,7 +129,7 @@ class PingAnSocMemoryProfile:
             return MemoryPatternSignature(
                 dimension=MemoryPatternDimension.BEHAVIOR,
                 value=_bounded_value(behavior_fingerprints[0]),
-                label="PingAn canonical behavior fingerprint",
+                label=_pingan_behavior_label(request, facets),
                 origin=self.identity.feature_schema_version,
                 facets=signature_facets,
             )
@@ -408,6 +408,74 @@ def _pingan_pattern_facets(
     """Freeze only decision-relevant and reviewer-useful facets on a cohort."""
 
     return {key: list(facets[key]) for key in _PINGAN_PATTERN_FACET_KEYS if facets.get(key)}
+
+
+_ATTACK_FAMILY_LABELS = {
+    "command_and_control": "命令与控制",
+    "proxy_tunnel_activity": "代理 / 隧道",
+    "denial_of_service": "拒绝服务",
+    "malicious_outbound_connection": "恶意外联",
+    "reverse_shell": "反弹 Shell",
+    "webshell": "WebShell",
+    "command_execution": "命令执行",
+    "privilege_escalation": "权限提升",
+    "lateral_movement": "横向移动",
+    "vulnerability_exploitation": "漏洞利用",
+}
+
+
+def _pingan_behavior_label(
+    request: LLMAnalysisRequest,
+    facets: dict[str, list[str]],
+) -> str:
+    """Render canonical facets as an analyst-readable same-behavior name."""
+
+    services = facets.get("network_service", [])
+    vulnerabilities = facets.get("vulnerability_id", [])
+    families = facets.get("attack_behavior_family", [])
+    core_components = facets.get("behavior_component_core", [])
+    parts: list[str] = []
+
+    if "udp/1194" in {value.casefold() for value in services}:
+        parts.append("OpenVPN")
+    parts.extend(vulnerabilities[:2])
+    for family in families:
+        if family == "vulnerability_exploitation" and vulnerabilities:
+            continue
+        label = _ATTACK_FAMILY_LABELS.get(family)
+        if label and not (label == "代理 / 隧道" and "OpenVPN" in parts):
+            parts.append(label)
+    parts.extend(_endpoint_behavior_labels(core_components))
+    parts.extend(_network_service_label(value) for value in services[:2])
+
+    unique = list(dict.fromkeys(part for part in parts if part))
+    if not unique:
+        fallback = request.detection.rule_name or request.classification.category or request.detection.detection_key or "未命名同类行为"
+        unique.append(" ".join(fallback.split()))
+    return " / ".join(unique)[:512]
+
+
+def _endpoint_behavior_labels(components: list[str]) -> list[str]:
+    by_prefix: dict[str, list[str]] = {}
+    for component in components:
+        prefix, separator, value = component.partition(":")
+        if separator and value:
+            by_prefix.setdefault(prefix, []).append(value)
+    labels: list[str] = []
+    if by_prefix.get("process_image"):
+        labels.append(by_prefix["process_image"][0])
+    if by_prefix.get("parent_service"):
+        labels.append(f"{by_prefix['parent_service'][0]} 服务")
+    if "windows_protected_registry_hive" in by_prefix.get("target_class", []):
+        labels.append("Windows 受保护注册表配置单元")
+    return labels
+
+
+def _network_service_label(value: str) -> str:
+    protocol, separator, port = value.partition("/")
+    if separator and port:
+        return f"{protocol.upper()} {port}"
+    return value.upper()
 
 
 def _project_pingan_facets(

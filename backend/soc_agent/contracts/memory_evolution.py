@@ -104,7 +104,10 @@ class SocMemoryFeedbackEvent(BaseModel):
     source: SocMemoryFeedbackSource
     trust: SocMemoryFeedbackTrust
     final_verdict: Verdict
+    memory_reviewed_verdict: Verdict | None = None
     memory_target_verdict: Verdict | None = None
+    directive_was_active: bool = False
+    applicability_status: str | None = Field(default=None, max_length=64)
     alignment: SocMemoryFeedbackAlignment
     reason: str = Field(min_length=1, max_length=4000)
     source_ref: str = Field(min_length=1, max_length=256)

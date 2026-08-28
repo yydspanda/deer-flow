@@ -15,7 +15,7 @@
    标准协议，因此以后接其他公司时新增 Profile，不修改通用内核。
 3. 只有重复、结论明确、相互一致且存在强锚点的 cohort 才生成一条候选，运营专家审核的是“模式”，
    不是每天上万条告警。
-4. `detection_key` 只负责识别规则大类；PingAn Profile v6（feature schema v5）再从 canonical
+4. `detection_key` 只负责识别规则大类；PingAn Profile v7（feature schema v5）再从 canonical
    `rule_name` 生成 `detection_signature`，并从 canonical network/endpoint evidence 生成版本化
    core/detail behavior component。
    只有 `detection_key + detection_signature + strong behavior_fingerprint` 才定义可改判的同类行为，
@@ -197,7 +197,7 @@ alerts fall out of the recurrence workflow as naive datetimes.
 
 ### 5.3 Same reusable alert class
 
-The PingAn Profile v6 / feature schema v5 selects one stable cohort signature:
+The PingAn Profile v7 / feature schema v5 selects one stable cohort signature:
 
 1. when available, hash canonical `detection_key + detection_signature + behavior_fingerprint`
    into a `compound` cohort; the original facets remain separately auditable;
@@ -241,9 +241,10 @@ component overlaps; it cannot apply its directive. Protocol-only similarity is n
 Evaluate component stability on a held-out PingAn corpus and bump the feature schema whenever the
 component policy changes.
 
-Profile v6 / feature schema v5 is intentionally incompatible with earlier versions. Existing records remain
+Profile v7 / feature schema v5 is intentionally incompatible with earlier versions. Existing records remain
 auditable but cannot be matched or apply a directive until the source cohort is re-aggregated, reviewed and
-activated under v6.
+activated under v7. Profile v7 keeps the v5 decision fingerprint and adds a deterministic analyst-facing
+behavior label derived from the same canonical components; it never uses a Candidate summary as the behavior name.
 
 The real DEV replay for rule `RPAADM_000558` demonstrates the boundary: alerts `2448168`, `2457097`,
 `2457177` and `2457581` converge on `UDP/1194 + proxy_tunnel_activity` across changing IPs, while alert
@@ -285,7 +286,7 @@ The default `soc.memory_pattern_aggregation.v3` policy is:
 
 | Gate | Default | Why |
 |---|---:|---|
-| Window | 30 days for PingAn Profile v6 | Bound one recurrence cohort for comparatively static PingAn rules |
+| Window | 30 days for PingAn Profile v7 | Bound one recurrence cohort for comparatively static PingAn rules |
 | Observations | >= 5 | One alert cannot become a pattern |
 | Distinct sources | >= 5 | Retries do not manufacture support |
 | Conclusive outcomes | >= 5 | Unknown results do not form a lesson |
@@ -294,7 +295,7 @@ The default `soc.memory_pattern_aggregation.v3` policy is:
 
 Three clocks must not be conflated:
 
-- **aggregation window**: PingAn Profile v6 defaults to a fixed 30-day UTC window; it
+- **aggregation window**: PingAn Profile v7 defaults to a fixed 30-day UTC window; it
   groups repeated observations into one review candidate and is neither a rolling
   lookback nor the Memory lifetime. The generic profile remains 24 hours, and explicit
   offline/operator policies may override the profile default;
@@ -323,7 +324,9 @@ overwrites the old record.
 自动 Pattern gate 负责控制批量告警产生的候选噪声，但它不是唯一入口。分析师在一条已完成 Run 中发现
 重要、可复用的业务经验时，可以显式点击“提前提炼”创建 Candidate，即使该 cohort 尚未达到 5/5 门槛。
 该动作本身已经表达“交给专家治理”的意图，因此不强制分析师提前编写沉淀理由；可选备注只用于提示审核人
-重点关注的内容。最终判断、业务事实、使用条件、处置建议和治理理由统一在 Candidate 审核阶段完成，避免重复填写。
+重点关注的内容。Candidate 审核阶段只要求审核人选择最终判断，并可选补充一次业务事实。AI 将冻结证据和
+该输入整理为八段研判经验卡；服务端根据最终用途自动生成审计描述。审核人不再重复填写一份“治理理由”。
+只有后续启用、暂停或恢复 Memory 时，才填写本次使用状态变更说明。
 
 该入口复用 `SocReviewService -> SocMemoryCandidateSourceBridge -> MemoryAdmissionService ->
 SocMemoryService`，来源为 `manual_note`，状态固定为 `pending_review`。它仍要求可复用 facet，保留
@@ -348,9 +351,10 @@ Candidate confirmation is one explicit product action. The reviewer may:
   Runtime deterministically supplies the machine applicability prose; prior Runtime/model outcomes remain
   observations and cannot replace the reviewer selection;
 - for context-only records, edit the final summary/content;
-- for decision-bearing records, explicitly submit `soc.memory_business_lesson.v1` with
-  conclusion, business rationale, applicability conditions, generalization boundaries,
-  invalidation conditions, and handling guidance; a review reason alone is audit metadata;
+- for decision-bearing records, explicitly submit `soc.memory_business_lesson.v2` with
+  detection scenario, observed business event, conclusion, business rationale,
+  applicability conditions, generalization boundaries, invalidation conditions, and
+  handling guidance; v1 remains read-compatible, and a review reason alone is audit metadata;
 - keep the profile-produced applicability, or narrow it by promoting an existing optional
   candidate facet to required; the service rejects removal of strong anchors, larger value
   sets, changed profile/schema versions or widened context-only fallback;
@@ -362,7 +366,7 @@ Candidate confirmation is one explicit product action. The reviewer may:
 Convenience input `apply_to_future_matches=true` is materialized into a typed
 `SocMemoryDecisionDirective`. The server never derives this directive from Memory prose.
 The optional drafter may transform candidate/cohort facts and a reviewer note into a complete
-editable Lesson draft, but that draft has `decision_impact=none`, is not persisted, and does
+editable eight-section Lesson draft, but that draft has `decision_impact=none`, is not persisted, and does
 not become reviewer-owned until the reviewer explicitly submits it as `record_lesson`.
 Missing `record_lesson` still fails before the candidate state transition.
 It is rejected for detection-only/rule-context candidates. A reviewer can still confirm
@@ -442,17 +446,19 @@ exactly one final effect in one Run, and health is incremented once. The record 
 
 When an analyst correction or trusted Zeus final disposition arrives, it becomes one
 `SocMemoryFeedbackEvent` for every Memory actually used by that run. The service compares
-the final technical verdict with the reviewed directive:
+the final technical verdict with the record's explicit reviewer verdict. That comparison
+also works for context-only Memory; directive status is recorded separately:
 
 | Result | Effect |
 |---|---|
-| Same risk class | `supports`; increment support health |
-| Opposite risk class | `contradicts`; create revision proposal |
-| Memory had no directive | `unknown`; context use remains auditable |
-| Scope later proven inapplicable | `not_applicable`; retained for scope review |
+| Exact/applicable use and same risk class | `supports`; increment support health |
+| Exact/applicable use and opposite risk class | `contradicts`; create revision proposal |
+| Legacy record without a reviewer verdict | `unknown`; context use remains auditable |
+| Partial context-only match or scope later proven inapplicable | `not_applicable`; do not punish the lesson |
 
-Safety rule: if an active benign/false-positive Memory is followed by a high-trust risk
-outcome, retrieval is immediately disabled by `soc-memory-safety-monitor`. The old record
+Safety rule: if a retrievable benign/false-positive Memory was applicable to the current
+alert and is followed by a high-trust risk outcome, retrieval is immediately disabled by
+`soc-memory-safety-monitor`, whether or not its directive happened to change that Run. The old record
 is never edited in place. Reviewers inspect the pending proposal and then narrow scope,
 create a new version, deprecate it, or reject the feedback.
 
@@ -602,7 +608,7 @@ validate the evaluator wiring, but `real_quality_metrics_available=false` and
 Rollback is retrieval disablement. Raw alerts, Base Decisions, uses, feedback, and prior
 record versions remain available for replay.
 
-Earlier Profile records do not silently match Profile v6 / feature-schema-v5 queries. They remain auditable but
+Earlier Profile records do not silently match Profile v7 / feature-schema-v5 queries. They remain auditable but
 must be re-aggregated under the v5 feature schema and reviewed again before receiving v6
 retrieval or decision authority. A migration must never infer a compound behavior scope
 from an old detection-only or coarser behavior record.

@@ -286,7 +286,7 @@ function MemoryGovernanceStatus({
 
 function patternTitle(pattern: SocMemoryCenterPatternSummary) {
   return (
-    pattern.candidate?.summary ?? pattern.pattern_label ?? pattern.pattern_value
+    pattern.pattern_label ?? pattern.candidate?.summary ?? pattern.pattern_value
   );
 }
 
@@ -437,7 +437,7 @@ export function SocMemoryCenter({
           <section className="overflow-hidden border" aria-label="经验中心统计">
             <div className="grid grid-cols-2 lg:grid-cols-5">
               <Metric
-                label="行为模式"
+                label="同类行为"
                 value={overview?.metrics.pattern_count ?? 0}
               />
               <Metric
@@ -478,7 +478,7 @@ export function SocMemoryCenter({
             </div>
           </section>
 
-          <section className="border" aria-label="经验模式筛选">
+          <section className="border" aria-label="同类行为筛选">
             <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_10rem_12rem_14rem]">
               <div className="space-y-1.5 md:col-span-2 xl:col-span-1">
                 <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
@@ -495,8 +495,8 @@ export function SocMemoryCenter({
                   <Input
                     value={searchDraft}
                     onChange={(event) => setSearchDraft(event.target.value)}
-                    placeholder="模式名称、告警 ID 或经验内容"
-                    aria-label="搜索经验模式"
+                    placeholder="同类行为、告警 ID 或经验内容"
+                    aria-label="搜索同类行为"
                   />
                   <Button
                     type="submit"
@@ -603,7 +603,7 @@ export function SocMemoryCenter({
                       }
                     }}
                   />
-                  包含已结束模式 ({overview?.terminal_history_count ?? 0})
+                  包含已结束同类行为 ({overview?.terminal_history_count ?? 0})
                 </label>
               ) : null}
               {activeFilterCount > 0 ? (
@@ -619,7 +619,7 @@ export function SocMemoryCenter({
               ) : null}
               <div className="text-muted-foreground ml-auto flex flex-wrap justify-end gap-x-3 gap-y-1 text-xs">
                 <span>最近样本优先</span>
-                <span>{overview ? `${overview.total} 个模式` : "-"}</span>
+                <span>{overview ? `${overview.total} 组同类行为` : "-"}</span>
               </div>
             </div>
           </section>
@@ -630,7 +630,7 @@ export function SocMemoryCenter({
           >
             <div className="min-w-0 border-b xl:border-r xl:border-b-0">
               <div className="bg-muted/30 flex items-center justify-between gap-3 border-b px-4 py-2 text-xs font-medium">
-                <span>行为模式</span>
+                <span>同类行为</span>
                 <span className="text-muted-foreground font-normal">
                   状态与样本
                 </span>
@@ -645,7 +645,7 @@ export function SocMemoryCenter({
                 </div>
               ) : (overview?.items.length ?? 0) === 0 ? (
                 <div className="text-muted-foreground flex h-48 items-center justify-center text-sm">
-                  当前筛选下没有行为模式。
+                  当前筛选下没有同类行为。
                 </div>
               ) : (
                 <div className="divide-y">
@@ -722,17 +722,17 @@ export function SocMemoryCenter({
             <div className="min-w-0">
               {detailLoading ? (
                 <div className="text-muted-foreground flex h-64 items-center justify-center text-sm">
-                  正在加载模式详情...
+                  正在加载同类行为详情...
                 </div>
               ) : detailError ? (
                 <div className="text-destructive flex h-64 items-center justify-center px-6 text-center text-sm">
                   {detailError instanceof Error
                     ? detailError.message
-                    : "模式详情加载失败"}
+                    : "同类行为详情加载失败"}
                 </div>
               ) : !detail ? (
                 <div className="text-muted-foreground flex h-64 items-center justify-center text-sm">
-                  选择一个行为模式查看详情。
+                  选择一组同类行为查看详情。
                 </div>
               ) : (
                 <div className="flex flex-col">

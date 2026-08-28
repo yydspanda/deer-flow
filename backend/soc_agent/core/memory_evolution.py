@@ -421,9 +421,12 @@ class SocMemoryEvolutionService:
             if memory is None or memory.version < use.memory_version:
                 continue
             target = memory.decision_directive.target_verdict if memory.decision_directive is not None else None
+            reviewed_verdict = memory.reviewed_verdict or target
             alignment = _feedback_alignment(
-                target,
+                reviewed_verdict,
                 correction.corrected_verdict,
+                applicability_status=use.applicability_report.status,
+                directive_was_active=use.directive_applied,
             )
             idempotency_key = f"memory-feedback:{correction.correction_id}:{use.use_id}"
             event = self._repository.find_memory_feedback_by_idempotency_key(idempotency_key)
@@ -439,7 +442,10 @@ class SocMemoryEvolutionService:
                     source=source,
                     trust=trust,
                     final_verdict=correction.corrected_verdict,
+                    memory_reviewed_verdict=reviewed_verdict,
                     memory_target_verdict=target,
+                    directive_was_active=use.directive_applied,
+                    applicability_status=use.applicability_report.status.value,
                     alignment=alignment,
                     reason=correction.reason,
                     source_ref=correction.correction_id,
@@ -460,7 +466,7 @@ class SocMemoryEvolutionService:
             if alignment is SocMemoryFeedbackAlignment.CONTRADICTS and trust is SocMemoryFeedbackTrust.HIGH:
                 proposal = self._revision_proposal(memory, use, event)
                 proposals.append(proposal)
-                if _dangerous_false_negative(target, correction.corrected_verdict):
+                if use.directive_applied or _dangerous_false_negative(reviewed_verdict, correction.corrected_verdict):
                     if self._suspend_retrieval(memory, event):
                         suspended.append(memory.memory_id)
 
@@ -581,7 +587,7 @@ class SocMemoryEvolutionService:
             memory_id=memory.memory_id,
             memory_version=use.memory_version,
             source_feedback_id=event.feedback_id,
-            reason=(f"High-trust final outcome contradicts the reviewed Memory directive; review applicability exclusions, conclusion, or deprecation. Feedback: {event.reason}"),
+            reason=(f"High-trust final outcome contradicts the reviewed Memory conclusion; review applicability exclusions, conclusion, directive, or deprecation. Feedback: {event.reason}"),
             proposed_excluded_facets=exclusions,
             proposed_target_verdict=event.final_verdict,
             created_at=event.created_at,
@@ -610,7 +616,7 @@ class SocMemoryEvolutionService:
                 memory_id=memory.memory_id,
                 action=SocMemoryRetrievalActivationAction.DISABLE,
                 expected_record_version=memory.version,
-                reason=(f"Safety suspension after high-trust risk feedback contradicted a benign Memory directive ({event.feedback_id})."),
+                reason=(f"Safety suspension after high-trust final feedback contradicted an active Memory decision or benign reviewed conclusion ({event.feedback_id})."),
                 policy_version=SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
                 metadata={
                     "source": "memory_feedback_safety_monitor",
@@ -637,7 +643,7 @@ class SocMemoryEvolutionService:
                 update={
                     "version": health.version + 1,
                     "status": SocMemoryHealthStatus.SUSPENDED,
-                    "suspension_reason": ("High-trust final risk verdict contradicted an active benign directive."),
+                    "suspension_reason": ("High-trust final outcome contradicted an active directive or a benign reviewed conclusion."),
                     "updated_at": event.created_at,
                 }
             )
@@ -708,12 +714,17 @@ def _feedback_source_and_trust(
 
 
 def _feedback_alignment(
-    target: Verdict | None,
+    reviewed_verdict: Verdict | None,
     final: Verdict,
+    *,
+    applicability_status: SocMemoryApplicabilityStatus,
+    directive_was_active: bool,
 ) -> SocMemoryFeedbackAlignment:
-    if target is None:
+    if reviewed_verdict is None:
         return SocMemoryFeedbackAlignment.UNKNOWN
-    if target is final or _verdict_class(target) == _verdict_class(final):
+    if not directive_was_active and applicability_status is not SocMemoryApplicabilityStatus.APPLICABLE:
+        return SocMemoryFeedbackAlignment.NOT_APPLICABLE
+    if reviewed_verdict is final or _verdict_class(reviewed_verdict) == _verdict_class(final):
         return SocMemoryFeedbackAlignment.SUPPORTS
     return SocMemoryFeedbackAlignment.CONTRADICTS
 

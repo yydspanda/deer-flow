@@ -69,6 +69,8 @@ _MODEL_OUTPUT_KEYS = frozenset(
     {
         "schema_version",
         "reviewer_verdict",
+        "detection_scenario",
+        "observed_event",
         "conclusion",
         "supporting_source_refs",
         "business_rationale",
@@ -105,6 +107,8 @@ class _MemoryBusinessLessonModelOutput(BaseModel):
 
     schema_version: str
     reviewer_verdict: Verdict
+    detection_scenario: str = Field(min_length=5, max_length=2000)
+    observed_event: str = Field(min_length=5, max_length=4000)
     conclusion: str = Field(min_length=10, max_length=2000)
     supporting_source_refs: list[str] = Field(min_length=1, max_length=40)
     business_rationale: list[_BusinessRationaleItem] = Field(min_length=1, max_length=12)
@@ -120,12 +124,12 @@ class _MemoryBusinessLessonModelOutput(BaseModel):
             raise ValueError(f"schema_version must be {MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION}")
         return value
 
-    @field_validator("conclusion")
+    @field_validator("detection_scenario", "observed_event", "conclusion")
     @classmethod
-    def normalize_conclusion(cls, value: str) -> str:
+    def normalize_event_summary(cls, value: str) -> str:
         normalized = " ".join(value.split())
-        if len(normalized) < 10:
-            raise ValueError("memory lesson conclusion must be substantive")
+        if len(normalized) < 5:
+            raise ValueError("memory lesson event summary must be substantive")
         return normalized
 
     @field_validator("supporting_source_refs")
@@ -246,6 +250,9 @@ class JsonLLMMemoryLessonDrafter:
             repair_actions.extend(["provider_output_repair", *parse_repair_actions])
         response = responses[-1]
         lesson = SocMemoryBusinessLesson(
+            schema_version="soc.memory_business_lesson.v2",
+            detection_scenario=output.detection_scenario,
+            observed_event=output.observed_event,
             conclusion=output.conclusion,
             business_rationale=[item.statement for item in output.business_rationale],
             applicability_conditions=memory_lesson_applicability_conditions(candidate.applicability),
@@ -311,6 +318,8 @@ def _validate_output_contract(
     source_text = "\n".join(str(item.value) for item in source_catalog)
     output_text = "\n".join(
         [
+            output.detection_scenario,
+            output.observed_event,
             output.conclusion,
             *(item.statement for item in output.business_rationale),
             *output.generalization_boundaries,

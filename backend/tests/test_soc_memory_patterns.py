@@ -41,6 +41,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import (
     SocDaemonService,
+    SocMemoryPatternPostAnalysisObserver,
     SocMemoryPatternService,
     SocReviewService,
     SocServiceConflictError,
@@ -466,6 +467,66 @@ def test_duplicate_alert_across_batch_and_kafka_counts_once() -> None:
     assert duplicate.distinct_source_count == 1
     assert duplicate.candidate is None
     assert len(repository.list_memory_pattern_observations()) == 1
+
+
+def test_post_analysis_observer_records_one_replay_stable_observation() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    observer = SocMemoryPatternPostAnalysisObserver(
+        service=_service(repository, threshold=2),
+        environment="dev",
+        data_class=MemoryPatternDataClass.SIMULATION,
+    )
+    run = _run(1)
+    caller_context = ServiceRequestContext(
+        actor=ActorContext(
+            actor_id="analyst-1",
+            actor_type=ActorType.USER,
+            surface=EntrySurface.WEB,
+            roles=["soc_analyst"],
+        )
+    )
+
+    observer.observe(run, context=caller_context)
+    observer.observe(run, context=caller_context)
+
+    observations = repository.list_memory_pattern_observations()
+    assert len(observations) == 1
+    assert observations[0].source.source_type is MemoryPatternSourceType.ANALYSIS_RUN
+    assert observations[0].source.transport_ref == f"analysis-run:{run.run_id}"
+    assert observations[0].metadata["entry_surface"] == "web"
+
+
+def test_generic_observer_and_explicit_batch_observation_share_one_occurrence() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository, threshold=2)
+    observer = SocMemoryPatternPostAnalysisObserver(
+        service=service,
+        environment="dev",
+        data_class=MemoryPatternDataClass.SIMULATION,
+    )
+    run = _run(1)
+
+    _observe(service, run, transport_ref="batch:1")
+    observer.observe(run, context=_context())
+
+    observations = repository.list_memory_pattern_observations()
+    assert len(observations) == 1
+    assert observations[0].source.source_type is MemoryPatternSourceType.BATCH_ALERT
+
+
+def test_post_analysis_observer_skips_ineligible_run_without_breaking_analysis() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    observer = SocMemoryPatternPostAnalysisObserver(
+        service=_service(repository),
+        environment="dev",
+        data_class=MemoryPatternDataClass.SIMULATION,
+    )
+    run = _run(1)
+    run.analysis = None
+
+    observer.observe(run, context=_context())
+
+    assert repository.list_memory_pattern_observations() == []
 
 
 def test_fixed_window_uses_source_event_time_not_runtime_start_time() -> None:

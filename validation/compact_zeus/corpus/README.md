@@ -34,7 +34,7 @@ manifest 记录每个输入文件的 SHA-256、重复行选择、标签命中、
 的摘要。
 
 Workbench index v3 同时冻结当前 `PingAnSocMemoryProfile` 身份和聚合窗口。PingAn Profile
-v6 使用 30 天 fixed UTC window，并按目标网络服务、CVE 和规范化攻击行为细分模式；Profile
+v7 使用 30 天 fixed UTC window，并按目标网络服务、CVE 和规范化攻击行为细分模式；Profile
 或窗口变化后必须重建 index，旧 index 会 fail closed，不会让页面预计算分组与 Runtime
 Pattern 聚合产生两套口径。
 

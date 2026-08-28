@@ -6,12 +6,15 @@ import os
 
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.automation import load_soc_automation_policy
+from soc_agent.contracts import MemoryPatternDataClass
 from soc_agent.core import (
     DeterministicAnalysisRuntime,
     SocAnalysisService,
     SocAuthorizedActivityService,
     SocAutomationService,
     SocMemoryEvolutionService,
+    SocMemoryPatternPostAnalysisObserver,
+    SocMemoryPatternService,
     SocMemoryService,
     SocNormalizationMaintenanceService,
     SocTenantPolicyEvaluationService,
@@ -47,6 +50,7 @@ def build_soc_analysis_service(
     action_adapter_registry: SocActionAdapterRegistryPort | None = None,
     memory_environment: str | None = None,
     runtime_environment: str | None = None,
+    pattern_observation_enabled: bool | None = None,
 ) -> SocAnalysisService:
     """Build the one analysis service shared by CLI and offline batch entry points."""
 
@@ -68,6 +72,7 @@ def build_soc_analysis_service(
         settings=resolved_settings,
         action_adapter_registry=action_adapter_registry,
         runtime_environment=resolved_environment,
+        pattern_observation_enabled=pattern_observation_enabled,
     )
     analysis_request_enricher = _build_analysis_request_enricher(
         repository,
@@ -157,6 +162,7 @@ def _build_post_analysis_observers(
     settings: SocLLMSettings,
     action_adapter_registry: SocActionAdapterRegistryPort | None = None,
     runtime_environment: str | None = None,
+    pattern_observation_enabled: bool | None = None,
 ) -> tuple[PostAnalysisObserver, ...]:
     observers: list[PostAnalysisObserver] = []
     tenant_policy_enabled = _strict_env_bool(
@@ -276,6 +282,38 @@ def _build_post_analysis_observers(
         )
     elif automation_path or tenant_policy_enabled:
         raise ValueError("SOC automation and Memory evolution require persisted analysis repository")
+
+    observe_patterns = (
+        pattern_observation_enabled
+        if pattern_observation_enabled is not None
+        else _strict_env_bool(
+            "SOC_MEMORY_PATTERN_OBSERVATION_ENABLED",
+            default=False,
+        )
+    )
+    if observe_patterns:
+        if repository is None:
+            raise ValueError("SOC Memory pattern observation requires persisted analysis repository")
+        if not runtime_environment:
+            raise ValueError("SOC Memory pattern observation requires an explicit runtime environment")
+        data_class_value = os.environ.get("SOC_MEMORY_PATTERN_DATA_CLASS", "").strip().casefold()
+        if not data_class_value:
+            raise ValueError("SOC_MEMORY_PATTERN_DATA_CLASS is required when pattern observation is enabled")
+        try:
+            data_class = MemoryPatternDataClass(data_class_value)
+        except ValueError as exc:
+            raise ValueError("SOC_MEMORY_PATTERN_DATA_CLASS must be 'simulation' or 'operational'") from exc
+        observers.append(
+            SocMemoryPatternPostAnalysisObserver(
+                service=SocMemoryPatternService(
+                    repository=repository,
+                    candidate_repository=repository,
+                    profile_registry=build_soc_memory_profile_registry(),
+                ),
+                environment=runtime_environment,
+                data_class=data_class,
+            )
+        )
     return tuple(observers)
 
 

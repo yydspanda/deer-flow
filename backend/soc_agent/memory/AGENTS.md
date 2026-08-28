@@ -9,6 +9,9 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 - A Runtime run may create an admitted candidate or Pattern observation, never a
   confirmed Memory automatically. Replays and duplicate source events must be
   idempotent; ordinary low-value alerts must not create one Memory each.
+- `Pattern observation`, `lineage`, and `profile` remain internal contract terms. The
+  analyst UI presents them as alert samples and same-behavior groups, using a
+  deterministic canonical behavior label rather than a Candidate summary.
 - Fixed-window duration is a versioned cohort semantic. The generic profile defaults
   to 24 hours; a tenant profile may declare another bounded default. An explicitly
   supplied operator/evaluation policy overrides the profile default and is frozen on
@@ -23,8 +26,10 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   It still requires a reusable facet, creates only a `manual_note` `pending_review`
   candidate, and must not alter the run, ReviewQueue, retrieval state, or action authority.
   Its candidate identity is stable per run/alert; a later optional note must reuse the
-  existing review task rather than creating duplicate candidates. Final verdict, business
-  facts, applicability, and governance reason belong to Candidate review.
+  existing review task rather than creating duplicate candidates. Candidate review asks
+  for the final verdict and optional business fact once; the service generates audit prose
+  from the reviewed outcome and future-use mode. A separate reason is required only for a
+  later retrieval enable/disable mutation.
 - Explicit run promotion and correction must resolve the tenant `SocMemoryProfile`, project
   facets from the exact persisted run, and build applicability through that Profile. When a
   Pattern observation exists, its server-owned environment overrides caller metadata. Do not
@@ -42,8 +47,9 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   Memory; `reject` means do not persist that candidate. Only the audited `reopen`
   transition may return an eligible rejected candidate to review.
 - New decision-bearing confirmation requires reviewer-owned
-  `soc.memory_business_lesson.v1`: conclusion, business rationale, exact applicability,
-  allowed generalization, invalidation conditions, and handling guidance. A generic
+  `soc.memory_business_lesson.v2`: detection scenario, observed business event,
+  conclusion, business rationale, exact applicability, allowed generalization,
+  invalidation conditions, and handling guidance. V1 remains read-compatible. A generic
   review reason or alert caption cannot substitute for it.
 - Confirmation creates a retrieval-disabled record. Retrieval activation is a separate
   audited mutation with validity/review windows and optimistic version checks.
@@ -96,7 +102,7 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   the typed applicability object remains authoritative. Legacy prose may be localized
   only at read time and must not be rewritten in storage.
 - Validate strict JSON/references and permit at most one bounded output-repair call. The
-  generated six-section lesson is read-only by default, explicitly editable, and remains
+  generated eight-section lesson is read-only by default, explicitly editable, and remains
   non-persisted until the existing review command confirms it.
 
 ## Reinforcement And Revision
@@ -128,6 +134,11 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   but leaves the predecessor disabled; an explicit activation mutation is required.
   Rejected revision candidates cannot be reopened with stale lineage. Start a new
   revision through a later exact Memory use or a new authenticated inventory review.
+- Final-outcome comparison uses the explicit reviewer verdict even when a Memory was used
+  as context-only. Exact applicable matches can support or contradict the lesson; partial
+  context-only matches are `not_applicable` and do not punish it. A high-trust risk outcome
+  contradicting a retrievable benign lesson suspends retrieval even when no directive was
+  applied in that Run.
 - Contradiction opens governed review and may suspend retrieval according to policy.
   A revision creates explicit supersession/version lineage so later analysis can show
   which Memory changed what decision and why.

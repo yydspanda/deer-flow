@@ -213,6 +213,12 @@ Runtime decisions, construct Memory, or infer action authority.
 - `/workspace/soc/operations` is a read-only consumer of
   `soc.operations_snapshot.v1`. It may refresh the passive endpoint and translate
   server-owned availability values.
+- Effectiveness formulas and relationships come from the server read model. The primary
+  drill-down is `Rule Code -> 同类行为 -> Memory`; use canonical detection identity when
+  no Rule Code exists. Keep Pattern/Profile terminology in technical audit views.
+- Show `context-only` as “仅供研判参考” and directive use as “直接复用结论”. Only the
+  latter may display attributable accuracy. Show final-outcome coverage and denominators,
+  and never infer Memory value from retrieval count alone.
 - Do not actively probe Kafka, recompute aggregates, infer overall health, or turn
   `not_measured` into healthy zero. Label SQLite and fixture/Playwright evidence as
   local/test, separate from deployed Gateway, production telemetry, and SLO proof.

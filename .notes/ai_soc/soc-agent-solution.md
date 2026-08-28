@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-08-12
+Last updated: 2026-08-28
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -29,6 +29,7 @@ Review should answer these questions first:
 | Data contracts are stable? / 数据协议是否稳定 | Sections 8, 9 |
 | PingAn knowledge is reusable and not hard-coded? / 平安经验是否可迁移 | Section 11 |
 | Memory can help decisions without becoming hidden authority? / 记忆如何受控改判 | Sections 7.2, 10 and `governance/decision-disposition-action-automation.md` |
+| Accuracy, misses, automation and Rule quality are honestly measured? / 准确率、漏报、自动化与规则质量口径是否可信 | Section 13 and `governance/effectiveness-and-rule-optimization.md` |
 | Governed context is typed, scoped and auditable? / 运营事实是否强类型、有范围、时效和审计 | Section 7.4 |
 | Approval and side effects are safe? / 审批和副作用是否安全 | Sections 7, 12 |
 | The Alpha journey is reproducible and honestly scoped? / Alpha 是否可复跑且边界真实 | Section 13 and `.notes/ai_soc/alpha-acceptance-runbook.md` |
@@ -139,7 +140,7 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 确认记忆 | Confirmed Memory | `SocMemoryRecord` | 人类确认后的可检索记忆，默认仍受 retrieval policy 约束 |
 | 记忆准入 | Memory Admission | `MemoryAdmissionDecision` | 在创建候选前判断是否有人工提升信号、可复用锚点和足够理由 |
 | 检测签名 | Detection Signature | `detection_signature` facet | 租户 Profile 从 canonical detector name 生成的版本化签名，用于拆分一个 broad rule code 下的不同检测场景 |
-| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从 canonical core behavior 生成的可回放检索锚点；通用 feature schema v2 增加目标网络服务与 CVE，PingAn Profile v6 / feature schema v5 再加入版本化攻击行为类型和 endpoint core，排除 IP/主机/账号/随机参数；端口、来源类别等弱特征可拆分同类但不能单独产生改判权限 |
+| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从 canonical core behavior 生成的可回放检索锚点；通用 feature schema v2 增加目标网络服务与 CVE，PingAn Profile v7 / feature schema v5 再加入版本化攻击行为类型和 endpoint core，排除 IP/主机/账号/随机参数；端口、来源类别等弱特征可拆分同类但不能单独产生改判权限 |
 | 能力卡 | Capability Card | PingAn capability docs | 描述一个业务能力应落到 skill、MCP、adapter、memory 还是 eval |
 
 ---
@@ -1995,7 +1996,7 @@ lineage 重新打开，必须重新发起受治理修订。同一 Memory 同时�
 六段 `Business Lesson`，被拒绝、替代、过期或停用的候选展示只读治理历史及合法后续动作。
 
 Memory Center 以稳定 `lineage_key` 作为一级对象，Profile 定义的 fixed-window `aggregation_key` 只是候选生成窗口；
-generic 默认 24h，PingAn Profile v6 默认 30d。一个模式
+generic 默认 24h，PingAn Profile v7 默认 30d。一个模式
 跨三个窗口出现 `6 + 1 + 1` 次时，页面展示一个 8 条 observation、3 个 window 的 Pattern；候选创建时
 冻结的 5 条与后续 3 条 reinforcement 分开显示，所有原始 observation 仍可审计和 replay。这样既不会
 让固定 Demo 冒充生产 Memory，也不会把长期重复模式按日期切碎。
@@ -2071,7 +2072,7 @@ Rules:
   a server-owned tenant profile may define stricter same-class and duplicate-occurrence semantics without
   changing Runtime. Cohorts isolate tenant/environment/`simulation|operational`, and place the
   canonical timezone-aware source event time in a fixed UTC window. The generic profile defaults to 24 hours,
-  while a versioned tenant profile may declare another bounded default; PingAn Profile v6 uses 30 days. An
+  while a versioned tenant profile may declare another bounded default; PingAn Profile v7 uses 30 days. An
   explicitly supplied operator/evaluation policy remains an auditable override. Each effective window first requires
   5 observations and 5 distinct alert sources, then separately requires 5 conclusive outcomes, at least 80%
   risk/benign consistency, and one consensus strong retrieval anchor before proposing exactly one frozen
@@ -2087,7 +2088,7 @@ Rules:
   strong anchors. An equivalent lesson in a later fixed window produces reinforcement observations and reuses the
   existing governed candidate instead of creating another expert task. A changed risk class or strong-anchor scope
   is a material new lesson; it may create a new candidate, but never auto-supersedes the reviewed record.
-- PingAn uses `PingAnSocMemoryProfile` v6 (feature schema v5) behind the generic profile protocol. It consumes canonical Adapter output,
+- PingAn uses `PingAnSocMemoryProfile` v7 (feature schema v5) behind the generic profile protocol. It consumes canonical Adapter output,
   uses a canonical detection-key + behavior-fingerprint compound when both exist, treats detection-only as
   non-decisive rule context, retains behavior-only as the ruleless pattern fallback, rejects broad category-only
   cohorts, and deduplicates one upstream occurrence before support counting. Occurrence identity starts with the
@@ -2127,9 +2128,10 @@ Rules:
   be the sole anchor for a detection lesson or benign pattern.
 - Candidate selection is relevance-first across the full eligible corpus through the normalized facet
   index; top-K is a final model-context budget, not a latest-200 database scan.
-- A confirmed decision-bearing Memory must be understandable without reopening its source alert. The typed
-  `soc.memory_business_lesson.v1` stores conclusion, business rationale, exact applicability, permitted
-  generalization, invalidation/counterevidence conditions, and handling guidance. `SocMemoryService` is the
+- A confirmed decision-bearing Memory must be understandable without reopening its source alert. New reviews use
+  `soc.memory_business_lesson.v2`, which stores the detector-reported scenario, the observed business event,
+  reviewed conclusion, rationale, exact applicability, permitted generalization,
+  invalidation/counterevidence conditions, and handling guidance; v1 remains read-compatible. `SocMemoryService` is the
   single confirmation boundary: a decision-bearing confirmation must submit an explicit reviewer-owned
   `record_lesson`. The service validates, renders and persists it; it never promotes a generic review reason or
   candidate caption into reusable knowledge. The rendered lesson becomes record `summary/content` and therefore
@@ -2158,9 +2160,10 @@ Rules:
 - Every projected `M-*` is persisted as an idempotent `SocMemoryUseRecord` after post-Runtime automation, including
   exact record/version/hash, score, matched facets, applicability, base/effective verdict and transition effect.
   Analyst correction or trusted external disposition then creates append-only `SocMemoryFeedbackEvent` records and
-  updates versioned health. A contradiction creates a review proposal; high-trust risk feedback contradicting an
-  active benign directive immediately disables retrieval through a disable-only safety-monitor role. No feedback
-  silently rewrites a confirmed record.
+  updates versioned health. Comparison uses the explicit reviewer verdict even for exact context-only use; partial
+  context-only matches are not-applicable rather than false contradictions. A contradiction creates a review
+  proposal; high-trust risk feedback contradicting a retrievable applicable benign lesson immediately disables
+  retrieval through a disable-only safety-monitor role. No feedback silently rewrites a confirmed record.
 - Memory never grants action authority. A separate reviewed `SocAutomationPolicy` can authorize the
   current alert with or without Memory, and always records independent authorization/execution lineage.
 - Active operational facts are not confirmed memory. Memory may describe how a scanner or exercise
@@ -2444,6 +2447,50 @@ Security invariants:
 
 The system should be reviewable from a single alert before scaling to Kafka.
 
+### 13.1 Product Effectiveness / 产品效能闭环
+
+Runtime quality cannot be inferred from its own output. Migration `0026_effectiveness_telemetry`
+adds queryable Run-level verdict, duration, provider usage and output-quality indexes; existing
+Decision, Disposition, final outcome and Memory lineage remain the authoritative business sources.
+`SocEffectivenessService` reads those sources through a SQL aggregate and exposes
+`soc.effectiveness_snapshot.v1` at `GET /api/soc/effectiveness/snapshot`. One selected rule can be
+expanded through `GET /api/soc/effectiveness/rules/{group_key}` into the product hierarchy
+`Rule Code -> same behavior / 同类行为 -> exact Memory version`.
+
+The read model uses only the latest Run per alert, keeps replay/superseded counts visible, and
+returns every rate with numerator and denominator. Triage accuracy, technical/operational misses,
+transfer precision/recall and wrong-auto-ignore are `not_measured` until a high-trust analyst or
+trusted external final verdict exists. Applied auto-ignore is measured separately and never treats
+a shadow proposal as automation.
+
+Detection-family evaluation is vendor-neutral. The stable group is tenant + source + canonical
+detection identity; `rule_code` is an optional PingAn/vendor alias. For each group the product shows
+volume, label coverage, confirmed-risk and false-positive shares, AI accuracy/miss, applied
+automation, model calls/tokens/latency, output repair/degradation and Memory use/contradictions.
+A versioned deterministic policy produces advisory candidates for label collection, detector
+tuning, scenario splitting, input/output repair, full analysis or a governed fast path. It never
+edits an upstream rule. Fast-path evaluation requires an exact reviewed behavior scope, observed
+model cost, no known wrong auto-ignore and sampled full-analysis verification; same `rule_code`
+alone is never enough.
+
+Rule names are display metadata, not stable identity. A renamed detector therefore stays in one
+Rule Code row, while different canonical behavior fingerprints below that row remain separate.
+Every eligible completed analysis enters the same idempotent post-analysis Pattern observer when
+explicitly enabled; Kafka/batch/workbench paths that already observe directly disable the generic
+observer and share the same occurrence key, so one alert cannot inflate support. PingAn Profile v7
+keeps feature schema v5 decision matching but adds deterministic human-readable labels such as
+`OpenVPN / UDP 1194` or `CVE-2017-7924 / UDP 44818`.
+
+Per-Memory effectiveness is version-specific. Only exact directive use is causally attributed to
+Memory; context-only use remains non-causal background. The read model reports final-outcome
+coverage, directive accuracy, helpful correction, harmful override, contradictions and actual
+applied wrong-auto-ignore. A historical use never inherits the current Memory version's activation
+or summary when an immutable historical record snapshot is unavailable.
+
+The exact formulas, truth precedence, Memory contradiction workflow, compute boundary and
+before/after acceptance are owned by
+[`governance/effectiveness-and-rule-optimization.md`](governance/effectiveness-and-rule-optimization.md).
+
 Useful command surfaces:
 
 ```bash
@@ -2595,7 +2642,7 @@ real acceptance. Both the five-row and 50-row external rehearsals have passed; t
 `internal_real` run in approved PingAn DEV remains separate Real Integration Debt. The 50-row simulation
 persisted 157/157 fake MCP results without failure or unauthorized side effects, but all results were
 normal not-found. It is therefore delivery-shape evidence only and does not prove a real Provider hit
-mapping. PI-03A/B/C and PI-04A/B simulation/local product slices are complete. PI-05A now freezes and
+mapping. PI-03A/B/C and PI-04A/B/C simulation/local product slices are complete. PI-05A now freezes and
 rehearses the governed rollout contract without changing a real stage; the product completion pointer
 is `PI-05B Simulation Completion Gate`. Real Provider, infrastructure, quality, telemetry, owner and
 cohort-enforcement evidence remain independent gates.

@@ -13,14 +13,16 @@ from soc_agent.contracts import (
     Verdict,
 )
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v4"
-MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v2"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v5"
+MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v3"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000
 
 _OUTPUT_EXAMPLE: dict[str, Any] = {
     "schema_version": MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION,
     "reviewer_verdict": "false_positive",
+    "detection_scenario": "反弹 Shell 检测规则命中一条向内部 askbob-gpt 服务发起的网络连接。",
+    "observed_event": "终端访问企业内部 LLM 服务，请求目标和行为模式与已审核样本一致，未观察到真实反弹 Shell 执行链。",
     "conclusion": "该重复模式是已确认的内部服务调用，技术结论为误报，并非真实反弹 Shell。",
     "supporting_source_refs": ["EX-D-001", "EX-D-002", "EX-D-003"],
     "business_rationale": [
@@ -113,6 +115,8 @@ def memory_lesson_draft_response_schema() -> dict[str, Any]:
         "required": [
             "schema_version",
             "reviewer_verdict",
+            "detection_scenario",
+            "observed_event",
             "conclusion",
             "supporting_source_refs",
             "business_rationale",
@@ -130,6 +134,18 @@ def memory_lesson_draft_response_schema() -> dict[str, Any]:
                 "type": "string",
                 "enum": [item.value for item in Verdict],
                 "description": "Exact echo of the authenticated reviewer's selected verdict.",
+            },
+            "detection_scenario": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 2000,
+                "description": "What the detector claimed or which security scenario triggered, grounded in supplied sources.",
+            },
+            "observed_event": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 4000,
+                "description": "What actually happened according to the reviewed candidate and analyst-supplied business facts.",
             },
             "conclusion": {
                 "type": "string",
@@ -240,7 +256,9 @@ Write concise analyst-facing Chinese. A Business Lesson explains what the repeat
 <drafting_method>
 1. Use reviewer_verdict as the final outcome around which the draft is written. Treat candidate/cohort verdicts only as historical model observations, even when they disagree.
 2. Use reviewer context only when present; do not fabricate a missing tenant-specific explanation. If it is absent, state that the business explanation remains unprovided instead of turning prior model consistency into business truth.
-3. Write a reusable conclusion, not a restatement of one alert. State business meaning and the reviewer-selected risk verdict only.
+3. First separate detector claim from reviewed reality: detection_scenario says what security behavior the rule reported;
+   observed_event says what actually happened. Then write a reusable conclusion, not a restatement of one alert.
+   State business meaning and the reviewer-selected risk verdict only.
    Put handling in handling_guidance and never put close/suppress/block/isolate/approve/authorize-execution commands in the conclusion.
    A source-backed factual statement such as "authorization status does not change that the attack attempt occurred" may remain in the conclusion;
    it describes technical meaning and grants no action authority. Put uncertainty about whether authorization applies in uncertainties.
@@ -260,7 +278,9 @@ Write concise analyst-facing Chinese. A Business Lesson explains what the repeat
 - Every business_rationale item has at least one exact D-* source_ref.
 - At least one business_rationale item must cite reviewer_selected_verdict. When reviewer_context exists, at least one item must also cite analyst_draft_context.
 - supporting_source_refs is the deduplicated set of D-* facts directly supporting the conclusion.
-- Do not return candidate IDs, alert IDs, raw evidence objects, directives, validity, activation, confidence, or action authorization fields.
+- Do not return candidate IDs, alert IDs, raw evidence objects, directives, validity, activation, confidence,
+  or action authorization fields. detection_scenario and observed_event must remain concise analyst-facing facts,
+  not raw payload dumps.
 </output_rules>"""
 
 
@@ -294,7 +314,8 @@ def _user_prompt(
             "<final_checklist>",
             f"- schema_version is exactly {MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION}.",
             "- reviewer_verdict exactly matches lesson_context.reviewer_verdict and is cited as reviewer-owned outcome, not inferred from candidate consistency.",
-            "- All six sections are present: conclusion, supporting_source_refs, business_rationale, generalization_boundaries, invalidation_conditions, handling_guidance; uncertainties is always present and may be empty.",
+            "- The event summary is complete: detection_scenario states what triggered, observed_event states what actually happened, and conclusion states the reviewed reusable outcome.",
+            "- All reusable sections are present: conclusion, supporting_source_refs, business_rationale, generalization_boundaries, invalidation_conditions, handling_guidance; uncertainties is always present and may be empty.",
             "- Every returned reference exists in the current lesson_context and no EX-D-* alias is returned.",
             "- The conclusion is reusable and says what the pattern means, not merely that an alert was processed.",
             "- Every literal identifier is copied exactly from a cited current D-* value; no spelling, spacing, path, or character variation is allowed.",

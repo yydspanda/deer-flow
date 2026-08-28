@@ -311,13 +311,13 @@ def test_applicability_revision_reprojects_scope_from_exact_source_run() -> None
     candidate = result.candidate
     assert candidate.applicability is not None
     assert candidate.applicability.profile_id == "pingan.soc"
-    assert candidate.applicability.profile_version == "6"
+    assert candidate.applicability.profile_version == "7"
     assert candidate.applicability.required_facets["environment"] == ["dev"]
     assert candidate.applicability.required_facets["detection_key"] == ["sec_guard_apt:rule_code:rpaadm_000558"]
     assert candidate.applicability.required_facets["behavior_fingerprint"] == candidate.facets["behavior_fingerprint"]
     assert candidate.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
     assert candidate.metadata["revision_scope_source"] == "source_run_profile_projection"
-    assert candidate.metadata["memory_profile_version"] == "6"
+    assert candidate.metadata["memory_profile_version"] == "7"
     assert candidate.facets != predecessor.facets
 
 

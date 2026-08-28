@@ -232,7 +232,7 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
   expect(
     Math.max(...listRowCenters) - Math.min(...listRowCenters),
   ).toBeLessThan(1);
-  await expect(page.getByText("选择一个行为模式查看详情。")).toBeVisible();
+  await expect(page.getByText("选择一组同类行为查看详情。")).toBeVisible();
   expect(detailRequests).toHaveLength(0);
 
   await page.getByRole("link", { name: /Sliver 远控木马心跳重复模式/ }).click();

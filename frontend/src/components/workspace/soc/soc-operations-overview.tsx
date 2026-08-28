@@ -3,22 +3,40 @@
 import {
   ActivityIcon,
   AlertTriangleIcon,
+  BookOpenCheckIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   Clock3Icon,
+  CpuIcon,
   DatabaseIcon,
   GaugeIcon,
+  GitBranchIcon,
   RefreshCwIcon,
   RadioTowerIcon,
+  ShieldCheckIcon,
+  TargetIcon,
 } from "lucide-react";
+import { Fragment, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
-import { useSocOperationsSnapshot } from "@/core/soc";
+import {
+  useSocEffectivenessSnapshot,
+  useSocOperationsSnapshot,
+  useSocRuleEffectivenessDetail,
+} from "@/core/soc";
 import type {
+  SocEffectivenessSnapshot,
+  SocMemoryEffectiveness,
   SocOperationsAvailability,
   SocOperationsSnapshot,
+  SocRateMetric,
+  SocRuleEffectivenessDetail,
+  SocRuleRecommendationPriority,
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
 
@@ -149,6 +167,726 @@ function DataNature({ snapshot }: { snapshot: SocOperationsSnapshot }) {
   );
 }
 
+function formatRate(metric: SocRateMetric) {
+  return metric.value === null || metric.value === undefined
+    ? "待标注"
+    : new Intl.NumberFormat("zh-CN", {
+        style: "percent",
+        maximumFractionDigits: 1,
+      }).format(metric.value);
+}
+
+function formatOptionalRate(value?: number | null) {
+  return value === null || value === undefined
+    ? "-"
+    : new Intl.NumberFormat("zh-CN", {
+        style: "percent",
+        maximumFractionDigits: 1,
+      }).format(value);
+}
+
+function compactNumber(value: number) {
+  return new Intl.NumberFormat("zh-CN", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function RateMetricCell({
+  label,
+  metric,
+  direction = "neutral",
+}: {
+  label: string;
+  metric: SocRateMetric;
+  direction?: "higher" | "lower" | "neutral";
+}) {
+  const measured = metric.value !== null && metric.value !== undefined;
+  return (
+    <div className="min-w-0 border-r border-b px-4 py-4 last:border-r-0">
+      <div className="text-muted-foreground text-xs leading-5">{label}</div>
+      <div
+        className={cn(
+          "mt-1 text-2xl font-semibold tabular-nums",
+          !measured && "text-muted-foreground text-lg",
+          measured && direction === "higher" && "text-emerald-700",
+          measured &&
+            direction === "lower" &&
+            metric.value! > 0 &&
+            "text-amber-700",
+        )}
+      >
+        {formatRate(metric)}
+      </div>
+      <div className="text-muted-foreground mt-1 text-[11px] tabular-nums">
+        {metric.numerator} / {metric.denominator}
+      </div>
+      <p className="text-muted-foreground mt-2 line-clamp-2 text-[11px] leading-4">
+        {metric.interpretation}
+      </p>
+    </div>
+  );
+}
+
+const RECOMMENDATION_CLASSES: Record<SocRuleRecommendationPriority, string> = {
+  high: "border-red-300 bg-red-50 text-red-800",
+  medium: "border-amber-300 bg-amber-50 text-amber-800",
+  low: "border-sky-300 bg-sky-50 text-sky-800",
+  info: "border-zinc-300 bg-zinc-50 text-zinc-700",
+};
+
+const VERDICT_LABELS: Record<string, string> = {
+  false_positive: "误报",
+  true_positive: "真实风险",
+  suspicious: "可疑",
+  unknown: "待确认",
+};
+
+function formatVerdictCounts(verdictCounts: Record<string, number>) {
+  const values = Object.entries(verdictCounts)
+    .filter(([, count]) => count > 0)
+    .sort((left, right) => right[1] - left[1])
+    .map(
+      ([verdict, count]) => `${VERDICT_LABELS[verdict] ?? verdict} ${count}`,
+    );
+  return values.length > 0 ? values.join(" · ") : "暂无结论";
+}
+
+function memoryStageLabel({
+  retrieval_enabled: retrievalEnabled,
+  memory_id: memoryId,
+  candidate_id: candidateId,
+}: {
+  retrieval_enabled: boolean;
+  memory_id?: string | null;
+  candidate_id?: string | null;
+}) {
+  if (retrievalEnabled) return "已启用，可精确复用";
+  if (memoryId) return "经验已确认，暂停复用";
+  if (candidateId) return "经验待审核";
+  return "正在积累同类样本";
+}
+
+function MemoryEffectRow({ memory }: { memory: SocMemoryEffectiveness }) {
+  return (
+    <tr className="align-top">
+      <td className="max-w-80 px-3 py-3">
+        <div className="font-medium break-words">
+          {memory.summary ?? memory.memory_id}
+        </div>
+        <div className="text-muted-foreground mt-1 font-mono">
+          {memory.memory_id} · v{memory.memory_version}
+        </div>
+        <Badge
+          variant="outline"
+          className={cn(
+            "mt-2",
+            memory.retrieval_enabled
+              ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+              : "border-zinc-300 bg-zinc-50 text-zinc-700",
+          )}
+        >
+          {memory.retrieval_enabled ? "可精确复用" : "未启用精确复用"}
+        </Badge>
+      </td>
+      <td className="px-3 py-3 tabular-nums">
+        直接复用 {memory.directive_count}
+        <div className="text-muted-foreground mt-1">
+          仅供参考 {memory.context_only_count}
+        </div>
+      </td>
+      <td className="px-3 py-3 tabular-nums">
+        {formatRate(memory.final_outcome_coverage)}
+        <div className="text-muted-foreground mt-1">
+          {memory.high_trust_feedback_count}/{memory.use_alert_count}{" "}
+          条有最终反馈
+        </div>
+      </td>
+      <td className="px-3 py-3 tabular-nums">
+        {formatRate(memory.directive_accuracy)}
+        <div className="text-muted-foreground mt-1">
+          只统计直接复用且已有最终反馈的告警
+        </div>
+      </td>
+      <td className="px-3 py-3 tabular-nums">
+        帮助纠正 {memory.helpful_correction_count}
+        <div
+          className={cn(
+            "mt-1",
+            memory.harmful_override_count > 0
+              ? "text-red-700"
+              : "text-muted-foreground",
+          )}
+        >
+          错误覆盖 {memory.harmful_override_count}
+        </div>
+        <div
+          className={cn(
+            "mt-1",
+            memory.contradiction_count > 0
+              ? "text-amber-700"
+              : "text-muted-foreground",
+          )}
+        >
+          运营结论相反 {memory.contradiction_count}
+        </div>
+        {memory.wrong_auto_ignore_count > 0 ? (
+          <div className="mt-1 font-medium text-red-700">
+            错误自动忽略 {memory.wrong_auto_ignore_count}
+          </div>
+        ) : null}
+      </td>
+      <td className="max-w-64 px-3 py-3">
+        <div className="break-words">
+          来源：{memory.source_rule_codes.join("、") || "未记录"}
+        </div>
+        <div className="text-muted-foreground mt-1 break-words">
+          实际用于：{memory.actual_rule_codes.join("、") || "暂无"}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function RuleEffectivenessDrilldown({
+  detail,
+  isLoading,
+  error,
+}: {
+  detail: SocRuleEffectivenessDetail | null;
+  isLoading: boolean;
+  error: unknown;
+}) {
+  if (isLoading && !detail) {
+    return <Skeleton className="h-40 w-full rounded-none" />;
+  }
+  if (error && !detail) {
+    return (
+      <div className="border-l-2 border-red-500 bg-red-50 px-4 py-3 text-sm text-red-800">
+        无法读取该规则的同类行为与 Memory 效果：
+        {error instanceof Error ? error.message : "后端读模型不可用"}
+      </div>
+    );
+  }
+  if (!detail) return null;
+
+  return (
+    <div className="space-y-5 py-2">
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <GitBranchIcon className="size-4" />
+            <h4 className="font-semibold">同一 Rule Code 下的同类行为</h4>
+          </div>
+          <span className="text-muted-foreground">
+            {detail.behavior_groups.length} 组行为 · 点击规则可收起
+          </span>
+        </div>
+        <div className="bg-background mt-3 overflow-auto border">
+          <table className="w-full min-w-[68rem] text-left text-xs">
+            <thead className="bg-muted/70 border-b">
+              <tr>
+                <th className="px-3 py-2 font-medium">同类行为</th>
+                <th className="px-3 py-2 font-medium">告警样本</th>
+                <th className="px-3 py-2 font-medium">运营结论</th>
+                <th className="px-3 py-2 font-medium">经验沉淀与使用</th>
+                <th className="px-3 py-2 font-medium">最近出现</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {detail.behavior_groups.map((behavior) => (
+                <tr key={behavior.lineage_key} className="align-top">
+                  <td className="max-w-96 px-3 py-3 font-medium break-words">
+                    {behavior.behavior_label}
+                  </td>
+                  <td className="px-3 py-3 tabular-nums">
+                    {behavior.distinct_alert_count} 条告警
+                    <div className="text-muted-foreground mt-1">
+                      {behavior.window_count} 个时间窗口
+                    </div>
+                  </td>
+                  <td className="px-3 py-3">
+                    {formatVerdictCounts(behavior.verdict_counts)}
+                  </td>
+                  <td className="px-3 py-3">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        behavior.retrieval_enabled
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                          : behavior.candidate_id
+                            ? "border-amber-300 bg-amber-50 text-amber-800"
+                            : "border-zinc-300 bg-zinc-50 text-zinc-700",
+                      )}
+                    >
+                      {memoryStageLabel(behavior)}
+                    </Badge>
+                    {behavior.memory_id ? (
+                      <div className="text-muted-foreground mt-1 font-mono">
+                        {behavior.memory_id} · v{behavior.memory_version}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-3 tabular-nums">
+                    {formatDateTime(behavior.last_observed_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {detail.behavior_groups.length === 0 ? (
+            <div className="text-muted-foreground px-4 py-6 text-center text-sm">
+              当前窗口尚未形成可比较的同类行为样本。
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2">
+          <BookOpenCheckIcon className="size-4" />
+          <h4 className="font-semibold">Memory 实际效果</h4>
+        </div>
+        <p className="text-muted-foreground mt-1 text-xs leading-5">
+          “直接复用结论”可以归因；“仅供研判参考”只说明模型看过，不能据此宣称准确率提升。
+        </p>
+        <div className="bg-background mt-3 overflow-auto border">
+          <table className="w-full min-w-[76rem] text-left text-xs">
+            <thead className="bg-muted/70 border-b">
+              <tr>
+                <th className="px-3 py-2 font-medium">Memory</th>
+                <th className="px-3 py-2 font-medium">使用方式</th>
+                <th className="px-3 py-2 font-medium">最终反馈覆盖</th>
+                <th className="px-3 py-2 font-medium">直接复用正确率</th>
+                <th className="px-3 py-2 font-medium">帮助与风险</th>
+                <th className="px-3 py-2 font-medium">Rule Code 覆盖</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {detail.memories.map((memory) => (
+                <MemoryEffectRow
+                  key={`${memory.memory_id}:${memory.memory_version}`}
+                  memory={memory}
+                />
+              ))}
+            </tbody>
+          </table>
+          {detail.memories.length === 0 ? (
+            <div className="text-muted-foreground px-4 py-6 text-center text-sm">
+              该规则当前没有被实际使用过的 Memory。
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EffectivenessSection({
+  snapshot,
+  isLoading,
+  error,
+  windowDays,
+  onWindowChange,
+}: {
+  snapshot: SocEffectivenessSnapshot | null;
+  isLoading: boolean;
+  error: unknown;
+  windowDays: number;
+  onWindowChange: (days: number) => void;
+}) {
+  const summary = snapshot?.summary ?? null;
+  const coverage = snapshot?.coverage ?? null;
+  const compute = snapshot?.compute ?? null;
+  const [expandedRuleKey, setExpandedRuleKey] = useState<string | null>(null);
+  const ruleDetailQuery = useSocRuleEffectivenessDetail(
+    expandedRuleKey,
+    windowDays,
+  );
+
+  return (
+    <section className="border-b" aria-labelledby="effectiveness-heading">
+      <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5 md:px-7">
+        <div className="max-w-4xl">
+          <div className="flex items-center gap-2">
+            <TargetIcon className="size-4" />
+            <h2 id="effectiveness-heading" className="font-medium">
+              Effectiveness / 研判效能
+            </h2>
+          </div>
+          <p className="text-muted-foreground mt-1 text-sm leading-6">
+            以运营最终结论作为真值，衡量准确率、漏报、转交质量和自动忽略；未形成高可信结论的告警只计入覆盖率，不进入质量分母。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            value={String(windowDays)}
+            onValueChange={(value) => {
+              if (value) onWindowChange(Number(value));
+            }}
+            aria-label="选择效能统计窗口"
+          >
+            <ToggleGroupItem value="7">7 天</ToggleGroupItem>
+            <ToggleGroupItem value="30">30 天</ToggleGroupItem>
+            <ToggleGroupItem value="90">90 天</ToggleGroupItem>
+          </ToggleGroup>
+          {snapshot ? (
+            <AvailabilityBadge availability={snapshot.availability} />
+          ) : null}
+        </div>
+      </div>
+
+      {isLoading && !snapshot ? (
+        <div className="grid grid-cols-2 border-t md:grid-cols-4 xl:grid-cols-8">
+          {Array.from({ length: 8 }, (_, index) => (
+            <Skeleton key={index} className="h-32 rounded-none border-r" />
+          ))}
+        </div>
+      ) : null}
+
+      {error && !snapshot ? (
+        <div className="border-t border-red-200 bg-red-50 px-5 py-4 text-sm text-red-800 md:px-7">
+          无法读取效能数据：
+          {error instanceof Error ? error.message : "后端读模型不可用"}
+        </div>
+      ) : null}
+
+      {snapshot && (!summary || !coverage || !compute) ? (
+        <div className="border-t bg-amber-50 px-5 py-4 text-sm text-amber-900 md:px-7">
+          当前数据库未提供可聚合的效能数据。
+          {snapshot.error_code ? ` ${snapshot.error_code}` : ""}
+        </div>
+      ) : null}
+
+      {snapshot && summary && coverage && compute ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-zinc-50 px-5 py-3 text-sm md:px-7 dark:bg-zinc-950/30">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+              <span>
+                完成告警 <strong>{coverage.completed_alert_count}</strong>
+              </span>
+              <span>
+                高可信结论{" "}
+                <strong>{coverage.high_trust_labeled_alert_count}</strong>
+              </span>
+              <span>
+                标签覆盖{" "}
+                <strong>
+                  {formatRate(coverage.high_trust_label_coverage)}
+                </strong>
+              </span>
+              <span>
+                去除重跑 <strong>{coverage.superseded_run_count}</strong>
+              </span>
+            </div>
+            {coverage.high_trust_labeled_alert_count === 0 ? (
+              <Badge className="border-amber-300 bg-amber-50 text-amber-800">
+                先接运营最终状态，暂不宣称准确率
+              </Badge>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-2 border-t md:grid-cols-4 xl:grid-cols-8">
+            <RateMetricCell
+              label="研判准确率 / Accuracy"
+              metric={summary.triage_accuracy}
+              direction="higher"
+            />
+            <RateMetricCell
+              label="技术漏报率 / Miss"
+              metric={summary.detection_miss_rate}
+              direction="lower"
+            />
+            <RateMetricCell
+              label="错误自动忽略 / Operational miss"
+              metric={summary.operational_miss_rate}
+              direction="lower"
+            />
+            <RateMetricCell
+              label="转交精确率 / Transfer precision"
+              metric={summary.transfer_precision}
+              direction="higher"
+            />
+            <RateMetricCell
+              label="攻击转交召回 / Transfer recall"
+              metric={summary.attack_transfer_recall}
+              direction="higher"
+            />
+            <RateMetricCell
+              label="自动忽略率 / Automation"
+              metric={summary.auto_ignore_rate}
+              direction="neutral"
+            />
+            <RateMetricCell
+              label="自动忽略错误率 / Wrong ignore"
+              metric={summary.wrong_auto_ignore_rate}
+              direction="lower"
+            />
+            <RateMetricCell
+              label="人工触达率 / Human touch"
+              metric={summary.human_touch_rate}
+              direction="lower"
+            />
+          </div>
+
+          <div className="grid border-t lg:grid-cols-[minmax(0,0.85fr)_minmax(0,2.15fr)]">
+            <div className="border-b px-5 py-5 md:px-7 lg:border-r lg:border-b-0">
+              <div className="flex items-center gap-2">
+                <CpuIcon className="size-4" />
+                <h3 className="text-sm font-semibold">
+                  Compute efficiency / 算力利用
+                </h3>
+              </div>
+              <dl className="mt-4 grid grid-cols-2 border-y text-sm">
+                <div className="border-r border-b px-3 py-3">
+                  <dt className="text-muted-foreground text-xs">模型调用</dt>
+                  <dd className="mt-1 text-lg font-semibold tabular-nums">
+                    {compute.provider_call_count}
+                  </dd>
+                </div>
+                <div className="border-b px-3 py-3">
+                  <dt className="text-muted-foreground text-xs">
+                    Total tokens
+                  </dt>
+                  <dd className="mt-1 text-lg font-semibold tabular-nums">
+                    {compactNumber(compute.total_tokens)}
+                  </dd>
+                </div>
+                <div className="border-r px-3 py-3">
+                  <dt className="text-muted-foreground text-xs">
+                    平均 Run 耗时
+                  </dt>
+                  <dd className="mt-1 font-medium tabular-nums">
+                    {compute.average_total_duration_ms === null ||
+                    compute.average_total_duration_ms === undefined
+                      ? "-"
+                      : `${(compute.average_total_duration_ms / 1000).toFixed(1)} s`}
+                  </dd>
+                </div>
+                <div className="px-3 py-3">
+                  <dt className="text-muted-foreground text-xs">Token 覆盖</dt>
+                  <dd className="mt-1 font-medium">
+                    {formatRate(compute.token_measurement_coverage)}
+                  </dd>
+                </div>
+              </dl>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <Badge variant="outline">
+                  Repair {formatRate(compute.repair_rate)}
+                </Badge>
+                <Badge variant="outline">
+                  Fallback {formatRate(compute.fallback_rate)}
+                </Badge>
+                <Badge variant="outline">
+                  Degraded {formatRate(compute.degraded_rate)}
+                </Badge>
+              </div>
+            </div>
+
+            <div className="min-w-0 px-5 py-5 md:px-7">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <GitBranchIcon className="size-4" />
+                  <div>
+                    <h3 className="text-sm font-semibold">
+                      Detection effectiveness / 检测规则效能
+                    </h3>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      平安按 Rule Code
+                      汇总；每条规则可下钻到多组同类行为和各自独立的 Memory。
+                    </p>
+                  </div>
+                </div>
+                <Badge
+                  variant="outline"
+                  title={snapshot.recommendation_policy_version}
+                >
+                  建议口径 v1
+                </Badge>
+              </div>
+              <div className="mt-4 max-h-[34rem] overflow-auto border">
+                <table className="w-full min-w-[80rem] text-left text-xs">
+                  <thead className="bg-muted/70 sticky top-0 z-10 border-b">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">
+                        规则 / Rule Code
+                      </th>
+                      <th className="px-3 py-2 font-medium">量级</th>
+                      <th className="px-3 py-2 font-medium">标签覆盖</th>
+                      <th className="px-3 py-2 font-medium">有效检出</th>
+                      <th className="px-3 py-2 font-medium">规则误报</th>
+                      <th className="px-3 py-2 font-medium">AI 研判</th>
+                      <th className="px-3 py-2 font-medium">自动忽略</th>
+                      <th className="px-3 py-2 font-medium">Tokens</th>
+                      <th className="px-3 py-2 font-medium">Memory</th>
+                      <th className="px-3 py-2 font-medium">建议</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {snapshot.rules.slice(0, 100).map((rule) => (
+                      <Fragment key={rule.group_key}>
+                        <tr className="align-top">
+                          <td className="max-w-72 px-3 py-3">
+                            <div className="flex items-start gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="-ml-2 size-7 shrink-0"
+                                title={
+                                  expandedRuleKey === rule.group_key
+                                    ? "收起同类行为与 Memory 效果"
+                                    : "查看同类行为与 Memory 效果"
+                                }
+                                aria-label={
+                                  expandedRuleKey === rule.group_key
+                                    ? "收起规则详情"
+                                    : "展开规则详情"
+                                }
+                                aria-expanded={
+                                  expandedRuleKey === rule.group_key
+                                }
+                                onClick={() =>
+                                  setExpandedRuleKey((current) =>
+                                    current === rule.group_key
+                                      ? null
+                                      : rule.group_key,
+                                  )
+                                }
+                              >
+                                {expandedRuleKey === rule.group_key ? (
+                                  <ChevronDownIcon className="size-4" />
+                                ) : (
+                                  <ChevronRightIcon className="size-4" />
+                                )}
+                              </Button>
+                              <div className="min-w-0">
+                                <div className="font-medium break-words">
+                                  {rule.rule_name ?? rule.detection_identity}
+                                </div>
+                                <div className="text-muted-foreground mt-1 font-mono break-all">
+                                  {rule.rule_code ??
+                                    rule.detection_key ??
+                                    "unclassified"}
+                                </div>
+                                <div className="text-muted-foreground mt-1">
+                                  {rule.source_type}
+                                  {rule.source_system
+                                    ? ` · ${rule.source_system}`
+                                    : ""}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            {rule.alert_count}
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            {formatOptionalRate(rule.label_coverage)}
+                            <div className="text-muted-foreground mt-1">
+                              {rule.labeled_count}/{rule.completed_count}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            {formatOptionalRate(rule.confirmed_risk_rate)}
+                            <div className="text-muted-foreground mt-1">
+                              {rule.final_risk_count}/{rule.labeled_count}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            {formatOptionalRate(rule.false_positive_rate)}
+                            <div className="text-muted-foreground mt-1">
+                              {rule.final_false_positive_count}/
+                              {rule.labeled_count}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            准确 {formatOptionalRate(rule.triage_accuracy)}
+                            <div className="text-muted-foreground mt-1">
+                              漏报 {formatOptionalRate(rule.miss_rate)}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            {formatOptionalRate(rule.auto_ignore_rate)}
+                            {rule.wrong_auto_ignore_count > 0 ? (
+                              <div className="mt-1 text-red-700">
+                                错误 {rule.wrong_auto_ignore_count}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            {compactNumber(rule.total_tokens)}
+                            <div className="text-muted-foreground mt-1">
+                              {rule.provider_call_count} calls
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 tabular-nums">
+                            仅供参考 {rule.memory_context_use_count}
+                            <div className="text-muted-foreground mt-1">
+                              复用结论 {rule.memory_directive_use_count} ·
+                              结论相反 {rule.memory_contradiction_count}
+                            </div>
+                          </td>
+                          <td className="max-w-72 px-3 py-3">
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "whitespace-normal",
+                                RECOMMENDATION_CLASSES[
+                                  rule.recommendation.priority
+                                ],
+                              )}
+                            >
+                              {rule.recommendation.title}
+                            </Badge>
+                            <p className="text-muted-foreground mt-2 line-clamp-3 leading-5">
+                              {rule.recommendation.suggested_next_step}
+                            </p>
+                          </td>
+                        </tr>
+                        {expandedRuleKey === rule.group_key ? (
+                          <tr>
+                            <td
+                              colSpan={10}
+                              className="bg-muted/25 border-t px-4 py-4"
+                            >
+                              <RuleEffectivenessDrilldown
+                                detail={ruleDetailQuery.detail}
+                                isLoading={ruleDetailQuery.isLoading}
+                                error={ruleDetailQuery.error}
+                              />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+                {snapshot.rules.length === 0 ? (
+                  <div className="text-muted-foreground px-4 py-8 text-center text-sm">
+                    当前窗口没有可聚合的告警 Run。
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2 border-t bg-emerald-50 px-5 py-3 text-xs leading-5 text-emerald-950 md:px-7">
+            <ShieldCheckIcon className="mt-0.5 size-4 shrink-0" />
+            <span>
+              快速路径只针对“精确行为 + 已审核 Memory/Policy +
+              无反证”的稳定模式，并保留抽样复核；绝不因同一 Rule Code 直接跳过
+              LLM。
+            </span>
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 function LoadingState() {
   return (
     <div className="space-y-6 p-6" aria-label="正在加载 SOC 运营快照">
@@ -167,7 +905,11 @@ function LoadingState() {
 }
 
 export function SocOperationsOverview() {
+  const [effectivenessWindowDays, setEffectivenessWindowDays] = useState(30);
   const query = useSocOperationsSnapshot();
+  const effectivenessQuery = useSocEffectivenessSnapshot(
+    effectivenessWindowDays,
+  );
   const snapshot = query.snapshot;
   const metrics = snapshot?.persisted.metrics ?? null;
   const runStatuses = Object.entries(
@@ -184,13 +926,19 @@ export function SocOperationsOverview() {
           <Button
             variant="outline"
             size="icon-sm"
-            onClick={() => void query.refetch()}
-            disabled={query.isFetching}
+            onClick={() =>
+              void Promise.all([query.refetch(), effectivenessQuery.refetch()])
+            }
+            disabled={query.isFetching || effectivenessQuery.isFetching}
             aria-label="刷新运营快照"
             title="刷新运营快照"
           >
             <RefreshCwIcon
-              className={cn("size-4", query.isFetching && "animate-spin")}
+              className={cn(
+                "size-4",
+                (query.isFetching || effectivenessQuery.isFetching) &&
+                  "animate-spin",
+              )}
             />
           </Button>
         }
@@ -227,10 +975,18 @@ export function SocOperationsOverview() {
           </section>
         ) : null}
 
+        {snapshot ? <DataNature snapshot={snapshot} /> : null}
+
+        <EffectivenessSection
+          snapshot={effectivenessQuery.snapshot}
+          isLoading={effectivenessQuery.isLoading}
+          error={effectivenessQuery.error}
+          windowDays={effectivenessWindowDays}
+          onWindowChange={setEffectivenessWindowDays}
+        />
+
         {snapshot ? (
           <>
-            <DataNature snapshot={snapshot} />
-
             {query.error ? (
               <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900 md:px-7">
                 自动刷新失败，当前继续展示最近一次成功快照。

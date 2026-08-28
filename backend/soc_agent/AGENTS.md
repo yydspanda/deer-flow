@@ -101,6 +101,11 @@ file for SOC code. The authoritative product and engineering documents are:
   hours; tenant profiles may own a versioned bounded default such as PingAn's 30-day
   window. Do not infer this duration from raw vendor fields or silently rewrite old
   observations when a Profile changes.
+- The optional `SocMemoryPatternPostAnalysisObserver` is the shared post-analysis entry
+  for ordinary persisted analysis lanes. Enable it only with an explicit runtime
+  environment plus `SOC_MEMORY_PATTERN_DATA_CLASS`; Kafka, batch, and DEV workbenches
+  that already call the pattern service must disable this observer. All lanes share the
+  occurrence key, so replay or transport duplication cannot increase support.
 
 ## Persistence And Ingress
 
@@ -119,6 +124,18 @@ file for SOC code. The authoritative product and engineering documents are:
 - Candidate review, action approval, and normalization maintenance own independent
   repositories and APIs. ReviewQueue resolution must not inline or implicitly perform
   any of those state transitions.
+- Product effectiveness is a read model owned by `SocEffectivenessService` and its
+  repository protocol. It selects the latest Run per alert and joins persisted Decision,
+  applied Disposition, trusted final outcome, model-usage, and Memory feedback lineage.
+  API/Web must not reimplement formulas. Unlabeled alerts never enter accuracy or miss
+  denominators; `rule_code` remains an optional vendor alias, and every rule-improvement
+  recommendation is advisory only.
+- Rule effectiveness groups by canonical detection identity, not mutable rule display
+  names. The drill-down contract is `Rule Code -> same behavior -> exact Memory version`.
+  Directive outcomes are attributable; context-only Memory is non-causal. Historical
+  Memory uses must not inherit the current record version's label or activation state,
+  and wrong-auto-ignore requires an actually applied ignore disposition plus trusted
+  final risk truth.
 - Journal provider requests before invocation. Recovery may resume only when the frozen
   request and config/model lineage still match; otherwise start a new attempt.
 - Kafka topic `soc.alerts.raw.v1` accepts only

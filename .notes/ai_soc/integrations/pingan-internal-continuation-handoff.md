@@ -163,7 +163,7 @@ PI-01D1-D4 + PI-01E external simulation（Done）
   -> PI-01E 内网 shadow 全链路（Parked Real Integration Debt）
   -> PI-02 真实 Kafka/PostgreSQL/K8s（Parked / inputs absent）
 
-当前产品完成轨已经完成 PI-03A/B/C、PI-04A/B 与 PI-05A/B，并在 Simulation Completion Gate 收口；这些任务不在
+当前产品完成轨已经完成 PI-03A/B/C、PI-04A/B/C 与 PI-05A/B，并在 Simulation Completion Gate 收口；这些任务不在
 本内网交接单内，也不等待本节债务完成。PI-05C 只在真实部署输入到位后恢复，不在外网实现假控制器。
 
 D12-B 真实 asset.locate（Parked，可独立恢复）

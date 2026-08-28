@@ -4216,6 +4216,7 @@ def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
         repository,
         settings=_llm_settings_from_args(args),
         memory_environment=memory_pattern_environment,
+        pattern_observation_enabled=False,
     )
     approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
     investigation_service = _investigation_service_from_args(args, repository)
@@ -4788,11 +4789,13 @@ def _analysis_service_for_repository(
     *,
     settings: SocLLMSettings | None = None,
     memory_environment: str | None = None,
+    pattern_observation_enabled: bool | None = None,
 ) -> SocAnalysisService:
     return build_soc_analysis_service(
         repository,
         settings=settings,
         memory_environment=memory_environment,
+        pattern_observation_enabled=pattern_observation_enabled,
     )
 
 

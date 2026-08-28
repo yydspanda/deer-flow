@@ -16,6 +16,7 @@ from soc_agent.contracts import (
     AnalysisContextReferenceKind,
     DetectionRuleRef,
     LLMAnalysisRequest,
+    MemoryPatternDataClass,
     SocMemoryApplicabilityReport,
     SocMemoryApplicabilityStatus,
     SocMemoryCandidateSource,
@@ -27,6 +28,7 @@ from soc_agent.contracts import (
     SocMemoryRetrievalResult,
     SocMemoryTargetArtifact,
 )
+from soc_agent.core import SocMemoryPatternPostAnalysisObserver
 from soc_agent.core.runtime import analyze_alert
 from soc_agent.llm import SocAnalyzerMode, SocLLMSettings
 from soc_agent.memory import (
@@ -262,6 +264,54 @@ def test_runtime_environment_is_scoped_across_memory_and_automation(
     automation_observer = service._post_analysis_observers[0]
     assert memory_enricher._environment == "dev-corpus-eval"
     assert automation_observer._environment == "dev-corpus-eval"
+
+
+def test_pattern_observer_composition_requires_explicit_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOC_MEMORY_PATTERN_OBSERVATION_ENABLED", "true")
+    monkeypatch.setenv("SOC_MEMORY_PATTERN_DATA_CLASS", "simulation")
+    monkeypatch.setenv("SOC_TENANT_POLICY_ENABLED", "false")
+    monkeypatch.delenv("SOC_AUTOMATION_POLICY_PATH", raising=False)
+
+    observers = analysis_application._build_post_analysis_observers(
+        SimpleNamespace(),
+        settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+        runtime_environment="dev",
+    )
+
+    assert isinstance(observers[-1], SocMemoryPatternPostAnalysisObserver)
+    assert observers[-1]._environment == "dev"
+    assert observers[-1]._data_class is MemoryPatternDataClass.SIMULATION
+
+    explicitly_disabled = analysis_application._build_post_analysis_observers(
+        SimpleNamespace(),
+        settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+        runtime_environment="dev",
+        pattern_observation_enabled=False,
+    )
+    assert not any(isinstance(item, SocMemoryPatternPostAnalysisObserver) for item in explicitly_disabled)
+
+
+def test_pattern_observer_composition_fails_closed_without_repository_or_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOC_MEMORY_PATTERN_OBSERVATION_ENABLED", "true")
+    monkeypatch.setenv("SOC_MEMORY_PATTERN_DATA_CLASS", "simulation")
+    monkeypatch.setenv("SOC_TENANT_POLICY_ENABLED", "false")
+
+    with pytest.raises(ValueError, match="persisted analysis repository"):
+        analysis_application._build_post_analysis_observers(
+            None,
+            settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+            runtime_environment="dev",
+        )
+
+    with pytest.raises(ValueError, match="runtime environment"):
+        analysis_application._build_post_analysis_observers(
+            SimpleNamespace(),
+            settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+        )
 
 
 def test_memory_retrieval_failure_is_sanitized_and_non_blocking() -> None:

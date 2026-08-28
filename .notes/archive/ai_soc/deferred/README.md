@@ -4,7 +4,7 @@
 这里直接启动开发；权威执行顺序仍由 `.notes/ai_soc/delivery-roadmap.md` 决定。
 
 2026-08-15 已按代码、`delivery-roadmap.md` 和 `progress.md` 重新审计：已完成的 `PI-03C`
-Skill-improvement backlog、`PI-04A/B` Operations Snapshot/Web，以及已落地的 PingAn software-path
+Skill-improvement backlog、`PI-04A/B/C` Operations Snapshot/Web/Effectiveness，以及已落地的 PingAn software-path
 fast policy 均已从本索引移除。真实 provider/基础设施/rollout 等 Data-gated 债务继续由
 `.notes/ai_soc/integrations/` 管理，不在这里复制第二套台账。
 
@@ -12,7 +12,7 @@ fast policy 均已从本索引移除。真实 provider/基础设施/rollout 等 
 |---|---|---|---|
 | [Native Agent Tool Call + trusted target binding](native-agent-tool-call-and-target-binding.md) | 独立 architecture hardening；高风险无人值守执行前置 | Lead Agent proposal 准备进入自动写入/高风险链，或 marker/目标漂移已形成可测问题 | 增加只创建 proposal 的 `propose_soc_action` native tool，并以 frozen context 的 typed `target_ref` 替代自由 payload |
 | [Kafka worker pool / concurrency](kafka-worker-pool-concurrency-plan.md) | `PI-02` | 有真实 Kafka、DB、LLM P50/P95、lag 和失败数据，串行模式实测不达标 | 在默认 concurrency=`1` 下加入 bounded queue/poller，先验证顺序提交、背压和优雅退出，不直接打开多 worker |
-| [Production observability, Prometheus and SLO](production-observability-and-slo.md) | 真实 `PI-04` / `PI-05C` | staging/production 已产生真实 telemetry，并明确窗口、阈值、owner 和 runbook | 先冻结低基数 telemetry contract，再接现有 Operations Service；不重做已完成的 Snapshot/Web |
+| [Production observability, Prometheus and SLO](production-observability-and-slo.md) | `PI-04D` / `PI-05C` | staging/production 已产生真实 labels/telemetry，并明确窗口、阈值、owner 和 runbook | 先冻结低基数 telemetry contract，再接现有 Operations/Effectiveness Service；不重做已完成的 Snapshot/Web/read model |
 | [Correlation label corpus expansion](correlation-label-corpus-expansion.md) | `PI-03` | 有获批脱敏 pair、分析师 reviewer 和版本化标签流程 | 先建立 immutable manifest + reviewer/rationale/provenance/supersede contract，再扩 corpus 和跑 scorer replay diff |
 | [DB memory to Wiki/OKF projection](wiki-okf-memory-projection.md) | `PI-03` 之后 | DB 生命周期和检索价值已被真实使用验证，且分析师提出明确协作需求 | 先做 DB -> versioned read-only export；Wiki 编辑只能回流 proposal，不允许直接改变 active memory |
 | [Adaptive normalization and parser evolution](adaptive-normalization-parser-evolution.md) | `PI-03` 或独立治理切片 | `PI-01E`/5000+ 批跑产生可重复 drift cohort，并有 owner、review/replay/rollback 流程 | 先实现按 tenant/source/parser/fingerprint 聚合的 cohort report + candidate bundle；不自动生成或上线 parser |

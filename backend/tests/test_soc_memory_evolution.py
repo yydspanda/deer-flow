@@ -437,3 +437,57 @@ def test_supporting_final_outcome_keeps_reviewed_memory_active(
     assert lineage.health[0].status.value == "healthy"
     assert lineage.health[0].use_count == 1
     assert lineage.health[0].support_count == 1
+
+
+def test_context_only_reviewed_memory_is_revised_when_final_truth_contradicts_it(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 15, 8, 0, tzinfo=UTC)
+    repository = _repository(tmp_path / "memory-context-only-contradiction.db")
+    memory = _active_benign_memory(now).model_copy(
+        update={
+            "reviewed_verdict": Verdict.FALSE_POSITIVE,
+            "decision_directive": None,
+        }
+    )
+    run = _run(memory, now)
+    repository.save_memory_record(memory)
+    repository.save_run(run)
+    uses = SocMemoryEvolutionService(
+        repository=repository,
+        memory_record_repository=repository,
+        automation_repository=repository,
+        mutation_audit_repository=repository,
+        mutation_uow=repository,
+        now_provider=lambda: now,
+    ).capture_run_usage(run)
+
+    assert len(uses) == 1
+    assert uses[0].directive_applied is False
+
+    corrected = SocReviewService(
+        repository=repository,
+        memory_record_repository=repository,
+        mutation_audit_repository=repository,
+        mutation_uow=repository,
+    ).correct(
+        CorrectionCommand(
+            run_id=run.run_id,
+            corrected_verdict=Verdict.TRUE_POSITIVE,
+            reason="运营复核确认当前事件是真实攻击，与既有无风险经验冲突。",
+        ),
+        context=_analyst_context("correction-context-only-contradiction"),
+    )
+
+    correction = corrected.corrections[-1]
+    assert len(correction.memory_feedback_ids) == 1
+    assert len(correction.memory_revision_proposal_ids) == 1
+    assert correction.suspended_memory_ids == [memory.memory_id]
+    lineage = SocMemoryEvolutionService(
+        repository=repository,
+        memory_record_repository=repository,
+    ).get_lineage(memory.memory_id)
+    assert lineage.feedback[0].memory_reviewed_verdict is Verdict.FALSE_POSITIVE
+    assert lineage.feedback[0].memory_target_verdict is None
+    assert lineage.feedback[0].directive_was_active is False
+    assert lineage.feedback[0].alignment.value == "contradicts"

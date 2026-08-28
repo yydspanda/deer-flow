@@ -35,6 +35,7 @@ class MemoryPatternSourceType(StrEnum):
 
     KAFKA_ALERT = "kafka_alert"
     BATCH_ALERT = "batch_alert"
+    ANALYSIS_RUN = "analysis_run"
 
 
 class MemoryPatternDimension(StrEnum):

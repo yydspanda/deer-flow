@@ -3491,6 +3491,7 @@ def _memory_record_from_candidate(
         summary=summary,
         content=content,
         business_lesson=lesson,
+        reviewed_verdict=(command.confirmed_verdict or (command.decision_directive.target_verdict if command.decision_directive is not None else None)),
         facets=candidate.facets,
         applicability=command.record_applicability or candidate.applicability,
         evidence_refs=candidate.evidence_refs,

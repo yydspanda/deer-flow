@@ -25,6 +25,7 @@
 | 🚫 | Forbidden mutation | 不允许模型/自由文本 Memory 绕过服务直接改判或执行 |
 | 🛠️ | Maintenance | 解析器、Schema 基线和字段映射维护 |
 | 🪪 | Governed context | 带时效、范围、来源和撤销语义的运营事实 |
+| 📊 | Effectiveness / metrics | 带分母的质量、自动化、规则和算力指标 |
 
 ## 1. End-to-End Overview / 端到端总览
 
@@ -129,6 +130,14 @@ flowchart TD
     Z11 -->|No| V
     U --> Q
     V --> G
+    E --> EF0["🗃️ Effectiveness telemetry<br/>verdict / latency / model usage / quality"]
+    A1 --> EF0
+    A8 --> EF0
+    Z6 --> EF0
+    V --> EF0
+    EF0 --> EF1["⚙️ SocEffectivenessService<br/>latest Run per alert + trusted truth"]
+    EF1 --> EF2["📊 Operations Web/API<br/>准确率 / 漏报 / 自动忽略 / Rule / 算力"]
+    EF1 --> EF3["🔧 Advisory rule candidates<br/>不自动修改规则"]
 ```
 
 这张图表达的是当前系统的实际闭环：
@@ -180,11 +189,11 @@ flowchart TD
     checkpoint/history，采纳仍只生成 `pending_review` candidate。Kafka/批处理也不能逐告警写 candidate；
     PI-03F3 只在显式启用时把完成的 run 保存为 immutable observation，以 tenant/environment/data class
     隔离。server-owned Memory Profile 从 canonical 字段选择 cohort 与 occurrence identity：generic fallback
-    保持跨厂商，PingAn Profile v6（feature schema v5）使用 detection key + detector signature + behavior fingerprint 形成
+    保持跨厂商，PingAn Profile v7（feature schema v5）使用 detection key + detector signature + behavior fingerprint 形成
     compound cohort；只有 strong behavior compound 才可 decision-eligible，detection-only/weak-only 降为
     rule-context，behavior-only strong 保留 ruleless pattern，并拒绝 category-only cohort；
     同 upstream event/input occurrence 不重复增加 support。随后使用 canonical
-    timezone-aware source event time 的固定 UTC 窗口。通用 Profile 默认 24h，PingAn Profile v6 默认 30d；
+    timezone-aware source event time 的固定 UTC 窗口。通用 Profile 默认 24h，PingAn Profile v7 默认 30d；
     `soc.memory_pattern_aggregation.v3` 要求一个有效 Profile 窗口内
     达到 5 support + 5 distinct sources + 5 conclusive outcomes，并满足 risk/benign consistency >=80% 和
     consensus strong anchor，才提出一个 frozen `pending_review` pattern lesson。低支持、冲突、未决或弱锚点
@@ -231,6 +240,10 @@ flowchart TD
    使用 migration `0023` 的四类 append-only lineage 表，migration `0024` 增加租户策略和四阶段索引；
    migration `0025` 保存 Memory profile/occurrence、use、feedback、health 与 revision proposal。
    两类审计互补，不能互相替代。
+21. migration `0026` 为 `AnalysisRun` 增加可查询的 verdict、总耗时、模型调用/Token 和输出质量索引。
+    `SocEffectivenessService` 只读汇总最新 Run、Decision/Disposition、最终 outcome 与 Memory feedback；
+    未形成高可信最终技术结论的告警不进入准确率、漏报率或规则误报率分母。Rule Code 只是可选供应商
+    别名，规则优化输出固定为 advisory，不能直接改 Flink 规则、Memory、Policy 或动作权限。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从

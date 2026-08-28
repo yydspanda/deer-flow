@@ -45,6 +45,7 @@
 | 设计通用记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
 | 审阅 PingAn Memory 的同类关联、候选质量、改判、反馈和失效闭环 | `memory/pingan-soc-memory-design.md` | `governance/decision-disposition-action-automation.md` |
 | 理解 Memory 改判、无 Memory 自动处置和完整动作留痕 | `governance/decision-disposition-action-automation.md` | `soc-agent-solution.md` Section 7.2 / 10 |
+| 审阅研判准确率、漏报、转交、自动忽略、Rule Code 质量和算力优化口径 | `governance/effectiveness-and-rule-optimization.md` | `alert-lifecycle-flow.md` 的最终状态回流与 Memory feedback |
 | 管理授权活动、影子处置建议、抽样 outcome 与评测 gate，规划变更窗口与护网身份 | `governance/governed-context-facts.md` | `soc-agent-solution.md` Section 7.4 |
 | 设计 Lead/Sub Agent、skill、MCP 开放配置 | `governance/agent-profile-governance.md` | 工程契约 Profile / Skill / MCP 章节 |
 
@@ -99,6 +100,7 @@ ai_soc/
 └── governance/
     ├── agent-profile-governance.md    # Lead/Sub Agent、Skill、MCP 配置治理
     ├── decision-disposition-action-automation.md # 改判、处置、授权、执行和 Memory 影响边界
+    ├── effectiveness-and-rule-optimization.md # 最终真值、Rule Code/同类行为/Memory 效能和算力闭环
     └── governed-context-facts.md      # 授权/演练/变更等 typed fact 生命周期和 CLI
 ```
 
@@ -125,6 +127,7 @@ ai_soc/
 | `memory/memory-tracking.md` | typed memory、candidate、confirmed memory、retrieval policy | memory contract、状态机、检索、projection 变化时更新 |
 | `memory/pingan-soc-memory-design.md` | PingAn same-class profile、模式候选、适用范围、反馈/健康/修订闭环 | PingAn profile、Memory evolution、审核或失效规则变化时更新 |
 | `governance/decision-disposition-action-automation.md` | base/effective decision、disposition、authorization、execution 的唯一专项说明 | Memory decision directive、automation policy、动作执行或 lineage contract 变化时更新 |
+| `governance/effectiveness-and-rule-optimization.md` | 最终真值、准确率/漏报/自动化、Rule Code→同类行为→Memory 效果与算力优化的统一口径 | 埋点、指标公式、规则建议阈值、最终状态来源或快速路径边界变化时更新 |
 | `governance/governed-context-facts.md` | typed operational fact、版本、来源、有效期和授权匹配边界 | fact contract、生命周期、matcher 或 disposition policy 变化时更新 |
 | `governance/agent-profile-governance.md` | agent profile、skill、MCP 开放配置治理 | profile 生命周期、权限和用户可配置范围变化时更新 |
 

@@ -142,7 +142,9 @@ def render_memory_business_lesson(lesson: SocMemoryBusinessLesson) -> str:
     """Render the typed lesson into bounded analyst/model-readable text."""
 
     sections = (
-        ("结论 / Conclusion", [lesson.conclusion]),
+        *((("检测场景 / Detection scenario", [lesson.detection_scenario]),) if lesson.detection_scenario is not None else ()),
+        *((("实际事件 / Observed event", [lesson.observed_event]),) if lesson.observed_event is not None else ()),
+        ("审核结论 / Reviewed conclusion", [lesson.conclusion]),
         ("业务依据 / Business rationale", lesson.business_rationale),
         ("适用条件 / Applicability", lesson.applicability_conditions),
         ("泛化边界 / Generalization boundaries", lesson.generalization_boundaries),

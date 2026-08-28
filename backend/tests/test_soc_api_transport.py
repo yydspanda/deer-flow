@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.gateway.routers import (
     soc_alerts,
     soc_approvals,
+    soc_effectiveness,
     soc_external_dispositions,
     soc_memory,
     soc_normalization,
@@ -62,6 +63,7 @@ def _soc_openapi() -> dict:
     for module in (
         soc_alerts,
         soc_approvals,
+        soc_effectiveness,
         soc_external_dispositions,
         soc_memory,
         soc_normalization,

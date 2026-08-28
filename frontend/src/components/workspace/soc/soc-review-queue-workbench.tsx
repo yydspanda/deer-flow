@@ -271,6 +271,8 @@ interface MemoryCandidateReviewDraft {
   applyToFutureMatches: boolean;
   confirmedVerdict: SocVerdict | null;
   promotedFacetKeys: string[];
+  lessonDetectionScenario: string;
+  lessonObservedEvent: string;
   lessonConclusion: string;
   lessonBusinessRationale: string;
   lessonGeneralizationBoundary: string;
@@ -289,6 +291,8 @@ function defaultMemoryCandidateReviewDraft(
     applyToFutureMatches: false,
     confirmedVerdict: null,
     promotedFacetKeys: [],
+    lessonDetectionScenario: "",
+    lessonObservedEvent: "",
     lessonConclusion: "",
     lessonBusinessRationale: "",
     lessonGeneralizationBoundary: "",
@@ -342,6 +346,8 @@ function reviewedLessonItems(value: string): string[] {
 
 function hasMemoryLessonDraft(draft: MemoryCandidateReviewDraft) {
   return [
+    draft.lessonDetectionScenario,
+    draft.lessonObservedEvent,
     draft.lessonConclusion,
     draft.lessonBusinessRationale,
     draft.lessonGeneralizationBoundary,
@@ -355,6 +361,8 @@ function reviewedMemoryBusinessLesson(
   applicability: SocMemoryApplicabilitySpec | null | undefined,
 ): SocMemoryBusinessLesson | undefined {
   const conclusion = draft.lessonConclusion.trim();
+  const detectionScenario = draft.lessonDetectionScenario.trim();
+  const observedEvent = draft.lessonObservedEvent.trim();
   const businessRationale = reviewedLessonItems(draft.lessonBusinessRationale);
   const generalizationBoundaries = reviewedLessonItems(
     draft.lessonGeneralizationBoundary,
@@ -374,6 +382,8 @@ function reviewedMemoryBusinessLesson(
     );
   }
   if (
+    detectionScenario.length < 5 ||
+    observedEvent.length < 5 ||
     conclusion.length < 10 ||
     businessRationale.length === 0 ||
     businessRationale.some((item) => item.length < 5) ||
@@ -388,7 +398,9 @@ function reviewedMemoryBusinessLesson(
     return undefined;
   }
   return {
-    schema_version: "soc.memory_business_lesson.v1",
+    schema_version: "soc.memory_business_lesson.v2",
+    detection_scenario: detectionScenario,
+    observed_event: observedEvent,
     conclusion,
     business_rationale: businessRationale,
     applicability_conditions: applicabilityConditions,
@@ -418,6 +430,25 @@ function defaultMemoryRetrievalDraft(
     validUntil: validUntil.toISOString().slice(0, 16),
     reviewAfterDays: "30",
   };
+}
+
+function memoryConfirmationValidUntil(candidate: SocMemoryCandidate) {
+  const preferred = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+  if (candidate.source.source_type === "repeated_pattern") {
+    return preferred.toISOString();
+  }
+  const candidateLimit = candidate.validity.valid_until
+    ? new Date(candidate.validity.valid_until)
+    : null;
+  if (
+    candidateLimit &&
+    !Number.isNaN(candidateLimit.getTime()) &&
+    candidateLimit.getTime() > Date.now() + 60_000 &&
+    candidateLimit.getTime() < preferred.getTime()
+  ) {
+    return new Date(candidateLimit.getTime() - 30_000).toISOString();
+  }
+  return preferred.toISOString();
 }
 
 const OUTCOME_REVIEW_KIND_OPTIONS: {
@@ -736,48 +767,64 @@ function CandidateMetric({ label, value }: { label: string; value: string }) {
 
 const MEMORY_LESSON_BLUEPRINT = [
   {
-    key: "conclusion",
+    key: "detection_scenario",
     order: "01",
-    title: "经验结论",
-    english: "Conclusion",
-    emphasis: "核心判断",
-    description: "说明这个模式的业务含义，以及最终判定有无风险。",
+    title: "检测场景",
+    english: "Detection scenario",
+    emphasis: "规则报告",
+    description: "说明规则认为发生了什么攻击或异常行为。",
+  },
+  {
+    key: "observed_event",
+    order: "02",
+    title: "实际事件",
+    english: "Observed event",
+    emphasis: "真实发生",
+    description: "用业务语言说明本组告警实际发生的事件。",
+  },
+  {
+    key: "conclusion",
+    order: "03",
+    title: "审核结论",
+    english: "Reviewed outcome",
+    emphasis: "有无风险",
+    description: "记录运营专家确认的最终判断及其可复用业务含义。",
   },
   {
     key: "business_rationale",
-    order: "02",
-    title: "业务依据",
-    english: "Business rationale",
+    order: "04",
+    title: "判断依据",
+    english: "Reviewed basis",
     emphasis: "事实基础",
-    description: "记录运营专家确认过的事实，解释为什么可以得出该结论。",
+    description: "记录支持结论的业务事实与审核依据。",
   },
   {
     key: "applicability_conditions",
-    order: "03",
+    order: "05",
     title: "适用条件",
     english: "Applicability",
-    emphasis: "匹配开关",
-    description: "决定什么样的新告警可以使用这条经验，由系统从候选范围生成。",
+    emphasis: "必须匹配",
+    description: "决定哪些新告警可以使用，由后端匹配契约生成。",
   },
   {
     key: "generalization_boundaries",
-    order: "04",
-    title: "泛化边界",
+    order: "06",
+    title: "允许变化",
     english: "Generalization",
-    emphasis: "允许变化",
-    description: "说明主机、IP、时间或实例等哪些差异不会改变业务结论。",
+    emphasis: "泛化边界",
+    description: "说明 IP、主机、时间等哪些差异不会改变结论。",
   },
   {
     key: "invalidation_conditions",
-    order: "05",
-    title: "失效条件",
+    order: "07",
+    title: "失效与反例",
     english: "Invalidation",
-    emphasis: "安全边界",
-    description: "列出出现哪些反证或变化后必须停止复用，并重新研判。",
+    emphasis: "停止复用",
+    description: "出现这些反证时暂停经验，并进入复盘或修订。",
   },
   {
     key: "handling_guidance",
-    order: "06",
+    order: "08",
     title: "处置建议",
     english: "Handling guidance",
     emphasis: "后续动作",
@@ -790,6 +837,10 @@ function MemoryLessonReadView({ lesson }: { lesson: SocMemoryBusinessLesson }) {
     (typeof MEMORY_LESSON_BLUEPRINT)[number]["key"],
     string[]
   > = {
+    detection_scenario: lesson.detection_scenario
+      ? [lesson.detection_scenario]
+      : [],
+    observed_event: lesson.observed_event ? [lesson.observed_event] : [],
     conclusion: [lesson.conclusion],
     business_rationale: lesson.business_rationale,
     applicability_conditions: lesson.applicability_conditions,
@@ -800,7 +851,9 @@ function MemoryLessonReadView({ lesson }: { lesson: SocMemoryBusinessLesson }) {
 
   return (
     <div className="divide-y border-y">
-      {MEMORY_LESSON_BLUEPRINT.map((item) => (
+      {MEMORY_LESSON_BLUEPRINT.filter(
+        (item) => values[item.key].length > 0,
+      ).map((item) => (
         <div
           key={item.key}
           className="grid min-w-0 gap-2 py-3 lg:grid-cols-[12rem_minmax(0,1fr)]"
@@ -819,7 +872,9 @@ function MemoryLessonReadView({ lesson }: { lesson: SocMemoryBusinessLesson }) {
               {item.description}
             </p>
           </div>
-          {item.key === "conclusion" ? (
+          {["detection_scenario", "observed_event", "conclusion"].includes(
+            item.key,
+          ) ? (
             <p className="text-sm leading-6 break-words">
               {values[item.key][0]}
             </p>
@@ -2222,6 +2277,8 @@ function MemoryCandidateSection({
                               onReviewDraftChange(candidate, {
                                 confirmedVerdict: value as SocVerdict,
                                 applyToFutureMatches: false,
+                                lessonDetectionScenario: "",
+                                lessonObservedEvent: "",
                                 lessonConclusion: "",
                                 lessonBusinessRationale: "",
                                 lessonGeneralizationBoundary: "",
@@ -2285,8 +2342,8 @@ function MemoryCandidateSection({
                           {isDraftingLesson
                             ? "生成中"
                             : hasLessonDraft
-                              ? "重新生成 Business Lesson"
-                              : "AI 生成 Business Lesson"}
+                              ? "重新生成研判经验"
+                              : "AI 生成研判经验"}
                         </Button>
                       </div>
                     </div>
@@ -2296,7 +2353,7 @@ function MemoryCandidateSection({
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <div className="text-sm font-semibold">
-                              2. 审阅 Business Lesson
+                              2. 审阅研判经验卡
                             </div>
                             <div className="text-muted-foreground mt-1 text-xs">
                               {draft.lessonDraftProvenance}
@@ -2325,7 +2382,33 @@ function MemoryCandidateSection({
                         {draft.lessonEditing || !reviewedLesson ? (
                           <div className="mt-4 grid gap-3 md:grid-cols-2">
                             <label className="grid gap-1 text-xs font-medium md:col-span-2">
-                              经验结论
+                              检测场景：规则报告了什么
+                              <Textarea
+                                value={draft.lessonDetectionScenario}
+                                disabled={isReviewing || !editable}
+                                className="min-h-16 text-xs"
+                                onChange={(event) =>
+                                  onReviewDraftChange(candidate, {
+                                    lessonDetectionScenario: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                              实际事件：业务上发生了什么
+                              <Textarea
+                                value={draft.lessonObservedEvent}
+                                disabled={isReviewing || !editable}
+                                className="min-h-20 text-xs"
+                                onChange={(event) =>
+                                  onReviewDraftChange(candidate, {
+                                    lessonObservedEvent: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                              审核结论
                               <Textarea
                                 value={draft.lessonConclusion}
                                 disabled={isReviewing || !editable}
@@ -2338,7 +2421,7 @@ function MemoryCandidateSection({
                               />
                             </label>
                             <label className="grid gap-1 text-xs font-medium md:col-span-2">
-                              业务依据（每行一条）
+                              判断依据（每行一条）
                               <Textarea
                                 value={draft.lessonBusinessRationale}
                                 disabled={isReviewing || !editable}
@@ -2545,7 +2628,7 @@ function MemoryCandidateSection({
                           onClick={() => onReview(candidate, "confirm")}
                         >
                           <CheckCircle2Icon className="size-4" />
-                          确认并沉淀 Memory
+                          确认并启用经验
                         </Button>
                         <Button
                           size="sm"
@@ -2803,9 +2886,12 @@ function MemoryRetrievalActivationSection({
                 {retrievalMutable ? (
                   <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem_8rem_auto] lg:items-end">
                     <label className="grid gap-1 text-xs">
-                      <span className="text-muted-foreground">治理理由</span>
+                      <span className="text-muted-foreground">
+                        使用状态变更说明
+                      </span>
                       <Input
                         value={draft.reason}
+                        placeholder="说明本次开放或暂停的原因"
                         onChange={(event) =>
                           onDraftChange(record, "reason", event.target.value)
                         }
@@ -3373,10 +3459,9 @@ export function SocReviewQueueWorkbench({
         ? "审核人决定放弃沉淀该候选，未形成可复用 Memory。"
         : decision === "reopen"
           ? "审核人重新打开此前被放弃的候选，返回待审核状态。"
-          : draft.businessContext.trim() ||
-            (decision === "confirm" && reviewerVerdict
-              ? `审核人确认 Business Lesson，最终判断为${verdictLabel(reviewerVerdict)}。`
-              : `审核人执行候选状态变更：${decision}。`);
+          : decision === "confirm" && reviewerVerdict
+            ? `审核人确认研判经验，最终判断为${verdictLabel(reviewerVerdict)}；未来用途为${draft.applyToFutureMatches ? "精确匹配时复用结论" : "仅作研判参考"}。`
+            : `审核人执行候选状态变更：${decision}。`;
     const narrowedApplicability = reviewedMemoryApplicability(candidate, draft);
     const effectiveApplicability =
       narrowedApplicability ?? candidate.applicability;
@@ -3400,10 +3485,17 @@ export function SocReviewQueueWorkbench({
           ...(decision === "confirm" && recordLesson
             ? { record_lesson: recordLesson }
             : {}),
+          ...(decision === "confirm"
+            ? {
+                confirmed_verdict: reviewerVerdict,
+                activate_retrieval: true,
+                activation_valid_until: memoryConfirmationValidUntil(candidate),
+                activation_review_after_days: 30,
+              }
+            : {}),
           ...(decision === "confirm" && draft.applyToFutureMatches
             ? {
                 apply_to_future_matches: true,
-                confirmed_verdict: reviewerVerdict,
                 clear_review_on_match: true,
               }
             : {}),
@@ -3448,6 +3540,8 @@ export function SocReviewQueueWorkbench({
       }
       const lesson = result.lesson;
       handleMemoryReviewDraftChange(candidate, {
+        lessonDetectionScenario: lesson.detection_scenario ?? "",
+        lessonObservedEvent: lesson.observed_event ?? "",
         lessonConclusion: lesson.conclusion,
         lessonBusinessRationale: lesson.business_rationale.join("\n"),
         lessonGeneralizationBoundary:
@@ -3487,7 +3581,7 @@ export function SocReviewQueueWorkbench({
       defaultMemoryRetrievalDraft(record);
     const reason = draft.reason.trim();
     if (!reason) {
-      toast.error("请填写治理理由");
+      toast.error("请填写使用状态变更说明");
       return;
     }
     try {

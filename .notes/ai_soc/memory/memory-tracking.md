@@ -297,7 +297,7 @@ PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
   timezone-aware `AlertInput.event.event_time` 落入固定 UTC window。缺失或 naive event time 时跳过聚合，
   不使用 `run.started_at` 伪造历史窗口，也不猜租户时区。
 - policy `soc.memory_pattern_aggregation.v3` 的 generic 默认 window=24h；tenant profile 可声明版本化的
-  bounded default，PingAn Profile v6 默认 fixed UTC 30d，显式离线/operator policy 可覆盖。所有 Profile
+  bounded default，PingAn Profile v7 默认 fixed UTC 30d，显式离线/operator policy 可覆盖。所有 Profile
   仍使用 minimum support=5、minimum distinct sources=5、minimum conclusive support=5、risk/benign
   consistency >=80%，并要求至少一个与候选类型对应的
   consensus strong retrieval anchor。
@@ -315,7 +315,7 @@ PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
 - recurrence 不证明 benign/malicious、授权、攻击影响或处置动作，不能改变 Runtime decision、确认记忆、
   启用 retrieval 或执行 action。Kafka/batch sidecar 默认关闭，聚合失败不阻断基础分析。
 - `SocMemoryProfileRegistry` 在 composition root 选择 tenant/source profile。PingAn profile 只消费 canonical
-  Adapter 输出：Profile v6 / feature schema v5 使用 detection key + detector signature + behavior fingerprint 形成 compound
+  Adapter 输出：Profile v7 / feature schema v5 使用 detection key + detector signature + behavior fingerprint 形成 compound
   cohort；只有 strong behavior compound 才可 decision-eligible，detection-only/weak-only 只能形成
   rule-context，behavior-only strong 保留为 ruleless pattern，category-only 不形成 PingAn cohort；
   同 upstream event/input occurrence 不重复增加 support。

@@ -426,9 +426,24 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         }.issubset(memory_pattern_columns)
         memory_pattern_constraints = {constraint["name"] for constraint in inspect(engine).get_unique_constraints("soc_memory_pattern_observations")}
         assert "uq_soc_memory_pattern_aggregation_occurrence" in memory_pattern_constraints
+        analysis_run_columns = {column["name"] for column in inspect(engine).get_columns("soc_analysis_runs")}
+        assert {
+            "analysis_verdict",
+            "runtime_decision_verdict",
+            "total_duration_ms",
+            "provider_call_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "usage_measurement_status",
+            "output_quality_status",
+            "repair_applied",
+            "deterministic_fallback_used",
+            "degraded_section_count",
+        }.issubset(analysis_run_columns)
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0025_memory_evolution"
+        assert revision == "0026_effectiveness"
     finally:
         engine.dispose()
 

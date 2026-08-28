@@ -592,6 +592,293 @@ function operationsSnapshot() {
   };
 }
 
+function rateMetric(
+  metricId: string,
+  numerator: number,
+  denominator: number,
+  interpretation: string,
+) {
+  return {
+    metric_id: metricId,
+    availability: denominator > 0 ? "available" : "not_measured",
+    numerator,
+    denominator,
+    value: denominator > 0 ? numerator / denominator : null,
+    formula: `${numerator} / ${denominator}`,
+    interpretation,
+  };
+}
+
+function effectivenessSnapshot() {
+  return {
+    schema_version: "soc.effectiveness_snapshot.v1",
+    generated_at: NOW,
+    availability: "available",
+    scope: {
+      schema_version: "soc.effectiveness_scope.v1",
+      window_start: "2026-07-18T08:00:00Z",
+      window_end: NOW,
+      tenant_id: null,
+      source_type: null,
+    },
+    coverage: {
+      total_alert_count: 120,
+      completed_alert_count: 120,
+      superseded_run_count: 3,
+      labeled_alert_count: 10,
+      high_trust_labeled_alert_count: 10,
+      label_coverage: rateMetric(
+        "quality.label_coverage",
+        10,
+        120,
+        "只有形成最终结论的告警进入质量分母。",
+      ),
+      high_trust_label_coverage: rateMetric(
+        "quality.high_trust_label_coverage",
+        10,
+        120,
+        "具名人工或可信外部系统确认。",
+      ),
+    },
+    summary: {
+      triage_accuracy: rateMetric(
+        "quality.triage_accuracy",
+        10,
+        10,
+        "Effective Verdict 与最终技术结论一致。",
+      ),
+      detection_miss_rate: rateMetric(
+        "quality.detection_miss_rate",
+        0,
+        1,
+        "真实攻击被技术研判为误报。",
+      ),
+      operational_miss_rate: rateMetric(
+        "quality.operational_miss_rate",
+        0,
+        1,
+        "真实攻击被实际自动忽略。",
+      ),
+      transfer_precision: rateMetric(
+        "quality.transfer_precision",
+        1,
+        1,
+        "有标签的转交中最终为真实攻击。",
+      ),
+      attack_transfer_recall: rateMetric(
+        "quality.attack_transfer_recall",
+        1,
+        1,
+        "最终真实攻击中被转交的比例。",
+      ),
+      auto_ignore_rate: rateMetric(
+        "automation.auto_ignore_rate",
+        90,
+        120,
+        "已实际应用忽略类处置。",
+      ),
+      wrong_auto_ignore_rate: rateMetric(
+        "automation.wrong_auto_ignore_rate",
+        0,
+        9,
+        "自动忽略后最终为真实攻击。",
+      ),
+      human_touch_rate: rateMetric(
+        "operations.human_touch_rate",
+        10,
+        120,
+        "发生人工最终确认。",
+      ),
+    },
+    compute: {
+      run_count: 120,
+      provider_run_count: 120,
+      provider_call_count: 120,
+      token_measured_run_count: 120,
+      input_tokens: 420000,
+      output_tokens: 60000,
+      total_tokens: 480000,
+      average_tokens_per_measured_run: 4000,
+      duration_measured_run_count: 120,
+      average_total_duration_ms: 1250,
+      repair_run_count: 2,
+      fallback_run_count: 0,
+      degraded_run_count: 1,
+      token_measurement_coverage: rateMetric(
+        "compute.token_measurement_coverage",
+        120,
+        120,
+        "Provider 返回可审计 usage。",
+      ),
+      repair_rate: rateMetric(
+        "compute.repair_rate",
+        2,
+        120,
+        "模型输出经过机械修复。",
+      ),
+      fallback_rate: rateMetric(
+        "compute.fallback_rate",
+        0,
+        120,
+        "退回确定性分析。",
+      ),
+      degraded_rate: rateMetric(
+        "compute.degraded_rate",
+        1,
+        120,
+        "存在局部降级。",
+      ),
+    },
+    rules: [
+      {
+        schema_version: "soc.rule_effectiveness.v1",
+        group_key: "0123456789abcdef",
+        tenant_id: "tenant-alpha",
+        source_type: "nids",
+        source_system: "alpha-fixture",
+        detection_identity: "alpha:nids:RC-ALPHA-001",
+        detection_key: "alpha:nids:RC-ALPHA-001",
+        rule_code: "RC-ALPHA-001",
+        rule_name: "重复外联检测",
+        alert_count: 120,
+        completed_count: 120,
+        labeled_count: 10,
+        high_trust_labeled_count: 10,
+        label_coverage: 10 / 120,
+        final_risk_count: 1,
+        final_false_positive_count: 9,
+        confirmed_risk_rate: 0.1,
+        false_positive_rate: 0.9,
+        triage_accuracy: 1,
+        miss_rate: 0,
+        transfer_precision: 1,
+        auto_ignore_rate: 0.75,
+        wrong_auto_ignore_count: 0,
+        provider_call_count: 120,
+        provider_run_count: 120,
+        total_tokens: 480000,
+        average_total_duration_ms: 1250,
+        repair_run_count: 2,
+        fallback_run_count: 0,
+        degraded_run_count: 1,
+        memory_context_use_count: 48,
+        memory_directive_use_count: 36,
+        memory_contradiction_count: 0,
+        recommendation: {
+          schema_version: "soc.rule_improvement_recommendation.v1",
+          kind: "fast_path_candidate",
+          priority: "medium",
+          title: "评估受治理快速路径",
+          rationale: ["高量且已标注误报模式稳定。"],
+          suggested_next_step:
+            "先收紧到精确行为指纹和已审核 Memory/Policy，再灰度验证并保留抽样复核。",
+          reason_codes: [
+            "high_volume",
+            "stable_false_positive_outcome",
+            "model_compute_present",
+          ],
+          policy_version: "soc.rule_optimization_policy.v1",
+          authority: "advisory",
+          status: "candidate",
+        },
+      },
+    ],
+    recommendation_policy_version: "soc.rule_optimization_policy.v1",
+    aggregation_mode: "latest_run_per_alert_sql_v1",
+    error_code: null,
+    measurement_notes: ["Fixture values verify presentation only."],
+  };
+}
+
+function ruleEffectivenessDetail() {
+  const snapshot = effectivenessSnapshot();
+  return {
+    schema_version: "soc.rule_effectiveness_detail.v1",
+    generated_at: NOW,
+    scope: snapshot.scope,
+    rule: snapshot.rules[0],
+    behavior_groups: [
+      {
+        schema_version: "soc.behavior_group_effectiveness.v1",
+        lineage_key: "a".repeat(64),
+        behavior_label: "OpenVPN / UDP 1194",
+        environment: "dev",
+        data_class: "simulation",
+        sample_count: 8,
+        distinct_alert_count: 8,
+        window_count: 2,
+        verdict_counts: { false_positive: 8 },
+        first_observed_at: "2026-08-20T08:00:00Z",
+        last_observed_at: NOW,
+        candidate_id: "MC-ALPHA-001",
+        candidate_status: "confirmed",
+        memory_id: "MEM-ALPHA-001",
+        memory_version: 2,
+        memory_status: "confirmed",
+        retrieval_enabled: true,
+      },
+      {
+        schema_version: "soc.behavior_group_effectiveness.v1",
+        lineage_key: "b".repeat(64),
+        behavior_label: "CVE-2017-7924 / UDP 44818",
+        environment: "dev",
+        data_class: "simulation",
+        sample_count: 3,
+        distinct_alert_count: 3,
+        window_count: 1,
+        verdict_counts: { true_positive: 2, suspicious: 1 },
+        first_observed_at: "2026-08-27T08:00:00Z",
+        last_observed_at: NOW,
+        candidate_id: null,
+        candidate_status: null,
+        memory_id: null,
+        memory_version: null,
+        memory_status: null,
+        retrieval_enabled: false,
+      },
+    ],
+    memories: [
+      {
+        schema_version: "soc.memory_effectiveness.v1",
+        memory_id: "MEM-ALPHA-001",
+        memory_version: 2,
+        summary: "内部 OpenVPN 服务访问的稳定误报经验",
+        record_status: "confirmed",
+        retrieval_enabled: true,
+        use_alert_count: 8,
+        context_only_count: 2,
+        directive_count: 6,
+        high_trust_feedback_count: 5,
+        support_count: 5,
+        contradiction_count: 0,
+        not_applicable_count: 0,
+        helpful_correction_count: 4,
+        harmful_override_count: 0,
+        wrong_auto_ignore_count: 0,
+        final_outcome_coverage: rateMetric(
+          "memory.final_outcome_coverage",
+          5,
+          8,
+          "已有运营最终反馈的使用告警占比。",
+        ),
+        directive_accuracy: rateMetric(
+          "memory.directive_accuracy",
+          5,
+          5,
+          "直接复用结论与高可信最终反馈一致。",
+        ),
+        source_rule_codes: ["RC-ALPHA-001"],
+        actual_rule_codes: ["RC-ALPHA-001"],
+        last_use_at: NOW,
+        last_feedback_at: NOW,
+        causal_note:
+          "directive_effects_attributable_context_effects_non_causal",
+      },
+    ],
+    relationship_note: "memory_rule_relationship_derived_from_actual_runs",
+  };
+}
+
 async function fulfill(route: Route, body: unknown, status = 200) {
   await route.fulfill({
     status,
@@ -924,6 +1211,15 @@ export async function mockSocAPI(
     }
     if (method === "GET" && path === "/api/soc/operations/snapshot") {
       return fulfill(route, operationsSnapshot());
+    }
+    if (method === "GET" && path === "/api/soc/effectiveness/snapshot") {
+      return fulfill(route, effectivenessSnapshot());
+    }
+    if (
+      method === "GET" &&
+      path === "/api/soc/effectiveness/rules/0123456789abcdef"
+    ) {
+      return fulfill(route, ruleEffectivenessDetail());
     }
     if (method === "GET" && path === "/api/soc/normalization/baselines") {
       return fulfill(route, {

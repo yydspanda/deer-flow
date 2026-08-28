@@ -57,12 +57,14 @@ from soc_agent.contracts import (
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentApprovalRequestStatus,
+    SocBehaviorGroupEffectivenessAggregate,
     SocDecisionTransitionRecord,
     SocDispositionOutcomeRecord,
     SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
     SocDispositionSampleManifest,
     SocDispositionTransitionRecord,
+    SocEffectivenessScope,
     SocEnrichmentActionAttempt,
     SocEnrichmentExecution,
     SocEnrichmentExecutionCommand,
@@ -75,6 +77,7 @@ from soc_agent.contracts import (
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
+    SocMemoryEffectivenessAggregate,
     SocMemoryFeedbackEvent,
     SocMemoryFeedbackResult,
     SocMemoryHealthRecord,
@@ -88,6 +91,8 @@ from soc_agent.contracts import (
     SocMutationOperation,
     SocOperationsKafkaSnapshot,
     SocPersistedOperationsMetrics,
+    SocRuleEffectivenessAggregate,
+    SocRuleEffectivenessSelector,
     TenantDispositionPolicy,
     TenantPolicyAdvisorResult,
     TenantPolicyDecision,
@@ -327,6 +332,31 @@ class SocOperationsRepository(Protocol):
     """Exact aggregate read boundary for SOC operational persistence."""
 
     def read_persisted_metrics(self) -> SocPersistedOperationsMetrics: ...
+
+
+class SocEffectivenessRepositoryError(RuntimeError):
+    """Sanitized failure raised by the product-effectiveness read model."""
+
+
+class SocEffectivenessRepository(Protocol):
+    """Exact aggregate boundary over persisted SOC lineage."""
+
+    def read_rule_aggregates(
+        self,
+        scope: SocEffectivenessScope,
+    ) -> list[SocRuleEffectivenessAggregate]: ...
+
+    def read_behavior_group_aggregates(
+        self,
+        scope: SocEffectivenessScope,
+        selector: SocRuleEffectivenessSelector,
+    ) -> list[SocBehaviorGroupEffectivenessAggregate]: ...
+
+    def read_memory_aggregates(
+        self,
+        scope: SocEffectivenessScope,
+        selector: SocRuleEffectivenessSelector,
+    ) -> list[SocMemoryEffectivenessAggregate]: ...
 
 
 class SocOperationsKafkaProbe(Protocol):

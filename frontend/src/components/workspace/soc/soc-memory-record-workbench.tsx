@@ -43,6 +43,19 @@ const USE_EFFECT_LABELS: Record<SocMemoryUseEffect, string> = {
   conflicted: "与当前证据冲突",
 };
 
+const VERDICT_LABELS = {
+  false_positive: "误报",
+  true_positive: "真实攻击",
+  suspicious: "可疑",
+  unknown: "未知",
+} as const;
+
+const MEMORY_HEALTH_LABELS = {
+  healthy: "结论持续得到验证",
+  watch: "存在反例，继续观察",
+  suspended: "已暂停，等待复盘",
+} as const;
+
 const EXCLUSION_LABELS: Record<string, string> = {
   retrieval_disabled: "该经验当前暂停用于新告警",
   activation_not_governed: "该经验缺少完整的使用审批配置",
@@ -75,7 +88,7 @@ function futureLocalDate(days: number) {
 
 function LessonSection({ lesson }: { lesson: SocMemoryBusinessLesson }) {
   const groups = [
-    ["业务依据", lesson.business_rationale],
+    ["判断依据", lesson.business_rationale],
     ["适用条件", lesson.applicability_conditions],
     ["泛化边界", lesson.generalization_boundaries],
     ["失效条件", lesson.invalidation_conditions],
@@ -83,8 +96,24 @@ function LessonSection({ lesson }: { lesson: SocMemoryBusinessLesson }) {
   ] as const;
   return (
     <div className="space-y-4">
+      {lesson.detection_scenario ? (
+        <div className="border-l-4 border-l-amber-500 pl-4">
+          <div className="text-muted-foreground text-xs">
+            检测场景：规则报告了什么
+          </div>
+          <p className="mt-1 text-sm leading-6">{lesson.detection_scenario}</p>
+        </div>
+      ) : null}
+      {lesson.observed_event ? (
+        <div className="border-l-4 border-l-sky-500 pl-4">
+          <div className="text-muted-foreground text-xs">
+            实际事件：业务上发生了什么
+          </div>
+          <p className="mt-1 text-sm leading-6">{lesson.observed_event}</p>
+        </div>
+      ) : null}
       <div>
-        <div className="text-muted-foreground text-xs">核心结论</div>
+        <div className="text-muted-foreground text-xs">审核结论</div>
         <p className="mt-1 text-sm leading-6">{lesson.conclusion}</p>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
@@ -159,6 +188,14 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
   const [locator, setLocator] = useState("");
   const record = lineage?.record ?? null;
   const uses = lineage?.uses ?? [];
+  const feedback = lineage?.feedback ?? [];
+  const currentHealth =
+    lineage?.health
+      .filter((item) => item.memory_version === record?.version)
+      .sort((left, right) => right.version - left.version)[0] ?? null;
+  const latestFeedback = [...feedback].sort((left, right) =>
+    right.created_at.localeCompare(left.created_at),
+  )[0];
   const availability = record
     ? memoryAvailabilityCopy(record.retrieval_enabled)
     : null;
@@ -263,6 +300,11 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       {availability?.label}
                     </Badge>
                     <Badge variant="outline">{record.memory_type}</Badge>
+                    {record.reviewed_verdict ? (
+                      <Badge variant="secondary">
+                        审核结论：{VERDICT_LABELS[record.reviewed_verdict]}
+                      </Badge>
+                    ) : null}
                   </div>
                 </div>
                 <dl className="grid text-sm sm:grid-cols-2 lg:grid-cols-4">
@@ -307,6 +349,97 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
               </section>
 
               <SocMemoryDecisionCapability record={record} />
+
+              <section
+                className="border"
+                aria-labelledby="memory-feedback-heading"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
+                  <div>
+                    <h2
+                      id="memory-feedback-heading"
+                      className="text-sm font-semibold"
+                    >
+                      新告警验证结果
+                    </h2>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      运营最终结论会反向检验这条经验；相反结论不会被静默覆盖。
+                    </p>
+                  </div>
+                  <Badge
+                    variant={
+                      currentHealth?.status === "suspended"
+                        ? "destructive"
+                        : "outline"
+                    }
+                  >
+                    {currentHealth
+                      ? MEMORY_HEALTH_LABELS[currentHealth.status]
+                      : "尚无最终结论反馈"}
+                  </Badge>
+                </div>
+                <dl className="grid grid-cols-2 text-sm md:grid-cols-4">
+                  <div className="border-r border-b px-4 py-3 md:border-b-0">
+                    <dt className="text-muted-foreground text-xs">
+                      被新告警使用
+                    </dt>
+                    <dd className="mt-1 text-lg font-semibold tabular-nums">
+                      {currentHealth?.use_count ?? uses.length}
+                    </dd>
+                  </div>
+                  <div className="border-b px-4 py-3 md:border-r md:border-b-0">
+                    <dt className="text-muted-foreground text-xs">
+                      最终结论支持
+                    </dt>
+                    <dd className="mt-1 text-lg font-semibold text-emerald-700 tabular-nums">
+                      {currentHealth?.support_count ?? 0}
+                    </dd>
+                  </div>
+                  <div className="border-r px-4 py-3">
+                    <dt className="text-muted-foreground text-xs">
+                      最终结论相反
+                    </dt>
+                    <dd className="mt-1 text-lg font-semibold text-amber-700 tabular-nums">
+                      {currentHealth?.contradiction_count ?? 0}
+                    </dd>
+                  </div>
+                  <div className="px-4 py-3">
+                    <dt className="text-muted-foreground text-xs">
+                      不在适用范围
+                    </dt>
+                    <dd className="mt-1 text-lg font-semibold tabular-nums">
+                      {currentHealth?.not_applicable_count ?? 0}
+                    </dd>
+                  </div>
+                </dl>
+                {latestFeedback?.alignment === "contradicts" ? (
+                  <div className="border-t border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <AlertTriangleIcon className="size-4" />
+                      最近一次运营结论与经验相反
+                    </div>
+                    <p className="mt-2 leading-6">
+                      告警 {latestFeedback.alert_id} 最终判定为
+                      <strong>
+                        {VERDICT_LABELS[latestFeedback.final_verdict]}
+                      </strong>
+                      ；经验原审核结论为
+                      <strong>
+                        {latestFeedback.memory_reviewed_verdict
+                          ? VERDICT_LABELS[
+                              latestFeedback.memory_reviewed_verdict
+                            ]
+                          : "未记录"}
+                      </strong>
+                      。系统已保留反例并进入版本化复盘；危险的错误忽略经验会暂停用于新告警。
+                    </p>
+                    <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">
+                      反馈时间 {formatTime(latestFeedback.created_at)} ·
+                      判断依据：{latestFeedback.reason}
+                    </p>
+                  </div>
+                ) : null}
+              </section>
 
               {record.metadata.revision_pending === true ? (
                 <Alert className="border-amber-300 bg-amber-50 text-amber-950">

@@ -136,7 +136,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 | `PI-01` | Providers and governed investigation / 能力源与受控调查 | **External product flow complete / Real Debt Open**: D1-D4、external 5/50、PI-01F/F2 和 PI-01G1..G3 passed；D12-B、TI、security-tag 的真实 gate 保留；B2/C data-gated | 仿真证明 workflow reachability；Web/Gateway/TUI proposal 与专家委派均进入统一治理边界；真实 `mocked=false` 证据另行关闭 Provider gate；任何入口不得越权修改基础 Runtime |
 | `PI-02` | Infrastructure / 基础设施 | **Local Simulation Done / Real Debt Parked**: SQLite、local Redpanda/Kafka、worker/DLQ/幂等已有 Alpha 证据；真实 Kafka/PostgreSQL/K8s 参数暂缺 | 当前只要求本地流程可重复；生产吞吐、ACL/TLS、恢复、连接池和 K8s gate 保持开放 |
 | `PI-03` | Labels, learning and calibration / 标签、学习与校准 | **PI-03A/B/C Simulation Done / Real Feedback Debt Open**: corpus、统一质量 replay 和反馈型 Skill backlog 均已走通；真实人工标签和 source classifier 仍开放 | 仿真可以验证治理代码，但不能生成真实准确率声明；任何 profile/Skill/parser promotion 仍需人工批准与真实标签 |
-| `PI-04` | Operations and security / 运维与安全 | **PI-04A/B Done / Real Telemetry Debt Open**: Snapshot CLI/API 与薄 Web 已完成；本地/仿真数据性质、无 overall health 和 `not_measured` 缺口显式可见 | Web 只消费冻结 snapshot；Playwright fixture 不冒充 deployed Gateway 或真实 lag/算力/Prometheus/SLO |
+| `PI-04` | Operations and security / 运维与安全 | **PI-04A/B/C Done / PI-04D Real Telemetry Debt Open**: 运行快照、薄 Web、最终真值驱动的效能/规则只读模型已完成；真实标签、Kafka/Provider/算力 telemetry、Prometheus/SLO 仍开放 | 所有比率暴露分母；无高可信最终状态时保持 `not_measured`；规则建议只读且不得把本地/仿真数据冒充生产效果 |
 | `PI-05` | Governed rollout / 受治理上线 | **PI-05A/B Simulation Done / PI-05C Real Debt Open**: rollout rehearsal 与五组件 Simulation Completion Gate 均已完成；真实控制器不在外网伪造 | completion report 必须保持 7 个 real gate 为 open、真实 transition/effect 为 0、`pilot_ready=false`、`production_ready=false`；只有 PI-05C 的真实环境证据可推进 stage |
 | `PI-06` | Delivery governance / 交付治理 | **Done 2026-08-26**: 活动进度台账、月度归档、实验 manifest、Roadmap 引用和 upstream 漂移检查已机器化 | `progress.md` 只保留唯一当前指针和最多 10 条近期记录；CI 阻止未知 task、重复 Current/In Progress、缺失实验元数据和长期 upstream 落后 |
 
@@ -230,7 +230,16 @@ PI-03 仿真产品轨已完成 A/B/C。每个切片都先用明确的 `simulatio
 | `PI-03E` | Adaptive parser governance / 自适应解析治理 | drift cohort report + candidate bundle；之后才允许 dual-run/replay/approval/canary/rollback | 禁止单告警 LLM 解析和 Runtime 自修改；无稳定 cohort 不启动 |
 | `PI-03F` | Governed memory candidate source completion / 记忆候选来源收口 | **Done**: F1 已完成 CLI/TUI 显式采纳；F2 已完成 authenticated Gateway/Web server-side message resolution；F3 已完成默认关闭的 Kafka/batch typed observation、固定窗口聚合、5/5 双门槛、冻结候选和只读 replay | 禁止逐告警、逐 finding、模型自说自话地写 candidate；所有来源带 typed provenance/idempotency/scope，保持 `pending_review`，confirmed/retrieval 仍需人工治理；重复出现不等于真假、授权、影响或处置结论 |
 
-### 6.3 PI-05 Decomposition / 受治理上线工作包
+### 6.3 PI-04 Decomposition / 运营效能工作包
+
+| ID | Work / 工作 | Status / 状态 | Gate / 门槛 |
+|---|---|---|---|
+| `PI-04A` | Passive operations snapshot / 被动运营快照 | **Done**: persisted counts、Kafka availability、CLI/API | 不主动探测，不生成浏览器总体健康度 |
+| `PI-04B` | Thin operations Web / 薄运营 Web | **Done**: `/workspace/soc/operations` 消费冻结 snapshot | local/test/real data nature 和 `not_measured` 显式可见 |
+| `PI-04C` | Effectiveness and rule optimization / 效能与规则优化 | **Done (product-shaped)**: migration `0026`、snapshot + Rule Code→同类行为→Memory 下钻、统一 Pattern Observer、Core/SQL/API/Web、Memory 反例回读和版本化 advisory recommendation | 最新 Run 去重；准确率/漏报/规则误报只用高可信最终真值；Rule Code 可选；context-only 不做因果归因；没有真实标签不宣称质量；建议不自动改规则或授权动作 |
+| `PI-04D` | Production telemetry, SLO and causal validation / 生产遥测、SLO 与因果验证 | **Real Integration Debt**: 接真实运营最终状态、Kafka/LLM/Provider telemetry、Prometheus、owner/SLO，并对规则版本做冻结 cohort before/after 或 A/B | 真实标签覆盖、误报下降且漏报/错误忽略不升；fixture、本地 SQLite 和单周期相关性不得关闭生产 Gate |
+
+### 6.4 PI-05 Decomposition / 受治理上线工作包
 
 | ID | Work / 工作 | Status / 状态 | Gate / 门槛 |
 |---|---|---|---|
@@ -241,7 +250,7 @@ PI-03 仿真产品轨已完成 A/B/C。每个切片都先用明确的 `simulatio
 PI-05B 的可复跑命令和 artifact 生成顺序见
 `backend/samples/rollout/README.md`。该 Gate 结束产品仿真实现轨，不会自动切换到 PI-05C；只有真实环境输入到位后才恢复对应 integration debt。
 
-### 6.4 Delivery And Fork Governance / 交付与 Fork 治理
+### 6.5 Delivery And Fork Governance / 交付与 Fork 治理
 
 | ID | Work / 工作 | Status / 状态 | Gate / 门槛 |
 |---|---|---|---|

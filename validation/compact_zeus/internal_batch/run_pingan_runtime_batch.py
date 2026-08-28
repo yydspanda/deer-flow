@@ -1862,6 +1862,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings=settings,
             action_adapter_registry=registry,
             memory_environment=memory_pattern_environment,
+            pattern_observation_enabled=False,
         )
         investigation_service = None
         investigation_reporting_service = None

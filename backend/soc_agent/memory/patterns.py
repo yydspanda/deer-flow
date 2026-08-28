@@ -251,6 +251,7 @@ def memory_pattern_command_from_run(
     data_class: MemoryPatternDataClass,
     policy_fingerprint: str,
     profile: SocMemoryProfile | None = None,
+    source_metadata: dict[str, str] | None = None,
 ) -> MemoryPatternObservationCreateCommand:
     """Project one completed Runtime result into a neutral recurrence observation."""
 
@@ -328,6 +329,7 @@ def memory_pattern_command_from_run(
         lesson=lesson,
         evidence_refs=list(dict.fromkeys(evidence_refs)),
         metadata={
+            **(source_metadata or {}),
             "pipeline_version": run.pipeline_version,
             "model_name": run.model_name,
             "prompt_version": run.prompt_version,

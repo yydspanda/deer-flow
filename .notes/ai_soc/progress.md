@@ -9,7 +9,7 @@
 - **Current Objective:** 在 PingAn DEV 完成真实只读 Provider 与调查链的 `mocked=false` 验收，不改变通用 SOC Runtime 契约。
 - **Next Gate:** `D12-B` asset Provider direct/MCP/persistence smoke，然后依次关闭 `PI-01A` 与 `PI-01B1` 的真实证据门禁。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-08-27`
+- **Last Updated:** `2026-08-28`
 
 ## Current Constraints / 当前约束
 
@@ -22,6 +22,13 @@
 | Upstream baseline | `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`；2026-08-26 测量为 ahead `261` / behind `0` |
 
 ## Recent Completion Records / 近期完成记录
+
+### 2026-08-28 — Effectiveness, rule optimization and Memory feedback UX
+
+- **Task:** `PI-04C`
+- **Status:** `Done`
+- **Outcome:** 新增最终真值驱动的准确率、漏报、转交、自动忽略、规则质量和算力只读模型，并形成 `Rule Code -> 同类行为 -> Memory 版本` 下钻。共享后分析 Observer 统一记录 Pattern，入口重投按业务事件幂等；Memory 只按实际效果归因，`context-only` 不记改判功劳，历史版本不继承当前状态，错误自动忽略必须同时存在最终攻击真值与真实忽略动作。
+- **Verification:** 80 项后端效果/Pattern/Memory/API/迁移聚焦回归、35 项前端 SOC API 单测、前端 lint/type-check，以及桌面/移动端 Playwright 下钻与布局验收；真实 Zeus 最终状态和生产 telemetry 仍归 `PI-04D`。
 
 ### 2026-08-27 — Alert result and operator-workflow separation
 
@@ -84,13 +91,6 @@
 - **Task:** `PI-03`
 - **Status:** `Done`
 - **Outcome:** DEV 语料工作台允许任意顺序重跑；每次 replay 新建 Run，保留 lineage，且同一原始告警不会重复增加 Pattern 支持数。
-- **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
-
-### 2026-08-21 — PingAn Memory pattern precision
-
-- **Task:** `PI-03`
-- **Status:** `Done`
-- **Outcome:** 行为指纹加入 network service、CVE 和攻击行为族，减少同 rule 不同行为被错误聚合，并改善审核范围的中文可读性。
 - **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
 
 ## Update Contract / 更新约定

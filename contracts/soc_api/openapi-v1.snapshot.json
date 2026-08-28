@@ -38,6 +38,12 @@
     "/api/soc/approvals/requests/{approval_request_id}/reject": [
       "post"
     ],
+    "/api/soc/effectiveness/rules/{group_key}": [
+      "get"
+    ],
+    "/api/soc/effectiveness/snapshot": [
+      "get"
+    ],
     "/api/soc/external-dispositions": [
       "post"
     ],

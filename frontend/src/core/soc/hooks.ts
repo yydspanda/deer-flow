@@ -21,6 +21,8 @@ import {
   getSocCorpusWorkbenchExecution,
   getSocCorpusWorkbenchState,
   getSocDispositionSampleReviewInbox,
+  getSocEffectivenessSnapshot,
+  getSocRuleEffectivenessDetail,
   getSocMemoryCandidate,
   getSocMemoryCenterOverview,
   getSocMemoryCenterPattern,
@@ -240,6 +242,19 @@ export const socNormalizationQueryKeys = {
 export const socOperationsQueryKeys = {
   all: ["soc-operations"] as const,
   snapshot: () => [...socOperationsQueryKeys.all, "snapshot"] as const,
+};
+
+export const socEffectivenessQueryKeys = {
+  all: ["soc-effectiveness"] as const,
+  snapshot: (windowDays: number) =>
+    [...socEffectivenessQueryKeys.all, "snapshot", windowDays] as const,
+  ruleDetail: (groupKey: string | null, windowDays: number) =>
+    [
+      ...socEffectivenessQueryKeys.all,
+      "rule-detail",
+      groupKey,
+      windowDays,
+    ] as const,
 };
 
 function useSocWebRequestContext(): SocRequestContext {
@@ -515,6 +530,32 @@ export function useSocOperationsSnapshot() {
     staleTime: 15_000,
   });
   return { snapshot: query.data ?? null, ...query };
+}
+
+export function useSocEffectivenessSnapshot(windowDays = 30) {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socEffectivenessQueryKeys.snapshot(windowDays),
+    queryFn: () => getSocEffectivenessSnapshot({ windowDays }, context),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  return { snapshot: query.data ?? null, ...query };
+}
+
+export function useSocRuleEffectivenessDetail(
+  groupKey: string | null,
+  windowDays = 30,
+) {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socEffectivenessQueryKeys.ruleDetail(groupKey, windowDays),
+    queryFn: () =>
+      getSocRuleEffectivenessDetail(groupKey!, { windowDays }, context),
+    enabled: Boolean(groupKey),
+    staleTime: 30_000,
+  });
+  return { detail: query.data ?? null, ...query };
 }
 
 export function useSocMemoryWorkbench() {

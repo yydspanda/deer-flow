@@ -9,6 +9,7 @@ from math import ceil
 from typing import Any
 
 from soc_agent.contracts import (
+    ActorAuthSource,
     ActorContext,
     ActorType,
     AnalysisRun,
@@ -38,7 +39,10 @@ from soc_agent.contracts import (
     SocMemoryTargetArtifact,
     SocMutationOperation,
 )
-from soc_agent.memory.patterns import memory_pattern_command_from_run
+from soc_agent.memory.patterns import (
+    MemoryPatternIneligibleError,
+    memory_pattern_command_from_run,
+)
 from soc_agent.memory.profiles import SocMemoryProfile, SocMemoryProfileRegistry
 from soc_agent.memory.scoring import memory_strong_anchor_keys
 from soc_agent.protocols import (
@@ -66,7 +70,15 @@ from .service import (
     SocServiceNotImplementedError,
 )
 
-_INGEST_ROLES = frozenset({"soc_daemon", "soc_batch_runner", "soc_engineer", "soc_admin"})
+_INGEST_ROLES = frozenset(
+    {
+        "soc_daemon",
+        "soc_batch_runner",
+        "soc_engineer",
+        "soc_admin",
+        "soc_memory_pattern_observer",
+    }
+)
 
 
 class SocMemoryPatternService:
@@ -112,6 +124,7 @@ class SocMemoryPatternService:
         environment: str,
         data_class: MemoryPatternDataClass,
         context: ServiceRequestContext,
+        source_metadata: dict[str, str] | None = None,
     ) -> MemoryPatternAggregationResult:
         """Project and admit one completed Runtime result through the same service."""
 
@@ -126,6 +139,7 @@ class SocMemoryPatternService:
             data_class=data_class,
             policy_fingerprint=policy_fingerprint,
             profile=profile,
+            source_metadata=source_metadata,
         )
         return self.ingest_observation(command, context=context)
 
@@ -708,6 +722,58 @@ class SocMemoryPatternService:
         )
 
 
+class SocMemoryPatternPostAnalysisObserver:
+    """Project every persisted analysis lane into one idempotent pattern stream."""
+
+    def __init__(
+        self,
+        *,
+        service: SocMemoryPatternService,
+        environment: str,
+        data_class: MemoryPatternDataClass,
+    ) -> None:
+        normalized_environment = environment.strip().casefold()
+        if not normalized_environment:
+            raise ValueError("memory pattern observer environment must not be blank")
+        self._service = service
+        self._environment = normalized_environment
+        self._data_class = data_class
+
+    def observe(
+        self,
+        run: AnalysisRun,
+        *,
+        context: ServiceRequestContext,
+    ) -> None:
+        observer_context = ServiceRequestContext(
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            idempotency_key=f"memory-pattern:analysis-run:{run.run_id}",
+            actor=ActorContext(
+                actor_id="soc-memory-pattern-observer",
+                actor_type=ActorType.SERVICE,
+                surface=context.actor.surface,
+                roles=["soc_memory_pattern_observer"],
+                auth_source=ActorAuthSource.SYSTEM,
+            ),
+        )
+        try:
+            self._service.observe_run(
+                run,
+                source_type=MemoryPatternSourceType.ANALYSIS_RUN,
+                transport_ref=f"analysis-run:{run.run_id}",
+                environment=self._environment,
+                data_class=self._data_class,
+                context=observer_context,
+                source_metadata={
+                    "entry_surface": context.actor.surface.value,
+                    "caller_actor_type": context.actor.actor_type.value,
+                },
+            )
+        except MemoryPatternIneligibleError:
+            return
+
+
 def _fixed_window(observed_at: datetime, window_seconds: int) -> tuple[datetime, datetime]:
     observed_utc = observed_at.astimezone(UTC)
     epoch = int(observed_utc.timestamp())
@@ -1162,4 +1228,7 @@ def _candidate_aggregation_key(candidate: SocMemoryCandidate | None) -> str | No
     return value if isinstance(value, str) and len(value) == 64 else None
 
 
-__all__ = ["SocMemoryPatternService"]
+__all__ = [
+    "SocMemoryPatternPostAnalysisObserver",
+    "SocMemoryPatternService",
+]

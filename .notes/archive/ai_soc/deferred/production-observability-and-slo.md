@@ -1,13 +1,14 @@
 # Production Observability, Prometheus and SLO
 
 > 状态：Deferred / real-telemetry-dependent。`PI-04A` 的 Operations Snapshot CLI/API 和
-> `PI-04B` 的薄 Web 页面已经完成；本项只保留真实 Kafka、Runtime、LLM、Provider、算力、Prometheus、
+> `PI-04B` 的薄 Web、`PI-04C` 的最终真值/规则/算力只读模型已经完成；本 `PI-04D` 只保留真实 Kafka、Runtime、LLM、Provider、算力、Prometheus、
 > SLO 和告警治理，不再把已完成的运营页面列为未来工作。
 
 ## 当前已有
 
 - `SocOperationsService` 和版本化 operations snapshot。
 - `/api/soc/operations/snapshot` 与 `/workspace/soc/operations`。
+- `/api/soc/effectiveness/snapshot` 的带分母质量指标、检测族 advisory 建议与 Memory 反例统计。
 - SQLite/local simulation 数据性质和 `not_measured` 缺口的明确展示。
 - Kafka JSONL、持久化计数、ReviewQueue、Approval、Normalization 等已有观测数据源。
 
@@ -44,4 +45,3 @@
 - exporter 失败不影响告警分析主链路，指标采集有明确资源上限。
 - 无凭证、原始告警、IP、账号或无限 rule/source 值进入 Prometheus labels。
 - SLO 阈值来自真实 baseline 和 owner 审核，不由本地 simulation 或模型自行生成。
-

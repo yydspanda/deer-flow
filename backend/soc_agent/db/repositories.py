@@ -2569,6 +2569,7 @@ def _upsert_review_item(session: Session, item: ReviewQueueItem) -> None:
 
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
+    effectiveness = _run_effectiveness_projection(run)
     return {
         "alert_id": run.alert_id,
         "status": run.status.value,
@@ -2577,6 +2578,7 @@ def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dic
         "pipeline_version": run.pipeline_version,
         "model_name": run.model_name,
         "prompt_version": run.prompt_version,
+        **effectiveness,
         "started_at": run.started_at,
         "ended_at": run.ended_at,
         "input_payload": run.input_payload,
@@ -2599,6 +2601,7 @@ def _audit_row_values(record: DecisionAuditRecord, payload: dict) -> dict:
         "previous_verdict": record.previous_verdict.value if record.previous_verdict is not None else None,
         "final_verdict": record.final_verdict.value if record.final_verdict is not None else None,
         "confidence": record.confidence,
+        "confidence_source": (str(record.payload.get("confidence_source")) if record.payload.get("confidence_source") is not None else None),
         "replay_of_run_id": record.replay_of_run_id,
         "correction_id": record.correction_id,
         "record_payload": payload,
@@ -3147,6 +3150,7 @@ def _external_disposition_row_values(record: SocExternalDispositionRecord, paylo
         "external_status": record.event.external_status,
         "canonical_status": record.canonical_status.value,
         "apply_status": record.apply_status.value,
+        "trust_level": (str(record.metadata.get("mapping_trust_level")) if record.metadata.get("mapping_trust_level") is not None else None),
         "idempotency_key": record.idempotency_key,
         "target_run_id": record.target_run_id,
         "target_alert_id": record.target_alert_id,
@@ -3157,6 +3161,61 @@ def _external_disposition_row_values(record: SocExternalDispositionRecord, paylo
         "memory_candidate_id": record.memory_candidate_id,
         "created_at": record.created_at,
         "disposition_payload": payload,
+    }
+
+
+def _run_effectiveness_projection(run: AnalysisRun) -> dict[str, Any]:
+    """Project bounded quality/cost scalars without creating a second truth store."""
+
+    quality = run.analysis_output_quality
+    provider_call_count = 0
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    usage_seen = False
+    usage_statuses: set[str] = set()
+    metadata_repair_applied = False
+
+    for step in run.steps:
+        metadata = step.metadata
+        calls = metadata.get("provider_call_count")
+        if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0:
+            provider_call_count += calls
+        usage = metadata.get("usage")
+        if isinstance(usage, dict):
+            values = {key: value for key, value in usage.items() if key in {"input_tokens", "output_tokens", "total_tokens"} and isinstance(value, int) and not isinstance(value, bool) and value >= 0}
+            if values:
+                usage_seen = True
+                input_tokens += int(values.get("input_tokens", 0))
+                output_tokens += int(values.get("output_tokens", 0))
+                total_tokens += int(values.get("total_tokens", 0))
+        measurement = metadata.get("usage_measurement")
+        if isinstance(measurement, dict) and isinstance(measurement.get("status"), str):
+            usage_statuses.add(str(measurement["status"]))
+        metadata_repair_applied = metadata_repair_applied or metadata.get("repair_applied") is True
+
+    if provider_call_count == 0 and run.provider_request_journals:
+        provider_call_count = len(run.provider_request_journals)
+    if not usage_statuses:
+        usage_measurement_status = "unavailable" if provider_call_count else "not_applicable"
+    elif len(usage_statuses) == 1:
+        usage_measurement_status = next(iter(usage_statuses))
+    else:
+        usage_measurement_status = "mixed"
+
+    return {
+        "analysis_verdict": run.analysis.verdict.value if run.analysis is not None else None,
+        "runtime_decision_verdict": run.decision.verdict.value if run.decision is not None else None,
+        "total_duration_ms": run.total_duration_ms,
+        "provider_call_count": provider_call_count,
+        "input_tokens": input_tokens if usage_seen else None,
+        "output_tokens": output_tokens if usage_seen else None,
+        "total_tokens": total_tokens if usage_seen else None,
+        "usage_measurement_status": usage_measurement_status,
+        "output_quality_status": quality.status.value if quality is not None else None,
+        "repair_applied": (quality.repair_attempted or metadata_repair_applied if quality is not None else metadata_repair_applied),
+        "deterministic_fallback_used": (quality.deterministic_fallback_used if quality is not None else False),
+        "degraded_section_count": len(quality.degraded_sections) if quality is not None else 0,
     }
 
 
