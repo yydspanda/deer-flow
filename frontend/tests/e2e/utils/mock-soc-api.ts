@@ -625,8 +625,15 @@ function effectivenessSnapshot() {
       total_alert_count: 120,
       completed_alert_count: 120,
       superseded_run_count: 3,
+      conclusion_maintained_alert_count: 110,
       labeled_alert_count: 10,
       high_trust_labeled_alert_count: 10,
+      conclusion_maintenance_rate: rateMetric(
+        "operations.conclusion_maintenance_rate",
+        110,
+        120,
+        "尚无高可信最终结果反驳；包含未反馈告警，不等于人工确认。",
+      ),
       label_coverage: rateMetric(
         "quality.label_coverage",
         10,

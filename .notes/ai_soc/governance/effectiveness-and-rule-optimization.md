@@ -111,7 +111,8 @@ Detection truth / 技术真值与 Operational disposition / 运营处置必须�
 
 | Metric | Formula | Meaning |
 |---|---|---|
-| Label coverage / 标签覆盖 | 高可信最终结论 / 完成告警 | 评价其他质量指标是否有代表性 |
+| Conclusion maintenance / 结论未被改判 | 没有高可信最终结果反驳 Effective Verdict 的完成告警 / 完成告警 | 运营工作流信号；包含未反馈告警，不等于人工确认或准确率 |
+| Final-outcome verification coverage / 最终结果验证覆盖 | 高可信最终结论 / 完成告警 | 评价其他质量指标是否有代表性 |
 | Triage accuracy / 研判准确率 | Effective Verdict 与最终技术真值一致 / 高可信已标注告警 | 系统判断是否正确 |
 | Detection miss / 技术漏报率 | 最终真实攻击但 Effective 为误报 / 最终真实攻击 | 模型、Memory、Policy 综合漏报 |
 | Operational miss / 运营漏报率 | 最终真实攻击但已自动忽略 / 最终真实攻击 | 自动化安全红线 |
@@ -120,6 +121,19 @@ Detection truth / 技术真值与 Operational disposition / 运营处置必须�
 | Auto-ignore rate / 自动忽略率 | 已实际应用忽略类处置 / 完成告警 | 当前所说自动化率；shadow proposal 不计入 |
 | Wrong auto-ignore / 错误自动忽略率 | 自动忽略后最终为真实攻击 / 有标签的自动忽略 | 必须与自动忽略率同时展示 |
 | Human touch / 人工触达率 | 人工最终修正或人工 outcome / 完成告警 | 是否真正减少运营工作量 |
+
+运营人员通常只在不同意系统结论时改判，因此“没有改判”只能作为后台统计信号，不能被伪装成真值，
+也不直接展示在运营总览。页面只保留已处理告警量；暂时没有数据的指标显示 `--`，不向运营人员解释
+统计分母。八个精确公式按四个业务问题组织：
+
+1. **研判质量**：研判准确率 + 技术漏报率；
+2. **自动化安全**：错误自动忽略条数 + 攻击误忽略率 + 自动忽略错误率；
+3. **转交质量**：转交精确率 + 攻击转交召回；
+4. **减负效果**：自动忽略率 + 人工触达率。
+
+前端不展示“验证覆盖”等统计术语，但后端仍保留 numerator、denominator 和 coverage，供技术审计与报表
+解释。前端分组不改变后端公式，也不把未反馈告警加入准确率、漏报率或 Memory 正确率分母。需要评估
+全量真实质量时，应补运营最终状态同步和独立抽样复核，而不是将“沉默”推断为认可。
 
 ## 6. Rule Code And Behavior Evaluation / Rule Code 与同类行为评价
 
@@ -207,6 +221,12 @@ LiteLLM 不返回 usage，调用次数和耗时仍可测，Token 覆盖明确降
 - SQL read model: `SqlAlchemySocEffectivenessRepository`
 - Contract: `soc.effectiveness_snapshot.v1`
 - Persistence index migration: `0026_effectiveness_telemetry`
+- Refresh boundary: Gateway caches one successful snapshot for 30 seconds per
+  `window_days + tenant_id + source_type` scope and coalesces concurrent readers. The
+  frontend polls once per minute, so one alert mutation does not synchronously recalculate
+  the dashboard and multiple viewers do not multiply the same aggregate query. After the
+  cache expires, SQL recomputes only persisted rows in the selected time window, chooses
+  the latest Run per `alert_id`, and never replays raw alerts, Adapter parsing, or LLM calls.
 - Web: `SOC 运营总览 -> 研判效能 -> Rule Code -> 同类行为 -> Memory 实际效果`
 - Memory detail: `新告警验证结果` 展示使用、支持、反例、不适用和暂停状态。
 

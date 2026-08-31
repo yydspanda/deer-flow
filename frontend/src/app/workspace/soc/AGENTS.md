@@ -13,7 +13,11 @@ Runtime decisions, construct Memory, or infer action authority.
 - State-changing calls send stable idempotency keys and invalidate the owning query
   namespace after success. Do not optimistically mutate governed state.
 - All `/workspace/soc/*` pages use `SocWorkspaceHeader` for stable second-level
-  navigation. Page headers contain only local actions such as refresh/filter.
+  navigation. The persistent SOC layout exposes an immediate, non-blocking top progress
+  indicator for internal route clicks; target pages then take over with route/local
+  loading shells. Page headers contain only local actions such as refresh/filter. Heavy
+  SOC workspaces use route-level lazy shells so development compilation never looks like
+  an ignored click.
 - Keep operational hierarchy explicit: each page or bounded workflow section has at most
   one filled primary command; navigation/view selectors remain segmented, read-only state
   remains a Badge, refresh/search utilities use familiar icon controls, and destructive
@@ -145,8 +149,10 @@ Runtime decisions, construct Memory, or infer action authority.
   chronological evaluation remains a separate batch/eval path. Historical disposition
   labels stay hidden per alert until a Runtime decision exists, and are displayed as
   operational outcomes rather than independent detection truth.
-- Corpus filter and selected-alert continuity may be retained in tab-scoped browser
-  storage, but never persisted as business state. When a processed alert creates a
+- Corpus filter continuity may be retained in tab-scoped browser storage, but selected
+  alert detail is page-local and must not be restored or auto-opened on navigation. The
+  list query is server-filtered and paginated; React must not fetch the complete corpus
+  and repeat those filters locally. When a processed alert creates a
   Pattern Candidate, keep the current page visible and render a persistent review link;
   the prominent safety band must only project server-returned Effective Decision fields.
 - The corpus execution monitor polls only the selected active alert's lightweight
@@ -156,9 +162,10 @@ Runtime decisions, construct Memory, or infer action authority.
 - Do not use one mutation's global pending state to lock the corpus table. Keep local
   pending state by alert ID and poll the server's lightweight `/activity` projection so
   different alerts can run concurrently while duplicate clicks across browser sessions
-  remain disabled. A process response's embedded corpus snapshot may be stale relative
-  to another concurrent completion; invalidate and refetch the authoritative state rather
-  than overwriting the query cache with that snapshot.
+  remain disabled. Poll quickly only while executions are active and back off while the
+  workbench is idle. A process response contains only the affected alert projection;
+  invalidate and refetch the authoritative page rather than overwriting the query cache
+  with a corpus snapshot.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
   The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,
   canonical normalization, bounded model context/output, validation, Decision, and
@@ -234,6 +241,12 @@ Runtime decisions, construct Memory, or infer action authority.
 - Effectiveness formulas and relationships come from the server read model. The primary
   drill-down is `Rule Code -> 同类行为 -> Memory`; use canonical detection identity when
   no Rule Code exists. Keep Pattern/Profile terminology in technical audit views.
+- Keep the operations summary decision-oriented: show processed volume and render unavailable
+  metric values as `--`. Do not add a statistics-explanation banner or expose
+  conclusion-maintenance and verification-coverage terminology in the primary UI. Group the eight
+  server metrics under triage quality, automation safety, transfer quality, and workload reduction;
+  exact coverage, availability, and denominators remain available through the API and technical
+  audit.
 - Show `context-only` as “仅供研判参考” and directive use as “直接复用结论”. Only the
   latter may display attributable accuracy. Show final-outcome coverage and denominators,
   and never infer Memory value from retrieval count alone.

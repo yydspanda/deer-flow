@@ -1161,6 +1161,7 @@ export type SocCorpusComparisonStatus =
   | "unscored"
   | "not_run"
   | "unlabeled";
+export type SocCorpusComparisonFilter = SocCorpusComparisonStatus | "labeled";
 export type SocCorpusLabelTemporalStatus =
   | "valid"
   | "label_time_missing"
@@ -1447,7 +1448,7 @@ export interface SocLeadershipDemoGuide {
 }
 
 export interface SocCorpusWorkbenchState {
-  schema_version: "soc.corpus_dev_workbench.v3";
+  schema_version: "soc.corpus_dev_workbench.v4";
   safety: {
     environment: "dev";
     database_backend: "sqlite";
@@ -1517,12 +1518,32 @@ export interface SocCorpusWorkbenchState {
     effective_match_rate?: number | null;
   };
   leadership_demo: SocLeadershipDemoGuide;
+  source_types: string[];
   groups: SocCorpusWorkbenchGroup[];
+  rehearsal_alerts: SocCorpusWorkbenchAlert[];
+  alert_page: {
+    total: number;
+    limit: number;
+    offset: number;
+    has_next: boolean;
+  };
   alerts: SocCorpusWorkbenchAlert[];
 }
 
+export interface SocCorpusWorkbenchQuery {
+  search?: string | null;
+  readiness?: SocCorpusWorkbenchReadiness | null;
+  sourceType?: string | null;
+  groupId?: string | null;
+  comparison?: SocCorpusComparisonFilter | null;
+  unprocessedOnly?: boolean;
+  focusAlertId?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
 export interface SocCorpusWorkbenchProcessResult {
-  schema_version: "soc.corpus_dev_workbench_process.v3";
+  schema_version: "soc.corpus_dev_workbench_process.v4";
   alert_id: string;
   run_id?: string | null;
   replay_of_run_id?: string | null;
@@ -1530,7 +1551,7 @@ export interface SocCorpusWorkbenchProcessResult {
   execution_mode: "initial" | "rerun" | "pattern_resume";
   pattern_observation_reused: boolean;
   idempotent: boolean;
-  state: SocCorpusWorkbenchState;
+  alert: SocCorpusWorkbenchAlert;
 }
 
 export interface SocMemoryRunPromotionRequest {
@@ -2331,8 +2352,10 @@ export interface SocEffectivenessCoverage {
   total_alert_count: number;
   completed_alert_count: number;
   superseded_run_count: number;
+  conclusion_maintained_alert_count?: number | null;
   labeled_alert_count: number;
   high_trust_labeled_alert_count: number;
+  conclusion_maintenance_rate?: SocRateMetric | null;
   label_coverage: SocRateMetric;
   high_trust_label_coverage: SocRateMetric;
 }

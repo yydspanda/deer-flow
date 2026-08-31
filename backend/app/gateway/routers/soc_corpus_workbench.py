@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Query, Request
 
 from app.gateway.routers.soc_transport import create_soc_router
 from app.gateway.soc_dependencies import soc_service_context_from_request
@@ -17,6 +17,8 @@ from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
 from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
+    CorpusComparisonFilter,
+    CorpusReadiness,
     SocCorpusWorkbenchActivity,
     SocCorpusWorkbenchAuditBundle,
     SocCorpusWorkbenchBusyError,
@@ -101,8 +103,27 @@ CorpusWorkbenchServiceDep = Annotated[
 )
 def get_corpus_workbench_state(
     service: CorpusWorkbenchServiceDep,
+    search: Annotated[str | None, Query(max_length=256)] = None,
+    readiness: CorpusReadiness | None = None,
+    source_type: Annotated[str | None, Query(max_length=64)] = None,
+    group_id: Annotated[str | None, Query(max_length=512)] = None,
+    comparison: CorpusComparisonFilter | None = None,
+    unprocessed_only: bool = True,
+    focus_alert_id: Annotated[str | None, Query(max_length=128)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> SocCorpusWorkbenchState:
-    return service.get_state()
+    return service.get_state(
+        search=search,
+        readiness=readiness,
+        source_type=source_type,
+        group_id=group_id,
+        comparison=comparison,
+        unprocessed_only=unprocessed_only,
+        focus_alert_id=focus_alert_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(

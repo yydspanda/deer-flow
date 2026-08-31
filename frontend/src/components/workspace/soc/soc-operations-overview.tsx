@@ -192,22 +192,25 @@ function compactNumber(value: number) {
   }).format(value);
 }
 
-function RateMetricCell({
+function RateMetricStat({
   label,
   metric,
   direction = "neutral",
+  primary = false,
 }: {
   label: string;
   metric: SocRateMetric;
   direction?: "higher" | "lower" | "neutral";
+  primary?: boolean;
 }) {
   const measured = metric.value !== null && metric.value !== undefined;
   return (
-    <div className="min-w-0 border-r border-b px-4 py-4 last:border-r-0">
+    <div className={cn("min-w-0", !primary && "border-t pt-3")}>
       <div className="text-muted-foreground text-xs leading-5">{label}</div>
       <div
         className={cn(
-          "mt-1 text-2xl font-semibold tabular-nums",
+          "mt-1 font-semibold tabular-nums",
+          primary ? "text-3xl" : "text-lg",
           !measured && "text-muted-foreground text-lg",
           measured && direction === "higher" && "text-emerald-700",
           measured &&
@@ -216,15 +219,46 @@ function RateMetricCell({
             "text-amber-700",
         )}
       >
-        {formatRate(metric)}
+        {measured ? formatRate(metric) : "--"}
       </div>
-      <div className="text-muted-foreground mt-1 text-[11px] tabular-nums">
-        {metric.numerator} / {metric.denominator}
-      </div>
-      <p className="text-muted-foreground mt-2 line-clamp-2 text-[11px] leading-4">
-        {metric.interpretation}
-      </p>
+      {measured ? (
+        <div className="text-muted-foreground mt-1 text-[11px] tabular-nums">
+          {metric.numerator} / {metric.denominator}
+        </div>
+      ) : (
+        <div className="mt-1 h-4" aria-hidden="true" />
+      )}
     </div>
+  );
+}
+
+function EffectivenessMetricGroup({
+  icon,
+  title,
+  question,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  question: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <article
+      data-testid="effectiveness-metric-group"
+      className="grid min-h-64 min-w-0 grid-rows-[auto_1fr] border-r border-b px-5 py-5 last:border-r-0"
+    >
+      <div>
+        <div className="flex items-center gap-2">
+          {icon}
+          <h3 className="text-sm font-semibold">{title}</h3>
+        </div>
+        <p className="text-muted-foreground mt-1 min-h-10 text-xs leading-5">
+          {question}
+        </p>
+      </div>
+      <div className="mt-4 grid content-between gap-3">{children}</div>
+    </article>
   );
 }
 
@@ -515,7 +549,7 @@ function EffectivenessSection({
             </h2>
           </div>
           <p className="text-muted-foreground mt-1 text-sm leading-6">
-            以运营最终结论作为真值，衡量准确率、漏报、转交质量和自动忽略；未形成高可信结论的告警只计入覆盖率，不进入质量分母。
+            以运营最终处置结果评估研判质量，以实际执行记录衡量自动化安全与减负效果。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -539,9 +573,9 @@ function EffectivenessSection({
       </div>
 
       {isLoading && !snapshot ? (
-        <div className="grid grid-cols-2 border-t md:grid-cols-4 xl:grid-cols-8">
-          {Array.from({ length: 8 }, (_, index) => (
-            <Skeleton key={index} className="h-32 rounded-none border-r" />
+        <div className="grid grid-cols-1 border-t sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, index) => (
+            <Skeleton key={index} className="h-64 rounded-none border-r" />
           ))}
         </div>
       ) : null}
@@ -562,73 +596,116 @@ function EffectivenessSection({
 
       {snapshot && summary && coverage && compute ? (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-zinc-50 px-5 py-3 text-sm md:px-7 dark:bg-zinc-950/30">
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 border-t border-b bg-zinc-50 px-5 py-3 text-sm md:px-7 dark:bg-zinc-950/30">
+            <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
               <span>
-                完成告警 <strong>{coverage.completed_alert_count}</strong>
-              </span>
-              <span>
-                高可信结论{" "}
-                <strong>{coverage.high_trust_labeled_alert_count}</strong>
-              </span>
-              <span>
-                标签覆盖{" "}
-                <strong>
-                  {formatRate(coverage.high_trust_label_coverage)}
+                已处理告警{" "}
+                <strong className="text-lg tabular-nums">
+                  {coverage.completed_alert_count}
                 </strong>
               </span>
-              <span>
-                去除重跑 <strong>{coverage.superseded_run_count}</strong>
+              <span className="text-muted-foreground text-xs">
+                去除 {coverage.superseded_run_count} 次重跑
               </span>
             </div>
-            {coverage.high_trust_labeled_alert_count === 0 ? (
-              <Badge className="border-amber-300 bg-amber-50 text-amber-800">
-                先接运营最终状态，暂不宣称准确率
-              </Badge>
-            ) : null}
           </div>
 
-          <div className="grid grid-cols-2 border-t md:grid-cols-4 xl:grid-cols-8">
-            <RateMetricCell
-              label="研判准确率 / Accuracy"
-              metric={summary.triage_accuracy}
-              direction="higher"
-            />
-            <RateMetricCell
-              label="技术漏报率 / Miss"
-              metric={summary.detection_miss_rate}
-              direction="lower"
-            />
-            <RateMetricCell
-              label="错误自动忽略 / Operational miss"
-              metric={summary.operational_miss_rate}
-              direction="lower"
-            />
-            <RateMetricCell
-              label="转交精确率 / Transfer precision"
-              metric={summary.transfer_precision}
-              direction="higher"
-            />
-            <RateMetricCell
-              label="攻击转交召回 / Transfer recall"
-              metric={summary.attack_transfer_recall}
-              direction="higher"
-            />
-            <RateMetricCell
-              label="自动忽略率 / Automation"
-              metric={summary.auto_ignore_rate}
-              direction="neutral"
-            />
-            <RateMetricCell
-              label="自动忽略错误率 / Wrong ignore"
-              metric={summary.wrong_auto_ignore_rate}
-              direction="lower"
-            />
-            <RateMetricCell
-              label="人工触达率 / Human touch"
-              metric={summary.human_touch_rate}
-              direction="lower"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
+            <EffectivenessMetricGroup
+              icon={<ShieldCheckIcon className="size-4 text-emerald-700" />}
+              title="研判质量"
+              question="有最终结果的样本里，系统判断是否正确？"
+            >
+              <RateMetricStat
+                label="研判准确率 / Accuracy"
+                metric={summary.triage_accuracy}
+                direction="higher"
+                primary
+              />
+              <RateMetricStat
+                label="技术漏报率 / Miss rate"
+                metric={summary.detection_miss_rate}
+                direction="lower"
+              />
+            </EffectivenessMetricGroup>
+
+            <EffectivenessMetricGroup
+              icon={<AlertTriangleIcon className="size-4 text-red-700" />}
+              title="自动化安全"
+              question="实际自动忽略是否放过了真实攻击？"
+            >
+              <div className="min-w-0">
+                <div className="text-muted-foreground text-xs leading-5">
+                  错误自动忽略
+                </div>
+                <div
+                  className={cn(
+                    "mt-1 text-3xl font-semibold tabular-nums",
+                    summary.operational_miss_rate.value === null ||
+                      summary.operational_miss_rate.value === undefined
+                      ? "text-muted-foreground text-lg"
+                      : summary.operational_miss_rate.numerator > 0
+                        ? "text-red-700"
+                        : "text-emerald-700",
+                  )}
+                >
+                  {summary.operational_miss_rate.value === null ||
+                  summary.operational_miss_rate.value === undefined
+                    ? "--"
+                    : `${summary.operational_miss_rate.numerator} 条`}
+                </div>
+                {summary.operational_miss_rate.value !== null &&
+                summary.operational_miss_rate.value !== undefined ? (
+                  <div className="text-muted-foreground mt-1 text-[11px] tabular-nums">
+                    攻击误忽略率 {formatRate(summary.operational_miss_rate)} ·{" "}
+                    {summary.operational_miss_rate.numerator} /{" "}
+                    {summary.operational_miss_rate.denominator}
+                  </div>
+                ) : (
+                  <div className="mt-1 h-4" aria-hidden="true" />
+                )}
+              </div>
+              <RateMetricStat
+                label="自动忽略错误率 / Wrong ignore"
+                metric={summary.wrong_auto_ignore_rate}
+                direction="lower"
+              />
+            </EffectivenessMetricGroup>
+
+            <EffectivenessMetricGroup
+              icon={<GitBranchIcon className="size-4 text-sky-700" />}
+              title="转交质量"
+              question="转交是否集中在真实风险，并覆盖应转交的攻击？"
+            >
+              <RateMetricStat
+                label="转交精确率 / Precision"
+                metric={summary.transfer_precision}
+                direction="higher"
+                primary
+              />
+              <RateMetricStat
+                label="攻击转交召回 / Recall"
+                metric={summary.attack_transfer_recall}
+                direction="higher"
+              />
+            </EffectivenessMetricGroup>
+
+            <EffectivenessMetricGroup
+              icon={<ActivityIcon className="size-4 text-violet-700" />}
+              title="减负效果"
+              question="系统实际自动处理多少，运营仍需触达多少？"
+            >
+              <RateMetricStat
+                label="自动忽略率 / Automation"
+                metric={summary.auto_ignore_rate}
+                primary
+              />
+              <RateMetricStat
+                label="人工触达率 / Human touch"
+                metric={summary.human_touch_rate}
+                direction="lower"
+              />
+            </EffectivenessMetricGroup>
           </div>
 
           <div className="grid border-t lg:grid-cols-[minmax(0,0.85fr)_minmax(0,2.15fr)]">
@@ -714,7 +791,7 @@ function EffectivenessSection({
                         规则 / Rule Code
                       </th>
                       <th className="px-3 py-2 font-medium">量级</th>
-                      <th className="px-3 py-2 font-medium">标签覆盖</th>
+                      <th className="px-3 py-2 font-medium">已有结果</th>
                       <th className="px-3 py-2 font-medium">有效检出</th>
                       <th className="px-3 py-2 font-medium">规则误报</th>
                       <th className="px-3 py-2 font-medium">AI 研判</th>
@@ -784,9 +861,10 @@ function EffectivenessSection({
                             {rule.alert_count}
                           </td>
                           <td className="px-3 py-3 tabular-nums">
-                            {formatOptionalRate(rule.label_coverage)}
-                            <div className="text-muted-foreground mt-1">
-                              {rule.labeled_count}/{rule.completed_count}
+                            {rule.labeled_count}/{rule.completed_count}
+                            <div className="text-muted-foreground mt-1 text-xs">
+                              {formatOptionalRate(rule.label_coverage)}{" "}
+                              已有最终结果
                             </div>
                           </td>
                           <td className="px-3 py-3 tabular-nums">

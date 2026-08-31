@@ -85,6 +85,12 @@ file for SOC code. The authoritative product and engineering documents are:
   request fails immediately without invoking Runtime. `/activity` is the lightweight
   cross-session polling contract. This DEV claim is not a production multi-instance
   lease; Kafka/API production ingress continues to require durable source idempotency.
+- The corpus workbench list contract is server-filtered and paginated. Its state response
+  carries only the requested alert page, recurrent group summaries, and the bounded
+  rehearsal manifest; it must not project every source alert for each navigation or
+  filter change. A process mutation returns only the affected alert projection, after
+  which clients invalidate and refetch the authoritative page instead of embedding a
+  multi-megabyte corpus snapshot in the mutation response.
 - The bounded-input audit artifact must distinguish model-visible projection from the
   frozen Runtime request. Only a matching prompt/builder version may be labeled exact;
   old runs use an explicit partial reconstruction status instead of silently applying a
@@ -136,6 +142,15 @@ file for SOC code. The authoritative product and engineering documents are:
   API/Web must not reimplement formulas. Unlabeled alerts never enter accuracy or miss
   denominators; `rule_code` remains an optional vendor alias, and every rule-improvement
   recommendation is advisory only.
+- `conclusion_maintenance_rate` is a workflow signal: it counts completed latest Runs for
+  which no high-trust final outcome contradicts the Effective Verdict. It includes silent,
+  unverified alerts and must never be renamed to analyst approval, label coverage, or
+  accuracy. Only trusted final outcomes enter quality denominators.
+- The Gateway reuses each effectiveness snapshot for 30 seconds per
+  `window_days/tenant_id/source_type` scope and coalesces concurrent reads in one process.
+  This cache is a bounded read optimization, not business state: the repository remains
+  authoritative, unavailable reads are not cached, and a refresh after expiry reruns the
+  exact selected-window SQL aggregate rather than replaying alerts or invoking models.
 - Rule effectiveness groups by canonical detection identity, not mutable rule display
   names. The drill-down contract is `Rule Code -> same behavior -> exact Memory version`.
   Directive outcomes are attributable; context-only Memory is non-causal. Historical

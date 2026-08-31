@@ -201,7 +201,7 @@ function corpusState(processed = false) {
     behavior_strength: "strong",
   };
   return {
-    schema_version: "soc.corpus_dev_workbench.v3",
+    schema_version: "soc.corpus_dev_workbench.v4",
     safety: {
       environment: "dev",
       database_backend: "sqlite",
@@ -335,6 +335,7 @@ function corpusState(processed = false) {
         },
       ],
     },
+    source_types: ["edr", "nids", "ndr"],
     groups: [
       {
         group_id: "CG-GALAXY",
@@ -369,7 +370,68 @@ function corpusState(processed = false) {
         memory_hit_count: 0,
       },
     ],
+    rehearsal_alerts: [candidateAlert, contextOnlyAlert],
+    alert_page: {
+      total: 3,
+      limit: 20,
+      offset: 0,
+      has_next: false,
+    },
     alerts: [candidateAlert, weakAlert, contextOnlyAlert],
+  };
+}
+
+function corpusStateForRequest(
+  state: ReturnType<typeof corpusState>,
+  requestUrl: string,
+) {
+  const params = new URL(requestUrl).searchParams;
+  const search = params.get("search")?.toLocaleLowerCase() ?? "";
+  const readiness = params.get("readiness");
+  const sourceType = params.get("source_type");
+  const groupId = params.get("group_id");
+  const comparison = params.get("comparison");
+  const focusAlertId = params.get("focus_alert_id");
+  const unprocessedOnly = params.get("unprocessed_only") !== "false";
+  const limit = Number(params.get("limit") ?? 20);
+  const offset = Number(params.get("offset") ?? 0);
+  const alerts = state.alerts
+    .filter((alert) => !readiness || alert.readiness === readiness)
+    .filter((alert) => !sourceType || alert.source_type === sourceType)
+    .filter((alert) => !groupId || alert.group_id === groupId)
+    .filter(
+      (alert) =>
+        !unprocessedOnly ||
+        alert.workflow_state !== "completed" ||
+        alert.alert_id === focusAlertId,
+    )
+    .filter((alert) => {
+      if (!comparison) return true;
+      if (comparison === "labeled") return alert.operational_label_available;
+      return alert.effective_label_comparison === comparison;
+    })
+    .filter((alert) => {
+      if (!search) return true;
+      return [
+        alert.alert_id,
+        alert.rule_code,
+        alert.rule_name,
+        alert.detection_key,
+        alert.endpoint,
+        alert.host_name,
+        alert.topic,
+      ].some((value) => value?.toLocaleLowerCase().includes(search));
+    });
+  const pagedAlerts = alerts.slice(offset, offset + limit);
+  return {
+    ...state,
+    alert_page: {
+      total: alerts.length,
+      limit,
+      offset,
+      has_next: offset + pagedAlerts.length < alerts.length,
+    },
+    alerts: pagedAlerts,
   };
 }
 
@@ -712,7 +774,7 @@ test("runs distinct alerts concurrently without enabling a duplicate click", asy
       activeAlertIds.delete(alertId);
       await route.fulfill({
         json: {
-          schema_version: "soc.corpus_dev_workbench_process.v3",
+          schema_version: "soc.corpus_dev_workbench_process.v4",
           alert_id: alertId,
           run_id: `RUN-${alertId}`,
           observation_id: `MPO-${alertId}`,
@@ -720,12 +782,12 @@ test("runs distinct alerts concurrently without enabling a duplicate click", asy
           execution_mode: "initial",
           replay_of_run_id: null,
           pattern_observation_reused: false,
-          state: current,
+          alert: current.alerts.find((item) => item.alert_id === alertId),
         },
       });
       return;
     }
-    await route.fulfill({ json: current });
+    await route.fulfill({ json: corpusStateForRequest(current, url) });
   });
 
   await page.goto("/workspace/soc/corpus-validation");
@@ -770,7 +832,9 @@ test("shows an alert claimed by another session and does not post it again", asy
     if (route.request().method() === "POST") {
       processCalls += 1;
     }
-    await route.fulfill({ json: corpusState() });
+    await route.fulfill({
+      json: corpusStateForRequest(corpusState(), route.request().url()),
+    });
   });
 
   await page.goto("/workspace/soc/corpus-validation");
@@ -791,13 +855,17 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   mockLangGraphAPI(page, { threads: [] });
   let current = corpusState();
   let processCalls = 0;
+  let auditCalls = 0;
+  let executionCalls = 0;
   let promotionRequestBody: unknown;
   await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
     if (route.request().url().endsWith("/audit")) {
+      auditCalls += 1;
       await route.fulfill({ json: corpusAudit() });
       return;
     }
     if (route.request().url().endsWith("/execution")) {
+      executionCalls += 1;
       await route.fulfill({
         json: corpusExecution(current.readiness.processed_count > 0),
       });
@@ -808,7 +876,7 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
       current = corpusState(true);
       await route.fulfill({
         json: {
-          schema_version: "soc.corpus_dev_workbench_process.v3",
+          schema_version: "soc.corpus_dev_workbench_process.v4",
           alert_id: "1984426",
           run_id: `RUN-CORPUS-${processCalls}`,
           observation_id: "MPO-CORPUS-1",
@@ -816,12 +884,14 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
           execution_mode: processCalls > 1 ? "rerun" : "initial",
           replay_of_run_id: processCalls > 1 ? "RUN-CORPUS-1" : null,
           pattern_observation_reused: processCalls > 1,
-          state: current,
+          alert: current.alerts[0],
         },
       });
       return;
     }
-    await route.fulfill({ json: current });
+    await route.fulfill({
+      json: corpusStateForRequest(current, route.request().url()),
+    });
   });
   await page.route("**/api/soc/memory/runs/*/promote", async (route) => {
     promotionRequestBody = route.request().postDataJSON();
@@ -872,6 +942,10 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
     page.getByText("GalaxyLab_T1003-SAM-Dumping").first(),
   ).toBeVisible();
   await expect(page.getByText("Weak single alert")).toBeVisible();
+  await expect(page.getByText("选择一条告警查看运行结果")).toBeVisible();
+  expect(auditCalls).toBe(0);
+  expect(executionCalls).toBe(0);
+  await page.locator('[data-alert-id="1984426"]').click();
   await expect(page.getByText("Runtime 运行后揭示")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "历史经验如何参与研判" }),
@@ -1012,7 +1086,7 @@ test("announces a newly generated Pattern Candidate in the current alert", async
       current = corpusStateWithPatternCandidate();
       await route.fulfill({
         json: {
-          schema_version: "soc.corpus_dev_workbench_process.v3",
+          schema_version: "soc.corpus_dev_workbench_process.v4",
           alert_id: "1984426",
           run_id: "RUN-CORPUS-1",
           observation_id: "MPO-CORPUS-1",
@@ -1020,12 +1094,14 @@ test("announces a newly generated Pattern Candidate in the current alert", async
           execution_mode: "initial",
           replay_of_run_id: null,
           pattern_observation_reused: false,
-          state: current,
+          alert: current.alerts[0],
         },
       });
       return;
     }
-    await route.fulfill({ json: current });
+    await route.fulfill({
+      json: corpusStateForRequest(current, route.request().url()),
+    });
   });
 
   await page.goto("/workspace/soc/corpus-validation");
@@ -1083,11 +1159,14 @@ test("explains when tenant policy changes the operational action", async ({
       await route.fulfill({ json: corpusExecution(true) });
       return;
     }
-    await route.fulfill({ json: state });
+    await route.fulfill({
+      json: corpusStateForRequest(state, route.request().url()),
+    });
   });
 
   await page.goto("/workspace/soc/corpus-validation");
 
+  await page.locator('[data-alert-id="1984426"]').click();
   await expect(page.getByText("企业策略调整了运营动作")).toBeVisible();
   await expect(page.getByText("模型判断：误报")).toBeVisible();
   await expect(page.getByText("基础动作：忽略")).toBeVisible();
@@ -1106,7 +1185,9 @@ test("opens a used Memory correction and creates a governed revision candidate",
       await route.fulfill({ json: corpusExecution(true) });
       return;
     }
-    await route.fulfill({ json: corpusState(true) });
+    await route.fulfill({
+      json: corpusStateForRequest(corpusState(true), route.request().url()),
+    });
   });
   let revisionRequest: Record<string, unknown> | null = null;
   await page.route("**/api/soc/memory/records/MEM-GALAXY**", async (route) => {
@@ -1138,9 +1219,11 @@ test("opens a used Memory correction and creates a governed revision candidate",
   await page.goto("/workspace/soc/corpus-validation");
   await page.getByRole("switch", { name: "仅显示未运行告警" }).click();
   await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
+  await page.locator('[data-alert-id="1984426"]').click();
   await page.getByRole("link", { name: "纠正此 Memory" }).click();
   await expect(page).toHaveURL(
     /\/workspace\/soc\/memory\/records\/MEM-GALAXY\/revise\?run_id=RUN-CORPUS-1/,
+    { timeout: 15_000 },
   );
   await expect(page.getByRole("heading", { name: "纠正经验" })).toBeVisible();
   await expect(page.getByText("RUN-CORPUS-1", { exact: true })).toBeVisible();
@@ -1232,6 +1315,7 @@ test("creates an operator-direct revision from the Memory inventory", async ({
   });
   await expect(page).toHaveURL(
     "/workspace/soc/review/memory-candidates/MC-DIRECT-REVISION-1",
+    { timeout: 15_000 },
   );
 });
 

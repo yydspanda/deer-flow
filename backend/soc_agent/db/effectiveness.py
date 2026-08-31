@@ -185,6 +185,13 @@ class SqlAlchemySocEffectivenessRepository:
         )
         completed = latest_runs.c.status == "success"
         labeled = final_verdict.in_(_RESOLVED_VERDICTS)
+        conclusion_maintained = and_(
+            completed,
+            or_(
+                final_verdict.is_(None),
+                effective_verdict == final_verdict,
+            ),
+        )
         final_risk = final_verdict == _TRUE_POSITIVE
         final_false_positive = final_verdict == _FALSE_POSITIVE
         transferred = predicted_disposition == _TRANSFERRED
@@ -230,6 +237,7 @@ class SqlAlchemySocEffectivenessRepository:
                 func.count(latest_runs.c.run_id).label("alert_count"),
                 _sum_if(completed).label("completed_count"),
                 func.coalesce(func.sum(latest_runs.c.alert_run_count - 1), 0).label("superseded_run_count"),
+                _sum_if(conclusion_maintained).label("conclusion_maintained_count"),
                 _sum_if(labeled).label("labeled_count"),
                 _sum_if(labeled).label("high_trust_labeled_count"),
                 _sum_if(and_(labeled, effective_verdict == final_verdict)).label("correct_count"),

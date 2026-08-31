@@ -68,6 +68,11 @@ class _FakeRequest:
 class _FakeWorkbenchService:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.state_query: dict[str, object] | None = None
+
+    def get_state(self, **query):
+        self.state_query = query
+        return SimpleNamespace(alerts=[])
 
     def process_alert(self, alert_id: str, *, context):
         self.calls.append(alert_id)
@@ -161,10 +166,14 @@ def test_corpus_workbench_projects_all_real_alerts_and_memory_readiness(
         database_file="soc-corpus-workbench.sqlite",
     )
 
-    state = service.get_state()
+    state = service.get_state(limit=500, unprocessed_only=False)
 
     assert state.source.alert_count == 210
     assert len(state.alerts) == 210
+    assert state.alert_page.total == 210
+    assert state.alert_page.limit == 500
+    assert state.alert_page.offset == 0
+    assert state.source_types
     assert state.readiness.fingerprint_coverage_count == 192
     assert state.readiness.decision_eligible_alert_count == 121
     # Feature schema v5 splits same-rule network alerts by canonical service,
@@ -190,6 +199,53 @@ def test_corpus_workbench_projects_all_real_alerts_and_memory_readiness(
     serialized = state.model_dump_json()
     assert "zeusRawLogs" not in serialized
     assert "raw_message" not in serialized
+
+
+@pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+def test_corpus_workbench_pages_and_filters_alerts_on_the_server(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    service = SocCorpusWorkbenchService(
+        repository=repository,
+        analysis_service=SimpleNamespace(),
+        pattern_service=SocMemoryPatternService(
+            repository=repository,
+            candidate_repository=repository,
+            profile_registry=build_soc_memory_profile_registry(),
+        ),
+        source_path=_CORPUS,
+        settings=SocLLMSettings(
+            mode=SocAnalyzerMode.LLM,
+            model_name="fixture-model",
+        ),
+        database_file="soc-corpus-workbench.sqlite",
+    )
+
+    first_page = service.get_state(limit=20, unprocessed_only=False)
+
+    assert first_page.schema_version == "soc.corpus_dev_workbench.v4"
+    assert first_page.alert_page.total == 210
+    assert len(first_page.alerts) == 20
+    assert [item.sequence_number for item in first_page.alerts] == list(range(1, 21))
+    assert all(item.alert_count >= 2 for item in first_page.groups)
+    assert {item.alert_id for item in first_page.rehearsal_alerts} == ({alert_id for chapter in first_page.leadership_demo.chapters for target in chapter.targets for alert_id in target.rehearsal_alert_ids} & set(service._cases))
+
+    selected_group = next(item for item in first_page.groups if item.alert_count >= 2)
+    group_page = service.get_state(
+        group_id=selected_group.group_id,
+        limit=5,
+        unprocessed_only=False,
+    )
+    search_page = service.get_state(
+        search=group_page.alerts[0].alert_id,
+        limit=20,
+        unprocessed_only=False,
+    )
+
+    assert group_page.alert_page.total == selected_group.alert_count
+    assert all(item.group_id == selected_group.group_id for item in group_page.alerts)
+    assert [item.alert_id for item in search_page.alerts] == [group_page.alerts[0].alert_id]
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
@@ -253,7 +309,8 @@ def test_corpus_workbench_reruns_one_alert_without_duplicate_pattern_support(
     assert rerun.pattern_observation_reused is True
     assert rerun_retry.run_id == rerun.run_id
     assert len(repository.list_runs_by_alert_id(alert_id, limit=20)) == 2
-    projected = next(item for item in rerun.state.alerts if item.alert_id == alert_id)
+    assert rerun.schema_version == "soc.corpus_dev_workbench_process.v4"
+    projected = rerun.alert
     assert projected.run_id == rerun.run_id
     assert projected.replay_of_run_id == first.run_id
     assert projected.pattern_support_count == 1
@@ -320,7 +377,7 @@ def test_corpus_workbench_allows_parallel_distinct_alerts(
         "analyst-1",
         "analyst-2",
     }
-    state = service.get_state()
+    state = service.get_state(limit=500, unprocessed_only=False)
     active_alerts = [item for item in state.alerts if item.alert_id in alert_ids]
     assert all(item.workflow_state == "running" for item in active_alerts)
     assert all(item.can_process is False for item in active_alerts)
@@ -522,7 +579,10 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
         )
     )
 
-    state = service.get_state()
+    state = service.get_state(
+        search=case.alert_id,
+        unprocessed_only=False,
+    )
     projected = next(item for item in state.alerts if item.alert_id == case.alert_id)
 
     assert projected.candidate_id == candidate.candidate_id
@@ -649,6 +709,36 @@ def test_corpus_workbench_process_endpoint_requires_admin() -> None:
         )
 
     assert exc_info.value.status_code == 403
+
+
+def test_corpus_workbench_state_endpoint_forwards_server_filters() -> None:
+    service = _FakeWorkbenchService()
+
+    result = soc_corpus_workbench.get_corpus_workbench_state(
+        service=service,
+        search="OpenVPN",
+        readiness="recurrent_strong",
+        source_type="nids",
+        group_id="group-1",
+        comparison="mismatched",
+        unprocessed_only=False,
+        focus_alert_id="2457581",
+        limit=20,
+        offset=40,
+    )
+
+    assert result.alerts == []
+    assert service.state_query == {
+        "search": "OpenVPN",
+        "readiness": "recurrent_strong",
+        "source_type": "nids",
+        "group_id": "group-1",
+        "comparison": "mismatched",
+        "unprocessed_only": False,
+        "focus_alert_id": "2457581",
+        "limit": 20,
+        "offset": 40,
+    }
 
 
 def test_corpus_workbench_process_endpoint_uses_authenticated_admin() -> None:

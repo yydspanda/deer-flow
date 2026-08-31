@@ -1,5 +1,5 @@
-import { SocMemoryCenter } from "@/components/workspace/soc/soc-memory-center";
+import { SocMemoryCenterLoader } from "@/components/workspace/soc/soc-memory-center-loader";
 
 export default function SocMemoryCenterPage() {
-  return <SocMemoryCenter />;
+  return <SocMemoryCenterLoader />;
 }

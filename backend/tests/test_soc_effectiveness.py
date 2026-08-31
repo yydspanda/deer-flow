@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Event
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -12,6 +15,7 @@ from app.gateway.routers.soc_effectiveness import (
     get_rule_effectiveness_detail,
 )
 from soc_agent.contracts import (
+    SocEffectivenessCoverage,
     SocOperationsAvailability,
     SocRuleOptimizationPolicy,
     SocRuleRecommendationKind,
@@ -35,6 +39,13 @@ from soc_agent.db.models import (
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=UTC)
 
 
+def test_conclusion_maintenance_is_an_additive_optional_v1_field() -> None:
+    required = set(SocEffectivenessCoverage.model_json_schema().get("required", []))
+
+    assert "conclusion_maintained_alert_count" not in required
+    assert "conclusion_maintenance_rate" not in required
+
+
 def test_effectiveness_snapshot_counts_latest_run_and_exposes_denominators() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     create_soc_tables(engine)
@@ -56,6 +67,8 @@ def test_effectiveness_snapshot_counts_latest_run_and_exposes_denominators() -> 
     assert snapshot.coverage is not None
     assert snapshot.coverage.total_alert_count == 2
     assert snapshot.coverage.superseded_run_count == 1
+    assert snapshot.coverage.conclusion_maintained_alert_count == 0
+    assert snapshot.coverage.conclusion_maintenance_rate.value == 0.0
     assert snapshot.coverage.high_trust_labeled_alert_count == 2
     assert snapshot.coverage.high_trust_label_coverage.value == 1.0
 
@@ -130,6 +143,52 @@ def test_effectiveness_snapshot_does_not_invent_accuracy_without_truth_labels() 
     assert snapshot.summary.triage_accuracy.value is None
     assert snapshot.summary.detection_miss_rate.availability is SocOperationsAvailability.NOT_MEASURED
     assert snapshot.rules[0].recommendation.kind is SocRuleRecommendationKind.INSUFFICIENT_LABELS
+    assert snapshot.coverage is not None
+    assert snapshot.coverage.conclusion_maintained_alert_count == 1
+    assert snapshot.coverage.conclusion_maintenance_rate.value == 1.0
+    assert "不代表人工确认" in snapshot.coverage.conclusion_maintenance_rate.interpretation
+
+
+def test_conclusion_maintenance_separates_silence_confirmation_and_correction() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    create_soc_tables(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    first = NOW - timedelta(hours=3)
+    second = NOW - timedelta(hours=2)
+    third = NOW - timedelta(hours=1)
+    with session_factory() as session:
+        session.add_all(
+            [
+                _run("RUN-UNCHALLENGED", "ALT-UNCHALLENGED", first, verdict="false_positive"),
+                _summary("RUN-UNCHALLENGED", "ALT-UNCHALLENGED", first),
+                _decision("RUN-UNCHALLENGED", "ALT-UNCHALLENGED", first, "false_positive", "ignored"),
+                _run("RUN-CONFIRMED", "ALT-CONFIRMED", second, verdict="true_positive"),
+                _summary("RUN-CONFIRMED", "ALT-CONFIRMED", second),
+                _decision("RUN-CONFIRMED", "ALT-CONFIRMED", second, "true_positive", "escalated"),
+                _correction("RUN-CONFIRMED", "ALT-CONFIRMED", second, "true_positive"),
+                _run("RUN-CORRECTED", "ALT-CORRECTED", third, verdict="false_positive"),
+                _summary("RUN-CORRECTED", "ALT-CORRECTED", third),
+                _decision("RUN-CORRECTED", "ALT-CORRECTED", third, "false_positive", "ignored"),
+                _correction("RUN-CORRECTED", "ALT-CORRECTED", third, "true_positive"),
+            ]
+        )
+        session.commit()
+
+    snapshot = SocEffectivenessService(
+        repository=SqlAlchemySocEffectivenessRepository(session_factory),
+        clock=lambda: NOW,
+    ).get_snapshot()
+
+    assert snapshot.coverage is not None
+    assert snapshot.coverage.completed_alert_count == 3
+    assert snapshot.coverage.conclusion_maintained_alert_count == 2
+    assert snapshot.coverage.conclusion_maintenance_rate.numerator == 2
+    assert snapshot.coverage.conclusion_maintenance_rate.denominator == 3
+    assert snapshot.coverage.conclusion_maintenance_rate.value == pytest.approx(2 / 3)
+    assert snapshot.coverage.high_trust_labeled_alert_count == 2
+    assert snapshot.summary is not None
+    assert snapshot.summary.triage_accuracy.numerator == 1
+    assert snapshot.summary.triage_accuracy.denominator == 2
 
 
 def test_rule_effectiveness_uses_detection_identity_not_mutable_rule_name() -> None:
@@ -199,6 +258,64 @@ def test_effectiveness_router_uses_the_same_core_service() -> None:
             source_type=None,
         )
     assert exc_info.value.status_code == 503
+
+
+def test_effectiveness_snapshot_reuses_one_repository_read_within_cache_ttl() -> None:
+    repository = Mock()
+    repository.read_rule_aggregates.return_value = []
+    monotonic_time = [10.0]
+    service = SocEffectivenessService(
+        repository=repository,
+        clock=lambda: NOW,
+        cache_ttl_seconds=30,
+        monotonic_clock=lambda: monotonic_time[0],
+    )
+
+    first = service.get_snapshot(window_days=30, tenant_id="pingan")
+    second = service.get_snapshot(window_days=30, tenant_id="pingan")
+
+    assert second is first
+    repository.read_rule_aggregates.assert_called_once()
+
+    monotonic_time[0] += 31
+    refreshed = service.get_snapshot(window_days=30, tenant_id="pingan")
+
+    assert refreshed is not first
+    assert repository.read_rule_aggregates.call_count == 2
+
+
+def test_effectiveness_snapshot_coalesces_concurrent_reads_for_one_scope() -> None:
+    repository = Mock()
+    read_started = Event()
+    release_read = Event()
+
+    def read_rule_aggregates(_scope):
+        read_started.set()
+        assert release_read.wait(timeout=2)
+        return []
+
+    repository.read_rule_aggregates.side_effect = read_rule_aggregates
+    service = SocEffectivenessService(
+        repository=repository,
+        clock=lambda: NOW,
+        cache_ttl_seconds=30,
+    )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(
+                service.get_snapshot,
+                window_days=30,
+                tenant_id="pingan",
+            )
+            for _ in range(4)
+        ]
+        assert read_started.wait(timeout=2)
+        release_read.set()
+        snapshots = [future.result(timeout=2) for future in futures]
+
+    assert repository.read_rule_aggregates.call_count == 1
+    assert all(snapshot is snapshots[0] for snapshot in snapshots)
 
 
 def test_effectiveness_uses_independent_sample_truth_without_overriding_primary_outcome() -> None:

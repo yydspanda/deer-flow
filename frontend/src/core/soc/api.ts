@@ -16,6 +16,7 @@ import type {
   SocCorpusWorkbenchAuditBundle,
   SocCorpusWorkbenchExecution,
   SocCorpusWorkbenchProcessResult,
+  SocCorpusWorkbenchQuery,
   SocCorpusWorkbenchState,
   SocDispositionOutcomeApplyResult,
   SocDispositionOutcomeRecordRequest,
@@ -257,10 +258,23 @@ export async function processSocMemoryWorkbenchAlert(
 }
 
 export async function getSocCorpusWorkbenchState(
+  query: SocCorpusWorkbenchQuery = {},
   context?: SocRequestContext,
 ): Promise<SocCorpusWorkbenchState> {
+  const params = new URLSearchParams();
+  if (query.search?.trim()) params.set("search", query.search.trim());
+  if (query.readiness) params.set("readiness", query.readiness);
+  if (query.sourceType) params.set("source_type", query.sourceType);
+  if (query.groupId) params.set("group_id", query.groupId);
+  if (query.comparison) params.set("comparison", query.comparison);
+  params.set("unprocessed_only", String(query.unprocessedOnly ?? true));
+  if (query.focusAlertId) {
+    params.set("focus_alert_id", query.focusAlertId);
+  }
+  params.set("limit", String(query.limit ?? 20));
+  params.set("offset", String(query.offset ?? 0));
   const response = await fetch(
-    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench`,
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench?${params.toString()}`,
     { headers: buildSocHeaders(context) },
   );
   return readJson<SocCorpusWorkbenchState>(

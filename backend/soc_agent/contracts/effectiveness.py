@@ -85,15 +85,17 @@ class SocRateMetric(BaseModel):
 
 
 class SocEffectivenessCoverage(BaseModel):
-    """Population and truth-label coverage for honest metric interpretation."""
+    """Population, workflow acceptance, and truth coverage for honest interpretation."""
 
     model_config = ConfigDict(extra="forbid")
 
     total_alert_count: NonNegativeInt = 0
     completed_alert_count: NonNegativeInt = 0
     superseded_run_count: NonNegativeInt = 0
+    conclusion_maintained_alert_count: NonNegativeInt | None = None
     labeled_alert_count: NonNegativeInt = 0
     high_trust_labeled_alert_count: NonNegativeInt = 0
+    conclusion_maintenance_rate: SocRateMetric | None = None
     label_coverage: SocRateMetric
     high_trust_label_coverage: SocRateMetric
 
@@ -168,6 +170,7 @@ class SocRuleEffectivenessAggregate(BaseModel):
     alert_count: NonNegativeInt = 0
     completed_count: NonNegativeInt = 0
     superseded_run_count: NonNegativeInt = 0
+    conclusion_maintained_count: NonNegativeInt = 0
     labeled_count: NonNegativeInt = 0
     high_trust_labeled_count: NonNegativeInt = 0
     correct_count: NonNegativeInt = 0

@@ -2470,6 +2470,14 @@ transfer precision/recall and wrong-auto-ignore are `not_measured` until a high-
 trusted external final verdict exists. Applied auto-ignore is measured separately and never treats
 a shadow proposal as automation.
 
+Because analysts commonly act only when they disagree, the read model also reports conclusion
+maintenance: a completed alert whose Effective Verdict has not been contradicted by a high-trust
+final outcome. This is an operational acceptance signal only. It includes alerts with no feedback
+and therefore cannot enter accuracy or miss denominators. It remains an audit/read-model signal rather
+than a primary operator metric. The Web summary shows processed volume, renders unavailable values
+as `--` without an explanatory statistics banner, and groups the eight exact rates into triage
+quality, automation safety, transfer quality and workload reduction.
+
 Detection-family evaluation is vendor-neutral. The stable group is tenant + source + canonical
 detection identity; `rule_code` is an optional PingAn/vendor alias. For each group the product shows
 volume, label coverage, confirmed-risk and false-positive shares, AI accuracy/miss, applied

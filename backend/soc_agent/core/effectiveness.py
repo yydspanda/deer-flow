@@ -6,6 +6,8 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from threading import Lock
+from time import monotonic
 
 from soc_agent.contracts import (
     SocBehaviorGroupEffectiveness,
@@ -52,11 +54,22 @@ class SocEffectivenessService:
         policy: SocRuleOptimizationPolicy | None = None,
         database_error_code: str | None = None,
         clock: Callable[[], datetime] | None = None,
+        cache_ttl_seconds: float = 30.0,
+        monotonic_clock: Callable[[], float] | None = None,
     ) -> None:
+        if cache_ttl_seconds < 0:
+            raise ValueError("effectiveness cache_ttl_seconds must be non-negative")
         self._repository = repository
         self._policy = policy or SocRuleOptimizationPolicy()
         self._database_error_code = database_error_code
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._cache_ttl_seconds = cache_ttl_seconds
+        self._monotonic_clock = monotonic_clock or monotonic
+        self._snapshot_cache: dict[
+            tuple[int, str | None, str | None],
+            tuple[float, SocEffectivenessSnapshot],
+        ] = {}
+        self._snapshot_cache_lock = Lock()
 
     def get_snapshot(
         self,
@@ -80,6 +93,34 @@ class SocEffectivenessService:
                 recommendation_policy_version=self._policy.policy_version,
                 error_code=self._database_error_code or "soc.effectiveness.database_not_configured",
             )
+        if self._cache_ttl_seconds <= 0:
+            return self._build_snapshot(now=now, scope=scope)
+
+        cache_key = (window_days, tenant_id, source_type)
+        with self._snapshot_cache_lock:
+            current_tick = self._monotonic_clock()
+            cached = self._snapshot_cache.get(cache_key)
+            if cached is not None and cached[0] > current_tick:
+                return cached[1]
+            if cached is not None:
+                self._snapshot_cache.pop(cache_key, None)
+
+            snapshot = self._build_snapshot(now=now, scope=scope)
+            if snapshot.availability is SocOperationsAvailability.AVAILABLE:
+                self._store_cached_snapshot(
+                    key=cache_key,
+                    expires_at=current_tick + self._cache_ttl_seconds,
+                    snapshot=snapshot,
+                )
+            return snapshot
+
+    def _build_snapshot(
+        self,
+        *,
+        now: datetime,
+        scope: SocEffectivenessScope,
+    ) -> SocEffectivenessSnapshot:
+        assert self._repository is not None
         try:
             aggregates = self._repository.read_rule_aggregates(scope)
         except SocEffectivenessRepositoryError:
@@ -114,12 +155,31 @@ class SocEffectivenessService:
             recommendation_policy_version=self._policy.policy_version,
             measurement_notes=[
                 "每个 alert_id 只统计窗口内最新 Run；重跑与 replay 不重复扩大业务量。",
+                "结论未被改判只表示当前没有高可信最终结果反驳 Effective Verdict；它包含尚未反馈的告警，不等于人工确认或研判正确。",
                 "准确率、漏报率和转交质量只使用已形成高可信最终结论的告警；未标注告警不进入分母。",
                 "自动化率按已实际应用的忽略类 disposition 计算；shadow proposal 不计为自动执行。",
                 "Rule Code 是 PingAn 可选别名；通用聚合主键仍由租户、来源和 canonical detection identity 组成。",
                 "模型算力仅统计 AnalysisRun 中可审计的 Runtime 调用；Memory 草稿等离线治理调用暂不混入告警成本。",
             ],
         )
+
+    def _store_cached_snapshot(
+        self,
+        *,
+        key: tuple[int, str | None, str | None],
+        expires_at: float,
+        snapshot: SocEffectivenessSnapshot,
+    ) -> None:
+        expired_keys = [cached_key for cached_key, (cached_expiry, _) in self._snapshot_cache.items() if cached_expiry <= self._monotonic_clock()]
+        for expired_key in expired_keys:
+            self._snapshot_cache.pop(expired_key, None)
+        if len(self._snapshot_cache) >= 64:
+            oldest_key = min(
+                self._snapshot_cache,
+                key=lambda cached_key: self._snapshot_cache[cached_key][0],
+            )
+            self._snapshot_cache.pop(oldest_key, None)
+        self._snapshot_cache[key] = (expires_at, snapshot)
 
     def get_rule_detail(
         self,
@@ -235,14 +295,22 @@ def _coverage(item: SocRuleEffectivenessAggregate) -> SocEffectivenessCoverage:
         total_alert_count=item.alert_count,
         completed_alert_count=item.completed_count,
         superseded_run_count=item.superseded_run_count,
+        conclusion_maintained_alert_count=item.conclusion_maintained_count,
         labeled_alert_count=item.labeled_count,
         high_trust_labeled_alert_count=item.high_trust_labeled_count,
+        conclusion_maintenance_rate=_rate(
+            "operations.conclusion_maintenance_rate",
+            item.conclusion_maintained_count,
+            item.completed_count,
+            "没有高可信最终结果反驳 Effective Verdict 的完成告警 / 全部完成告警",
+            "反映结论尚未被改判的工作流状态；包含未反馈告警，不代表人工确认，也不能替代准确率。",
+        ),
         label_coverage=_rate(
             "quality.label_coverage",
             item.labeled_count,
             item.completed_count,
             "已形成最终技术结论的完成告警 / 全部完成告警",
-            "覆盖率越低，准确率越不能代表全量生产效果。",
+            "最终结果验证覆盖越低，准确率越不能代表全量生产效果。",
         ),
         high_trust_label_coverage=_rate(
             "quality.high_trust_label_coverage",
@@ -296,7 +364,7 @@ def _summary(item: SocRuleEffectivenessAggregate) -> SocEffectivenessSummary:
             item.auto_ignore_count,
             item.completed_count,
             "已实际自动应用忽略类处置 / 全部完成告警",
-            "用户所称自动化率；必须和错误自动忽略率、标签覆盖率一起阅读。",
+            "用户所称自动化率；必须和错误自动忽略率、最终结果验证覆盖一起阅读。",
         ),
         wrong_auto_ignore_rate=_rate(
             "automation.wrong_auto_ignore_rate",

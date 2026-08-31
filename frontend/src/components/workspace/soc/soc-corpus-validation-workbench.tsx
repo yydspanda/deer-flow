@@ -23,8 +23,9 @@ import {
   ShieldCheckIcon,
   XCircleIcon,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -48,7 +49,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { SocCorpusAuditViewer } from "@/components/workspace/soc/soc-corpus-audit-viewer";
 import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
 import { SocLeadershipDemoGuidePanel } from "@/components/workspace/soc/soc-leadership-demo-guide";
 import { memoryRunUsageCopy } from "@/components/workspace/soc/soc-memory-copy";
@@ -76,6 +76,16 @@ import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 const FILTER_STORAGE_KEY = "soc.corpus-validation.filters.v1";
+
+const SocCorpusAuditViewer = dynamic(
+  () =>
+    import("@/components/workspace/soc/soc-corpus-audit-viewer").then(
+      (module) => module.SocCorpusAuditViewer,
+    ),
+  {
+    loading: () => <Skeleton className="h-96 w-full rounded-none" />,
+  },
+);
 
 const VERDICT_LABELS: Record<SocVerdict, string> = {
   true_positive: "真实风险",
@@ -137,7 +147,6 @@ interface CorpusFilterSnapshot {
   sourceType: string;
   groupId: string;
   unprocessedOnly: boolean;
-  selectedAlertId: string | null;
 }
 
 interface RunFeedback {
@@ -196,11 +205,6 @@ function readStoredFilters(): Partial<CorpusFilterSnapshot> | null {
       unprocessedOnly:
         typeof parsed.unprocessedOnly === "boolean"
           ? parsed.unprocessedOnly
-          : undefined,
-      selectedAlertId:
-        typeof parsed.selectedAlertId === "string" ||
-        parsed.selectedAlertId === null
-          ? parsed.selectedAlertId
           : undefined,
     };
   } catch {
@@ -1206,10 +1210,6 @@ function AlertDetail({
 }
 
 export function SocCorpusValidationWorkbench() {
-  const query = useSocCorpusWorkbench();
-  const activityQuery = useSocCorpusWorkbenchActivity();
-  const processMutation = useProcessSocCorpusWorkbenchAlert();
-  const state = query.state;
   const [search, setSearch] = useState("");
   const [readiness, setReadiness] = useState<ReadinessFilter>("all");
   const [comparison, setComparison] = useState<ComparisonFilter>("all");
@@ -1217,6 +1217,7 @@ export function SocCorpusValidationWorkbench() {
   const [groupId, setGroupId] = useState("all");
   const [unprocessedOnly, setUnprocessedOnly] = useState(true);
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
+  const [focusAlertId, setFocusAlertId] = useState<string | null>(null);
   const [runFeedbackByAlert, setRunFeedbackByAlert] = useState<
     Record<string, RunFeedback>
   >({});
@@ -1226,6 +1227,21 @@ export function SocCorpusValidationWorkbench() {
   const [filtersHydrated, setFiltersHydrated] = useState(false);
   const [page, setPage] = useState(0);
   const detailRef = useRef<HTMLDivElement>(null);
+  const deferredSearch = useDeferredValue(search.trim());
+  const query = useSocCorpusWorkbench({
+    search: deferredSearch || null,
+    readiness: readiness === "all" ? null : readiness,
+    sourceType: sourceType === "all" ? null : sourceType,
+    groupId: groupId === "all" ? null : groupId,
+    comparison: comparison === "all" ? null : comparison,
+    unprocessedOnly,
+    focusAlertId,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+  });
+  const activityQuery = useSocCorpusWorkbenchActivity();
+  const processMutation = useProcessSocCorpusWorkbenchAlert();
+  const state = query.state;
   const activeExecutionByAlert = useMemo(
     () =>
       new Map(
@@ -1235,6 +1251,19 @@ export function SocCorpusValidationWorkbench() {
         ]),
       ),
     [activityQuery.activity?.executions],
+  );
+  const maxConcurrentExecutions =
+    activityQuery.activity?.max_concurrent_executions ?? 1;
+  const visibleActiveAlertCount = useMemo(
+    () =>
+      new Set([...activeExecutionByAlert.keys(), ...processingAlertIds]).size,
+    [activeExecutionByAlert, processingAlertIds],
+  );
+  const availableExecutionSlots = Math.max(
+    0,
+    activityQuery.activity
+      ? maxConcurrentExecutions - visibleActiveAlertCount
+      : Number.POSITIVE_INFINITY,
   );
   const runFeedback = selectedAlertId
     ? (runFeedbackByAlert[selectedAlertId] ?? null)
@@ -1303,9 +1332,6 @@ export function SocCorpusValidationWorkbench() {
       if (stored.unprocessedOnly !== undefined) {
         setUnprocessedOnly(stored.unprocessedOnly);
       }
-      if (stored.selectedAlertId !== undefined) {
-        setSelectedAlertId(stored.selectedAlertId);
-      }
     }
     setFiltersHydrated(true);
   }, []);
@@ -1319,7 +1345,6 @@ export function SocCorpusValidationWorkbench() {
       sourceType,
       groupId,
       unprocessedOnly,
-      selectedAlertId,
     };
     try {
       window.sessionStorage.setItem(
@@ -1335,17 +1360,13 @@ export function SocCorpusValidationWorkbench() {
     groupId,
     readiness,
     search,
-    selectedAlertId,
     sourceType,
     unprocessedOnly,
   ]);
 
   const sourceTypes = useMemo(
-    () =>
-      Array.from(
-        new Set(state?.alerts.map((item) => item.source_type) ?? []),
-      ).sort(),
-    [state?.alerts],
+    () => state?.source_types ?? [],
+    [state?.source_types],
   );
 
   useEffect(() => {
@@ -1361,10 +1382,13 @@ export function SocCorpusValidationWorkbench() {
     }
   }, [filtersHydrated, groupId, sourceType, sourceTypes, state]);
 
-  const filtered = useMemo(() => {
-    if (!state) return [];
+  const pageCount = Math.max(
+    1,
+    Math.ceil((state?.alert_page.total ?? 0) / PAGE_SIZE),
+  );
+  const pageAlerts = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
-    return state.alerts
+    return (state?.alerts ?? [])
       .filter((alert) => readiness === "all" || alert.readiness === readiness)
       .filter(
         (alert) => sourceType === "all" || alert.source_type === sourceType,
@@ -1374,9 +1398,7 @@ export function SocCorpusValidationWorkbench() {
         (alert) =>
           !unprocessedOnly ||
           alert.workflow_state !== "completed" ||
-          processingAlertIds.has(alert.alert_id) ||
-          activeExecutionByAlert.has(alert.alert_id) ||
-          alert.alert_id === selectedAlertId,
+          alert.alert_id === focusAlertId,
       )
       .filter((alert) => {
         if (comparison === "all") return true;
@@ -1396,42 +1418,48 @@ export function SocCorpusValidationWorkbench() {
           alert.host_name,
           alert.topic,
         ].some((value) => value?.toLocaleLowerCase().includes(needle));
-      })
-      .sort((left, right) => left.sequence_number - right.sequence_number);
+      });
   }, [
     comparison,
+    focusAlertId,
     groupId,
     readiness,
     search,
     sourceType,
-    state,
+    state?.alerts,
     unprocessedOnly,
-    activeExecutionByAlert,
-    processingAlertIds,
-    selectedAlertId,
   ]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageAlerts = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   useEffect(() => {
     setPage(0);
+    setFocusAlertId(null);
   }, [comparison, groupId, readiness, search, sourceType, unprocessedOnly]);
 
   useEffect(() => {
-    if (!filtersHydrated) return;
-    if (!filtered.length) {
-      setSelectedAlertId(null);
+    if (page < pageCount) return;
+    setPage(Math.max(0, pageCount - 1));
+  }, [page, pageCount]);
+
+  useEffect(() => {
+    if (!filtersHydrated || !state) return;
+    if (!selectedAlertId) return;
+    if (pageAlerts.some((item) => item.alert_id === selectedAlertId)) return;
+    if (
+      state.rehearsal_alerts.some((item) => item.alert_id === selectedAlertId)
+    ) {
       return;
     }
-    if (filtered.some((item) => item.alert_id === selectedAlertId)) return;
-    setSelectedAlertId(filtered[0]?.alert_id ?? null);
-  }, [filtered, filtersHydrated, selectedAlertId]);
+    setSelectedAlertId(null);
+  }, [filtersHydrated, pageAlerts, selectedAlertId, state]);
 
   const selectedAlert = useMemo(
     () =>
-      state?.alerts.find((item) => item.alert_id === selectedAlertId) ?? null,
-    [selectedAlertId, state?.alerts],
+      state?.alerts.find((item) => item.alert_id === selectedAlertId) ??
+      state?.rehearsal_alerts.find(
+        (item) => item.alert_id === selectedAlertId,
+      ) ??
+      null,
+    [selectedAlertId, state?.alerts, state?.rehearsal_alerts],
   );
 
   const handleProcess = async (alertId: string) => {
@@ -1458,9 +1486,8 @@ export function SocCorpusValidationWorkbench() {
     }));
     try {
       const result = await processMutation.mutateAsync(alertId);
-      const updatedAlert = result.state.alerts.find(
-        (item) => item.alert_id === alertId,
-      );
+      const updatedAlert = result.alert;
+      setFocusAlertId(alertId);
       let feedbackMessage = "完整研判链路已完成，可按需查看详细结果。";
       let feedbackAction: RunFeedback["action"];
       if (result.execution_mode === "rerun") {
@@ -1647,15 +1674,14 @@ export function SocCorpusValidationWorkbench() {
             <Badge
               variant="outline"
               className={cn(
-                activityQuery.activity?.active_count
+                visibleActiveAlertCount
                   ? "border-sky-300 bg-sky-50 text-sky-800"
                   : "border-zinc-300 bg-white text-zinc-700",
               )}
               title="不同告警可并行；同一告警只允许一个活动执行"
             >
               <ActivityIcon className="size-3.5" />
-              运行中 {activityQuery.activity?.active_count ?? 0}/
-              {activityQuery.activity?.max_concurrent_executions ?? 1}
+              运行中 {visibleActiveAlertCount}/{maxConcurrentExecutions}
             </Badge>
             <Button
               variant="outline"
@@ -1698,7 +1724,7 @@ export function SocCorpusValidationWorkbench() {
         <SocLeadershipDemoGuidePanel
           guide={state.leadership_demo}
           groups={state.groups}
-          alerts={state.alerts}
+          alerts={state.rehearsal_alerts}
           activeGroupId={groupId}
           onSelectTarget={handleSelectDemoTarget}
         />
@@ -1855,7 +1881,7 @@ export function SocCorpusValidationWorkbench() {
           </div>
           <div className="text-muted-foreground mt-3 flex flex-wrap items-center gap-2 text-xs">
             <FilterIcon className="size-3.5" />
-            <span>{filtered.length} 条命中筛选</span>
+            <span>{state.alert_page.total} 条命中筛选</span>
             <span>·</span>
             <span>筛选条件会在当前浏览器标签页保留</span>
             <span>·</span>
@@ -1898,8 +1924,7 @@ export function SocCorpusValidationWorkbench() {
                     !!activeExecution ||
                     alert.workflow_state === "running";
                   const otherSessionProcessing = !localProcessing && processing;
-                  const executionCapacityFull =
-                    activityQuery.activity?.available_slots === 0;
+                  const executionCapacityFull = availableExecutionSlots === 0;
                   return (
                     <tr
                       key={alert.alert_id}

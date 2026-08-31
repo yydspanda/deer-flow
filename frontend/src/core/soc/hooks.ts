@@ -67,6 +67,7 @@ import type {
   SocMemoryBusinessLessonDraftRequest,
   SocMemoryCandidateStatus,
   SocMemoryCandidateSupersessionRequest,
+  SocCorpusWorkbenchQuery,
   SocMemoryFutureUseState,
   SocMemoryQuery,
   SocMemoryRecord,
@@ -225,7 +226,8 @@ export const socMemoryWorkbenchQueryKeys = {
 
 export const socCorpusWorkbenchQueryKeys = {
   all: ["soc-corpus-workbench"] as const,
-  state: () => [...socCorpusWorkbenchQueryKeys.all, "state"] as const,
+  state: (query?: SocCorpusWorkbenchQuery) =>
+    [...socCorpusWorkbenchQueryKeys.all, "state", query ?? {}] as const,
   activity: () => [...socCorpusWorkbenchQueryKeys.all, "activity"] as const,
   execution: (alertId: string | null | undefined) =>
     [...socCorpusWorkbenchQueryKeys.all, "execution", alertId] as const,
@@ -592,15 +594,16 @@ export function useProcessSocMemoryWorkbenchAlert() {
   });
 }
 
-export function useSocCorpusWorkbench() {
+export function useSocCorpusWorkbench(query: SocCorpusWorkbenchQuery = {}) {
   const context = useSocWebRequestContext();
-  const query = useQuery({
-    queryKey: socCorpusWorkbenchQueryKeys.state(),
-    queryFn: () => getSocCorpusWorkbenchState(context),
+  const result = useQuery({
+    queryKey: socCorpusWorkbenchQueryKeys.state(query),
+    queryFn: () => getSocCorpusWorkbenchState(query, context),
     retry: false,
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+    placeholderData: (previous) => previous,
   });
-  return { state: query.data ?? null, ...query };
+  return { state: result.data ?? null, ...result };
 }
 
 export function useSocCorpusWorkbenchActivity() {
@@ -609,7 +612,8 @@ export function useSocCorpusWorkbenchActivity() {
     queryKey: socCorpusWorkbenchQueryKeys.activity(),
     queryFn: () => getSocCorpusWorkbenchActivity(context),
     retry: false,
-    refetchInterval: 1_000,
+    refetchInterval: (query) =>
+      (query.state.data?.active_count ?? 0) > 0 ? 1_000 : 5_000,
     refetchIntervalInBackground: false,
     staleTime: 0,
   });
@@ -654,12 +658,8 @@ export function useProcessSocCorpusWorkbenchAlert() {
     mutationFn: (alertId: string) =>
       processSocCorpusWorkbenchAlert(alertId, context),
     onSuccess: (result) => {
-      queryClient.setQueryData(
-        socCorpusWorkbenchQueryKeys.state(),
-        result.state,
-      );
       void queryClient.invalidateQueries({
-        queryKey: socCorpusWorkbenchQueryKeys.state(),
+        queryKey: socCorpusWorkbenchQueryKeys.all,
       });
       void queryClient.invalidateQueries({
         queryKey: socCorpusWorkbenchQueryKeys.activity(),
@@ -697,7 +697,7 @@ export function usePromoteSocRunToMemory() {
     }) => promoteSocRunToMemory(runId, request, context),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({
-        queryKey: socCorpusWorkbenchQueryKeys.state(),
+        queryKey: socCorpusWorkbenchQueryKeys.all,
       });
       void queryClient.invalidateQueries({
         queryKey: socCorpusWorkbenchQueryKeys.execution(result.alert_id),
@@ -825,8 +825,7 @@ export function useSocMemoryCenterOverview({
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: socMemoryQueryKeys.center(filters),
     queryFn: () => getSocMemoryCenterOverview(filters, context),
-    staleTime: 0,
-    refetchOnMount: "always",
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { overview: data ?? null, isLoading, isFetching, error, refetch };
 }

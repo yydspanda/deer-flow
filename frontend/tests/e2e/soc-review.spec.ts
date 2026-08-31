@@ -450,6 +450,17 @@ test.describe("SOC review workbench", () => {
     ).toBeVisible();
     await expect(page.getByText("RC-ALPHA-001")).toBeVisible();
     await expect(page.getByText("评估受治理快速路径")).toBeVisible();
+    await expect(page.getByText("已处理告警")).toBeVisible();
+    await expect(page.getByText("结论未被改判")).toHaveCount(0);
+    await expect(page.getByText("最终结果已验证")).toHaveCount(0);
+    await expect(page.getByText("验证覆盖", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("质量指标暂不可评估")).toHaveCount(0);
+    const effectivenessGroups = page.getByTestId("effectiveness-metric-group");
+    await expect(effectivenessGroups).toHaveCount(4);
+    await expect(effectivenessGroups.nth(0)).toContainText("研判质量");
+    await expect(effectivenessGroups.nth(1)).toContainText("自动化安全");
+    await expect(effectivenessGroups.nth(2)).toContainText("转交质量");
+    await expect(effectivenessGroups.nth(3)).toContainText("减负效果");
     await page.getByRole("button", { name: "展开规则详情" }).click();
     await expect(page.getByText("OpenVPN / UDP 1194")).toBeVisible();
     await expect(page.getByText("CVE-2017-7924 / UDP 44818")).toBeVisible();
@@ -465,6 +476,19 @@ test.describe("SOC review workbench", () => {
     await expect(
       page.getByText("Production SLO evidence: not available"),
     ).toBeVisible();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileGroupRects = await effectivenessGroups.evaluateAll((elements) =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: Math.round(rect.left),
+          width: Math.round(rect.width),
+        };
+      }),
+    );
+    expect(new Set(mobileGroupRects.map((rect) => rect.left)).size).toBe(1);
+    expect(mobileGroupRects.every((rect) => rect.width <= 390)).toBe(true);
 
     expect(
       state.requests.filter(

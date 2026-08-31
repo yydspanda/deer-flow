@@ -18,15 +18,21 @@ DATABASE_URL="sqlite:///$DATABASE_PATH"
 MEMORY_CENTER_URL="http://localhost:2026/workspace/soc/memory"
 WORKBENCH_URL="http://localhost:2026/workspace/soc/dev/memory-validation/galaxylab"
 CORPUS_WORKBENCH_URL="http://localhost:2026/workspace/soc/corpus-validation"
+CORPUS_WARMUP_API_URL="http://localhost:2026/api/soc/dev/corpus-workbench?unprocessed_only=true&limit=1&offset=0"
 ENTRYPOINT_HEALTH_URL="http://localhost:2026/api/v1/auth/setup-status"
 FRONTEND_HEALTH_URL="http://localhost:2026/"
 SOC_WARMUP_PATHS=(
     "/workspace/soc/operations"
+    "/workspace/soc/alerts"
+    "/workspace/soc/approvals"
     "/workspace/soc/review/alerts"
     "/workspace/soc/review/memory-candidates"
     "/workspace/soc/review/memory-candidates/__warmup__"
     "/workspace/soc/review/samples"
     "/workspace/soc/memory"
+    "/workspace/soc/memory/records"
+    "/workspace/soc/memory/records/__warmup__"
+    "/workspace/soc/memory/records/__warmup__/revise"
     "/workspace/soc/memory/patterns/__warmup__"
     "/workspace/soc/normalization"
     "/workspace/soc/corpus-validation"
@@ -149,6 +155,16 @@ warm_soc_routes() {
             return 1
         fi
     done
+    echo "Initializing the SOC corpus index and first-page projection..."
+    if timing="$(curl -fsS -o /dev/null \
+        --connect-timeout 3 \
+        --max-time 120 \
+        -w 'HTTP %{http_code}, first byte %{time_starttransfer}s, total %{time_total}s' \
+        "$CORPUS_WARMUP_API_URL")"; then
+        printf '  READY %-64s %s\n' "/api/soc/dev/corpus-workbench" "$timing"
+    else
+        echo "  SKIPPED corpus API warmup (authentication may be enabled)" >&2
+    fi
 }
 
 start() {
