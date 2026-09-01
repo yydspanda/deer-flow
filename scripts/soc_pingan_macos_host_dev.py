@@ -356,6 +356,7 @@ def validate_runtime_files() -> None:
     for path in (LOCAL_ENV, LOCAL_CONFIG):
         if path.stat().st_mode & 0o077:
             raise HostDevError(f"private local file must be mode 0600: {path.name}")
+    validate_local_config_profile(LOCAL_CONFIG)
 
     for path in (
         ROOT / "logs",
@@ -367,6 +368,55 @@ def validate_runtime_files() -> None:
     ):
         path.mkdir(parents=True, exist_ok=True)
     subprocess.run(build_nginx_test_command(), check=True)
+
+
+def validate_local_config_profile(path: Path) -> None:
+    content = path.read_text(encoding="utf-8")
+    if "PINGAN_LITELLM_" in content:
+        raise HostDevError("private config contains obsolete LiteLLM model references")
+    required_model_lines = (
+        "model: deepseek-v4-flash",
+        "api_base: $PINGAN_MODEL_GATEWAY_BASE_URL",
+        "api_key: $PINGAN_MODEL_GATEWAY_API_KEY",
+    )
+    if any(line not in content for line in required_model_lines):
+        raise HostDevError(
+            "private config is missing the project model-gateway references"
+        )
+    database_block = _top_level_yaml_block(content, "database")
+    if (
+        re.search(r"(?m)^\s+backend:\s*sqlite\s*(?:#.*)?$", database_block) is None
+        or re.search(
+            r"(?m)^\s+sqlite_dir:\s*\.deer-flow/data\s*(?:#.*)?$",
+            database_block,
+        )
+        is None
+    ):
+        raise HostDevError(
+            "private config must use database.backend=sqlite and "
+            "sqlite_dir=.deer-flow/data"
+        )
+
+
+def _top_level_yaml_block(content: str, key: str) -> str:
+    lines = content.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip() == f"{key}:" and not line[:1].isspace():
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    selected: list[str] = []
+    for line in lines[start:]:
+        if (
+            line.strip()
+            and not line[:1].isspace()
+            and not line.lstrip().startswith("#")
+        ):
+            break
+        selected.append(line)
+    return "\n".join(selected)
 
 
 def build_nginx_test_command(*, root: Path = ROOT) -> list[str]:
@@ -846,6 +896,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.action == "check":
             result = inspect_host(python_executable=args.python)
+            validate_runtime_files()
+            result["runtime_files_valid"] = True
         elif args.action == "install":
             result = install_dependencies(python_executable=args.python)
         elif args.action == "start":

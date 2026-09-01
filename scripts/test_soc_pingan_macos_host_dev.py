@@ -24,6 +24,7 @@ from scripts.soc_pingan_macos_host_dev import (
     parse_args,
     parse_version,
     resolve_start_allowed_origins,
+    validate_local_config_profile,
 )
 
 
@@ -48,6 +49,44 @@ def test_direct_script_entry_ignores_unrelated_installed_scripts_package(
 
     assert completed.returncode == 0, completed.stderr
     assert "Prepare and run PingAn SOC DEV" in completed.stdout
+
+
+def test_local_config_profile_requires_project_gateway_and_sqlite(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.pingan-dev.local"
+    config.write_text(
+        """models:
+  - model: deepseek-v4-flash
+    api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
+    api_key: $PINGAN_MODEL_GATEWAY_API_KEY
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+""",
+        encoding="utf-8",
+    )
+
+    validate_local_config_profile(config)
+
+
+def test_local_config_profile_rejects_obsolete_litellm_reference(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.pingan-dev.local"
+    config.write_text(
+        """models:
+  - model: deepseek-v4-flash
+    api_base: $PINGAN_LITELLM_BASE_URL
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HostDevError, match="obsolete LiteLLM"):
+        validate_local_config_profile(config)
 
 
 def test_parse_version_accepts_tool_version_shapes() -> None:

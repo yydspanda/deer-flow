@@ -140,6 +140,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
         "  .secrets/eagw-private-key.der"
     ) in runbook
     assert "soc_pingan_model_gateway_smoke.py \\\n  --confirm-live" in runbook
+    assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in runbook
 
 
 def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:
@@ -182,6 +183,37 @@ def test_private_overlay_config_rejects_stale_config_version(tmp_path: Path) -> 
     )
 
     with pytest.raises(ValueError, match="config_version"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_rejects_obsolete_litellm_model_profile(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        config_text="""config_version: 38
+models:
+  - api_base: $PINGAN_LITELLM_BASE_URL
+    api_key: $PINGAN_LITELLM_API_KEY
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+""",
+    )
+
+    with pytest.raises(ValueError, match="obsolete LiteLLM"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_requires_model_gateway_and_sqlite(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        config_text="config_version: 38\nmodels: []\n",
+    )
+
+    with pytest.raises(ValueError, match="model-gateway references"):
         _assert_private_overlay_config_ready(tmp_path)
 
 
@@ -286,7 +318,15 @@ def _write_private_profiles(
     *,
     overrides: dict[str, str] | None = None,
     extra: str = "",
-    config_text: str = "config_version: 38\nmodels: []\n",
+    config_text: str = """config_version: 38
+models:
+  - model: deepseek-v4-flash
+    api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
+    api_key: $PINGAN_MODEL_GATEWAY_API_KEY
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+""",
 ) -> None:
     (root / "config.example.yaml").write_text(
         "config_version: 38\n",

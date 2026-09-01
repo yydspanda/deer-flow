@@ -691,6 +691,7 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
             "private config_version does not match config.example.yaml: "
             f"expected {expected_config_version}, found {private_config_version}"
         )
+    _assert_private_config_contract(config_path.read_text(encoding="utf-8"))
 
     key_path = root / ".secrets/eagw-private-key.der"
     if not key_path.is_file() or not key_path.stat().st_size:
@@ -788,6 +789,54 @@ def _read_config_version(path: Path) -> int:
     if match is None:
         raise ValueError(f"config_version is missing or invalid: {path.name}")
     return int(match.group("version"))
+
+
+def _assert_private_config_contract(content: str) -> None:
+    if "PINGAN_LITELLM_" in content:
+        raise ValueError("private config contains obsolete LiteLLM model references")
+    required_model_lines = (
+        "model: deepseek-v4-flash",
+        "api_base: $PINGAN_MODEL_GATEWAY_BASE_URL",
+        "api_key: $PINGAN_MODEL_GATEWAY_API_KEY",
+    )
+    if any(line not in content for line in required_model_lines):
+        raise ValueError(
+            "private config is missing the project model-gateway references"
+        )
+    database_block = _top_level_yaml_block(content, "database")
+    if (
+        re.search(r"(?m)^\s+backend:\s*sqlite\s*(?:#.*)?$", database_block) is None
+        or re.search(
+            r"(?m)^\s+sqlite_dir:\s*\.deer-flow/data\s*(?:#.*)?$",
+            database_block,
+        )
+        is None
+    ):
+        raise ValueError(
+            "private config must use database.backend=sqlite and "
+            "sqlite_dir=.deer-flow/data"
+        )
+
+
+def _top_level_yaml_block(content: str, key: str) -> str:
+    lines = content.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip() == f"{key}:" and not line[:1].isspace():
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    selected: list[str] = []
+    for line in lines[start:]:
+        if (
+            line.strip()
+            and not line[:1].isspace()
+            and not line.lstrip().startswith("#")
+        ):
+            break
+        selected.append(line)
+    return "\n".join(selected)
 
 
 def _shell_export_values(content: str) -> dict[str, str]:
@@ -985,7 +1034,8 @@ unset SOC_DATABASE_URL
 
 (
   cd backend
-  .venv/bin/python -m soc_agent.cli db upgrade
+  .venv/bin/python -m soc_agent.cli db upgrade \\
+    --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"
 )
 ```
 

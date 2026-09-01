@@ -16,6 +16,10 @@ reviewed tenant policy enabled, and external action execution disabled. It must 
 the canonical Memory corpus plus the merged corpus/index/payload store before
 starting. It must not add Docker as a prerequisite, hard-code a developer home
 path, or create a second Gateway/frontend/nginx implementation.
+After external corpus staging, `check` must also validate all runtime files,
+mode-`0600` local profiles, the project model-gateway references, isolated SQLite
+configuration, and the non-root nginx config. It must reject retired LiteLLM model
+references before dependency installation or migration.
 
 That wrapper also owns three sidecars through
 `scripts/soc_pingan_host_sidecars.py`: the loopback project model gateway on `4001`, the

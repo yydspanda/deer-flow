@@ -55,7 +55,9 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 `dirty_override_used=true`、`final_handoff_eligible=false`，禁止作为最终内网交付。
 启用 `--include-private-overlay` 时，构建器还会在写出任何 archive 前检查两个 local config 均为
 `0600`、不含 `/Users/...` 硬编码、不含旧 import/operator 字段，并要求 model-gateway/ZEUS/workflow/fault-case
-的关键变量都存在且不是占位值。未先执行 profile preparer 的旧 `.env.soc-dev.local` 会被明确拒绝，
+的关键变量都存在且不是占位值。它同时拒绝旧 `PINGAN_LITELLM_*` model profile，并要求
+`config.pingan-dev.local` 明确使用项目 `4001` model-gateway 与独立 SQLite。未先执行 profile preparer
+的旧 `.env.soc-dev.local` 或旧 config 会被明确拒绝，
 这是预期保护，不是打包器故障。
 
 构建器会在 Git-ignored 的
@@ -471,10 +473,12 @@ Preflight 不发网络请求。外网只会因为真实内网 URL/credential 仍
 ```bash
 cd backend
 unset SOC_DATABASE_URL
-# DEER_FLOW_CONFIG_PATH -> database.backend: sqlite automatically resolves to
-# backend/.deer-flow/data/soc_agent_dev.db; migration creates missing parent dirs.
-./.venv/bin/python -m soc_agent.cli db upgrade
+./.venv/bin/python -m soc_agent.cli db upgrade \
+  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"
 ```
+
+这里显式使用 `soc_pingan_local_paths.py` 已导出的绝对路径，避免模型配置错误掩盖 SQLite 配置；
+migration 会创建缺失的父目录，且不会删除已有数据库。
 
 工具发现：
 
