@@ -63,6 +63,10 @@ not rely on `TARGET_REPO`, `SOC_REPO_ROOT`, or shell exports left by an earlier
 Runbook step.
 Do not instruct operators to replace JSON placeholders or edit generated private
 requests/config by hand when a bounded repository command can derive and validate them.
+Clean redeploy instructions must extract into staging first, invoke the old checkout's
+Host DEV `stop` command before deleting that checkout, and fail closed while any of
+`3000/8001/2026/4001/8090` is still listening. Never remove or move a running checkout:
+daemon processes can retain a deleted cwd and evade the replacement checkout's PID state.
 
 Large PingAn corpus artifacts are transferred separately, not embedded in either
 archive. The private overlay carries the matching corpus manifest/index, and

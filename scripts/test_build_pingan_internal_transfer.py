@@ -127,6 +127,11 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     )
     assert "$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl" in runbook
     assert "soc_pingan_stage_internal_corpus.py --apply" in runbook
+    assert "停止旧 Host DEV" in runbook
+    assert "for port in 3000 8001 2026 4001 8090" in runbook
+    assert runbook.index("soc_pingan_macos_host_dev.py stop") < runbook.index(
+        'rm -rf "$TARGET_REPO"'
+    )
     assert "三个 PKL 和 Workbench payload SQLite 不在 private overlay" in runbook
     assert "不需要额外 nginx/LAN hotfix" in runbook
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook

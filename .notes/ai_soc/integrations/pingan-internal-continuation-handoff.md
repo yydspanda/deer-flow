@@ -67,6 +67,9 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 - `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、corpus manifest/index、历史 EDR XLSX 及其已编译路径目录；不再携带三个大 PKL 或 Workbench payload SQLite，只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
 - `PINGAN-INTERNAL-MAC-RUNBOOK.md`：由构建器自动生成，固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令；不再手工维护时间戳，也不再携带独立 nginx/LAN hotfix。
+- 重部署必须先解压到 staging，再从旧 `$HOME/deer-flow` 执行 Host DEV `stop`；只有
+  `3000/8001/2026/4001/8090` 均无监听时才删除旧 checkout。不得先删除或移动运行中的目录，避免旧
+  Gateway/Nginx/模型网关/兼容 API 持有 deleted/Trash cwd 并继续占端口。
 
 当前目标 Mac 已具备 Python `3.12.7`、uv 和批准的内部包镜像，因此本次交付不再生成
 `deer-flow-pingan-macos-arm64-offline-*`。旧离线工具链脚本只保留为未来无 Python/无内部镜像机器的

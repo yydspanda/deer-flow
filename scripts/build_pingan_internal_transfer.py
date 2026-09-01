@@ -961,11 +961,36 @@ export TARGET_REPO="$HOME/deer-flow"
 export STAGE_DIR="$TRANSFER_DIR/extract"
 
 [ "$TARGET_REPO" = "$HOME/deer-flow" ] || exit 1
-rm -rf "$TARGET_REPO" "$STAGE_DIR"
+rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
 tar -xzf "$TRANSFER_DIR/{source_name}" -C "$STAGE_DIR"
 tar -xzf "$TRANSFER_DIR/{private_name}" -C "$STAGE_DIR"
+
+# 先停止旧 Host DEV。必须在删除旧 checkout 前执行，否则进程 cwd 会指向已删除目录。
+if [ -f "$TARGET_REPO/scripts/soc_pingan_macos_host_dev.py" ]; then
+  echo "停止旧 Host DEV..."
+  (
+    cd "$TARGET_REPO"
+    python3.12 scripts/soc_pingan_macos_host_dev.py stop
+  ) || exit 1
+fi
+
+# 不接管来源不明的监听进程；打印 PID/命令并停止部署。
+busy=0
+for port in 3000 8001 2026 4001 8090; do
+  if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "ERROR: TCP $port 仍被占用："
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN
+    busy=1
+  fi
+done
+[ "$busy" -eq 0 ] || {{
+  echo "请先停止上面列出的旧/外部进程，再重新执行本节；不要继续删除旧 checkout。"
+  exit 1
+}}
+
+rm -rf "$TARGET_REPO"
 mv "$STAGE_DIR/deer-flow-pingan-internal" "$TARGET_REPO"
 cd "$TARGET_REPO"
 
