@@ -321,6 +321,12 @@ The Host DEV driver starts this repository's model gateway at
 scene and upstream model. Do not start the old `sec_know_model`, LiteLLM,
 Celery, or Redis processes.
 
+The baseline model smoke matches the current SOC Runtime default: thinking is
+disabled and the bounded completion budget is 128 tokens. Its report must retain
+those requested settings even on failure. Enable thinking only for a separate
+capability check with an explicitly larger budget; do not conflate that optional
+check with basic EAGW connectivity.
+
 The legacy queue deadline remains deliberately narrow: only alert tasks with
 `executeType=1` or `executeType=3` use
 `SOC_PINGAN_LEGACY_QUEUE_TTL_SECONDS` (default `1800`). An expired alert does

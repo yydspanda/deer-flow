@@ -66,6 +66,9 @@ def test_prepare_legacy_model_gateway_env_writes_private_files_without_secret_re
     assert "PINGAN_LITELLM_" not in rendered
     assert "PINGAN_MODEL_GATEWAY_BASE_URL=http://127.0.0.1:4001/v1" in rendered
     assert "PINGAN_MODEL_GATEWAY_API_KEY=local-gateway-secret" in rendered
+    assert "PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED=false" in rendered
+    assert "PINGAN_MODEL_GATEWAY_SMOKE_MAX_TOKENS=128" in rendered
+    assert "SOC_LLM_THINKING_ENABLED=false" in rendered
     assert "SOC_PINGAN_MODEL_GATEWAY_PROVIDER=eagw" in rendered
     assert "SOC_PINGAN_MODEL_GATEWAY_SCENE_ID=1737" in rendered
     assert "SOC_PINGAN_LEGACY_LIFECYCLE_MODE=fake" in rendered

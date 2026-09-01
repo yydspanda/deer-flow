@@ -123,8 +123,11 @@ generic `soc_agent` code.
 - The internal model is accepted through the loopback OpenAI-compatible smoke in
   `backend/scripts/soc_pingan_model_gateway_smoke.py`. The loopback service is owned by
   this repository and maps the stable `deepseek-v4-flash` alias to an operator-owned
-  EAGW/OpenAI-compatible upstream. Reports must not retain keys, fixed
-  prompts/responses, or business payloads.
+  EAGW/OpenAI-compatible upstream. The baseline smoke must match the default SOC Runtime
+  mode (`thinking=false`) and use a bounded but sufficient completion budget; reasoning
+  capability is an explicit opt-in check, not part of basic connectivity. Success and
+  failure reports retain the requested thinking/effort/token settings but must not retain
+  keys, fixed prompts/responses, or business payloads.
 - Old ZEUS compatibility uses a separate PingAn API/worker composition over the generic
   `ProcessingJobRepository`: persist before accepting, claim with a lease, reuse the
   stable Runtime idempotency key after recovery, and commit terminal result plus Callback

@@ -46,6 +46,7 @@ class PingAnModelGatewaySmokeReport(BaseModel):
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
+    max_tokens_requested: int | None = Field(default=None, ge=1)
     thinking_requested: bool = False
     reasoning_effort_requested: str | None = None
     error_type: str | None = None
@@ -64,6 +65,9 @@ def run_pingan_model_gateway_smoke(
     started = monotonic()
     endpoint_path = "/v1/chat/completions"
     model = env.get("PINGAN_MODEL_GATEWAY_MODEL", "").strip()
+    max_tokens_requested: int | None = None
+    thinking_requested = False
+    reasoning_effort_requested: str | None = None
     try:
         endpoint_url, endpoint_path = _completion_endpoint(env.get("PINGAN_MODEL_GATEWAY_BASE_URL", ""))
         api_key = _required_non_placeholder(env, "PINGAN_MODEL_GATEWAY_API_KEY")
@@ -80,12 +84,19 @@ def run_pingan_model_gateway_smoke(
             env.get("PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED", "false"),
             name="PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED",
         )
-        reasoning_effort = env.get(
+        configured_reasoning_effort = env.get(
             "PINGAN_MODEL_GATEWAY_SMOKE_REASONING_EFFORT",
             "high",
         ).strip()
-        if len(reasoning_effort) > 32:
+        if len(configured_reasoning_effort) > 32:
             raise ValueError("PINGAN_MODEL_GATEWAY_SMOKE_REASONING_EFFORT is too long")
+        reasoning_effort_requested = configured_reasoning_effort if thinking_requested else None
+        max_tokens_requested = _positive_int(
+            env.get("PINGAN_MODEL_GATEWAY_SMOKE_MAX_TOKENS", "128"),
+            name="PINGAN_MODEL_GATEWAY_SMOKE_MAX_TOKENS",
+        )
+        if max_tokens_requested > 4096:
+            raise ValueError("PINGAN_MODEL_GATEWAY_SMOKE_MAX_TOKENS must not exceed 4096")
     except (TypeError, ValueError) as exc:
         return _failure_report(
             outcome="invalid_configuration",
@@ -94,19 +105,24 @@ def run_pingan_model_gateway_smoke(
             started=started,
             error_type=exc.__class__.__name__,
             error_message="PingAn model gateway smoke configuration is invalid.",
+            max_tokens_requested=max_tokens_requested,
+            thinking_requested=thinking_requested,
+            reasoning_effort_requested=reasoning_effort_requested,
         )
 
+    chat_template_kwargs: dict[str, Any] = {
+        "enable_thinking": thinking_requested,
+    }
+    if reasoning_effort_requested:
+        chat_template_kwargs["reasoning_effort"] = reasoning_effort_requested
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": _SMOKE_PROMPT}],
         "temperature": 0,
-        "max_tokens": 8,
+        "max_tokens": max_tokens_requested,
         "stream": False,
         "extra_body": {
-            "chat_template_kwargs": {
-                "enable_thinking": thinking_requested,
-                "reasoning_effort": reasoning_effort,
-            }
+            "chat_template_kwargs": chat_template_kwargs,
         },
     }
     owns_client = client is None
@@ -130,6 +146,9 @@ def run_pingan_model_gateway_smoke(
                 http_status=response.status_code,
                 error_type="HTTPStatusError",
                 error_message="PingAn model gateway rejected the configured credential.",
+                max_tokens_requested=max_tokens_requested,
+                thinking_requested=thinking_requested,
+                reasoning_effort_requested=reasoning_effort_requested,
             )
         if not 200 <= response.status_code < 300:
             return _failure_report(
@@ -140,6 +159,9 @@ def run_pingan_model_gateway_smoke(
                 http_status=response.status_code,
                 error_type="HTTPStatusError",
                 error_message="PingAn model gateway returned a non-success HTTP status.",
+                max_tokens_requested=max_tokens_requested,
+                thinking_requested=thinking_requested,
+                reasoning_effort_requested=reasoning_effort_requested,
             )
         if len(response.content) > max_response_bytes:
             raise ValueError("model gateway response exceeded the configured size limit")
@@ -153,6 +175,9 @@ def run_pingan_model_gateway_smoke(
             started=started,
             error_type=exc.__class__.__name__,
             error_message="PingAn model gateway chat completion timed out.",
+            max_tokens_requested=max_tokens_requested,
+            thinking_requested=thinking_requested,
+            reasoning_effort_requested=reasoning_effort_requested,
         )
     except httpx.HTTPError as exc:
         return _failure_report(
@@ -162,6 +187,9 @@ def run_pingan_model_gateway_smoke(
             started=started,
             error_type=exc.__class__.__name__,
             error_message="PingAn model gateway chat completion could not be reached.",
+            max_tokens_requested=max_tokens_requested,
+            thinking_requested=thinking_requested,
+            reasoning_effort_requested=reasoning_effort_requested,
         )
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         return _failure_report(
@@ -172,6 +200,9 @@ def run_pingan_model_gateway_smoke(
             http_status=response.status_code if "response" in locals() else None,
             error_type=exc.__class__.__name__,
             error_message="PingAn model gateway returned an invalid chat completion response.",
+            max_tokens_requested=max_tokens_requested,
+            thinking_requested=thinking_requested,
+            reasoning_effort_requested=reasoning_effort_requested,
         )
     finally:
         if owns_client:
@@ -194,8 +225,9 @@ def run_pingan_model_gateway_smoke(
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
         total_tokens=usage.get("total_tokens"),
+        max_tokens_requested=max_tokens_requested,
         thinking_requested=thinking_requested,
-        reasoning_effort_requested=reasoning_effort,
+        reasoning_effort_requested=reasoning_effort_requested,
     )
 
 
@@ -297,6 +329,9 @@ def _failure_report(
     error_type: str,
     error_message: str,
     http_status: int | None = None,
+    max_tokens_requested: int | None = None,
+    thinking_requested: bool = False,
+    reasoning_effort_requested: str | None = None,
 ) -> PingAnModelGatewaySmokeReport:
     return PingAnModelGatewaySmokeReport(
         outcome=outcome,
@@ -305,6 +340,9 @@ def _failure_report(
         model_requested=model,
         duration_ms=_elapsed_ms(started),
         http_status=http_status,
+        max_tokens_requested=max_tokens_requested,
+        thinking_requested=thinking_requested,
+        reasoning_effort_requested=reasoning_effort_requested,
         error_type=error_type,
         error_message=error_message,
     )

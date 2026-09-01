@@ -246,8 +246,9 @@ backend/.deer-flow/data/soc_agent_dev.db
    `SOC_PINGAN_LEGACY_CALLBACK_MODE=fake`，先运行
    `soc_pingan_legacy_fake_acceptance.py`；该命令自带无敏感合成协议夹具，不需要复制历史小 JSON；
    报告必须明确 `simulated=true`。
-2. 启动 Host DEV 后运行 `soc_pingan_model_gateway_smoke.py --confirm-live`；必须取得真实 completion，
-   `/health` 或 `/models` 不能替代。
+2. 启动 Host DEV 后运行 `soc_pingan_model_gateway_smoke.py --confirm-live`；基础连通性与当前 Runtime
+   默认一致，使用 `thinking=false` 和 128 Token 有界输出预算，必须取得真实 completion；`/health`
+   或 `/models` 不能替代。Thinking 能力另行显式验收，不阻塞该基础门禁。
 3. 选一条 ZEUS 中仍为“待研判”的已批准 DEV 告警，使用新的 `session_id`，把旧调用方实际发送的
    `app_code/flow_id/session_id/alert_id/alert_data` 保存到 `0600` 的 `.local.json`。
 4. 将 lifecycle/callback 两个 mode 同时改为 `internal` 并重启 Host DEV；不存在运行时 fake fallback。
@@ -374,7 +375,7 @@ SOC Runtime asset candidate
 
 - [x] 已审阅 `root_config` 和 LOCAL/DEV 环境选择；本地模型 gateway 为 OpenAI-compatible loopback endpoint。
 - [x] 项目模型网关、chat smoke 与不含正文/凭证的 `soc.pingan_model_gateway_smoke.v1` 报告已实现。
-- [ ] Host DEV 启动项目网关后取得 `model-gateway-smoke.json -> outcome=passed`；本地 `/health` 不能替代真实 EAGW completion 验收。
+- [ ] Host DEV 启动项目网关后取得 `model-gateway-smoke.json -> outcome=passed`、`thinking_requested=false`、`max_tokens_requested=128`；本地 `/health` 不能替代真实 EAGW completion 验收。
 - [x] preflight 强制 `SOC_PINGAN_ENV=dev`，并要求 ZEUS 与 Agent Platform 都使用显式 HTTPS host allowlist；不读取旧 `env_profile`。
 - [x] ZEUS signer 已在本项目内实现，不需要 import 整个旧 `util.util_tools`。
 - [x] Agent Platform wire contract 已提取为本项目自包含 HTTP client，不需要旧 Python 包、`PYTHONPATH`、Redis token manager 或 `run_workflow` import。

@@ -67,6 +67,7 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
         "PINGAN_MODEL_GATEWAY_API_KEY",
         "PINGAN_MODEL_GATEWAY_MODEL",
         "PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED",
+        "PINGAN_MODEL_GATEWAY_SMOKE_MAX_TOKENS",
         "SOC_PINGAN_MODEL_GATEWAY_ENABLED",
         "SOC_PINGAN_MODEL_GATEWAY_HOST",
         "SOC_PINGAN_MODEL_GATEWAY_PORT",
@@ -89,6 +90,7 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
         "SOC_PINGAN_MODEL_GATEWAY_MAX_REQUEST_BYTES",
         "SOC_ANALYZER_MODE",
         "SOC_LLM_MODEL",
+        "SOC_LLM_THINKING_ENABLED",
         "SOC_LLM_MAX_CONCURRENCY",
         "SOC_LLM_CALL_TIMEOUT_SECONDS",
         "SOC_PINGAN_COMPAT_ENABLED",
@@ -1095,7 +1097,9 @@ backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \\
   --report-path backend/.deer-flow/soc-internal-validation/model/model-gateway-smoke.json
 ```
 
-报告必须为 `outcome=passed`、`passed=true`；usage 缺失时允许记录为不可用，不得伪造 Token。
+基础连通性报告必须为 `outcome=passed`、`passed=true`、`thinking_requested=false`、
+`max_tokens_requested=128`；它与当前 SOC Runtime 默认模式一致。usage 缺失时允许记录为不可用，
+不得伪造 Token。Thinking 能力是独立的显式验收，不得用它阻塞基础连通性。
 
 然后验证真实旧 ZEUS 兼容闭环。先把一个仍处于“待研判”的已批准 DEV 告警保存为私有请求文件；
 必须使用新的 `session_id`，并保留旧调用方实际发送的完整 `alert_data`：
