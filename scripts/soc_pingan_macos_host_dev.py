@@ -19,17 +19,27 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-
-ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.soc_pingan_host_sidecars import (  # noqa: E402
-    HostDevSidecarError,
-    build_pingan_sidecar_specs,
-    sidecar_status,
-    start_sidecars,
-    stop_sidecars,
-)
+if __package__:
+    from .soc_pingan_host_sidecars import (  # noqa: E402
+        HostDevSidecarError,
+        build_pingan_sidecar_specs,
+        sidecar_status,
+        start_sidecars,
+        stop_sidecars,
+    )
+else:
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from soc_pingan_host_sidecars import (  # noqa: E402
+        HostDevSidecarError,
+        build_pingan_sidecar_specs,
+        sidecar_status,
+        start_sidecars,
+        stop_sidecars,
+    )
 
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +25,29 @@ from scripts.soc_pingan_macos_host_dev import (
     parse_version,
     resolve_start_allowed_origins,
 )
+
+
+def test_direct_script_entry_ignores_unrelated_installed_scripts_package(
+    tmp_path: Path,
+) -> None:
+    fake_package = tmp_path / "site-packages" / "scripts"
+    fake_package.mkdir(parents=True)
+    (fake_package / "__init__.py").write_text("", encoding="utf-8")
+    script = Path(__file__).with_name("soc_pingan_macos_host_dev.py")
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(fake_package.parent)
+
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Prepare and run PingAn SOC DEV" in completed.stdout
 
 
 def test_parse_version_accepts_tool_version_shapes() -> None:
