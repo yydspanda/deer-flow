@@ -359,6 +359,10 @@ and ensure its `app_code` has a matching key in
 submit/status/precheck/Runtime/callback gate:
 
 ```bash
+export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
   --confirm-live \
   --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
@@ -373,6 +377,10 @@ callback payload. Confirm the same result in the old ZEUS UI before expanding
 from one alert to 5, 50, and then the shadow corpus.
 
 ```bash
+export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
 export D12B_ASSET_KEY="<approved-internal-test-value>"
 
 backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \

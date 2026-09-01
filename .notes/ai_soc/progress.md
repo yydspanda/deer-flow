@@ -28,7 +28,7 @@
 - **Task:** `PI-01`
 - **Status:** `Done`
 - **Outcome:** 新增只读 AST profile preparer，从已审阅旧源码生成项目自有 EAGW 网关、旧 ZEUS ingress 与 `YHSYS` Workflow 的 Git-ignored 私有配置；RSA key 独立保存为 mode-`0600` private-overlay 文件。Transfer builder 拒绝旧 LiteLLM 环境变量/本地 model profile、占位值、宽权限 key、非 loopback 模型网关、非安全初始 lifecycle/callback 模式及不一致 app-key，并随包生成逐步内网安装、Fake、model smoke、live compatibility 与递进 shadow 手册。三个大 PKL 与 Workbench payload SQLite 改为内网既有数据，私有包只冻结 manifest/index；项目 staging 脚本在 Host DEV 前按 SHA-256/大小校验并以 `0600` 原子落位，数据库 migration 显式使用解析后的独立 SQLite 路径。
-- **Verification:** 真实旧源码 dry-run 不执行旧代码且 `secret_in_output=false`；staging dry-run/apply/missing/hash-mismatch 回归、兼容执行面/Host DEV/transfer 回归与自带无敏感合成夹具的 hermetic Fake E2E 通过，交付不再依赖 `datas/legacy_demos`。真实 EAGW、ZEUS 生命周期/回调和旧页面回读仍由内网 live acceptance 关闭。
+- **Verification:** 真实旧源码 dry-run 不执行旧代码且 `secret_in_output=false`；staging dry-run/apply/missing/hash-mismatch 回归、兼容执行面/Host DEV/transfer 回归与自带无敏感合成夹具的 hermetic Fake E2E 通过，交付不再依赖 `datas/legacy_demos`。Runbook 中每个加载本地配置的命令块会自行定位 checkout，不依赖前序终端状态。真实 EAGW、ZEUS 生命周期/回调和旧页面回读仍由内网 live acceptance 关闭。
 
 ### 2026-09-01 — Legacy ZEUS compatibility execution plane
 

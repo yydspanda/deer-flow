@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import tarfile
 from pathlib import Path
 
@@ -134,6 +135,19 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "soc_pingan_legacy_live_acceptance.py" in runbook
     assert "soc_pingan_prepare_legacy_model_gateway_profile.py" in runbook
     assert ".secrets/eagw-private-key.der" in runbook
+    local_env_blocks = [
+        block
+        for block in re.findall(r"```bash\n(.*?)```", runbook, flags=re.DOTALL)
+        if "source ./.env.soc-dev.local" in block
+    ]
+    assert len(local_env_blocks) == 3
+    for block in local_env_blocks:
+        assert 'export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"' in block
+        assert 'cd "$TARGET_REPO"' in block
+        assert (
+            'eval "$(backend/.venv/bin/python '
+            'backend/scripts/soc_pingan_local_paths.py --shell)"' in block
+        )
     assert "proves_real_internal_connectivity=true" in runbook
     assert "task-request.local.json" in runbook
     assert 'shasum -a 256 \\\n  "deer-flow-pingan-source' in runbook

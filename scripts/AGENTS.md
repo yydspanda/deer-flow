@@ -51,6 +51,12 @@ in the private overlay, and must never enter the source archive or report. Build
 from a clean commit and inspect both archives before replacing the previous
 `READY-TO-TRANSFER` contents.
 
+Generated transfer Runbook command blocks must be independently copyable. Any
+block that sources `.env.soc-dev.local` must first resolve the current checkout
+with `backend/scripts/soc_pingan_local_paths.py --shell` in that same block; do
+not rely on `TARGET_REPO`, `SOC_REPO_ROOT`, or shell exports left by an earlier
+Runbook step.
+
 Large PingAn corpus artifacts are transferred separately, not embedded in either
 archive. The private overlay carries the matching corpus manifest/index, and
 `scripts/soc_pingan_stage_internal_corpus.py` must validate every source file under

@@ -275,8 +275,11 @@ SOC_PINGAN_LEGACY_CALLBACK_MODE=internal
 重启并执行：
 
 ```bash
+export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
+cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \

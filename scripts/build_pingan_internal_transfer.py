@@ -1028,6 +1028,8 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 初始化 SOC SQLite：
 
 ```bash
+export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+cd "$TARGET_REPO"
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 unset SOC_DATABASE_URL
@@ -1084,6 +1086,9 @@ Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机�
 服务启动后执行无业务数据的真实模型 smoke：
 
 ```bash
+export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \\
   --confirm-live \\
@@ -1112,8 +1117,11 @@ SOC_PINGAN_LEGACY_CALLBACK_MODE=internal
 ```
 
 ```bash
+export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
   --confirm-live \\
