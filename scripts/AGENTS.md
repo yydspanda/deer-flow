@@ -36,6 +36,11 @@ scripts are reference material, not Host DEV dependencies.
 composition check and must always report `simulated=true`. It constructs its own
 value-free protocol fixture and must not depend on `datas/legacy_demos`, PKL files, or
 private alert input. The separate
+`soc_pingan_prepare_legacy_live_request.py` accepts one approved pending alert ID,
+reads the complete payload from the hash-bound Workbench payload store, creates a
+fresh session, and atomically writes the private request at mode `0600`; operators
+must not copy/edit the tracked protocol example. `soc_pingan_set_legacy_provider_mode.py`
+must update lifecycle and callback together without printing the private env. The separate
 `soc_pingan_legacy_live_acceptance.py` accepts only a private mode-`0600`
 `*.local.json`, loopback compatibility API, explicit `--confirm-live`, and both
 provider modes set to `internal`. Its pass gate requires a fresh durable job,
@@ -56,6 +61,8 @@ block that sources `.env.soc-dev.local` must first resolve the current checkout
 with `backend/scripts/soc_pingan_local_paths.py --shell` in that same block; do
 not rely on `TARGET_REPO`, `SOC_REPO_ROOT`, or shell exports left by an earlier
 Runbook step.
+Do not instruct operators to replace JSON placeholders or edit generated private
+requests/config by hand when a bounded repository command can derive and validate them.
 
 Large PingAn corpus artifacts are transferred separately, not embedded in either
 archive. The private overlay carries the matching corpus manifest/index, and

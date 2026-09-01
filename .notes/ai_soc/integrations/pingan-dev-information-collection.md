@@ -288,7 +288,7 @@ backend/.deer-flow/data/soc_agent_dev.db
 | `direct-provider-cases.json` | No by default | `soc.pingan_asset_case_matrix_report.v1`；只含 query hash、latency、attempt/error 分类，不含 raw query/UM/Provider body/override value |
 | `evidence-readback.json` | No by default | `soc.pingan_d12b_evidence_acceptance.v1`；只含 ID/hash/check/error type，证明 MCP/Dispatcher/evidence/shared context 和 Run/Review 不变式，不含 raw lookup/result |
 | `model-gateway-smoke.json` | Yes after review | 固定无业务 prompt 的连通性报告；只含模型、状态、latency、token、文本长度/hash，不含 key 或模型原文 |
-| `legacy-compat/task-request.local.json` | No | 一条仍为待研判的批准告警，保持旧 task 请求形态并使用唯一 session；权限 `0600`，不进源码包 |
+| `legacy-compat/task-request.local.json` | No | 请求准备器根据一个获批 pending `alert_id` 从 Workbench payload store 自动生成完整旧 task 请求和唯一 session；权限 `0600`，不手工编辑，不进源码包 |
 | `legacy-compat/live-acceptance.json` | Yes after review | `soc.pingan_legacy_live_acceptance.v1`；只含请求/结果 hash、任务状态、Runtime/precheck/callback 证明和耗时，不含正文或凭证 |
 
 ## 8. Implementation Order After Collection / 收集后的实现顺序

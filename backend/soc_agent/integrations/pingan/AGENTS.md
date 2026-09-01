@@ -145,6 +145,11 @@ generic `soc_agent` code.
   replay returns one job, read non-mocked lifecycle evidence and Runtime lineage from the
   same database, and require a delivered non-mocked callback attempt. Never place the
   request, result, callback payload, or app key in its report.
+- Prepare that live request through the PingAn request-preparation boundary: the operator
+  supplies only the approved pending `alert_id`; the boundary verifies the frozen
+  Workbench index/payload-store identity, preserves the complete `alert_data`, creates a
+  fresh session, and writes a mode-`0600` local file. Do not require manual JSON editing.
+  Lifecycle/callback provider modes must be switched together by the governed mode command.
 - The model gateway currently uses one process-local capacity semaphore; launch exactly
   one gateway process. Scale processing workers only after the internal model service has
   a reviewed shared admission mechanism or measured capacity increase.

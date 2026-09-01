@@ -2124,6 +2124,11 @@ LessonRule
   legacy allowed-key set，`app_code` 是业务路由/持久元数据/幂等字段，不是 credential selector。
   `alert_data` 必须保留旧调用方发送的完整对象，不能转换成 `message` 字符串；鉴权必须先于任务存在性
   查询，端口仍受 Host DEV/private deployment 与来源网络限制。
+- 旧协议 live acceptance 的私有请求不得由操作员复制示例后手工替换 JSON。PingAn 请求准备器只接收
+  人工批准的 pending `alert_id`，验证 Workbench index/payload-store 的 schema、SHA-256、大小、
+  source index、payload hash、快照状态与内外层 ID，自动生成 fresh session 和 mode-`0600`
+  `.local.json`；其报告禁止包含业务正文。Lifecycle/callback mode 必须由同一配置命令成对切换，
+  任一 key 缺失、重复或不可解析时 fail closed。
 
 ## 八、事件与通信规范
 

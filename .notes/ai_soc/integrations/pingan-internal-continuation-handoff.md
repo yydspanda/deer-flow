@@ -249,10 +249,11 @@ backend/.deer-flow/data/soc_agent_dev.db
 2. 启动 Host DEV 后运行 `soc_pingan_model_gateway_smoke.py --confirm-live`；基础连通性与当前 Runtime
    默认一致，使用 `thinking=false` 和 128 Token 有界输出预算，必须取得真实 completion；`/health`
    或 `/models` 不能替代。Thinking 能力另行显式验收，不阻塞该基础门禁。
-3. 选一条 ZEUS 中仍为“待研判”的已批准 DEV 告警，保持旧调用方的
-   `app_code=zeus`、`flow_id=alert_agent`，使用新的 `session_id`，把完整 `alert_data` 对象保存到
-   `0600` 的 `.local.json`。
-4. 将 lifecycle/callback 两个 mode 同时改为 `internal` 并重启 Host DEV；不存在运行时 fake fallback。
+3. 选一条 ZEUS 中仍为“待审阅”的已批准 DEV 告警，只向请求准备器输入 `alert_id`；脚本从
+   Workbench payload store 提取完整 `alert_data`、生成新的 `session_id`，并写入 `0600` 的
+   `.local.json`。
+4. 用 Provider-mode 命令把 lifecycle/callback 同时改为 `internal` 并重启 Host DEV；不存在运行时
+   fake fallback，也不手工编辑私有环境文件。
 5. 运行 live acceptance；它会提交同一请求两次验证幂等，只产生一个 Job，然后轮询旧 status 接口，
    最后从同一 SOC DB 核对真实 precheck、Runtime run、Callback Outbox 与 append-only attempt。
 6. 在旧 ZEUS 页面核对结果已回写、任务状态一致且没有重复结果；脚本通过不能替代页面 readback。
@@ -260,20 +261,22 @@ backend/.deer-flow/data/soc_agent_dev.db
 准备私有请求：
 
 ```bash
-mkdir -p backend/.deer-flow/soc-internal-validation/legacy-compat
-cp backend/samples/pingan_dev/legacy-task-request.example.json \
-  backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
-chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
+cd "$TARGET_REPO"
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_prepare_legacy_live_request.py \
+  --overwrite
 ```
 
-替换文件中全部 placeholder，并将示例 `alert_data` **整个对象**替换为旧调用方实际发送的完整对象，
-不能把完整 JSON 串塞进 `alert.message`。`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 的 value 是旧协议允许的
-Bearer/`app-key` 集合；映射标签（当前旧配置为 `common`）不要求等于请求 `app_code=zeus`。
-随后编辑 `.env.soc-dev.local`：
+请求准备器固定旧调用值 `app_code=zeus`、`flow_id=alert_agent`，并校验索引、payload SQLite、
+快照状态、内外层 ID、Hash 和大小；任何校验失败都不写请求。`SOC_PINGAN_COMPAT_APP_KEYS_JSON`
+的 value 是旧协议允许的 Bearer/`app-key` 集合；映射标签（当前旧配置为 `common`）不要求等于请求
+`app_code=zeus`。随后直接切换两个 Provider：
 
-```text
-SOC_PINGAN_LEGACY_LIFECYCLE_MODE=internal
-SOC_PINGAN_LEGACY_CALLBACK_MODE=internal
+```bash
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_set_legacy_provider_mode.py \
+  --mode internal
 ```
 
 重启并执行：
@@ -306,6 +309,8 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
 
 报告不包含 App Key、告警正文、模型正文或回调 payload，只保留哈希、状态、耗时和审计结论。
 `FAILURE`、已经被处理、排队过期、unknown lifecycle、fake callback 都是有价值的负例，但不能关闭本门禁。
+若真实 precheck 发现语料快照中的待审阅告警现已处理，Worker 会在模型调用前停止；重新运行请求准备器并
+输入另一个当前待审阅 ID，不得删除该门禁。
 
 单条通过后按 `5 -> 50 -> 200/5000+` 扩容，不直接全量：
 

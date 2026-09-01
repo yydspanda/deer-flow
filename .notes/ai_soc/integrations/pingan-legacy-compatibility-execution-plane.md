@@ -153,7 +153,7 @@ Base Decision
 | `PI-01H3` | Worker 与 `SocAnalysisService` 组合 | fake ZEUS 下 submit -> status -> analysis -> callback E2E；崩溃恢复不重复模型调用 |
 | `PI-01H4` | 项目自有模型网关和 `deepseek-v4-flash` 容量门 | OpenAI-compatible smoke；并发上限、超时、usage 降级 |
 | `PI-01H5` | macOS host DEV 与离线交付更新 | 无 Docker 启动；fake 全链通过；内网只替换 private overlay |
-| `PI-01H6` | 旧协议 live acceptance 与脱敏证据报告 | fresh submit、幂等 replay、真实 pending precheck、Runtime lineage、真实 delivered callback 同时通过 |
+| `PI-01H6` | 自动请求准备、Provider-mode 切换、旧协议 live acceptance 与脱敏证据报告 | 只输入获批 pending `alert_id`；完整 payload 自动装配；fresh submit、幂等 replay、真实 pending precheck、Runtime lineage、真实 delivered callback 同时通过 |
 
 ## 10. Implementation Status / 实现状态
 
@@ -176,6 +176,10 @@ Base Decision
 - `soc_pingan_legacy_live_acceptance.py` 只接收 mode-`0600` 的私有 `.local.json` 和 loopback API，
   显式验证 fresh submit、重复请求只产生一个 Job、非 mock lifecycle、Runtime run/model、Outbox 与
   delivered non-mock callback attempt；输出只有哈希、状态和耗时，不含业务正文或凭证。
+- `soc_pingan_prepare_legacy_live_request.py` 根据人工选择的 pending `alert_id` 从 SHA-256 绑定的
+  Workbench payload store 读取完整 `alert_data`，自动生成旧 `zeus/alert_agent` 请求和新 session；
+  `soc_pingan_set_legacy_provider_mode.py` 原子地成对切换 lifecycle/callback，不要求操作员编辑 JSON
+  或私有 env。
 
 外网完成表示代码和失败语义可交付，不表示 PingAn 真实依赖已验收。进入内网后不改 core contract，
 只注入 private overlay 并按下一节关闭真实门禁。

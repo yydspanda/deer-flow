@@ -191,7 +191,9 @@ def test_tracked_legacy_request_example_keeps_old_zeus_wire_shape() -> None:
 
     assert sample["app_code"] == "zeus"
     assert sample["flow_id"] == "alert_agent"
-    assert list(sample["alert_data"]) == ["<replace-entire-alert_data-object-with-approved-complete-payload>"]
+    assert sample["alert_id"] == "EXAMPLE-NOT-FOR-LIVE"
+    assert sample["alert_data"]["alert"]["alertId"] == sample["alert_id"]
+    assert sample["alert_data"]["example_only"] is True
     assert "message" not in sample["alert_data"]
 
 

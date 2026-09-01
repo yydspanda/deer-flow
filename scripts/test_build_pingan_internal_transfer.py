@@ -91,6 +91,8 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "backend/scripts/soc_pingan_legacy_api.py" in required
     assert "backend/scripts/soc_pingan_legacy_worker.py" in required
     assert "backend/scripts/soc_pingan_legacy_fake_acceptance.py" in required
+    assert "backend/scripts/soc_pingan_prepare_legacy_live_request.py" in required
+    assert "backend/scripts/soc_pingan_set_legacy_provider_mode.py" in required
     assert (
         "backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py" in required
     )
@@ -135,6 +137,13 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "无敏感合成协议夹具" in runbook
     assert "不读取历史小 JSON" in runbook
     assert "soc_pingan_legacy_live_acceptance.py" in runbook
+    assert "soc_pingan_prepare_legacy_live_request.py" in runbook
+    assert "soc_pingan_set_legacy_provider_mode.py" in runbook
+    assert "手工编辑请求 JSON" in runbook
+    assert "编辑该文件并替换全部 placeholder" not in runbook
+    assert (
+        "cp backend/samples/pingan_dev/legacy-task-request.example.json" not in runbook
+    )
     assert "soc_pingan_prepare_legacy_model_gateway_profile.py" in runbook
     assert ".secrets/eagw-private-key.der" in runbook
     local_env_blocks = [

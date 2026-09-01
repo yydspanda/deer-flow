@@ -7,7 +7,7 @@
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
 - **Current Objective:** `PI-01H` 外网实现与内网交付契约已冻结；下一阶段只注入 PingAn private overlay，关闭真实 EAGW、ZEUS 生命周期/回调、旧页面回读和容量门禁，不改通用 Runtime 契约。
-- **Next Gate:** 在内网 Apple Silicon DEV 用修正后的正式 smoke 留存 EAGW completion 报告，再以旧调用值 `app_code=zeus`、`flow_id=alert_agent` 和完整 `alert_data` 运行 live acceptance，关闭 ZEUS task/status/precheck/callback 门禁；随后完成旧页面回读、告警 `1 -> 5 -> 50 -> 200/5000+` 递进 shadow，以及模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
+- **Next Gate:** 在内网 Apple Silicon DEV 留存已通过的 EAGW completion 报告；随后只输入一个获批 pending `alert_id`，由请求准备器自动装配旧 `zeus/alert_agent` 完整请求并运行 live acceptance，关闭 ZEUS task/status/precheck/callback 门禁；再完成旧页面回读、告警 `1 -> 5 -> 50 -> 200/5000+` 递进 shadow，以及模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-01`
 
@@ -27,8 +27,8 @@
 
 - **Task:** `PI-01`
 - **Status:** `Done`
-- **Outcome:** 新增只读 AST profile preparer，从已审阅旧源码生成项目自有 EAGW 网关、旧 ZEUS ingress 与 `YHSYS` Workflow 的 Git-ignored 私有配置；RSA key 独立保存为 mode-`0600` private-overlay 文件。Transfer builder 拒绝旧 LiteLLM 环境变量/本地 model profile、占位值、宽权限 key、非 loopback 模型网关、非安全初始 lifecycle/callback 模式及不一致 app-key，并随包生成逐步内网安装、Fake、model smoke、live compatibility 与递进 shadow 手册。三个大 PKL 与 Workbench payload SQLite 改为内网既有数据，私有包只冻结 manifest/index；项目 staging 脚本在 Host DEV 前按 SHA-256/大小校验并以 `0600` 原子落位，数据库 migration 显式使用解析后的独立 SQLite 路径。旧源码复核进一步确认 `8090` 对 Bearer/`app-key` 使用全局 allowed-key-set 语义，`app_code=zeus` 只属于业务请求；兼容入口、live runner、示例与 Runbook 已按真实 wire contract 修正。
-- **Verification:** 真实旧源码 dry-run 不执行旧代码且 `secret_in_output=false`；staging dry-run/apply/missing/hash-mismatch 回归、兼容执行面/Host DEV/transfer 回归与自带无敏感合成夹具的 hermetic Fake E2E 通过，交付不再依赖 `datas/legacy_demos`。Runbook 中每个加载本地配置的命令块会自行定位 checkout，不依赖前序终端状态。内网手工无业务请求已证明 EAGW 非推理 completion 与 usage 可用，并暴露原 Smoke 的 8 Token/误报参数问题；基线已改为与 Runtime 一致的 `thinking=false`、128 Token。允许集合鉴权、鉴权先于任务存在性、旧 `zeus/alert_agent` 请求形态及歧义密钥 fail-closed 均有聚焦回归；正式内网 model/live 报告、ZEUS 生命周期/回调和旧页面回读仍待关闭。
+- **Outcome:** 新增只读 AST profile preparer，从已审阅旧源码生成项目自有 EAGW 网关、旧 ZEUS ingress 与 `YHSYS` Workflow 的 Git-ignored 私有配置；RSA key 独立保存为 mode-`0600` private-overlay 文件。Transfer builder 拒绝旧 LiteLLM 环境变量/本地 model profile、占位值、宽权限 key、非 loopback 模型网关、非安全初始 lifecycle/callback 模式及不一致 app-key，并随包生成逐步内网安装、Fake、model smoke、live compatibility 与递进 shadow 手册。三个大 PKL 与 Workbench payload SQLite 改为内网既有数据，私有包只冻结 manifest/index；项目 staging 脚本在 Host DEV 前按 SHA-256/大小校验并以 `0600` 原子落位，数据库 migration 显式使用解析后的独立 SQLite 路径。旧源码复核进一步确认 `8090` 对 Bearer/`app-key` 使用全局 allowed-key-set 语义，`app_code=zeus` 只属于业务请求。新增 live-request preparer：操作员只输入获批 pending `alert_id`，脚本从 hash-bound payload store 保留完整 `alert_data`、生成 fresh session 和 `0600` 请求；lifecycle/callback mode 也由独立命令成对切换，不再手工编辑 JSON/env。
+- **Verification:** 真实旧源码 dry-run 不执行旧代码且 `secret_in_output=false`；staging dry-run/apply/missing/hash-mismatch 回归、兼容执行面/Host DEV/transfer 回归与自带无敏感合成夹具的 hermetic Fake E2E 通过，交付不再依赖 `datas/legacy_demos`。Runbook 中每个加载本地配置的命令块会自行定位 checkout，不依赖前序终端状态。内网手工无业务请求已证明 EAGW 非推理 completion 与 usage 可用，并暴露原 Smoke 的 8 Token/误报参数问题；基线已改为与 Runtime 一致的 `thinking=false`、128 Token。允许集合鉴权、鉴权先于任务存在性、旧 `zeus/alert_agent` 请求形态及歧义密钥 fail-closed 均有聚焦回归。请求准备器已用真实 4343 条 Workbench store 中的告警验证完整 payload、ID/hash/status 与权限，Provider mode updater 验证成对原子切换；新增 7 项聚焦回归，兼容/live 回归与 transfer Runbook 回归通过。正式内网 live 报告、ZEUS 生命周期/回调和旧页面回读仍待关闭。
 
 ### 2026-09-01 — Legacy ZEUS compatibility execution plane
 

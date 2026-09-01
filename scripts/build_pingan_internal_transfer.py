@@ -180,6 +180,8 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/scripts/soc_pingan_legacy_worker.py",
     "backend/scripts/soc_pingan_legacy_fake_acceptance.py",
     "backend/scripts/soc_pingan_legacy_live_acceptance.py",
+    "backend/scripts/soc_pingan_prepare_legacy_live_request.py",
+    "backend/scripts/soc_pingan_set_legacy_provider_mode.py",
     "backend/scripts/soc_pingan_security_tag_mcp_server.py",
     "backend/scripts/soc_pingan_threat_intel_mcp_server.py",
     "backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py",
@@ -202,6 +204,8 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/integrations/pingan/legacy_compat/contracts.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/execution.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/live_acceptance.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/provider_mode.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/request_preparation.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/result_mapper.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/service.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/worker.py",
@@ -1101,25 +1105,33 @@ backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \\
 `max_tokens_requested=128`；它与当前 SOC Runtime 默认模式一致。usage 缺失时允许记录为不可用，
 不得伪造 Token。Thinking 能力是独立的显式验收，不得用它阻塞基础连通性。
 
-然后验证真实旧 ZEUS 兼容闭环。先把一个仍处于“待研判”的已批准 DEV 告警保存为私有请求文件；
-必须使用新的 `session_id`，并保留旧调用方实际发送的完整 `alert_data`：
+然后验证真实旧 ZEUS 兼容闭环。运行请求准备器，并在提示后只输入一个获批且当前仍处于
+“待审阅”的 ZEUS `alert_id`：
 
 ```bash
-mkdir -p backend/.deer-flow/soc-internal-validation/legacy-compat
-cp backend/samples/pingan_dev/legacy-task-request.example.json \\
-  backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
-chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+cd "$TARGET_REPO"
+backend/.venv/bin/python \\
+  backend/scripts/soc_pingan_prepare_legacy_live_request.py \\
+  --overwrite
 ```
 
-保留旧调用值 `app_code=zeus`、`flow_id=alert_agent`，编辑该文件并替换全部 placeholder；必须把
-示例 `alert_data` **整个对象**替换为旧调用方发送的完整对象，不能把完整 JSON 串塞进
-`alert.message`。`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 的 value 构成旧协议允许的 Bearer/`app-key`
-集合，映射标签（当前为 `common`）不要求等于 `app_code`。随后在 `.env.soc-dev.local` 中将以下两项从
-`fake` 改为 `internal`，停止并重新启动 Host DEV，使 Worker 真正读取新配置：
+脚本会从已落位且与索引 SHA-256 绑定的 Workbench payload SQLite 读取该 ID 的完整
+`alert_full_data.alert_data`，校验快照状态和内外层 ID，自动写入 `app_code=zeus`、
+`flow_id=alert_agent` 和新的 `session_id`，再以原子方式生成权限为 `0600` 的
+`backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json`。不需要、也不允许
+手工编辑请求 JSON；报告只输出 ID、Hash、大小和状态，不输出告警正文。
 
-```text
-SOC_PINGAN_LEGACY_LIFECYCLE_MODE=internal
-SOC_PINGAN_LEGACY_CALLBACK_MODE=internal
+`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 的 value 构成旧协议允许的 Bearer/`app-key` 集合，映射标签
+（当前为 `common`）不要求等于 `app_code`。随后用下面的可复制命令把两个 Provider mode 从
+`fake` 切换为 `internal`，无需打开 `.env.soc-dev.local`：
+
+```bash
+export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+cd "$TARGET_REPO"
+backend/.venv/bin/python \\
+  backend/scripts/soc_pingan_set_legacy_provider_mode.py \\
+  --mode internal
 ```
 
 ```bash
@@ -1140,7 +1152,20 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
 `callback_status=delivered`、`callback_mocked=false` 和
 `proves_real_internal_connectivity=true`，才证明 `8090 submit -> ZEUS precheck -> Runtime/LLM ->
 status -> ZEUS callback` 真实闭环。脚本不会输出告警正文、App Key 或回调正文；随后仍须在旧 ZEUS 页面
-核对回写结果可见且任务状态一致。
+核对回写结果可见且任务状态一致。如果真实 ZEUS precheck 表明这条快照告警已经被处理，验收会在
+模型调用前 fail closed；重新运行请求准备器并输入另一个当前待审阅 ID 即可。
+
+单条真实验收结束且暂不继续测试时，用下面命令恢复 fake Provider 并重启，避免后续演练误触真实回调：
+
+```bash
+export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+cd "$TARGET_REPO"
+backend/.venv/bin/python \\
+  backend/scripts/soc_pingan_set_legacy_provider_mode.py \\
+  --mode fake
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+```
 
 `--demo-no-auth` 仅用于可信内网演示：页面跳过注册/登录，所有访问者共享一个合成管理员身份，
 因此不能区分个人审计 actor。需要验收账号与权限时，先停止服务，再去掉该参数启动；无需改代码或数据库：

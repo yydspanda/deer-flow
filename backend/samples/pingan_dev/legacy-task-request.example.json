@@ -1,9 +1,17 @@
 {
   "app_code": "zeus",
   "flow_id": "alert_agent",
-  "session_id": "<unique-live-acceptance-session-id>",
-  "alert_id": "<approved-pending-alert-id>",
+  "session_id": "example-only-not-for-live-use",
+  "alert_id": "EXAMPLE-NOT-FOR-LIVE",
   "alert_data": {
-    "<replace-entire-alert_data-object-with-approved-complete-payload>": null
+    "alert": {
+      "alertId": "EXAMPLE-NOT-FOR-LIVE",
+      "status": "待审阅",
+      "executeType": 0,
+      "hitLog": []
+    },
+    "relatedAlertList": [],
+    "tenant_id": "pingan",
+    "example_only": true
   }
 }

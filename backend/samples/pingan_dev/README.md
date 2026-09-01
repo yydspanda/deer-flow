@@ -25,6 +25,9 @@ redacted there.
 - `d12b-test-cases.example.yaml`: value-free seven-case D12-B matrix. Copy it
   into the ignored internal validation directory and replace every placeholder
   before live execution.
+- `legacy-task-request.example.json`: protocol documentation only. Operators do
+  not copy or edit it; the request-preparation command reads the complete staged
+  payload and creates the private request automatically.
 - `../../soc_agent/integrations/pingan/zeus_signing.py`: self-contained copy of
   the reviewed ZEUS signing protocol, without the legacy module's default key or
   import-time dependencies.
@@ -350,22 +353,32 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_fake_acceptance.py
 ```
 
 That report is intentionally `simulated=true`. After the model gateway smoke
-passes, prepare one approved alert that is still pending in ZEUS:
+passes, run the request preparer and enter only one approved alert ID whose
+staged snapshot is still pending review:
 
 ```bash
-mkdir -p backend/.deer-flow/soc-internal-validation/legacy-compat
-cp backend/samples/pingan_dev/legacy-task-request.example.json \
-  backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
-chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_prepare_legacy_live_request.py \
+  --overwrite
 ```
 
-Keep the old caller values `app_code=zeus` and `flow_id=alert_agent`, replace
-the **entire** example `alert_data` object with the complete approved payload,
-and use a new `session_id`. The Bearer/`app-key` value must be one of the values
-allowed by `SOC_PINGAN_COMPAT_APP_KEYS_JSON`; its map label does not need to
-equal `app_code`. Then set both legacy provider modes to
-`internal` in `.env.soc-dev.local` and restart Host DEV. Run the real
-submit/status/precheck/Runtime/callback gate:
+The command reads the complete `alert_full_data.alert_data` object from the
+hash-bound Workbench payload store, validates the snapshot status and nested ID,
+generates a fresh session, and writes a mode-0600 `task-request.local.json`.
+No request JSON editing is allowed. The Bearer/`app-key` value must be one of the
+values allowed by `SOC_PINGAN_COMPAT_APP_KEYS_JSON`; its map label does not need
+to equal `app_code`. Switch both legacy providers together without opening the
+private environment file, then restart Host DEV:
+
+```bash
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_set_legacy_provider_mode.py \
+  --mode internal
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+```
+
+Run the real submit/status/precheck/Runtime/callback gate:
 
 ```bash
 export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
@@ -383,7 +396,9 @@ returns the same task, the Runtime produces a run and model name, the lifecycle
 check is real and pending, and the real callback has a delivered append-only
 attempt. It stores hashes and statuses, never the request, result, app key, or
 callback payload. Confirm the same result in the old ZEUS UI before expanding
-from one alert to 5, 50, and then the shadow corpus.
+from one alert to 5, 50, and then the shadow corpus. If the live ZEUS precheck
+shows that the selected snapshot has already been handled, prepare another ID;
+the worker stops before the model call rather than processing stale work.
 
 ```bash
 export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
