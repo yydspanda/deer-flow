@@ -21,6 +21,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 TRANSFER_ROOT = ROOT / "backend/.deer-flow/internal-transfer"
 DEFAULT_OUTPUT_DIR = TRANSFER_ROOT / "READY-TO-TRANSFER"
+TRANSFER_INSTALLER_NAME = "INSTALL-PINGAN-MAC.sh"
 TRANSFER_RUNBOOK_NAME = "PINGAN-INTERNAL-MAC-RUNBOOK.md"
 ARCHIVE_ROOT = "deer-flow-pingan-internal"
 MANIFEST_SCHEMA_VERSION = "soc.pingan_internal_transfer_manifest.v1"
@@ -346,6 +347,14 @@ def build_transfer_archives(
             private_manifest,
         )
 
+    installer_path = output_dir / TRANSFER_INSTALLER_NAME
+    _write_private_text(
+        installer_path,
+        _transfer_installer(archives=archives),
+    )
+    installer_path.chmod(0o700)
+    installer = _sidecar_result(installer_path)
+
     report_path = output_dir / f"transfer-report-{timestamp}.json"
     runbook_path = output_dir / TRANSFER_RUNBOOK_NAME
     _write_private_text(
@@ -355,6 +364,7 @@ def build_transfer_archives(
             git_info=git_info,
             archives=archives,
             report_name=report_path.name,
+            installer=installer,
         ),
     )
     report = {
@@ -362,6 +372,7 @@ def build_transfer_archives(
         "created_at": datetime.now(UTC).isoformat(),
         "output_directory": str(output_dir),
         "archives": archives,
+        "installer": installer,
         "runbook": _sidecar_result(runbook_path),
         "source_worktree_dirty": git_info["worktree_dirty"],
         "required_source_file_count": len(REQUIRED_HANDOFF_SOURCE_PATHS),
@@ -872,17 +883,162 @@ def _is_unresolved_private_value(value: str) -> bool:
     )
 
 
+def _transfer_installer(*, archives: dict[str, Any]) -> str:
+    source = archives["source"]
+    private = archives.get("private_overlay")
+    source_name = Path(str(source["path"])).name
+    source_sha = str(source["sha256"])
+    if private is None:
+        private_name = "<private-overlay-not-built>"
+        private_sha = "<unavailable>"
+        private_ready = "false"
+    else:
+        private_name = Path(str(private["path"])).name
+        private_sha = str(private["sha256"])
+        private_ready = "true"
+    return f"""#!/usr/bin/env bash
+if [[ "${{BASH_SOURCE[0]}}" != "$0" ]]; then
+  printf '%s\n' "ERROR: do not source this installer; run: bash ${{BASH_SOURCE[0]}}" >&2
+  return 2
+fi
+
+set -euo pipefail
+
+fail() {{
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}}
+
+require_command() {{
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}}
+
+verify_archive() {{
+  local archive="$1"
+  local expected="$2"
+  local digest_line
+  local actual
+  [[ -f "$archive" ]] || fail "transfer artifact not found: $archive"
+  digest_line="$(shasum -a 256 "$archive")" || fail "cannot hash: $archive"
+  actual="${{digest_line%% *}}"
+  [[ "$actual" == "$expected" ]] || fail "SHA-256 mismatch: $archive"
+}}
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${{BASH_SOURCE[0]}}")" && pwd -P)"
+TRANSFER_DIR="$SCRIPT_DIR"
+TARGET_REPO="$HOME/deer-flow"
+SOURCE_ARCHIVE="$TRANSFER_DIR/{source_name}"
+PRIVATE_ARCHIVE="$TRANSFER_DIR/{private_name}"
+SOURCE_SHA256="{source_sha}"
+PRIVATE_SHA256="{private_sha}"
+PRIVATE_OVERLAY_READY="{private_ready}"
+
+[[ "$PRIVATE_OVERLAY_READY" == "true" ]] || \
+  fail "this is a source-only package; build and transfer the private overlay first"
+
+for command_name in tar shasum lsof python3.12 mktemp mv chmod; do
+  require_command "$command_name"
+done
+
+echo "[1/5] Verifying transfer archives..."
+verify_archive "$SOURCE_ARCHIVE" "$SOURCE_SHA256"
+verify_archive "$PRIVATE_ARCHIVE" "$PRIVATE_SHA256"
+
+STAGE_DIR="$(mktemp -d "$TRANSFER_DIR/.install-stage.XXXXXX")"
+cleanup_stage() {{
+  rm -rf -- "$STAGE_DIR"
+}}
+trap cleanup_stage EXIT
+
+echo "[2/5] Extracting and validating the new checkout..."
+tar -xzf "$SOURCE_ARCHIVE" -C "$STAGE_DIR"
+tar -xzf "$PRIVATE_ARCHIVE" -C "$STAGE_DIR"
+STAGED_REPO="$STAGE_DIR/{ARCHIVE_ROOT}"
+for required_path in \
+  "scripts/soc_pingan_macos_host_dev.py" \
+  ".env.soc-dev.local" \
+  "config.pingan-dev.local" \
+  ".secrets/eagw-private-key.der"; do
+  [[ -f "$STAGED_REPO/$required_path" ]] || \
+    fail "staged checkout is incomplete: $required_path"
+done
+
+echo "[3/5] Stopping the old Host DEV checkout, if present..."
+if [[ -e "$TARGET_REPO" && ! -d "$TARGET_REPO" ]]; then
+  fail "target exists but is not a directory: $TARGET_REPO"
+fi
+if [[ -d "$TARGET_REPO" ]]; then
+  [[ -f "$TARGET_REPO/scripts/soc_pingan_macos_host_dev.py" ]] || \
+    fail "existing target is not a recognized Host DEV checkout: $TARGET_REPO"
+  if ! (
+    cd "$TARGET_REPO"
+    python3.12 scripts/soc_pingan_macos_host_dev.py stop
+  ); then
+    fail "old Host DEV stop failed; the existing checkout was not replaced"
+  fi
+fi
+
+busy=0
+for port in 3000 8001 2026 4001 8090; do
+  if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    printf 'ERROR: TCP %s is still in use:\n' "$port" >&2
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+    busy=1
+  fi
+done
+[[ "$busy" -eq 0 ]] || \
+  fail "stop the listed process(es), then run this installer again; the old checkout was not replaced"
+
+echo "[4/5] Replacing the checkout..."
+BACKUP_REPO=""
+if [[ -d "$TARGET_REPO" ]]; then
+  BACKUP_REPO="$HOME/.deer-flow-install-backup-$$"
+  [[ ! -e "$BACKUP_REPO" ]] || fail "backup path already exists: $BACKUP_REPO"
+  mv -- "$TARGET_REPO" "$BACKUP_REPO"
+fi
+if ! mv -- "$STAGED_REPO" "$TARGET_REPO"; then
+  if [[ -n "$BACKUP_REPO" && -d "$BACKUP_REPO" ]]; then
+    mv -- "$BACKUP_REPO" "$TARGET_REPO" || true
+  fi
+  fail "could not install the staged checkout; the previous checkout was restored when possible"
+fi
+
+if ! (
+  chmod 700 "$TARGET_REPO/.secrets"
+  chmod 600 \
+    "$TARGET_REPO/.env.soc-dev.local" \
+    "$TARGET_REPO/config.pingan-dev.local" \
+    "$TARGET_REPO/.secrets/eagw-private-key.der"
+); then
+  rm -rf -- "$TARGET_REPO"
+  if [[ -n "$BACKUP_REPO" && -d "$BACKUP_REPO" ]]; then
+    mv -- "$BACKUP_REPO" "$TARGET_REPO" || true
+  fi
+  fail "could not apply private-file permissions; the previous checkout was restored when possible"
+fi
+if [[ -n "$BACKUP_REPO" ]]; then
+  rm -rf -- "$BACKUP_REPO"
+fi
+
+echo "[5/5] Install complete: $TARGET_REPO"
+echo "Next: cd \"$TARGET_REPO\" && python3.12 scripts/soc_pingan_stage_internal_corpus.py"
+"""
+
+
 def _transfer_runbook(
     *,
     timestamp: str,
     git_info: dict[str, Any],
     archives: dict[str, Any],
     report_name: str,
+    installer: dict[str, Any],
 ) -> str:
     source = archives["source"]
     private = archives.get("private_overlay")
     source_name = Path(str(source["path"])).name
     source_sha = str(source["sha256"])
+    installer_name = Path(str(installer["path"])).name
+    installer_sha = str(installer["sha256"])
     if private is None:
         private_name = "<private-overlay-not-built>"
         private_sha = "<unavailable>"
@@ -921,6 +1077,7 @@ SHA-256 与本次交付一致，不需要额外 nginx/LAN hotfix。
 {private_name}
 {report_name}
 {TRANSFER_RUNBOOK_NAME}
+{installer_name}
 ```
 
 SHA-256：
@@ -928,6 +1085,7 @@ SHA-256：
 ```text
 {source_sha}  {source_name}
 {private_sha}  {private_name}
+{installer_sha}  {installer_name}
 ```
 
 {private_notice}
@@ -940,7 +1098,8 @@ cd "$TRANSFER_DIR"
 
 shasum -a 256 \\
   "{source_name}" \\
-  "{private_name}"
+  "{private_name}" \\
+  "{installer_name}"
 ```
 
 输出必须与第 1 节完全一致。随后检查 report：
@@ -957,47 +1116,14 @@ cat "{report_name}"
 以下命令会替换当前用户的 `$HOME/deer-flow`：
 
 ```bash
-export TARGET_REPO="$HOME/deer-flow"
-export STAGE_DIR="$TRANSFER_DIR/extract"
-
-[ "$TARGET_REPO" = "$HOME/deer-flow" ] || exit 1
-rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR"
-
-tar -xzf "$TRANSFER_DIR/{source_name}" -C "$STAGE_DIR"
-tar -xzf "$TRANSFER_DIR/{private_name}" -C "$STAGE_DIR"
-
-# 先停止旧 Host DEV。必须在删除旧 checkout 前执行，否则进程 cwd 会指向已删除目录。
-if [ -f "$TARGET_REPO/scripts/soc_pingan_macos_host_dev.py" ]; then
-  echo "停止旧 Host DEV..."
-  (
-    cd "$TARGET_REPO"
-    python3.12 scripts/soc_pingan_macos_host_dev.py stop
-  ) || exit 1
-fi
-
-# 不接管来源不明的监听进程；打印 PID/命令并停止部署。
-busy=0
-for port in 3000 8001 2026 4001 8090; do
-  if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "ERROR: TCP $port 仍被占用："
-    lsof -nP -iTCP:"$port" -sTCP:LISTEN
-    busy=1
-  fi
-done
-[ "$busy" -eq 0 ] || {{
-  echo "请先停止上面列出的旧/外部进程，再重新执行本节；不要继续删除旧 checkout。"
-  exit 1
-}}
-
-rm -rf "$TARGET_REPO"
-mv "$STAGE_DIR/deer-flow-pingan-internal" "$TARGET_REPO"
-cd "$TARGET_REPO"
-
-chmod 700 .secrets
-chmod 600 .env.soc-dev.local config.pingan-dev.local \\
-  .secrets/eagw-private-key.der
+bash "$HOME/READY-TO-TRANSFER/{installer_name}"
 ```
+
+安装器只读取它自身所在目录，不依赖前一节留下的 `TRANSFER_DIR`、`TARGET_REPO` 或其他
+shell 状态。它在子 Bash 中依次校验准确 SHA-256、解压并检查新 checkout、停止旧 Host DEV、
+确认 `3000/8001/2026/4001/8090` 全部释放，再事务式替换目录并设置私有文件权限。任一步失败
+都只结束安装器，不会关闭当前终端；Hash/解压/停服/端口失败时不会替换旧 checkout，替换阶段
+失败时会尽力恢复旧目录。不要使用 `source` 或 `.` 加载安装器。
 
 本次私有包同时包含：
 

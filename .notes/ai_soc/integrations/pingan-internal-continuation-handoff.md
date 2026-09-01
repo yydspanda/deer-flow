@@ -61,12 +61,13 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 这是预期保护，不是打包器故障。
 
 构建器会在 Git-ignored 的
-`backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/` 中生成本次交付的四类文件：
+`backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/` 中生成本次交付的五个文件：
 
 - `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
 - `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、corpus manifest/index、历史 EDR XLSX 及其已编译路径目录；不再携带三个大 PKL 或 Workbench payload SQLite，只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
 - `PINGAN-INTERNAL-MAC-RUNBOOK.md`：由构建器自动生成，固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令；不再手工维护时间戳，也不再携带独立 nginx/LAN hotfix。
+- `INSTALL-PINGAN-MAC.sh`：自包含安装器；从脚本自身位置解析两个 archive，先验 Hash/解压结果，再停止旧 Host DEV、检查五个端口并事务式替换 checkout。必须用 `bash` 执行，禁止 `source`；失败只退出子脚本，不关闭操作员终端。
 - 重部署必须先解压到 staging，再从旧 `$HOME/deer-flow` 执行 Host DEV `stop`；只有
   `3000/8001/2026/4001/8090` 均无监听时才删除旧 checkout。不得先删除或移动运行中的目录，避免旧
   Gateway/Nginx/模型网关/兼容 API 持有 deleted/Trash cwd 并继续占端口。
@@ -112,18 +113,19 @@ python3 scripts/build_pingan_internal_transfer.py --inspect \
   backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/deer-flow-pingan-private-overlay-<timestamp>.tar.gz
 ```
 
-内网 Mac 先叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`；对当前开发者它自然
-解析到 `/Users/zhangjianming627/deer-flow`，对其他同事无需修改脚本或配置：
+内网 Mac 使用随包安装器叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`；对当前
+开发者它自然解析到 `/Users/zhangjianming627/deer-flow`，对其他同事无需修改脚本或配置。安装命令
+不依赖前一个终端块留下的变量：
 
 ```bash
-TRANSFER_ROOT="$HOME/soc-transfer"
-TARGET_REPO="$HOME/deer-flow"
-mkdir -p "$TRANSFER_ROOT"
-tar -xzf /approved/path/deer-flow-pingan-source-<timestamp>.tar.gz -C "$TRANSFER_ROOT"
-tar -xzf /approved/path/deer-flow-pingan-private-overlay-<timestamp>.tar.gz -C "$TRANSFER_ROOT"
-mv "$TRANSFER_ROOT/deer-flow-pingan-internal" "$TARGET_REPO"
-cd "$TARGET_REPO"
+bash "$HOME/READY-TO-TRANSFER/INSTALL-PINGAN-MAC.sh"
+cd "$HOME/deer-flow"
 ```
+
+安装器会先验证两个 archive 的本次精确 SHA-256 和 staged checkout 完整性；随后从旧 checkout
+运行 Host DEV `stop`，只有 `3000/8001/2026/4001/8090` 都释放后才替换目录。校验、解压、停服或
+端口检查失败时旧目录不变；替换阶段失败时会尽力恢复旧目录。不得把 Runbook 的代码块通过
+`source`/`.` 加载，也不再手工复制长篇解压和 `rm -rf` 命令。
 
 三个 PKL 与 Workbench payload SQLite 已单独保存在内网，不再重复打包。当前开发者的 `$HOME`
 自然解析为 `/Users/zhangjianming627`，其他同事仍使用自己的 home。解压后必须先校验并落位：

@@ -61,6 +61,13 @@ block that sources `.env.soc-dev.local` must first resolve the current checkout
 with `backend/scripts/soc_pingan_local_paths.py --shell` in that same block; do
 not rely on `TARGET_REPO`, `SOC_REPO_ROOT`, or shell exports left by an earlier
 Runbook step.
+Clean installation must be delegated to the generated standalone
+`INSTALL-PINGAN-MAC.sh` and invoked with `bash`, never sourced. The installer
+resolves the transfer directory from its own `BASH_SOURCE`, verifies the exact
+archive hashes and staged checkout before stopping the old checkout, and keeps
+all `exit` behavior inside its child shell so a failed install cannot close the
+operator's interactive terminal. Do not put a bare `exit` in a Runbook command
+block.
 Do not instruct operators to replace JSON placeholders or edit generated private
 requests/config by hand when a bounded repository command can derive and validate them.
 Clean redeploy instructions must extract into staging first, invoke the old checkout's

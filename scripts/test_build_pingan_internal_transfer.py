@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import os
 import re
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -11,12 +13,15 @@ from scripts.build_pingan_internal_transfer import (
     PRIVATE_ENV_REQUIRED_KEYS,
     PRIVATE_OVERLAY_PATHS,
     REQUIRED_HANDOFF_SOURCE_PATHS,
+    TRANSFER_INSTALLER_NAME,
     TRANSFER_RUNBOOK_NAME,
     _archive_manifest,
     _assert_private_overlay_config_ready,
     _assert_required_handoff_sources,
     _assert_source_freeze_allowed,
     _assert_source_path_safe,
+    _sha256_file,
+    _transfer_installer,
     _transfer_runbook,
     _write_archive,
     inspect_archive,
@@ -116,22 +121,30 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
             },
         },
         report_name="transfer-report-20260824T000000Z.json",
+        installer={
+            "path": "/tmp/INSTALL-PINGAN-MAC.sh",
+            "sha256": "installer-sha",
+        },
     )
 
     assert "abc123" in runbook
     assert "source-sha" in runbook
     assert "private-sha" in runbook
+    assert "installer-sha" in runbook
+    assert TRANSFER_INSTALLER_NAME in runbook
     assert TRANSFER_RUNBOOK_NAME in runbook
     assert (
         "$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl" in runbook
     )
     assert "$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl" in runbook
     assert "soc_pingan_stage_internal_corpus.py --apply" in runbook
-    assert "停止旧 Host DEV" in runbook
-    assert "for port in 3000 8001 2026 4001 8090" in runbook
-    assert runbook.index("soc_pingan_macos_host_dev.py stop") < runbook.index(
-        'rm -rf "$TARGET_REPO"'
-    )
+    assert f'bash "$HOME/READY-TO-TRANSFER/{TRANSFER_INSTALLER_NAME}"' in runbook
+    clean_install = runbook.split("## 3. Clean Install", maxsplit=1)[1].split(
+        "## 4. Stage Existing Corpus", maxsplit=1
+    )[0]
+    assert "soc_pingan_macos_host_dev.py stop" not in clean_install
+    assert 'rm -rf "$TARGET_REPO"' not in clean_install
+    assert "exit 1" not in clean_install
     assert "三个 PKL 和 Workbench payload SQLite 不在 private overlay" in runbook
     assert "不需要额外 nginx/LAN hotfix" in runbook
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
@@ -167,12 +180,225 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "proves_real_internal_connectivity=true" in runbook
     assert "task-request.local.json" in runbook
     assert 'shasum -a 256 \\\n  "deer-flow-pingan-source' in runbook
-    assert (
-        "chmod 600 .env.soc-dev.local config.pingan-dev.local \\\n"
-        "  .secrets/eagw-private-key.der"
-    ) in runbook
     assert "soc_pingan_model_gateway_smoke.py \\\n  --confirm-live" in runbook
     assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in runbook
+
+
+def test_transfer_installer_is_self_contained_and_orders_destructive_steps() -> None:
+    installer = _transfer_installer(
+        archives={
+            "source": {
+                "path": "/tmp/deer-flow-pingan-source-20260824T000000Z.tar.gz",
+                "sha256": "source-sha",
+            },
+            "private_overlay": {
+                "path": (
+                    "/tmp/deer-flow-pingan-private-overlay-20260824T000000Z.tar.gz"
+                ),
+                "sha256": "private-sha",
+            },
+        }
+    )
+
+    assert installer.startswith("#!/usr/bin/env bash\n")
+    assert '[[ "${BASH_SOURCE[0]}" != "$0" ]]' in installer
+    assert "set -euo pipefail" in installer
+    assert 'SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"' in installer
+    assert 'TRANSFER_DIR="$SCRIPT_DIR"' in installer
+    assert 'TARGET_REPO="$HOME/deer-flow"' in installer
+    assert "source-sha" in installer
+    assert "private-sha" in installer
+    assert "for port in 3000 8001 2026 4001 8090" in installer
+    assert installer.index("verify_archive") < installer.index("tar -xzf")
+    assert installer.index("tar -xzf") < installer.index(
+        "soc_pingan_macos_host_dev.py stop"
+    )
+    assert installer.index("soc_pingan_macos_host_dev.py stop") < installer.index(
+        'mv -- "$TARGET_REPO" "$BACKUP_REPO"'
+    )
+    assert installer.index('mv -- "$TARGET_REPO" "$BACKUP_REPO"') < installer.index(
+        'mv -- "$STAGED_REPO" "$TARGET_REPO"'
+    )
+    assert '"$TARGET_REPO/.env.soc-dev.local"' in installer
+    assert '"$TARGET_REPO/.secrets/eagw-private-key.der"' in installer
+
+
+def test_transfer_installer_rejects_source_without_exiting_parent_shell(
+    tmp_path: Path,
+) -> None:
+    installer_path = tmp_path / TRANSFER_INSTALLER_NAME
+    installer_path.write_text(
+        _transfer_installer(
+            archives={
+                "source": {"path": "/tmp/source.tar.gz", "sha256": "source-sha"},
+                "private_overlay": {
+                    "path": "/tmp/private.tar.gz",
+                    "sha256": "private-sha",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; status=$?; printf "parent-survived:%s\\n" "$status"',
+            "installer-source-test",
+            str(installer_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "parent-survived:2" in completed.stdout
+    assert "do not source this installer" in completed.stderr
+
+
+def test_transfer_installer_replaces_checkout_without_parent_shell_state(
+    tmp_path: Path,
+) -> None:
+    transfer_dir = tmp_path / "ready"
+    transfer_dir.mkdir()
+    source_path = transfer_dir / "source.tar.gz"
+    private_path = transfer_dir / "private.tar.gz"
+    _write_installer_fixture_archive(
+        source_path,
+        {
+            "scripts/soc_pingan_macos_host_dev.py": "# staged host driver\n",
+            "source-marker.txt": "new checkout\n",
+        },
+    )
+    _write_installer_fixture_archive(
+        private_path,
+        {
+            ".env.soc-dev.local": "export TEST=1\n",
+            "config.pingan-dev.local": "config_version: 38\n",
+            ".secrets/eagw-private-key.der": "private-key",
+        },
+    )
+    installer_path = transfer_dir / TRANSFER_INSTALLER_NAME
+    installer_path.write_text(
+        _transfer_installer(
+            archives={
+                "source": {
+                    "path": str(source_path),
+                    "sha256": _sha256_file(source_path),
+                },
+                "private_overlay": {
+                    "path": str(private_path),
+                    "sha256": _sha256_file(private_path),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    old_repo = home / "deer-flow"
+    (old_repo / "scripts").mkdir(parents=True)
+    (old_repo / "scripts/soc_pingan_macos_host_dev.py").write_text(
+        "# old host driver\n",
+        encoding="utf-8",
+    )
+    (old_repo / "old-marker.txt").write_text("old checkout\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "python3.12",
+        '#!/bin/sh\n: > "$HOME/old-host-stopped"\n',
+    )
+    _write_executable(fake_bin / "lsof", "#!/bin/sh\nexit 1\n")
+    env = dict(os.environ)
+    env.update(
+        {
+            "HOME": str(home),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "TARGET_REPO": str(tmp_path / "stale-shell-target"),
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", str(installer_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (home / "old-host-stopped").is_file()
+    assert (home / "deer-flow/source-marker.txt").read_text() == "new checkout\n"
+    assert not (home / "deer-flow/old-marker.txt").exists()
+    assert (home / "deer-flow/.env.soc-dev.local").stat().st_mode & 0o777 == 0o600
+    assert (
+        home / "deer-flow/.secrets/eagw-private-key.der"
+    ).stat().st_mode & 0o777 == 0o600
+
+
+def test_transfer_installer_hash_failure_preserves_old_checkout(tmp_path: Path) -> None:
+    transfer_dir = tmp_path / "ready"
+    transfer_dir.mkdir()
+    source_path = transfer_dir / "source.tar.gz"
+    private_path = transfer_dir / "private.tar.gz"
+    _write_installer_fixture_archive(
+        source_path,
+        {"scripts/soc_pingan_macos_host_dev.py": "# staged host driver\n"},
+    )
+    _write_installer_fixture_archive(
+        private_path,
+        {
+            ".env.soc-dev.local": "export TEST=1\n",
+            "config.pingan-dev.local": "config_version: 38\n",
+            ".secrets/eagw-private-key.der": "private-key",
+        },
+    )
+    installer_path = transfer_dir / TRANSFER_INSTALLER_NAME
+    installer_path.write_text(
+        _transfer_installer(
+            archives={
+                "source": {"path": str(source_path), "sha256": "wrong-sha"},
+                "private_overlay": {
+                    "path": str(private_path),
+                    "sha256": _sha256_file(private_path),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+    old_repo = home / "deer-flow"
+    (old_repo / "scripts").mkdir(parents=True)
+    (old_repo / "scripts/soc_pingan_macos_host_dev.py").write_text(
+        "# old host driver\n",
+        encoding="utf-8",
+    )
+    (old_repo / "old-marker.txt").write_text("old checkout\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "python3.12",
+        '#!/bin/sh\n: > "$HOME/old-host-stopped"\n',
+    )
+    _write_executable(fake_bin / "lsof", "#!/bin/sh\nexit 1\n")
+    env = dict(os.environ)
+    env.update({"HOME": str(home), "PATH": f"{fake_bin}:{env['PATH']}"})
+
+    completed = subprocess.run(
+        ["bash", str(installer_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode != 0
+    assert "SHA-256 mismatch" in completed.stderr
+    assert (old_repo / "old-marker.txt").is_file()
+    assert not (home / "old-host-stopped").exists()
 
 
 def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:
@@ -406,3 +632,21 @@ database:
     env_path.chmod(0o600)
     config_path.chmod(0o600)
     key_path.chmod(0o600)
+
+
+def _write_installer_fixture_archive(
+    path: Path,
+    files: dict[str, str],
+) -> None:
+    with tarfile.open(path, "w:gz") as handle:
+        for relative, content in files.items():
+            payload = content.encode()
+            member = tarfile.TarInfo(f"{ARCHIVE_ROOT}/{relative}")
+            member.size = len(payload)
+            member.mode = 0o600
+            handle.addfile(member, io.BytesIO(payload))
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o700)
