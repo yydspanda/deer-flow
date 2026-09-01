@@ -41,11 +41,14 @@ from soc_agent.integrations.pingan.legacy_compat.zeus_lifecycle import (
     StaticPingAnZeusAlertLifecyclePort,
 )
 
+_FAKE_FIXTURE_VERSION = "soc.pingan_legacy_fake_fixture.v1"
+_FAKE_ALERT_ID = "FAKE-LEGACY-ACCEPTANCE"
+_FAKE_RAW_MESSAGE = 'synthetic SyslogClient[1]: 2026-01-01 00:00:00|!fixture|!alert|!{"attack_type":"synthetic connectivity probe","sip":"192.0.2.10","dip":"198.51.100.20","proto":"tcp","severity":1}'
+
 
 def run_pingan_legacy_fake_acceptance(
     *,
     database_url: str,
-    sample_path: Path,
     report_path: Path | None = None,
     app_code: str = "common",
     app_key: str = "fake-acceptance-key",
@@ -55,9 +58,7 @@ def run_pingan_legacy_fake_acceptance(
 
     started = time.monotonic()
     now = observed_at or datetime.now(UTC)
-    payload = json.loads(sample_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not isinstance(payload.get("alert"), dict):
-        raise ValueError("acceptance sample must contain an alert object")
+    payload = _build_synthetic_alert_payload()
 
     upgrade_soc_schema(database_url)
     engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
@@ -180,13 +181,14 @@ def run_pingan_legacy_fake_acceptance(
             "raw_payload_excluded_from_report": True,
         }
         report = {
-            "schema_version": "soc.pingan_legacy_fake_acceptance.v1",
+            "schema_version": "soc.pingan_legacy_fake_acceptance.v2",
             "generated_at": datetime.now(UTC).isoformat(),
             "mode": "fake",
             "simulated": True,
             "proves_real_internal_connectivity": False,
-            "sample": {
-                "file_name": sample_path.name,
+            "fixture": {
+                "kind": "synthetic_protocol_alert",
+                "version": _FAKE_FIXTURE_VERSION,
                 "alert_id": normal_alert_id,
             },
             "jobs": [
@@ -235,6 +237,32 @@ def run_pingan_legacy_fake_acceptance(
         return report
     finally:
         engine.dispose()
+
+
+def _build_synthetic_alert_payload() -> dict[str, Any]:
+    """Return a value-free alert that exercises the PingAn adapter and Runtime."""
+
+    return {
+        "tenant_id": "pingan",
+        "alert": {
+            "alertId": _FAKE_ALERT_ID,
+            "alertCode": "FAKE-LEGACY-001",
+            "alertName": "Synthetic legacy compatibility check",
+            "riskLevel": "low",
+            "createAt": "2026-01-01T00:00:00+08:00",
+            "executeType": "0",
+            "hitLog": [
+                {
+                    "topic": "soc_fake_acceptance",
+                    "topicName": "Synthetic protocol fixture",
+                    "ruleCode": "FAKE_LEGACY_PROTOCOL_001",
+                    "ruleName": "Synthetic legacy protocol fixture",
+                    "zeusRawLogs": [{"message": _FAKE_RAW_MESSAGE}],
+                }
+            ],
+        },
+        "relatedAlertList": [],
+    }
 
 
 def _legacy_request(

@@ -14,7 +14,6 @@ def test_fake_acceptance_covers_http_runtime_recovery_and_callback(
     report_path = tmp_path / "report.json"
     report = run_pingan_legacy_fake_acceptance(
         database_url=f"sqlite:///{tmp_path / 'soc.sqlite'}",
-        sample_path=(Path(__file__).resolve().parents[2] / "datas" / "legacy_demos" / "apt-1965449.json"),
         report_path=report_path,
     )
 
@@ -27,6 +26,25 @@ def test_fake_acceptance_covers_http_runtime_recovery_and_callback(
         "delivered",
         "delivered",
     ]
+    assert report["fixture"] == {
+        "kind": "synthetic_protocol_alert",
+        "version": "soc.pingan_legacy_fake_fixture.v1",
+        "alert_id": "FAKE-LEGACY-ACCEPTANCE",
+    }
     persisted = json.loads(report_path.read_text(encoding="utf-8"))
     assert persisted["secrets_included"] is False
     assert "hitLog" not in report_path.read_text(encoding="utf-8")
+    assert "legacy_demos" not in report_path.read_text(encoding="utf-8")
+
+
+def test_fake_acceptance_sources_do_not_depend_on_local_alert_samples() -> None:
+    backend_root = Path(__file__).resolve().parents[1]
+    sources = [
+        backend_root / "scripts" / "soc_pingan_legacy_fake_acceptance.py",
+        backend_root / "soc_agent" / "integrations" / "pingan" / "legacy_compat" / "acceptance.py",
+    ]
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+
+    assert "legacy_demos" not in combined
+    assert "--sample-path" not in combined

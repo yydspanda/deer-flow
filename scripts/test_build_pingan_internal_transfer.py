@@ -129,6 +129,8 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
     assert "soc_pingan_model_gateway_smoke.py" in runbook
     assert "soc_pingan_legacy_fake_acceptance.py" in runbook
+    assert "无敏感合成协议夹具" in runbook
+    assert "不读取历史小 JSON" in runbook
     assert "soc_pingan_legacy_live_acceptance.py" in runbook
     assert "soc_pingan_prepare_legacy_model_gateway_profile.py" in runbook
     assert ".secrets/eagw-private-key.der" in runbook

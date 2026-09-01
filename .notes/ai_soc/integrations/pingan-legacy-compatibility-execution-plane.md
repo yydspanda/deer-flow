@@ -167,8 +167,8 @@ Base Decision
   `chat_template_kwargs` 透传、请求大小/并发/排队/上游超时门。当前并发门是进程内信号量，
   因此模型网关固定单进程。
 - `soc_pingan_legacy_fake_acceptance.py` 使用真实 migration、HTTP contract、SQLite repository、
-  Runtime、结果投影和 callback dispatcher 验证幂等与崩溃恢复；报告固定声明 `simulated=true`，
-  不冒充内网连接证据。
+  Runtime、结果投影和 callback dispatcher 验证幂等与崩溃恢复；其输入是代码内置的无敏感合成
+  协议夹具，不依赖历史小 JSON、PKL 或内网数据；报告固定声明 `simulated=true`，不冒充内网连接证据。
 - `soc_pingan_macos_host_dev.py` 通过 sidecar manager 启停 4001 模型网关、8090 兼容 API 和一个
   durable worker，再复用 DeerFlow 原有 Gateway/Frontend/Nginx 启动器；不创建第二套 Web 栈。
 - `soc_pingan_legacy_live_acceptance.py` 只接收 mode-`0600` 的私有 `.local.json` 和 loopback API，

@@ -1046,8 +1046,9 @@ DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合�
 项目自身提供 `4001` 模型网关、`8090` 旧 ZEUS 兼容 API、持久 Worker 和 Callback
 Dispatcher；不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis。
 
-先运行不访问内网服务的 Fake E2E。它验证旧 HTTP 协议、SQLite migration、幂等、租约恢复、
-通用 Runtime、结果投影、Outbox 与逐次回调审计，但固定标记 `simulated=true`：
+先运行不访问内网服务的 Fake E2E。它使用代码内置的无敏感合成协议夹具，不读取历史小 JSON、
+PKL 或内网业务数据；它验证旧 HTTP 协议、SQLite migration、幂等、租约恢复、通用 Runtime、
+结果投影、Outbox 与逐次回调审计，但固定标记 `simulated=true`：
 
 ```bash
 cd "$TARGET_REPO"

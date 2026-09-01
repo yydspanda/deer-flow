@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = BACKEND_ROOT.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from soc_agent.integrations.pingan.legacy_compat.acceptance import (  # noqa: E402
@@ -24,11 +23,6 @@ def parse_args() -> argparse.Namespace:
         "--database-path",
         type=Path,
         default=None,
-    )
-    parser.add_argument(
-        "--sample-path",
-        type=Path,
-        default=REPO_ROOT / "datas" / "legacy_demos" / "apt-1965449.json",
     )
     parser.add_argument(
         "--report-path",
@@ -48,7 +42,6 @@ def main() -> int:
     database_url = f"sqlite:///{database_path.resolve()}"
     report = run_pingan_legacy_fake_acceptance(
         database_url=database_url,
-        sample_path=args.sample_path.resolve(),
         report_path=report_path.resolve(),
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

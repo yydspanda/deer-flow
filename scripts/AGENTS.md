@@ -33,7 +33,9 @@ semaphore is process-local. The old `sec_know_model`, LiteLLM, Celery, and Redis
 scripts are reference material, not Host DEV dependencies.
 
 `backend/scripts/soc_pingan_legacy_fake_acceptance.py` is the no-network
-composition check and must always report `simulated=true`. The separate
+composition check and must always report `simulated=true`. It constructs its own
+value-free protocol fixture and must not depend on `datas/legacy_demos`, PKL files, or
+private alert input. The separate
 `soc_pingan_legacy_live_acceptance.py` accepts only a private mode-`0600`
 `*.local.json`, loopback compatibility API, explicit `--confirm-live`, and both
 provider modes set to `internal`. Its pass gate requires a fresh durable job,

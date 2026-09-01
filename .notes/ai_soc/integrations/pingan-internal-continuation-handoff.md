@@ -244,7 +244,8 @@ backend/.deer-flow/data/soc_agent_dev.db
 
 1. 保持 `SOC_PINGAN_LEGACY_LIFECYCLE_MODE=fake`、
    `SOC_PINGAN_LEGACY_CALLBACK_MODE=fake`，先运行
-   `soc_pingan_legacy_fake_acceptance.py`；报告必须明确 `simulated=true`。
+   `soc_pingan_legacy_fake_acceptance.py`；该命令自带无敏感合成协议夹具，不需要复制历史小 JSON；
+   报告必须明确 `simulated=true`。
 2. 启动 Host DEV 后运行 `soc_pingan_model_gateway_smoke.py --confirm-live`；必须取得真实 completion，
    `/health` 或 `/models` 不能替代。
 3. 选一条 ZEUS 中仍为“待研判”的已批准 DEV 告警，使用新的 `session_id`，把旧调用方实际发送的
