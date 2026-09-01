@@ -13,7 +13,7 @@ from soc_agent.integrations.pingan.legacy_compat.wiring import (
 )
 
 
-def test_api_settings_preserve_old_port_and_parse_per_app_keys(
+def test_api_settings_preserve_old_port_and_parse_allowed_key_labels(
     tmp_path: Path,
 ) -> None:
     settings = PingAnLegacyApiSettings.from_env(

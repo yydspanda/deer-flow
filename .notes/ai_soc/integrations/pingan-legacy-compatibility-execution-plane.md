@@ -30,7 +30,9 @@ flowchart LR
 4. `POST /public/alertModelCallback`：完成、跳过或失败后异步回写。
 
 内网 DEV 为减少上游改造，兼容 API 延续旧服务的 `8090` 入口并显式绑定局域网；该端口只允许
-受信 ZEUS DEV/STG 调用方访问，并继续执行按 `app_code` 的 Bearer/`app-key` 鉴权和请求体上限。
+受信 ZEUS DEV/STG 调用方访问，并继续执行旧协议的 Bearer/`app-key` 允许集合鉴权和请求体上限。
+`app_code` 只参与业务路由、持久元数据与幂等键，不作为密钥映射标签；这与旧服务对
+`APP_KEY_DICT.values()` 的校验语义一致。
 模型网关 `4001` 始终仅绑定 loopback，不能暴露给局域网。
 
 ## 2. Ownership Boundary / 归属边界

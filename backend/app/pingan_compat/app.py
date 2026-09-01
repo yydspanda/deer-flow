@@ -29,6 +29,7 @@ def create_pingan_compat_app(
     normalized_keys = {app.strip(): key for app, key in app_keys.items() if app.strip() and key}
     if not normalized_keys:
         raise ValueError("at least one PingAn compatibility app key is required")
+    allowed_keys = tuple(dict.fromkeys(normalized_keys.values()))
 
     app = FastAPI(title="SOC PingAn Compatibility API", docs_url=None, redoc_url=None)
 
@@ -52,7 +53,7 @@ def create_pingan_compat_app(
     ) -> PingAnLegacyTaskResponse:
         _verify_bearer(
             authorization,
-            expected_key=normalized_keys.get(body.app_code),
+            allowed_keys=allowed_keys,
         )
         try:
             return service.submit(
@@ -69,13 +70,11 @@ def create_pingan_compat_app(
         task_id: str,
         app_key: str | None = Header(default=None, alias="app-key"),
     ) -> PingAnLegacyTaskResponse:
+        _verify_allowed_key(app_key, allowed_keys=allowed_keys)
         try:
-            job = service.get_job(task_id)
+            return service.get_status(task_id)
         except PingAnLegacyTaskNotFoundError as exc:
             raise HTTPException(status_code=404, detail="task not found") from exc
-        source_app = str(job.metadata.get("app_code") or "")
-        _verify_exact_key(app_key, expected_key=normalized_keys.get(source_app))
-        return service.get_status(task_id)
 
     return app
 
@@ -171,14 +170,21 @@ async def _send_body_limit_error(
     await response(scope, receive, send)
 
 
-def _verify_bearer(value: str | None, *, expected_key: str | None) -> None:
+def _verify_bearer(value: str | None, *, allowed_keys: tuple[str, ...]) -> None:
     if value is None or not value.startswith("Bearer "):
         raise HTTPException(status_code=403, detail="invalid API key")
-    _verify_exact_key(value.removeprefix("Bearer ").strip(), expected_key=expected_key)
+    _verify_allowed_key(
+        value.removeprefix("Bearer ").strip(),
+        allowed_keys=allowed_keys,
+    )
 
 
-def _verify_exact_key(value: str | None, *, expected_key: str | None) -> None:
-    if value is None or expected_key is None or not secrets.compare_digest(value, expected_key):
+def _verify_allowed_key(value: str | None, *, allowed_keys: tuple[str, ...]) -> None:
+    matched = False
+    if value is not None:
+        for allowed_key in allowed_keys:
+            matched = secrets.compare_digest(value, allowed_key) or matched
+    if not matched:
         raise HTTPException(status_code=403, detail="invalid API key")
 
 

@@ -129,6 +129,28 @@ def test_live_acceptance_refuses_placeholder_request_before_network() -> None:
     assert called is False
 
 
+def test_live_acceptance_refuses_ambiguous_allowed_key_set_before_network() -> None:
+    called = False
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200)
+
+    env = _valid_env()
+    env["SOC_PINGAN_COMPAT_APP_KEYS_JSON"] = '{"common":"compat-secret","secondary":"other-secret"}'
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = run_pingan_legacy_live_acceptance(
+            _task_request(),
+            env,
+            repository=_EvidenceRepository(),
+            client=client,
+        )
+
+    assert report.outcome == "invalid_configuration"
+    assert called is False
+
+
 def test_live_acceptance_fails_when_callback_was_delivered_by_fake_port() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
@@ -231,7 +253,7 @@ class _EvidenceRepository:
 def _valid_env() -> dict[str, str]:
     return {
         "SOC_PINGAN_COMPAT_SMOKE_BASE_URL": "http://127.0.0.1:8090",
-        "SOC_PINGAN_COMPAT_APP_KEYS_JSON": '{"SEC-MODEL":"compat-secret"}',
+        "SOC_PINGAN_COMPAT_APP_KEYS_JSON": '{"common":"compat-secret"}',
         "SOC_PINGAN_LEGACY_LIFECYCLE_MODE": "internal",
         "SOC_PINGAN_LEGACY_CALLBACK_MODE": "internal",
         "SOC_PINGAN_COMPAT_SMOKE_TIMEOUT_SECONDS": "10",
@@ -242,8 +264,8 @@ def _valid_env() -> dict[str, str]:
 
 def _task_request() -> dict:
     return {
-        "app_code": "SEC-MODEL",
-        "flow_id": "zeus-alert-analysis",
+        "app_code": "zeus",
+        "flow_id": "alert_agent",
         "session_id": "acceptance-20260901-1",
         "alert_id": "1965449",
         "alert_data": {

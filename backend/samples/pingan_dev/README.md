@@ -337,8 +337,9 @@ deadline.
 For the internal DEV handoff, the compatibility API deliberately keeps the old
 network shape and listens on `0.0.0.0:8090`, while the model gateway remains
 loopback-only on `127.0.0.1:4001`. Restrict inbound `8090` with the macOS
-firewall to the approved ZEUS DEV/STG callers. The app-specific Bearer/
-`app-key` authentication and bounded request body remain mandatory; do not
+firewall to the approved ZEUS DEV/STG callers. The legacy allowed-key-set Bearer/
+`app-key` authentication and bounded request body remain mandatory; `app_code`
+is business routing metadata rather than a credential-map key. Do not
 publish `8090` to an untrusted network.
 
 First prove the repository-owned compatibility plane without internal network
@@ -358,9 +359,11 @@ cp backend/samples/pingan_dev/legacy-task-request.example.json \
 chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
 ```
 
-Replace every placeholder and the example `alert_data`, use a new `session_id`,
-and ensure its `app_code` has a matching key in
-`SOC_PINGAN_COMPAT_APP_KEYS_JSON`. Then set both legacy provider modes to
+Keep the old caller values `app_code=zeus` and `flow_id=alert_agent`, replace
+the **entire** example `alert_data` object with the complete approved payload,
+and use a new `session_id`. The Bearer/`app-key` value must be one of the values
+allowed by `SOC_PINGAN_COMPAT_APP_KEYS_JSON`; its map label does not need to
+equal `app_code`. Then set both legacy provider modes to
 `internal` in `.env.soc-dev.local` and restart Host DEV. Run the real
 submit/status/precheck/Runtime/callback gate:
 

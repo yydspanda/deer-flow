@@ -134,8 +134,10 @@ generic `soc_agent` code.
   Outbox atomically. Callback attempts are append-only and callback retries must never
   rerun analysis. Do not restore Celery, Redis, old LlamaIndex flows, or old model routing.
 - Preserve the old `8090` ingress only in the PingAn Host DEV/private deployment profile;
-  keep per-`app_code` authentication and body limits, and restrict the port to approved
-  ZEUS callers. Only `executeType=1/3` receives the legacy 30-minute queue deadline.
+  authenticate Bearer/`app-key` values against the configured legacy allowed-key set,
+  keep `app_code` as business/idempotency metadata rather than a credential-map selector,
+  retain body limits, and restrict the port to approved ZEUS callers. Only
+  `executeType=1/3` receives the legacy 30-minute queue deadline.
   Expiration skips LLM but still persists a legacy expiration result and Callback Outbox;
   the generic queue must not learn this tenant rule.
 - Treat the fake execution-plane acceptance and the live compatibility acceptance as

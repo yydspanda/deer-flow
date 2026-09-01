@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import pytest
@@ -117,11 +118,11 @@ def test_non_alert_legacy_task_does_not_receive_alert_queue_deadline() -> None:
     assert persisted.expires_at is None
 
 
-def test_legacy_http_api_preserves_wire_shape_and_authenticates_per_app() -> None:
+def test_legacy_http_api_preserves_wire_shape_and_authenticates_against_allowed_key_set() -> None:
     repository = _repository()
     app = create_pingan_compat_app(
         service=PingAnLegacyTaskService(repository=repository),
-        app_keys={"zeus": "local-test-secret"},
+        app_keys={"common": "local-test-secret"},
     )
     client = TestClient(app)
 
@@ -160,6 +161,38 @@ def test_legacy_http_api_preserves_wire_shape_and_authenticates_per_app() -> Non
     assert wrong_status_auth.status_code == 403
     assert status.status_code == 200
     assert status.json() == body
+
+
+def test_legacy_status_authenticates_before_revealing_task_existence() -> None:
+    app = create_pingan_compat_app(
+        service=PingAnLegacyTaskService(repository=_repository()),
+        app_keys={"common": "local-test-secret"},
+    )
+    client = TestClient(app)
+
+    unauthorized = client.get(
+        "/task/task_status",
+        params={"task_id": "missing-job"},
+        headers={"app-key": "wrong"},
+    )
+    authorized = client.get(
+        "/task/task_status",
+        params={"task_id": "missing-job"},
+        headers={"app-key": "local-test-secret"},
+    )
+
+    assert unauthorized.status_code == 403
+    assert authorized.status_code == 404
+
+
+def test_tracked_legacy_request_example_keeps_old_zeus_wire_shape() -> None:
+    sample_path = Path(__file__).resolve().parents[2] / "backend/samples/pingan_dev/legacy-task-request.example.json"
+    sample = json.loads(sample_path.read_text(encoding="utf-8"))
+
+    assert sample["app_code"] == "zeus"
+    assert sample["flow_id"] == "alert_agent"
+    assert list(sample["alert_data"]) == ["<replace-entire-alert_data-object-with-approved-complete-payload>"]
+    assert "message" not in sample["alert_data"]
 
 
 def test_legacy_http_api_rejects_oversized_content_length_before_processing() -> None:

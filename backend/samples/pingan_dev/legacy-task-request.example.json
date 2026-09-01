@@ -1,13 +1,9 @@
 {
-  "app_code": "<approved-app-code>",
-  "flow_id": "<approved-flow-id>",
+  "app_code": "zeus",
+  "flow_id": "alert_agent",
   "session_id": "<unique-live-acceptance-session-id>",
   "alert_id": "<approved-pending-alert-id>",
   "alert_data": {
-    "alert": {
-      "id": "<approved-pending-alert-id>",
-      "executeType": 0,
-      "message": "<replace-with-the-approved-complete-alert-payload>"
-    }
+    "<replace-entire-alert_data-object-with-approved-complete-payload>": null
   }
 }

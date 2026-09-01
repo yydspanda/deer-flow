@@ -2119,6 +2119,11 @@ LessonRule
   传递 `X-Request-Id`，并拒绝已声明但不受支持的 API version。
 - `contracts/soc_api/openapi-v1.snapshot.json` 锁定所有已发布 SOC path/method、公共 request headers、
   response headers 和 error statuses。新增/删除/改路径必须显式 review snapshot diff。
+- PingAn 私有 `8090` 兼容入口不属于通用 `/api/soc/*`。它保留旧 ZEUS
+  `POST /workflow/task` 与 `GET /task/task_status` wire shape：Bearer/`app-key` 只需命中 operator 配置的
+  legacy allowed-key set，`app_code` 是业务路由/持久元数据/幂等字段，不是 credential selector。
+  `alert_data` 必须保留旧调用方发送的完整对象，不能转换成 `message` 字符串；鉴权必须先于任务存在性
+  查询，端口仍受 Host DEV/private deployment 与来源网络限制。
 
 ## 八、事件与通信规范
 

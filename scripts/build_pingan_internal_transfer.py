@@ -1111,8 +1111,10 @@ cp backend/samples/pingan_dev/legacy-task-request.example.json \\
 chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
 ```
 
-编辑该文件并替换全部 placeholder，确认请求 `app_code` 在
-`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 中有对应 key。随后在 `.env.soc-dev.local` 中将以下两项从
+保留旧调用值 `app_code=zeus`、`flow_id=alert_agent`，编辑该文件并替换全部 placeholder；必须把
+示例 `alert_data` **整个对象**替换为旧调用方发送的完整对象，不能把完整 JSON 串塞进
+`alert.message`。`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 的 value 构成旧协议允许的 Bearer/`app-key`
+集合，映射标签（当前为 `common`）不要求等于 `app_code`。随后在 `.env.soc-dev.local` 中将以下两项从
 `fake` 改为 `internal`，停止并重新启动 Host DEV，使 Worker 真正读取新配置：
 
 ```text

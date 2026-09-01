@@ -249,8 +249,9 @@ backend/.deer-flow/data/soc_agent_dev.db
 2. 启动 Host DEV 后运行 `soc_pingan_model_gateway_smoke.py --confirm-live`；基础连通性与当前 Runtime
    默认一致，使用 `thinking=false` 和 128 Token 有界输出预算，必须取得真实 completion；`/health`
    或 `/models` 不能替代。Thinking 能力另行显式验收，不阻塞该基础门禁。
-3. 选一条 ZEUS 中仍为“待研判”的已批准 DEV 告警，使用新的 `session_id`，把旧调用方实际发送的
-   `app_code/flow_id/session_id/alert_id/alert_data` 保存到 `0600` 的 `.local.json`。
+3. 选一条 ZEUS 中仍为“待研判”的已批准 DEV 告警，保持旧调用方的
+   `app_code=zeus`、`flow_id=alert_agent`，使用新的 `session_id`，把完整 `alert_data` 对象保存到
+   `0600` 的 `.local.json`。
 4. 将 lifecycle/callback 两个 mode 同时改为 `internal` 并重启 Host DEV；不存在运行时 fake fallback。
 5. 运行 live acceptance；它会提交同一请求两次验证幂等，只产生一个 Job，然后轮询旧 status 接口，
    最后从同一 SOC DB 核对真实 precheck、Runtime run、Callback Outbox 与 append-only attempt。
@@ -265,8 +266,10 @@ cp backend/samples/pingan_dev/legacy-task-request.example.json \
 chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
 ```
 
-替换文件中全部 placeholder 和示例 `alert_data`，并确认请求 `app_code` 在
-`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 中有对应 key；随后编辑 `.env.soc-dev.local`：
+替换文件中全部 placeholder，并将示例 `alert_data` **整个对象**替换为旧调用方实际发送的完整对象，
+不能把完整 JSON 串塞进 `alert.message`。`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 的 value 是旧协议允许的
+Bearer/`app-key` 集合；映射标签（当前旧配置为 `common`）不要求等于请求 `app_code=zeus`。
+随后编辑 `.env.soc-dev.local`：
 
 ```text
 SOC_PINGAN_LEGACY_LIFECYCLE_MODE=internal

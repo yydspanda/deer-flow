@@ -466,10 +466,16 @@ def _app_key(values: Mapping[str, str], *, app_code: str) -> str:
     parsed = json.loads(raw)
     if not isinstance(parsed, Mapping):
         raise ValueError("SOC_PINGAN_COMPAT_APP_KEYS_JSON must be an object")
-    key = parsed.get(app_code)
-    if not isinstance(key, str) or not key:
-        raise ValueError("task app_code has no configured compatibility key")
-    return key
+    normalized_keys = {str(label).strip(): key.strip() for label, key in parsed.items() if str(label).strip() and isinstance(key, str) and key.strip()}
+    if not normalized_keys or len(normalized_keys) != len(parsed):
+        raise ValueError("SOC_PINGAN_COMPAT_APP_KEYS_JSON requires non-empty string keys and values")
+    exact_key = normalized_keys.get(app_code)
+    if exact_key is not None:
+        return exact_key
+    unique_keys = tuple(dict.fromkeys(normalized_keys.values()))
+    if len(unique_keys) == 1:
+        return unique_keys[0]
+    raise ValueError("live acceptance cannot choose one compatibility key from multiple allowed values")
 
 
 def _require_internal_mode(values: Mapping[str, str], name: str) -> None:
