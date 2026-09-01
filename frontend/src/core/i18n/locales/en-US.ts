@@ -124,6 +124,8 @@ export const enUS: Translations = {
     loadingFullFile: "Loading full file...",
     previewFailed:
       "This file could not be previewed. You can still download it.",
+    viewSource: "View source",
+    missingTarget: "This link does not say which artifact to display.",
   },
 
   // Citations
@@ -459,6 +461,8 @@ export const enUS: Translations = {
       pause: "Pause",
       resume: "Resume",
       trigger: "Trigger now",
+      duplicate: "Duplicate",
+      duplicateTitleSuffix: " (Copy)",
       delete: "Delete",
     },
     deleteConfirm:
@@ -619,6 +623,8 @@ export const enUS: Translations = {
     branchFailed: "Failed to branch conversation.",
     streamReplayGap:
       "Some live updates expired. The conversation was restored from saved state.",
+    outlineLabel: "Conversation outline",
+    outlineAttachmentFallback: "Image or file message",
   },
 
   // Chats
@@ -1216,6 +1222,11 @@ export const enUS: Translations = {
       adminRequired: "Admin privileges are required to manage agent skills.",
       installAdminRequired:
         "Admin privileges are required to install agent skills.",
+      installFromFile: "Install .skill",
+      installingArchive: "Installing...",
+      invalidArchive: "Choose a file with the .skill extension.",
+      archiveTooLarge: "The skill archive must be 100 MiB or smaller.",
+      installFailed: "Failed to install the skill archive.",
     },
     notification: {
       title: "Notification",
