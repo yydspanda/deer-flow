@@ -3,6 +3,12 @@
 from soc_agent.db.base import SocBase, create_soc_tables
 from soc_agent.db.config import resolve_database_url, to_sync_database_url
 from soc_agent.db.effectiveness import SqlAlchemySocEffectivenessRepository
+from soc_agent.db.jobs import (
+    ProcessingJobConflictError,
+    ProcessingJobError,
+    ProcessingJobNotFoundError,
+    SqlAlchemyProcessingJobRepository,
+)
 from soc_agent.db.migration_runner import upgrade_soc_schema
 from soc_agent.db.models import (
     SocActionAuthorizationRow,
@@ -12,6 +18,8 @@ from soc_agent.db.models import (
     SocApprovalGrantRow,
     SocApprovalRequestRow,
     SocAuthorizationEnrichmentRow,
+    SocCallbackAttemptRow,
+    SocCallbackOutboxRow,
     SocDecisionAuditLogRow,
     SocDecisionTransitionRow,
     SocDispositionOutcomeRow,
@@ -30,6 +38,8 @@ from soc_agent.db.models import (
     SocMutationAuditRow,
     SocNormalizationMaintenanceIssueRow,
     SocNormalizationSchemaBaselineRow,
+    SocProcessingJobEventRow,
+    SocProcessingJobRow,
     SocReviewQueueRow,
     SocSkillFeedbackObservationRow,
     SocSkillImprovementCandidateRow,
@@ -43,6 +53,8 @@ __all__ = [
     "SocActionAuthorizationRow",
     "SocActionExecutionRow",
     "SocAuthorizationEnrichmentRow",
+    "SocCallbackAttemptRow",
+    "SocCallbackOutboxRow",
     "SocApprovalGrantRow",
     "SocApprovalRequestRow",
     "SocAlertSummaryRow",
@@ -65,15 +77,21 @@ __all__ = [
     "SocMutationAuditRow",
     "SocNormalizationMaintenanceIssueRow",
     "SocNormalizationSchemaBaselineRow",
+    "SocProcessingJobEventRow",
+    "SocProcessingJobRow",
     "SocReviewQueueRow",
     "SocSkillFeedbackObservationRow",
     "SocSkillImprovementCandidateRow",
     "SocBase",
     "SqlAlchemyAlertRepository",
+    "SqlAlchemyProcessingJobRepository",
     "SqlAlchemySocEffectivenessRepository",
     "SqlAlchemySocOperationsRepository",
     "create_soc_tables",
     "resolve_database_url",
     "to_sync_database_url",
     "upgrade_soc_schema",
+    "ProcessingJobConflictError",
+    "ProcessingJobError",
+    "ProcessingJobNotFoundError",
 ]

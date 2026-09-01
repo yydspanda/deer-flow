@@ -1,0 +1,13 @@
+{
+  "app_code": "<approved-app-code>",
+  "flow_id": "<approved-flow-id>",
+  "session_id": "<unique-live-acceptance-session-id>",
+  "alert_id": "<approved-pending-alert-id>",
+  "alert_data": {
+    "alert": {
+      "id": "<approved-pending-alert-id>",
+      "executeType": 0,
+      "message": "<replace-with-the-approved-complete-alert-payload>"
+    }
+  }
+}

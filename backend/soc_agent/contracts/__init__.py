@@ -195,6 +195,20 @@ from soc_agent.contracts.operations import (
     SocOperationsSnapshot,
     SocPersistedOperationsMetrics,
 )
+from soc_agent.contracts.processing_jobs import (
+    ACTIVE_PROCESSING_JOB_STATUSES,
+    CallbackAttemptOutcome,
+    CallbackOutboxStatus,
+    ProcessingJobStatus,
+    SocCallbackAttemptRecord,
+    SocCallbackOutboxRecord,
+    SocCallbackOutboxSubmission,
+    SocProcessingJob,
+    SocProcessingJobEvent,
+    SocProcessingJobSubmission,
+    stable_processing_payload_sha256,
+    stable_processing_submission_sha256,
+)
 from soc_agent.contracts.role_verification import (
     RoleAdjudicationVerificationResult,
     RoleVerificationAlternative,
@@ -600,6 +614,18 @@ from soc_agent.contracts.tenant_policy import (
 )
 
 __all__ = [
+    "ACTIVE_PROCESSING_JOB_STATUSES",
+    "CallbackAttemptOutcome",
+    "CallbackOutboxStatus",
+    "ProcessingJobStatus",
+    "SocCallbackAttemptRecord",
+    "SocProcessingJob",
+    "SocCallbackOutboxRecord",
+    "SocCallbackOutboxSubmission",
+    "SocProcessingJobEvent",
+    "SocProcessingJobSubmission",
+    "stable_processing_payload_sha256",
+    "stable_processing_submission_sha256",
     "SocAlertAttentionLevel",
     "SocAlertInvestigationContext",
     "SocAlertResult",

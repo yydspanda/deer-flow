@@ -1,4 +1,4 @@
-"""Safe connectivity smoke for the PingAn loopback LiteLLM gateway."""
+"""Safe connectivity smoke for the project-owned PingAn model gateway."""
 
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _SMOKE_PROMPT = "Reply with exactly the ASCII text OK."
 
 
-class PingAnLiteLLMSmokeReport(BaseModel):
+class PingAnModelGatewaySmokeReport(BaseModel):
     """Credential-free evidence for one OpenAI-compatible chat completion."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.pingan_litellm_smoke.v1"] = "soc.pingan_litellm_smoke.v1"
+    schema_version: Literal["soc.pingan_model_gateway_smoke.v1"] = "soc.pingan_model_gateway_smoke.v1"
     outcome: Literal[
         "passed",
         "invalid_configuration",
@@ -46,34 +46,46 @@ class PingAnLiteLLMSmokeReport(BaseModel):
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
+    thinking_requested: bool = False
+    reasoning_effort_requested: str | None = None
     error_type: str | None = None
     error_message: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-def run_pingan_litellm_smoke(
+def run_pingan_model_gateway_smoke(
     environ: Mapping[str, str] | None = None,
     *,
     client: httpx.Client | None = None,
-) -> PingAnLiteLLMSmokeReport:
+) -> PingAnModelGatewaySmokeReport:
     """Issue one fixed, non-business chat completion against the local gateway."""
 
     env = dict(os.environ if environ is None else environ)
     started = monotonic()
     endpoint_path = "/v1/chat/completions"
-    model = env.get("PINGAN_LITELLM_MODEL", "").strip()
+    model = env.get("PINGAN_MODEL_GATEWAY_MODEL", "").strip()
     try:
-        endpoint_url, endpoint_path = _completion_endpoint(env.get("PINGAN_LITELLM_BASE_URL", ""))
-        api_key = _required_non_placeholder(env, "PINGAN_LITELLM_API_KEY")
-        model = _required_non_placeholder(env, "PINGAN_LITELLM_MODEL")
+        endpoint_url, endpoint_path = _completion_endpoint(env.get("PINGAN_MODEL_GATEWAY_BASE_URL", ""))
+        api_key = _required_non_placeholder(env, "PINGAN_MODEL_GATEWAY_API_KEY")
+        model = _required_non_placeholder(env, "PINGAN_MODEL_GATEWAY_MODEL")
         timeout_seconds = _positive_float(
-            env.get("PINGAN_LITELLM_SMOKE_TIMEOUT_SECONDS", "60"),
-            name="PINGAN_LITELLM_SMOKE_TIMEOUT_SECONDS",
+            env.get("PINGAN_MODEL_GATEWAY_SMOKE_TIMEOUT_SECONDS", "60"),
+            name="PINGAN_MODEL_GATEWAY_SMOKE_TIMEOUT_SECONDS",
         )
         max_response_bytes = _positive_int(
-            env.get("PINGAN_LITELLM_SMOKE_MAX_RESPONSE_BYTES", "1000000"),
-            name="PINGAN_LITELLM_SMOKE_MAX_RESPONSE_BYTES",
+            env.get("PINGAN_MODEL_GATEWAY_SMOKE_MAX_RESPONSE_BYTES", "1000000"),
+            name="PINGAN_MODEL_GATEWAY_SMOKE_MAX_RESPONSE_BYTES",
         )
+        thinking_requested = _boolean(
+            env.get("PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED", "false"),
+            name="PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED",
+        )
+        reasoning_effort = env.get(
+            "PINGAN_MODEL_GATEWAY_SMOKE_REASONING_EFFORT",
+            "high",
+        ).strip()
+        if len(reasoning_effort) > 32:
+            raise ValueError("PINGAN_MODEL_GATEWAY_SMOKE_REASONING_EFFORT is too long")
     except (TypeError, ValueError) as exc:
         return _failure_report(
             outcome="invalid_configuration",
@@ -81,7 +93,7 @@ def run_pingan_litellm_smoke(
             model=model or "<unconfigured>",
             started=started,
             error_type=exc.__class__.__name__,
-            error_message="PingAn LiteLLM smoke configuration is invalid.",
+            error_message="PingAn model gateway smoke configuration is invalid.",
         )
 
     payload = {
@@ -90,6 +102,12 @@ def run_pingan_litellm_smoke(
         "temperature": 0,
         "max_tokens": 8,
         "stream": False,
+        "extra_body": {
+            "chat_template_kwargs": {
+                "enable_thinking": thinking_requested,
+                "reasoning_effort": reasoning_effort,
+            }
+        },
     }
     owns_client = client is None
     transport = client or httpx.Client(timeout=timeout_seconds)
@@ -111,7 +129,7 @@ def run_pingan_litellm_smoke(
                 started=started,
                 http_status=response.status_code,
                 error_type="HTTPStatusError",
-                error_message="PingAn LiteLLM rejected the configured credential.",
+                error_message="PingAn model gateway rejected the configured credential.",
             )
         if not 200 <= response.status_code < 300:
             return _failure_report(
@@ -121,10 +139,10 @@ def run_pingan_litellm_smoke(
                 started=started,
                 http_status=response.status_code,
                 error_type="HTTPStatusError",
-                error_message="PingAn LiteLLM returned a non-success HTTP status.",
+                error_message="PingAn model gateway returned a non-success HTTP status.",
             )
         if len(response.content) > max_response_bytes:
-            raise ValueError("LiteLLM response exceeded the configured size limit")
+            raise ValueError("model gateway response exceeded the configured size limit")
         body = response.json()
         parsed = _parse_completion(body)
     except httpx.TimeoutException as exc:
@@ -134,7 +152,7 @@ def run_pingan_litellm_smoke(
             model=model,
             started=started,
             error_type=exc.__class__.__name__,
-            error_message="PingAn LiteLLM chat completion timed out.",
+            error_message="PingAn model gateway chat completion timed out.",
         )
     except httpx.HTTPError as exc:
         return _failure_report(
@@ -143,7 +161,7 @@ def run_pingan_litellm_smoke(
             model=model,
             started=started,
             error_type=exc.__class__.__name__,
-            error_message="PingAn LiteLLM chat completion could not be reached.",
+            error_message="PingAn model gateway chat completion could not be reached.",
         )
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         return _failure_report(
@@ -153,7 +171,7 @@ def run_pingan_litellm_smoke(
             started=started,
             http_status=response.status_code if "response" in locals() else None,
             error_type=exc.__class__.__name__,
-            error_message="PingAn LiteLLM returned an invalid chat completion response.",
+            error_message="PingAn model gateway returned an invalid chat completion response.",
         )
     finally:
         if owns_client:
@@ -161,7 +179,7 @@ def run_pingan_litellm_smoke(
 
     content = parsed["content"]
     usage = parsed["usage"]
-    return PingAnLiteLLMSmokeReport(
+    return PingAnModelGatewaySmokeReport(
         outcome="passed",
         passed=True,
         endpoint_path=endpoint_path,
@@ -176,6 +194,8 @@ def run_pingan_litellm_smoke(
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
         total_tokens=usage.get("total_tokens"),
+        thinking_requested=thinking_requested,
+        reasoning_effort_requested=reasoning_effort,
     )
 
 
@@ -184,12 +204,12 @@ def _completion_endpoint(base_url: str) -> tuple[str, str]:
     parsed = urlparse(normalized)
     hostname = (parsed.hostname or "").lower()
     if parsed.scheme not in {"http", "https"} or hostname not in _LOOPBACK_HOSTS:
-        raise ValueError("LiteLLM base URL must be an HTTP(S) loopback endpoint")
+        raise ValueError("model gateway base URL must be an HTTP(S) loopback endpoint")
     if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
-        raise ValueError("LiteLLM base URL cannot contain credentials, parameters, query, or fragment")
+        raise ValueError("model gateway base URL cannot contain credentials, parameters, query, or fragment")
     base_path = parsed.path.rstrip("/")
     if base_path != "/v1":
-        raise ValueError("LiteLLM base URL must end at the OpenAI-compatible /v1 boundary")
+        raise ValueError("model gateway base URL must end at the OpenAI-compatible /v1 boundary")
     endpoint_path = f"{base_path}/chat/completions"
     return f"{normalized.rstrip('/')}/chat/completions", endpoint_path
 
@@ -213,6 +233,15 @@ def _positive_int(raw: str, *, name: str) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _boolean(raw: str, *, name: str) -> bool:
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _parse_completion(body: Any) -> dict[str, Any]:
@@ -268,8 +297,8 @@ def _failure_report(
     error_type: str,
     error_message: str,
     http_status: int | None = None,
-) -> PingAnLiteLLMSmokeReport:
-    return PingAnLiteLLMSmokeReport(
+) -> PingAnModelGatewaySmokeReport:
+    return PingAnModelGatewaySmokeReport(
         outcome=outcome,
         passed=False,
         endpoint_path=endpoint_path,

@@ -36,6 +36,10 @@ dependencies = [
     "wecom-aibot-python-sdk>=0.1.6",
     "dingtalk-stream>=0.24.3",
     "bcrypt>=4.0.0",
+    # Direct dependency: the PingAn model gateway signs EAGW requests with an
+    # operator-provided RSA key. Do not rely on an indirect SDK dependency for
+    # this security boundary.
+    "cryptography>=50.0.0",
     "pyjwt>=2.13.0",
     "email-validator>=2.0.0",
     "json-repair>=0.61.1",

@@ -29,8 +29,8 @@ composition/extensions，真实值只通过环境变量注入，不再现场增�
 - [x] Agent Platform wire contract 已从旧源码提取到本项目自包含 HTTP client，不再 import 旧项目的 `run_workflow`。
 - [x] 当前内网 Apple Silicon Mac 已准备 Python `3.12.7`、uv、Node `24`、pnpm 内网源与 nginx `1.23`，
   可使用无 Docker Host DEV；CPython `3.12.3` 离线工具链保留为备用。
-- [x] 已提供固定无业务数据的 LiteLLM `chat.completions` smoke；报告不保存 key、响应 ID 或模型原文。
-- [ ] 在内网启动 `sec_know_model` 后执行 LiteLLM smoke，并保存 `outcome=passed` 的 `0600` 报告。
+- [x] 已提供项目自有 OpenAI-compatible 模型网关和固定无业务数据的 `chat.completions` smoke；报告不保存 key、响应 ID 或模型原文。
+- [ ] 在内网由 Host DEV 启动项目模型网关后执行 smoke，并保存 `outcome=passed` 的 `0600` 报告。
 - [x] Agent Platform 的 `YHSYS` PRD URL、credential 与固定 `message.by=WANGWENBIN520` 已从旧源码确认；迁移器只把 secret 写入 Git-ignored `0600` env，真实调用仍需显式 PRD confirmation 和 `--confirm-live`。
 - [x] 首轮按直接访问 DEV/STG 设计，不配置代理、自定义 CA 或客户端证书；只有真实 smoke 明确报出网络前置条件时才补。
 - [ ] 确认 DEV 服务是否存在来源 IP 白名单，以及当前 Mac 是否已放行。
@@ -60,7 +60,7 @@ D12-B 之后再收集：TI 和安全标签的脱敏成功/查无/错误响应，
 | Threat intelligence | `POST /public/indicatorSearch`，与资产接口共用 ZEUS App ID/App Key |
 | Security tags | `POST /public/searchTagContent`，与资产接口共用 ZEUS App ID/App Key |
 | Success parsing | `searchAssetInfo` 和 `run_workflow` 的成功响应结构按旧代码实现并做兼容解析 |
-| Local model endpoint | LOCAL profile exposes OpenAI-compatible `http://localhost:4001/v1/`; provider alias is `DeepSeek_V4_Flash` |
+| Local model endpoint | 本项目在 `http://127.0.0.1:4001/v1/` 暴露 OpenAI-compatible gateway；公共 alias 为 `deepseek-v4-flash`，内部 EAGW scene/upstream model 由 private overlay 配置 |
 | ZEUS status map | `0..10` 对应已忽略、待审阅、退回中、待确认、处理中、待复核、待关闭、子单处理中、子单已关闭、已关闭、编辑 |
 
 SOC Runtime 不实现 `endpoint.process_tree.lookup` 或 `host.event_context.lookup`。进程树、命令行、登录账号和主机事件只使用告警自身携带的 bounded native evidence。
@@ -102,7 +102,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 - 外网构建 `deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz`。
 - 包内固定 Apple Silicon CPython `3.12.3`、`uv` 和当前 `backend/uv.lock` 的 `pingan-dev` 依赖缓存。
 - 安装器只写项目内的 `backend/.deer-flow/toolchain/`、`backend/.deer-flow/offline/` 和 `backend/.venv/`。
-- 安装过程强制 `--offline --no-python-downloads`，不使用 `sudo`，不修改系统 Python 或 `sec_know_model/.venv`。
+- 安装过程强制 `--offline --no-python-downloads`，不使用 `sudo`，不修改系统 Python，也不依赖其他项目的虚拟环境。
 - checkout 路径由 `backend/scripts/soc_pingan_local_paths.py` 基于脚本位置解析，不写死某位同事的 `/Users/...`。
 - 平安 Maven/PyPI 镜像只用于离线安装之后的可选依赖维护。项目使用 `uv` 而不是 Poetry；
   `backend/samples/pingan_dev/uv-index.env.example` 提供 `UV_DEFAULT_INDEX` 和精确 host:port 的
@@ -215,12 +215,12 @@ roster 或其他系统能否提供带 source/version/scope/validity 的事实；
 
 ### 5.1 LLM DEV configuration
 
-已确认并提供 `backend/samples/pingan_dev/config.example.yaml`：DeerFlow profile 名为 `deepseek-v4-flash`，向本地 OpenAI-compatible gateway 发送 provider alias `DeepSeek_V4_Flash`。Base URL 和 API key 从 `.env.soc-dev.local` 注入；仍需在内网确认并发/RPM 限制及 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full` 的使用范围。
+已确认并提供 `backend/samples/pingan_dev/config.example.yaml`：DeerFlow profile 和本地 gateway 公共 alias 均为 `deepseek-v4-flash`。Gateway 再根据 `.env.soc-dev.local` 中的 EAGW scene/upstream 配置调用内网模型；仍需在内网确认并发/RPM 限制及 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full` 的使用范围。
 
-验证分两层：`GET /models` 只证明 gateway 和凭证的基础可达性；
-`backend/scripts/soc_pingan_litellm_smoke.py --confirm-live --report-path ...` 才真实调用一次
+验证分两层：Gateway `/health` 只证明进程和本地鉴权边界可达；
+`backend/scripts/soc_pingan_model_gateway_smoke.py --confirm-live --report-path ...` 才真实调用一次
 `POST /v1/chat/completions`。该脚本只接受 loopback endpoint，使用固定无业务提示词，并保存不含响应正文的
-`soc.pingan_litellm_smoke.v1` 报告。
+`soc.pingan_model_gateway_smoke.v1` 报告。
 
 ### 5.2 SQLite-only DEV database
 
@@ -261,13 +261,18 @@ backend/.deer-flow/data/soc_agent_dev.db
 | `d12b-test-cases.local.yaml` | No | 真实 IP/host/UM、expected outcome/attempt 和 fault-injection 环境变量引用；文件权限 `0600` |
 | `direct-provider-cases.json` | No by default | `soc.pingan_asset_case_matrix_report.v1`；只含 query hash、latency、attempt/error 分类，不含 raw query/UM/Provider body/override value |
 | `evidence-readback.json` | No by default | `soc.pingan_d12b_evidence_acceptance.v1`；只含 ID/hash/check/error type，证明 MCP/Dispatcher/evidence/shared context 和 Run/Review 不变式，不含 raw lookup/result |
-| `litellm-smoke.json` | Yes after review | 固定无业务 prompt 的连通性报告；只含模型、状态、latency、token、文本长度/hash，不含 key 或模型原文 |
+| `model-gateway-smoke.json` | Yes after review | 固定无业务 prompt 的连通性报告；只含模型、状态、latency、token、文本长度/hash，不含 key 或模型原文 |
+| `legacy-compat/task-request.local.json` | No | 一条仍为待研判的批准告警，保持旧 task 请求形态并使用唯一 session；权限 `0600`，不进源码包 |
+| `legacy-compat/live-acceptance.json` | Yes after review | `soc.pingan_legacy_live_acceptance.v1`；只含请求/结果 hash、任务状态、Runtime/precheck/callback 证明和耗时，不含正文或凭证 |
 
 ## 8. Implementation Order After Collection / 收集后的实现顺序
 
 ```text
 DEV profile + no-network preflight (implemented)
-    -> loopback LiteLLM chat.completions smoke (implemented; internal execution pending)
+    -> project model gateway + durable legacy fake E2E (implemented externally)
+    -> loopback gateway -> real EAGW chat.completions smoke (internal execution pending)
+    -> 8090 old submit/status + real ZEUS precheck + Runtime + callback live acceptance
+    -> old ZEUS page result/status readback
     -> PI-01A threat_intel.ip_reputation.lookup Provider/MCP (implemented externally)
     -> PI-01A real DEV hit/not-found/error/timeout + actual field coverage + evidence readback
     -> PI-01B1 security_tag.lookup Provider/MCP (implemented externally)

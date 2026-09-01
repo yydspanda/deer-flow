@@ -12,10 +12,30 @@ same host launcher. `install` may use only the configured PingAn PyPI/NPM
 registries; `start` must retain `--skip-install`, disable Next.js telemetry, and
 use `LocalSandboxProvider`. The DEV wrapper owns the explicit safety profile for
 the Memory/Corpus workbenches: isolated SQLite, `dev` Memory/automation scope,
-tenant policy disabled, and external action execution disabled. It must validate
+reviewed tenant policy enabled, and external action execution disabled. It must validate
 the canonical Memory corpus plus the merged corpus/index/payload store before
 starting. It must not add Docker as a prerequisite, hard-code a developer home
 path, or create a second Gateway/frontend/nginx implementation.
+
+That wrapper also owns three sidecars through
+`scripts/soc_pingan_host_sidecars.py`: the loopback project model gateway on `4001`, the
+legacy ZEUS compatibility API on `8090`, and one durable compatibility worker. Internal
+DEV may bind authenticated `8090` to the trusted LAN to preserve the old upstream entry;
+`--local-only` must force it back to loopback, and `4001` must never leave loopback. Sidecar PID/state
+files are marker-checked before signaling, logs remain under the ignored Host DEV state
+directory, and `stop` includes disabled services so stale processes cannot survive a
+configuration change. Keep the model gateway single-process because its admission
+semaphore is process-local. The old `sec_know_model`, LiteLLM, Celery, and Redis startup
+scripts are reference material, not Host DEV dependencies.
+
+`backend/scripts/soc_pingan_legacy_fake_acceptance.py` is the no-network
+composition check and must always report `simulated=true`. The separate
+`soc_pingan_legacy_live_acceptance.py` accepts only a private mode-`0600`
+`*.local.json`, loopback compatibility API, explicit `--confirm-live`, and both
+provider modes set to `internal`. Its pass gate requires a fresh durable job,
+idempotent replay, real pending-alert lifecycle evidence, a Runtime run/model,
+and a delivered real callback attempt. Reports must contain hashes and state
+only, never request/result bodies or credentials.
 
 ## Backend Static Analysis Commands
 

@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -20,9 +21,20 @@ from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from scripts.soc_pingan_host_sidecars import (  # noqa: E402
+    HostDevSidecarError,
+    build_pingan_sidecar_specs,
+    sidecar_status,
+    start_sidecars,
+    stop_sidecars,
+)
+
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 RUNTIME_DIR = BACKEND / ".deer-flow" / "internal-host-dev"
+SIDECAR_RUNTIME_DIR = RUNTIME_DIR / "sidecars"
 LOCKED_REQUIREMENTS = RUNTIME_DIR / "backend-requirements.lock.txt"
 UV_INDEX_PROFILE = BACKEND / "samples" / "pingan_dev" / "uv-index.env.example"
 LOCAL_ENV = ROOT / ".env.soc-dev.local"
@@ -393,15 +405,50 @@ def start_runtime(
             "Authentication remains enabled; allow nginx through the macOS firewall.",
             flush=True,
         )
-    command = build_start_command(daemon=daemon, demo_no_auth=demo_no_auth)
-    os.execve(
-        command[0],
-        command,
-        build_start_environment(
-            allowed_origins=resolved_origins,
-            force_allowed_origins_override=True,
-        ),
+    start_environment = build_start_environment(
+        allowed_origins=resolved_origins,
+        force_allowed_origins_override=True,
     )
+    runtime_environment = constrain_sidecar_bindings(
+        load_local_runtime_environment(start_environment),
+        local_only=local_only,
+    )
+    if (
+        resolved_origins
+        and runtime_environment.get("SOC_PINGAN_COMPAT_ENABLED", "true").strip().lower()
+        in {"1", "true", "yes", "on"}
+        and runtime_environment.get("SOC_PINGAN_COMPAT_HOST", "127.0.0.1").strip()
+        in {"0.0.0.0", "::"}
+    ):
+        compat_port = runtime_environment.get("SOC_PINGAN_COMPAT_PORT", "8090")
+        print("Legacy ZEUS compatibility ingress:", flush=True)
+        for origin in resolved_origins:
+            print(
+                f"  http://{_origin_host(origin)}:{compat_port}/workflow/task",
+                flush=True,
+            )
+    specs = build_pingan_sidecar_specs(
+        root=ROOT,
+        environment=runtime_environment,
+    )
+    start_sidecars(
+        specs,
+        runtime_dir=SIDECAR_RUNTIME_DIR,
+        environment=runtime_environment,
+    )
+    command = build_start_command(daemon=daemon, demo_no_auth=demo_no_auth)
+    try:
+        subprocess.run(
+            command,
+            cwd=ROOT,
+            env=start_environment,
+            check=True,
+        )
+    except BaseException:
+        stop_sidecars(specs, runtime_dir=SIDECAR_RUNTIME_DIR)
+        raise
+    if not daemon:
+        stop_sidecars(specs, runtime_dir=SIDECAR_RUNTIME_DIR)
 
 
 def build_start_command(*, daemon: bool, demo_no_auth: bool = False) -> list[str]:
@@ -453,6 +500,7 @@ def build_start_environment(
     env.update(
         {
             "SOC_HOST_DEV_ROOT": str(ROOT),
+            "SOC_REPO_ROOT": str(ROOT),
             "DEER_FLOW_CONFIG_PATH": str(LOCAL_CONFIG),
             "NEXT_TELEMETRY_DISABLED": "1",
             "DO_NOT_TRACK": "1",
@@ -465,6 +513,19 @@ def build_start_environment(
     else:
         env.pop("SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE", None)
     return env
+
+
+def constrain_sidecar_bindings(
+    environment: dict[str, str],
+    *,
+    local_only: bool,
+) -> dict[str, str]:
+    """Make --local-only cover the PingAn ingress sidecar as well as Next.js."""
+
+    resolved = dict(environment)
+    if local_only:
+        resolved["SOC_PINGAN_COMPAT_HOST"] = "127.0.0.1"
+    return resolved
 
 
 def resolve_start_allowed_origins(
@@ -571,7 +632,80 @@ def normalize_allowed_origins(values: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def stop_runtime() -> None:
-    subprocess.run([str(ROOT / "scripts" / "serve.sh"), "--stop"], check=True)
+    environment = _best_effort_runtime_environment()
+    specs = build_pingan_sidecar_specs(
+        root=ROOT,
+        environment=environment,
+        include_disabled=True,
+    )
+    try:
+        subprocess.run([str(ROOT / "scripts" / "serve.sh"), "--stop"], check=True)
+    finally:
+        stop_sidecars(specs, runtime_dir=SIDECAR_RUNTIME_DIR)
+
+
+def runtime_status() -> dict[str, Any]:
+    environment = _best_effort_runtime_environment()
+    specs = build_pingan_sidecar_specs(
+        root=ROOT,
+        environment=environment,
+        include_disabled=True,
+    )
+    return {
+        "schema_version": "soc.pingan_macos_host_dev_status.v1",
+        "core": {
+            "gateway_8001": _tcp_port_open(8001),
+            "frontend_3000": _tcp_port_open(3000),
+            "nginx_2026": _tcp_port_open(2026),
+        },
+        "sidecars": sidecar_status(specs, runtime_dir=SIDECAR_RUNTIME_DIR),
+    }
+
+
+def load_local_runtime_environment(
+    base: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Source the operator-owned shell overlay without logging its secrets."""
+
+    environment = build_start_environment(base)
+    completed = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            'set -a; source "$1"; set +a; env -0',
+            "soc-pingan-host-env",
+            str(LOCAL_ENV),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    resolved = dict(environment)
+    for item in completed.stdout.split(b"\0"):
+        if b"=" not in item:
+            continue
+        raw_name, raw_value = item.split(b"=", 1)
+        resolved[raw_name.decode()] = raw_value.decode()
+    return resolved
+
+
+def _best_effort_runtime_environment() -> dict[str, str]:
+    if LOCAL_ENV.is_file():
+        try:
+            return load_local_runtime_environment()
+        except (OSError, subprocess.CalledProcessError, UnicodeDecodeError):
+            pass
+    return build_start_environment()
+
+
+def _tcp_port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 def _resolve_executable(value: str) -> str:
@@ -693,6 +827,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     subparsers.add_parser("stop", help="stop native DEV services")
+    subparsers.add_parser("status", help="show core and SOC sidecar process status")
     return parser.parse_args(argv)
 
 
@@ -712,12 +847,20 @@ def main(argv: list[str] | None = None) -> int:
                 demo_no_auth=args.demo_no_auth,
             )
             return 0
-        else:
+        elif args.action == "stop":
             stop_runtime()
             result = {"status": "stopped"}
+        else:
+            result = runtime_status()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    except (HostDevError, OSError, subprocess.CalledProcessError, ValueError) as exc:
+    except (
+        HostDevError,
+        HostDevSidecarError,
+        OSError,
+        subprocess.CalledProcessError,
+        ValueError,
+    ) as exc:
         print(f"error: {str(exc)[:1000] or type(exc).__name__}", file=sys.stderr)
         return 1
 

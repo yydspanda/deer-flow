@@ -1,18 +1,28 @@
 config_version: 36
 log_level: info
 
-# This profile keeps the public DeerFlow model name stable while routing the
-# provider model ID through the internal OpenAI-compatible LiteLLM gateway.
+# This profile keeps the public DeerFlow model name stable while routing it
+# through this repository's loopback OpenAI-compatible gateway. LiteLLM and the
+# old sec_know_model process are not required.
 models:
   - name: deepseek-v4-flash
     display_name: PingAn DeepSeek V4 Flash
     use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
-    model: $PINGAN_LITELLM_MODEL
-    api_base: $PINGAN_LITELLM_BASE_URL
-    api_key: $PINGAN_LITELLM_API_KEY
+    model: deepseek-v4-flash
+    api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
+    api_key: $PINGAN_MODEL_GATEWAY_API_KEY
     request_timeout: 600.0
     max_retries: 1
-    supports_thinking: false
+    supports_thinking: true
+    when_thinking_enabled:
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
+          reasoning_effort: high
+    when_thinking_disabled:
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
 tool_groups:
   - name: file:read

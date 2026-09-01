@@ -31,17 +31,16 @@ def test_pingan_dev_model_sample_loads_as_deerflow_profile(
     extensions_path = tmp_path / "extensions.json"
     extensions_path.write_text('{"mcpServers": {}, "skills": {}}', encoding="utf-8")
     monkeypatch.setenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH", str(extensions_path))
-    monkeypatch.setenv("PINGAN_LITELLM_MODEL", "DeepSeek_V4_Flash")
-    monkeypatch.setenv("PINGAN_LITELLM_BASE_URL", "http://localhost:4001/v1/")
-    monkeypatch.setenv("PINGAN_LITELLM_API_KEY", "local-proxy-test-key")
+    monkeypatch.setenv("PINGAN_MODEL_GATEWAY_BASE_URL", "http://localhost:4001/v1")
+    monkeypatch.setenv("PINGAN_MODEL_GATEWAY_API_KEY", "local-gateway-test-key")
 
     config = AppConfig.from_file(str(config_path))
     model = config.get_model_config("deepseek-v4-flash")
 
     assert model is not None
-    assert model.model == "DeepSeek_V4_Flash"
-    assert model.api_base == "http://localhost:4001/v1/"
-    assert model.api_key == "local-proxy-test-key"
+    assert model.model == "deepseek-v4-flash"
+    assert model.api_base == "http://localhost:4001/v1"
+    assert model.api_key == "local-gateway-test-key"
     assert config.database.backend == "sqlite"
 
 
@@ -109,7 +108,7 @@ def test_pingan_dev_preflight_validates_profile_without_network_or_secret_output
                 SimpleNamespace(
                     api_base="http://localhost:4001/v1/",
                     api_key="local-proxy-secret",
-                    model="DeepSeek_V4_Flash",
+                    model="deepseek-v4-flash",
                 )
                 if name == "deepseek-v4-flash"
                 else None

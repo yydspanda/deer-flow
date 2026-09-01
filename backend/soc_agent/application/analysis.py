@@ -51,6 +51,7 @@ def build_soc_analysis_service(
     memory_environment: str | None = None,
     runtime_environment: str | None = None,
     pattern_observation_enabled: bool | None = None,
+    execute_authorized_actions: bool | None = None,
 ) -> SocAnalysisService:
     """Build the one analysis service shared by CLI and offline batch entry points."""
 
@@ -73,6 +74,7 @@ def build_soc_analysis_service(
         action_adapter_registry=action_adapter_registry,
         runtime_environment=resolved_environment,
         pattern_observation_enabled=pattern_observation_enabled,
+        execute_authorized_actions=execute_authorized_actions,
     )
     analysis_request_enricher = _build_analysis_request_enricher(
         repository,
@@ -163,6 +165,7 @@ def _build_post_analysis_observers(
     action_adapter_registry: SocActionAdapterRegistryPort | None = None,
     runtime_environment: str | None = None,
     pattern_observation_enabled: bool | None = None,
+    execute_authorized_actions: bool | None = None,
 ) -> tuple[PostAnalysisObserver, ...]:
     observers: list[PostAnalysisObserver] = []
     tenant_policy_enabled = _strict_env_bool(
@@ -253,9 +256,13 @@ def _build_post_analysis_observers(
         if automation_environment and tenant_environment and automation_environment.casefold() != tenant_environment.casefold():
             raise ValueError("SOC automation and tenant policy environments must match")
         environment = automation_environment or tenant_environment or "default"
-        execute_actions = _strict_env_bool(
-            "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS",
-            default=False,
+        execute_actions = (
+            execute_authorized_actions
+            if execute_authorized_actions is not None
+            else _strict_env_bool(
+                "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS",
+                default=False,
+            )
         )
         if execute_actions and not automation_path:
             raise ValueError("SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS requires SOC_AUTOMATION_POLICY_PATH")

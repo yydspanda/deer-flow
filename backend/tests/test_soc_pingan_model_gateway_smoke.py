@@ -4,26 +4,32 @@ import json
 
 import httpx
 
-from soc_agent.integrations.pingan.litellm_smoke import run_pingan_litellm_smoke
+from soc_agent.integrations.pingan.model_gateway_smoke import run_pingan_model_gateway_smoke
 
 
-def test_litellm_smoke_calls_chat_completions_without_persisting_content_or_key() -> None:
+def test_model_gateway_smoke_calls_chat_completions_without_persisting_content_or_key() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == "http://localhost:4001/v1/chat/completions"
         assert request.headers["authorization"] == "Bearer local-secret"
         payload = json.loads(request.content)
         assert payload == {
-            "model": "DeepSeek_V4_Flash",
+            "model": "deepseek-v4-flash",
             "messages": [{"role": "user", "content": "Reply with exactly the ASCII text OK."}],
             "temperature": 0,
             "max_tokens": 8,
             "stream": False,
+            "extra_body": {
+                "chat_template_kwargs": {
+                    "enable_thinking": True,
+                    "reasoning_effort": "high",
+                }
+            },
         }
         return httpx.Response(
             200,
             json={
                 "id": "internal-response-id",
-                "model": "DeepSeek_V4_Flash",
+                "model": "deepseek-v4-flash-0731",
                 "choices": [
                     {
                         "message": {"role": "assistant", "content": "OK"},
@@ -39,12 +45,12 @@ def test_litellm_smoke_calls_chat_completions_without_persisting_content_or_key(
         )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        report = run_pingan_litellm_smoke(_valid_env(), client=client)
+        report = run_pingan_model_gateway_smoke(_valid_env(), client=client)
 
     assert report.outcome == "passed"
     assert report.passed is True
     assert report.endpoint_path == "/v1/chat/completions"
-    assert report.model_returned == "DeepSeek_V4_Flash"
+    assert report.model_returned == "deepseek-v4-flash-0731"
     assert report.content_length == 2
     assert report.total_tokens == 9
     encoded = json.dumps(report.model_dump(mode="json"))
@@ -53,7 +59,7 @@ def test_litellm_smoke_calls_chat_completions_without_persisting_content_or_key(
     assert "internal-response-id" not in encoded
 
 
-def test_litellm_smoke_rejects_non_loopback_without_calling_transport() -> None:
+def test_model_gateway_smoke_rejects_non_loopback_without_calling_transport() -> None:
     called = False
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -62,21 +68,21 @@ def test_litellm_smoke_rejects_non_loopback_without_calling_transport() -> None:
         return httpx.Response(200)
 
     env = _valid_env()
-    env["PINGAN_LITELLM_BASE_URL"] = "https://model.example/v1/"
+    env["PINGAN_MODEL_GATEWAY_BASE_URL"] = "https://model.example/v1/"
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        report = run_pingan_litellm_smoke(env, client=client)
+        report = run_pingan_model_gateway_smoke(env, client=client)
 
     assert report.outcome == "invalid_configuration"
     assert report.passed is False
     assert called is False
 
 
-def test_litellm_smoke_classifies_authentication_failure_without_response_body() -> None:
+def test_model_gateway_smoke_classifies_authentication_failure_without_response_body() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="credential local-secret rejected")
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        report = run_pingan_litellm_smoke(_valid_env(), client=client)
+        report = run_pingan_model_gateway_smoke(_valid_env(), client=client)
 
     assert report.outcome == "authentication_failed"
     assert report.http_status == 401
@@ -84,12 +90,12 @@ def test_litellm_smoke_classifies_authentication_failure_without_response_body()
     assert "credential local-secret rejected" not in report.error_message
 
 
-def test_litellm_smoke_rejects_empty_completion() -> None:
+def test_model_gateway_smoke_rejects_empty_completion() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "model": "DeepSeek_V4_Flash",
+                "model": "deepseek-v4-flash-0731",
                 "choices": [
                     {
                         "message": {"role": "assistant", "content": ""},
@@ -100,7 +106,7 @@ def test_litellm_smoke_rejects_empty_completion() -> None:
         )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        report = run_pingan_litellm_smoke(_valid_env(), client=client)
+        report = run_pingan_model_gateway_smoke(_valid_env(), client=client)
 
     assert report.outcome == "invalid_response"
     assert report.passed is False
@@ -108,9 +114,11 @@ def test_litellm_smoke_rejects_empty_completion() -> None:
 
 def _valid_env() -> dict[str, str]:
     return {
-        "PINGAN_LITELLM_BASE_URL": "http://localhost:4001/v1/",
-        "PINGAN_LITELLM_API_KEY": "local-secret",
-        "PINGAN_LITELLM_MODEL": "DeepSeek_V4_Flash",
-        "PINGAN_LITELLM_SMOKE_TIMEOUT_SECONDS": "10",
-        "PINGAN_LITELLM_SMOKE_MAX_RESPONSE_BYTES": "100000",
+        "PINGAN_MODEL_GATEWAY_BASE_URL": "http://localhost:4001/v1/",
+        "PINGAN_MODEL_GATEWAY_API_KEY": "local-secret",
+        "PINGAN_MODEL_GATEWAY_MODEL": "deepseek-v4-flash",
+        "PINGAN_MODEL_GATEWAY_SMOKE_TIMEOUT_SECONDS": "10",
+        "PINGAN_MODEL_GATEWAY_SMOKE_MAX_RESPONSE_BYTES": "100000",
+        "PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED": "true",
+        "PINGAN_MODEL_GATEWAY_SMOKE_REASONING_EFFORT": "high",
     }

@@ -66,9 +66,31 @@ PRIVATE_OVERLAY_PATHS = (
 )
 PRIVATE_ENV_REQUIRED_KEYS = frozenset(
     {
-        "PINGAN_LITELLM_BASE_URL",
-        "PINGAN_LITELLM_API_KEY",
-        "PINGAN_LITELLM_MODEL",
+        "PINGAN_MODEL_GATEWAY_BASE_URL",
+        "PINGAN_MODEL_GATEWAY_API_KEY",
+        "PINGAN_MODEL_GATEWAY_MODEL",
+        "SOC_PINGAN_MODEL_GATEWAY_ENABLED",
+        "SOC_PINGAN_MODEL_GATEWAY_PROVIDER",
+        "SOC_PINGAN_MODEL_GATEWAY_UPSTREAM_BASE_URL",
+        "SOC_PINGAN_MODEL_GATEWAY_ALLOWED_HOSTS",
+        "SOC_PINGAN_MODEL_GATEWAY_ALLOW_INSECURE_HTTP",
+        "SOC_PINGAN_MODEL_GATEWAY_APP_KEY",
+        "SOC_PINGAN_MODEL_GATEWAY_APP_SECRET",
+        "SOC_PINGAN_MODEL_GATEWAY_SCENE_ID",
+        "SOC_PINGAN_MODEL_GATEWAY_OPENAPI_CODE",
+        "SOC_PINGAN_MODEL_GATEWAY_OPENAPI_CREDENTIAL",
+        "SOC_PINGAN_MODEL_GATEWAY_RSA_PRIVATE_KEY_FILE",
+        "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY",
+        "SOC_PINGAN_COMPAT_ENABLED",
+        "SOC_PINGAN_COMPAT_APP_KEYS_JSON",
+        "SOC_PINGAN_COMPAT_MAX_REQUEST_BYTES",
+        "SOC_PINGAN_LEGACY_QUEUE_TTL_SECONDS",
+        "SOC_PINGAN_LEGACY_LIFECYCLE_MODE",
+        "SOC_PINGAN_LEGACY_CALLBACK_MODE",
+        "SOC_PINGAN_LEGACY_WORKER_CONCURRENCY",
+        "SOC_PINGAN_LEGACY_WORKER_LEASE_SECONDS",
+        "SOC_PINGAN_LEGACY_WORKER_MAX_ATTEMPTS",
+        "SOC_PINGAN_LEGACY_CALLBACK_MAX_ATTEMPTS",
         "SOC_PINGAN_ENV",
         "SOC_PINGAN_ASSET_PROVIDER_MODE",
         "SOC_PINGAN_ZEUS_BASE_URL",
@@ -104,12 +126,14 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     ".notes/ai_soc/integrations/mock-and-real-register.md",
     ".notes/ai_soc/integrations/pingan-dev-information-collection.md",
     ".notes/ai_soc/integrations/pingan-internal-continuation-handoff.md",
+    ".notes/ai_soc/integrations/pingan-legacy-compatibility-execution-plane.md",
     "AGENTS.md",
     "backend/samples/pingan_dev/README.md",
     "backend/samples/pingan_dev/config.example.yaml",
     "backend/samples/pingan_dev/d12b-test-cases.example.yaml",
     "backend/samples/pingan_dev/env.example",
     "backend/samples/pingan_dev/extensions.example.json",
+    "backend/samples/pingan_dev/legacy-task-request.example.json",
     "backend/samples/pingan_dev/uv-index.env.example",
     "backend/samples/enrichment/pingan-external-simulation.yaml",
     "backend/samples/enrichment/pingan-internal-shadow.yaml",
@@ -124,14 +148,40 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/scripts/soc_pingan_d12b_matrix.py",
     "backend/scripts/soc_pingan_dev_preflight.py",
     "backend/scripts/soc_pingan_local_paths.py",
-    "backend/scripts/soc_pingan_litellm_smoke.py",
+    "backend/scripts/soc_pingan_model_gateway.py",
+    "backend/scripts/soc_pingan_model_gateway_smoke.py",
+    "backend/scripts/soc_pingan_legacy_api.py",
+    "backend/scripts/soc_pingan_legacy_worker.py",
+    "backend/scripts/soc_pingan_legacy_fake_acceptance.py",
+    "backend/scripts/soc_pingan_legacy_live_acceptance.py",
     "backend/scripts/soc_pingan_security_tag_mcp_server.py",
     "backend/scripts/soc_pingan_threat_intel_mcp_server.py",
     "backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py",
+    "backend/app/pingan_compat/__init__.py",
+    "backend/app/pingan_compat/app.py",
+    "backend/app/pingan_model_gateway/__init__.py",
+    "backend/app/pingan_model_gateway/app.py",
+    "backend/soc_agent/application/analysis.py",
+    "backend/soc_agent/protocols.py",
+    "backend/soc_agent/db/models.py",
     "backend/soc_agent/integrations/pingan/agent_workflow.py",
     "backend/soc_agent/integrations/pingan/asset_location.py",
     "backend/soc_agent/integrations/pingan/legacy_workflow_profile.py",
-    "backend/soc_agent/integrations/pingan/litellm_smoke.py",
+    "backend/soc_agent/integrations/pingan/model_gateway.py",
+    "backend/soc_agent/integrations/pingan/model_gateway_smoke.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/acceptance.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/callback.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/contracts.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/execution.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/live_acceptance.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/result_mapper.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/service.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/worker.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/wiring.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/zeus_lifecycle.py",
+    "backend/soc_agent/contracts/processing_jobs.py",
+    "backend/soc_agent/db/jobs.py",
+    "backend/soc_agent/db/migrations/versions/0027_processing_jobs.py",
     "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json",
     "backend/soc_agent/integrations/pingan/security_tag.py",
     "backend/soc_agent/integrations/pingan/threat_intel.py",
@@ -143,8 +193,10 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "scripts/build_pingan_macos_offline_bundle.py",
     "scripts/build_pingan_internal_transfer.py",
     "scripts/soc_pingan_macos_host_dev.py",
+    "scripts/soc_pingan_host_sidecars.py",
     "scripts/test_build_pingan_macos_offline_bundle.py",
     "scripts/test_soc_pingan_macos_host_dev.py",
+    "scripts/test_soc_pingan_host_sidecars.py",
     "validation/compact_zeus/internal_batch/README.md",
     "validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py",
     "validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py",
@@ -793,40 +845,82 @@ unset SOC_DATABASE_URL
 
 DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合并。
 
-## 5. Internal Model / 内网模型
+## 5. Execution Plane Preflight / 执行面预检
 
-在 `$HOME/sec_know_model` 的独立终端按现有顺序启动：
+项目自身提供 `4001` 模型网关、`8090` 旧 ZEUS 兼容 API、持久 Worker 和 Callback
+Dispatcher；不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis。
 
-```bash
-bash ./start_proxy_.sh
-bash ./local_run.sh
-./.venv/bin/python ./run.py
-```
-
-确认 LiteLLM `4001` 可用后执行：
+先运行不访问内网服务的 Fake E2E。它验证旧 HTTP 协议、SQLite migration、幂等、租约恢复、
+通用 Runtime、结果投影、Outbox 与逐次回调审计，但固定标记 `simulated=true`：
 
 ```bash
 cd "$TARGET_REPO"
-eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
-source ./.env.soc-dev.local
-
-backend/.venv/bin/python backend/scripts/soc_pingan_litellm_smoke.py \
-  --confirm-live \
-  --report-path backend/.deer-flow/soc-internal-validation/model/litellm-smoke.json
+backend/.venv/bin/python backend/scripts/soc_pingan_legacy_fake_acceptance.py
 ```
 
-报告必须为 `outcome=passed`、`passed=true`。
+报告必须为 `passed=true`，但不能据此关闭任何真实内网门禁。
+
+`.env.soc-dev.local` 中的 EAGW RSA 私钥路径应指向仓库内未跟踪文件，例如
+`.secrets/eagw-private-key.pem`；文件只在内网创建并设为 `0600`，不得放入源代码包。
 
 ## 6. Start Web / 启动 Web
 
 ```bash
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+python3.12 scripts/soc_pingan_macos_host_dev.py status
 ```
 
-Host DEV 驱动会启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant Policy 和两个 SOC DEV
-Workbench，关闭真实外部动作执行，并自动发现内网地址配置 Next.js/HMR。仅本机使用时加
-`--local-only`。
+Host DEV 驱动会先启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，再启动
+DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
+Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机使用时加 `--local-only`。
+
+服务启动后执行无业务数据的真实模型 smoke：
+
+```bash
+source ./.env.soc-dev.local
+backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \
+  --confirm-live \
+  --report-path backend/.deer-flow/soc-internal-validation/model/model-gateway-smoke.json
+```
+
+报告必须为 `outcome=passed`、`passed=true`；usage 缺失时允许记录为不可用，不得伪造 Token。
+
+然后验证真实旧 ZEUS 兼容闭环。先把一个仍处于“待研判”的已批准 DEV 告警保存为私有请求文件；
+必须使用新的 `session_id`，并保留旧调用方实际发送的完整 `alert_data`：
+
+```bash
+mkdir -p backend/.deer-flow/soc-internal-validation/legacy-compat
+cp backend/samples/pingan_dev/legacy-task-request.example.json \
+  backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+```
+
+编辑该文件并替换全部 placeholder，确认请求 `app_code` 在
+`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 中有对应 key。随后在 `.env.soc-dev.local` 中将以下两项从
+`fake` 改为 `internal`，停止并重新启动 Host DEV，使 Worker 真正读取新配置：
+
+```text
+SOC_PINGAN_LEGACY_LIFECYCLE_MODE=internal
+SOC_PINGAN_LEGACY_CALLBACK_MODE=internal
+```
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+source ./.env.soc-dev.local
+backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
+  --confirm-live \
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
+  --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
+```
+
+只有报告同时满足 `outcome=passed`、`fresh_submission_confirmed=true`、
+`idempotent_replay_confirmed=true`、`run_id_present=true`、`lifecycle_mocked=false`、
+`callback_status=delivered`、`callback_mocked=false` 和
+`proves_real_internal_connectivity=true`，才证明 `8090 submit -> ZEUS precheck -> Runtime/LLM ->
+status -> ZEUS callback` 真实闭环。脚本不会输出告警正文、App Key 或回调正文；随后仍须在旧 ZEUS 页面
+核对回写结果可见且任务状态一致。
 
 `--demo-no-auth` 仅用于可信内网演示：页面跳过注册/登录，所有访问者共享一个合成管理员身份，
 因此不能区分个人审计 actor。需要验收账号与权限时，先停止服务，再去掉该参数启动；无需改代码或数据库：
@@ -863,6 +957,8 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 
 ```text
 D12-B preflight
+  -> model gateway completion smoke
+  -> legacy 8090 submit/status/precheck/callback live acceptance
   -> ZEUS asset direct smoke
   -> MCP asset.locate smoke
   -> InvestigationEvidence 回读

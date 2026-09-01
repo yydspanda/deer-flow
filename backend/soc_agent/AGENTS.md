@@ -126,6 +126,15 @@ file for SOC code. The authoritative product and engineering documents are:
   evidence as production proof.
 - Repositories implement protocols from `soc_agent/protocols.py`. Migrations live under
   `soc_agent/db/migrations/`, use `soc db upgrade`, and own `soc_alembic_version`.
+- Long-running external submissions use the vendor-neutral `ProcessingJobRepository`,
+  not request-scoped background tasks. Persist before acknowledging, claim by bounded
+  lease, recover expired work, and keep a stable Runtime idempotency key so a crash after
+  analysis cannot trigger a second model charge. SQLite permits one coordinating worker;
+  PostgreSQL claims use `FOR UPDATE SKIP LOCKED` for multiple replicas.
+- A terminal processing result and its Callback Outbox entry commit atomically. Callback
+  retries never rerun analysis, and every delivery/retry/dead-letter/expired-lease attempt
+  is append-only audit state. Generic job contracts must not learn tenant lifecycle codes,
+  legacy response envelopes, or vendor credentials.
 - Persist an analysis run, summary, optional ReviewQueue item, journal, and audit entries
   transactionally. A failed transaction must not leave a visible partial run.
 - `SocAlertResult` separates decision usability from operator attention. Uncertainty,

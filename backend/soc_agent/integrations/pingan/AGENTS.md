@@ -121,8 +121,28 @@ generic `soc_agent` code.
 ## Internal DEV And Handoff
 
 - The internal model is accepted through the loopback OpenAI-compatible smoke in
-  `backend/scripts/soc_pingan_litellm_smoke.py`. Reports must not retain keys, fixed
+  `backend/scripts/soc_pingan_model_gateway_smoke.py`. The loopback service is owned by
+  this repository and maps the stable `deepseek-v4-flash` alias to an operator-owned
+  EAGW/OpenAI-compatible upstream. Reports must not retain keys, fixed
   prompts/responses, or business payloads.
+- Old ZEUS compatibility uses a separate PingAn API/worker composition over the generic
+  `ProcessingJobRepository`: persist before accepting, claim with a lease, reuse the
+  stable Runtime idempotency key after recovery, and commit terminal result plus Callback
+  Outbox atomically. Callback attempts are append-only and callback retries must never
+  rerun analysis. Do not restore Celery, Redis, old LlamaIndex flows, or old model routing.
+- Preserve the old `8090` ingress only in the PingAn Host DEV/private deployment profile;
+  keep per-`app_code` authentication and body limits, and restrict the port to approved
+  ZEUS callers. Only `executeType=1/3` receives the legacy 30-minute queue deadline.
+  Expiration skips LLM but still persists a legacy expiration result and Callback Outbox;
+  the generic queue must not learn this tenant rule.
+- Treat the fake execution-plane acceptance and the live compatibility acceptance as
+  separate gates. Live acceptance must use a fresh approved pending alert, prove identical
+  replay returns one job, read non-mocked lifecycle evidence and Runtime lineage from the
+  same database, and require a delivered non-mocked callback attempt. Never place the
+  request, result, callback payload, or app key in its report.
+- The model gateway currently uses one process-local capacity semaphore; launch exactly
+  one gateway process. Scale processing workers only after the internal model service has
+  a reviewed shared admission mechanism or measured capacity increase.
 - Internal Apple Silicon handoff uses
   `scripts/build_pingan_macos_offline_bundle.py`. Resolve checkout paths at runtime; do
   not commit fixed `/Users/...` paths. Private overlay builders reject placeholders,

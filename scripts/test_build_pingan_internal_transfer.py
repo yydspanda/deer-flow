@@ -78,6 +78,17 @@ def test_private_overlay_contains_current_workbench_corpus_and_sidecars() -> Non
     } <= paths
 
 
+def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None:
+    required = set(REQUIRED_HANDOFF_SOURCE_PATHS)
+
+    assert "backend/scripts/soc_pingan_model_gateway.py" in required
+    assert "backend/scripts/soc_pingan_legacy_api.py" in required
+    assert "backend/scripts/soc_pingan_legacy_worker.py" in required
+    assert "backend/scripts/soc_pingan_legacy_fake_acceptance.py" in required
+    assert "scripts/soc_pingan_host_sidecars.py" in required
+    assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
+
+
 def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     runbook = _transfer_runbook(
         timestamp="20260824T000000Z",
@@ -101,6 +112,12 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert TRANSFER_RUNBOOK_NAME in runbook
     assert "full_alert_dams_labeled_merged.workbench-payloads.sqlite" in runbook
     assert "不需要额外 nginx/LAN hotfix" in runbook
+    assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
+    assert "soc_pingan_model_gateway_smoke.py" in runbook
+    assert "soc_pingan_legacy_fake_acceptance.py" in runbook
+    assert "soc_pingan_legacy_live_acceptance.py" in runbook
+    assert "proves_real_internal_connectivity=true" in runbook
+    assert "task-request.local.json" in runbook
 
 
 def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:

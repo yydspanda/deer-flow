@@ -6,10 +6,10 @@
 
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** 在 PingAn DEV 完成真实只读 Provider 与调查链的 `mocked=false` 验收，不改变通用 SOC Runtime 契约。
-- **Next Gate:** `D12-B` asset Provider direct/MCP/persistence smoke，然后依次关闭 `PI-01A` 与 `PI-01B1` 的真实证据门禁。
+- **Current Objective:** `PI-01H` 外网实现与内网交付契约已冻结；下一阶段只注入 PingAn private overlay，关闭真实 EAGW、ZEUS 生命周期/回调、旧页面回读和容量门禁，不改通用 Runtime 契约。
+- **Next Gate:** 在内网 Apple Silicon DEV 先跑 hermetic Fake E2E 与 EAGW completion，再用 live acceptance 关闭 ZEUS task/status/precheck/callback 门禁；随后完成旧页面回读、告警 `1 -> 5 -> 50 -> 200/5000+` 递进 shadow，以及模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-08-31`
+- **Last Updated:** `2026-09-01`
 
 ## Current Constraints / 当前约束
 
@@ -22,6 +22,13 @@
 | Upstream baseline | `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`；2026-08-26 测量为 ahead `261` / behind `0` |
 
 ## Recent Completion Records / 近期完成记录
+
+### 2026-09-01 — Legacy ZEUS compatibility execution plane
+
+- **Task:** `PI-01`
+- **Status:** `Done`
+- **Outcome:** 保留旧 task/status/precheck/callback 协议，内部替换为持久 Processing Job、租约 Worker、统一 SOC Runtime、legacy result projection 与 Callback Outbox；项目自有 `4001` OpenAI-compatible 模型网关取代旧 LiteLLM，macOS Host DEV 统一启停模型网关、`8090` 兼容 API 和 Worker。仅 `executeType=1/3` 使用 30 分钟排队时限，过期不调用模型但仍持久化兼容结果并回调；脱敏 live runner 可在内网一次验证 fresh submit、幂等 replay、真实 precheck、Runtime 与真实 callback attempt。
+- **Verification:** 核心兼容/网关回归、Host sidecar/transfer 回归、SOC 架构边界、空库 `0027` migration、PostgreSQL `FOR UPDATE SKIP LOCKED` 编译回归与真实 Fake E2E 均通过；Fake 报告明确 `simulated=true`、`proves_real_internal_connectivity=false`。
 
 ### 2026-08-31 — SOC workspace navigation and corpus projection performance
 
@@ -84,13 +91,6 @@
 - **Task:** `PI-04`
 - **Status:** `Done`
 - **Outcome:** 完成可复跑能力演示路线、项目摘要、技术方案和 FAQ，并明确真实、mock、shadow 与未验收边界。
-- **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
-
-### 2026-08-24 — Memory inventory and operator-direct revision
-
-- **Task:** `PI-03`
-- **Status:** `Done`
-- **Outcome:** 增加正式 Memory inventory、版本化修订、使用历史和 read-only Match Test，Pattern 与 Memory record 不再混用。
 - **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
 
 ## Update Contract / 更新约定

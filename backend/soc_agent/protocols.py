@@ -37,6 +37,7 @@ from soc_agent.contracts import (
     NormalizationMaintenanceIssueStatus,
     NormalizationMonitoringResult,
     NormalizationSchemaBaseline,
+    ProcessingJobStatus,
     ReviewQueueItem,
     ReviewQueueStatus,
     RoleAdjudicationVerificationResult,
@@ -58,6 +59,9 @@ from soc_agent.contracts import (
     SocAgentApprovalRequest,
     SocAgentApprovalRequestStatus,
     SocBehaviorGroupEffectivenessAggregate,
+    SocCallbackAttemptRecord,
+    SocCallbackOutboxRecord,
+    SocCallbackOutboxSubmission,
     SocDecisionTransitionRecord,
     SocDispositionOutcomeRecord,
     SocDispositionOutcomeReviewKind,
@@ -91,6 +95,9 @@ from soc_agent.contracts import (
     SocMutationOperation,
     SocOperationsKafkaSnapshot,
     SocPersistedOperationsMetrics,
+    SocProcessingJob,
+    SocProcessingJobEvent,
+    SocProcessingJobSubmission,
     SocRuleEffectivenessAggregate,
     SocRuleEffectivenessSelector,
     TenantDispositionPolicy,
@@ -111,6 +118,118 @@ class AnalysisRuntime(Protocol):
     """Run the deterministic analysis pipeline."""
 
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun: ...
+
+
+class ProcessingJobRepository(Protocol):
+    """Stable persistence boundary for durable jobs and callback delivery."""
+
+    def submit(
+        self,
+        submission: SocProcessingJobSubmission,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[SocProcessingJob, bool]: ...
+
+    def get(self, job_id: str) -> SocProcessingJob | None: ...
+
+    def claim_next(
+        self,
+        *,
+        queue_name: str,
+        worker_id: str,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> SocProcessingJob | None: ...
+
+    def recover_expired_leases(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> list[str]: ...
+
+    def renew_lease(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        expected_status: ProcessingJobStatus,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> SocProcessingJob: ...
+
+    def transition(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        expected_status: ProcessingJobStatus,
+        target_status: ProcessingJobStatus,
+        event_type: str,
+        now: datetime | None = None,
+        run_id: str | None = None,
+        result_payload: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        available_at: datetime | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> SocProcessingJob: ...
+
+    def complete_with_callback(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        expected_status: ProcessingJobStatus,
+        target_status: ProcessingJobStatus,
+        event_type: str,
+        result_payload: dict[str, Any],
+        callback: SocCallbackOutboxSubmission,
+        now: datetime | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> tuple[SocProcessingJob, SocCallbackOutboxRecord]: ...
+
+    def get_callback(self, outbox_id: str) -> SocCallbackOutboxRecord | None: ...
+
+    def list_callbacks(self, job_id: str) -> list[SocCallbackOutboxRecord]: ...
+
+    def claim_next_callback(
+        self,
+        *,
+        destination: str,
+        dispatcher_id: str,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> SocCallbackOutboxRecord | None: ...
+
+    def mark_callback_retry(
+        self,
+        outbox_id: str,
+        *,
+        dispatcher_id: str,
+        error_code: str,
+        error_message: str,
+        available_at: datetime,
+        now: datetime | None = None,
+        dead_letter: bool = False,
+    ) -> SocCallbackOutboxRecord: ...
+
+    def mark_callback_delivered(
+        self,
+        outbox_id: str,
+        *,
+        dispatcher_id: str,
+        response_metadata: dict[str, Any],
+        now: datetime | None = None,
+    ) -> SocCallbackOutboxRecord: ...
+
+    def list_events(self, job_id: str) -> list[SocProcessingJobEvent]: ...
+
+    def list_callback_attempts(
+        self,
+        outbox_id: str,
+    ) -> list[SocCallbackAttemptRecord]: ...
 
 
 AnalysisBeforeProviderHook = Callable[

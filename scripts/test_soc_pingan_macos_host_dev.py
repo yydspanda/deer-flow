@@ -12,6 +12,7 @@ from scripts.soc_pingan_macos_host_dev import (
     build_nginx_test_command,
     build_start_command,
     build_start_environment,
+    constrain_sidecar_bindings,
     discover_private_lan_ipv4s,
     expected_pnpm_version,
     is_public_npm_registry,
@@ -144,6 +145,7 @@ def test_start_plan_skips_install_and_enables_governed_policy_without_network_si
     assert environment["NEXT_TELEMETRY_DISABLED"] == "1"
     assert environment["DO_NOT_TRACK"] == "1"
     assert environment["UV_OFFLINE"] == "1"
+    assert environment["SOC_REPO_ROOT"] == str(Path(__file__).resolve().parents[1])
     assert "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true" in command[2]
     assert "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true" in command[2]
     assert (
@@ -212,6 +214,20 @@ def test_local_only_forces_private_env_lan_origins_off() -> None:
     )
 
     assert environment["SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"] == ""
+
+
+def test_local_only_also_forces_legacy_compat_ingress_to_loopback() -> None:
+    environment = {
+        "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
+        "SOC_PINGAN_COMPAT_PORT": "8090",
+    }
+
+    local = constrain_sidecar_bindings(environment, local_only=True)
+    lan = constrain_sidecar_bindings(environment, local_only=False)
+
+    assert local["SOC_PINGAN_COMPAT_HOST"] == "127.0.0.1"
+    assert lan["SOC_PINGAN_COMPAT_HOST"] == "0.0.0.0"
+    assert environment["SOC_PINGAN_COMPAT_HOST"] == "0.0.0.0"
 
 
 def test_default_lan_origins_use_private_default_interface_address() -> None:
@@ -292,6 +308,12 @@ def test_start_cli_accepts_demo_no_auth() -> None:
 
     assert args.daemon is True
     assert args.demo_no_auth is True
+
+
+def test_status_cli_is_available() -> None:
+    args = parse_args(["status"])
+
+    assert args.action == "status"
 
 
 def test_docker_soc_demo_start_is_explicit() -> None:

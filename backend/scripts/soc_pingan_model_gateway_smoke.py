@@ -1,4 +1,4 @@
-"""Issue one non-business chat completion against PingAn's local LiteLLM."""
+"""Issue one non-business chat completion against PingAn's local model gateway."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from soc_agent.integrations.pingan.dev_validation import write_validation_report  # noqa: E402
-from soc_agent.integrations.pingan.litellm_smoke import run_pingan_litellm_smoke  # noqa: E402
+from soc_agent.integrations.pingan.model_gateway_smoke import run_pingan_model_gateway_smoke  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.confirm_live:
         parser.error("--confirm-live is required")
 
-    report = run_pingan_litellm_smoke()
+    report = run_pingan_model_gateway_smoke()
     write_validation_report(report, args.report_path)
     print(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
     return 0 if report.passed else 1

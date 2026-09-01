@@ -1,7 +1,7 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-08-24
+> Reconciled: 2026-09-01
 > Status: `Real Integration Debt / parked`; this is no longer the current product-development pointer
 > Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
@@ -15,7 +15,8 @@
 
 - `D0-D11.1`：通用 SOC Runtime、LLM、Grounding、Decision Policy 和 212 条 corpus 稳定性验证。
 - `D12-A`：PingAn `asset.locate` 生产形态代码、fake transport、stdio MCP、fallback 编排和 fail-closed；结果仍为 `mocked=true`。
-- `D12-B 外网准备`：内网模型 profile、固定无业务数据的 LiteLLM chat smoke、无旧依赖 ZEUS signer、自包含 Agent Platform HTTP client、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 LiteLLM pass 或 Provider `mocked=false` 证据。
+- `D12-B 外网准备`：内网模型 profile、项目自有模型网关与固定无业务数据 chat smoke、无旧依赖 ZEUS signer、自包含 Agent Platform HTTP client、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 EAGW pass 或 Provider `mocked=false` 证据。
+- `PI-01H 外网实现`：旧 task/status 协议、持久 Processing Job、租约 Worker、统一 Runtime、legacy result projection、Callback Outbox/attempt audit、项目模型网关、Host DEV sidecar 与 Fake E2E 已实现；不再依赖旧 `sec_know_model`、LiteLLM、Celery、Redis 或 LlamaIndex workflow。真实 ZEUS/EAGW/callback 与负载证据仍待内网关闭。
 - `PI-01A 外网实现`：`/public/indicatorSearch` typed Provider、stdio MCP、action/evidence 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
 - `PI-01B1 外网实现`：`/public/searchTagContent` typed Provider、stdio MCP、validity/scope mapping 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
 - `PI-01D1/D2/D3`：versioned `SocEnrichmentPolicy/Plan`、deterministic Planner、strict default-off composition、durable execution/attempt/evidence、逐次 mock/real 校验、bounded retry/recovery/replay 与 Kafka/internal-batch opt-in 已实现；默认仍只跑固定 Runtime。
@@ -48,7 +49,7 @@ python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
 commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 `dirty_override_used=true`、`final_handoff_eligible=false`，禁止作为最终内网交付。
 启用 `--include-private-overlay` 时，构建器还会在写出任何 archive 前检查两个 local config 均为
-`0600`、不含 `/Users/...` 硬编码、不含旧 import/operator 字段，并要求 LiteLLM/ZEUS/workflow/fault-case
+`0600`、不含 `/Users/...` 硬编码、不含旧 import/operator 字段，并要求 model-gateway/ZEUS/workflow/fault-case
 的关键变量都存在且不是占位值。未先执行 profile preparer 的旧 `.env.soc-dev.local` 会被明确拒绝，
 这是预期保护，不是打包器故障。
 
@@ -77,7 +78,12 @@ PYTHONPATH=. backend/.venv/bin/pytest -q \
   backend/tests/test_soc_pingan_agent_workflow.py \
   backend/tests/test_soc_pingan_legacy_workflow_profile.py \
   backend/tests/test_soc_pingan_dev_validation.py \
-  backend/tests/test_soc_pingan_litellm_smoke.py \
+  backend/tests/test_soc_pingan_model_gateway.py \
+  backend/tests/test_soc_pingan_model_gateway_smoke.py \
+  backend/tests/test_soc_pingan_legacy_acceptance.py \
+  backend/tests/test_soc_pingan_legacy_compat.py \
+  backend/tests/test_soc_pingan_legacy_execution.py \
+  backend/tests/test_soc_processing_jobs.py \
   backend/tests/test_soc_pingan_local_paths.py
 ```
 
@@ -203,6 +209,76 @@ backend/.deer-flow/data/soc_agent_dev.db
 
 本轮不收集或配置 Kafka、K8s、PostgreSQL；这些能力保留在 PI-02，不能阻塞 D12-B。
 
+### 2.1 PI-01H - Legacy ZEUS live acceptance / 旧任务协议真实闭环
+
+外网 Fake E2E 只证明本项目内部组合正确，不能证明 EAGW、真实 ZEUS 状态检查或回调。内网按以下顺序
+关闭 `PI-01H` 真实门禁：
+
+1. 保持 `SOC_PINGAN_LEGACY_LIFECYCLE_MODE=fake`、
+   `SOC_PINGAN_LEGACY_CALLBACK_MODE=fake`，先运行
+   `soc_pingan_legacy_fake_acceptance.py`；报告必须明确 `simulated=true`。
+2. 启动 Host DEV 后运行 `soc_pingan_model_gateway_smoke.py --confirm-live`；必须取得真实 completion，
+   `/health` 或 `/models` 不能替代。
+3. 选一条 ZEUS 中仍为“待研判”的已批准 DEV 告警，使用新的 `session_id`，把旧调用方实际发送的
+   `app_code/flow_id/session_id/alert_id/alert_data` 保存到 `0600` 的 `.local.json`。
+4. 将 lifecycle/callback 两个 mode 同时改为 `internal` 并重启 Host DEV；不存在运行时 fake fallback。
+5. 运行 live acceptance；它会提交同一请求两次验证幂等，只产生一个 Job，然后轮询旧 status 接口，
+   最后从同一 SOC DB 核对真实 precheck、Runtime run、Callback Outbox 与 append-only attempt。
+6. 在旧 ZEUS 页面核对结果已回写、任务状态一致且没有重复结果；脚本通过不能替代页面 readback。
+
+准备私有请求：
+
+```bash
+mkdir -p backend/.deer-flow/soc-internal-validation/legacy-compat
+cp backend/samples/pingan_dev/legacy-task-request.example.json \
+  backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+```
+
+替换文件中全部 placeholder 和示例 `alert_data`，并确认请求 `app_code` 在
+`SOC_PINGAN_COMPAT_APP_KEYS_JSON` 中有对应 key；随后编辑 `.env.soc-dev.local`：
+
+```text
+SOC_PINGAN_LEGACY_LIFECYCLE_MODE=internal
+SOC_PINGAN_LEGACY_CALLBACK_MODE=internal
+```
+
+重启并执行：
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+source ./.env.soc-dev.local
+
+backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
+  --confirm-live \
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
+  --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
+```
+
+真实通过必须同时满足：
+
+| Evidence | Required value |
+|---|---|
+| Fresh submission | `fresh_submission_confirmed=true` |
+| Duplicate replay | `idempotent_replay_confirmed=true`，仍为同一个 `task_id` |
+| Legacy status | `terminal_status=SUCCESS` |
+| Runtime | `run_id_present=true`、`model_name_present=true` |
+| ZEUS lifecycle | `lifecycle_state=pending`、`lifecycle_mocked=false` |
+| Callback | `callback_status=delivered`、至少一条 delivered attempt、`callback_mocked=false` |
+| Aggregate gate | `outcome=passed`、`proves_real_internal_connectivity=true` |
+
+报告不包含 App Key、告警正文、模型正文或回调 payload，只保留哈希、状态、耗时和审计结论。
+`FAILURE`、已经被处理、排队过期、unknown lifecycle、fake callback 都是有价值的负例，但不能关闭本门禁。
+
+单条通过后按 `5 -> 50 -> 200/5000+` 扩容，不直接全量：
+
+- 5 条：覆盖 APT/NDR、EDR/HIDS、误报/真实风险和不同 `executeType`，人工逐条对比旧页面。
+- 50 条：统计排队等待、Runtime 总耗时、callback 重试、失败分类和重复提交数。
+- 200/5000+：只在 50 条无未知错误且 callback 无 dead letter 后进入 shadow；按实测平均调用时长与
+  每告警调用次数调整 `SOC_PINGAN_LEGACY_WORKER_CONCURRENCY`，不得解除模型网关容量上限。告警量
+  扩容与模型并发是两套实验；并发仍按 `1 -> 2 -> 4 -> 6` 单独记录吞吐、P95、超时与上游拒绝率。
+
 ## 3. D12-B - Internal Real Asset Provider / 真实资产定位
 
 ### 3.1 Target flow / 目标链路
@@ -265,8 +341,8 @@ SOC Runtime asset candidate
 ### 3.3 Inputs to prepare inside DEV / 内网准备项
 
 - [x] 已审阅 `root_config` 和 LOCAL/DEV 环境选择；本地模型 gateway 为 OpenAI-compatible loopback endpoint。
-- [x] LiteLLM chat smoke 与不含正文/凭证的 `soc.pingan_litellm_smoke.v1` 报告已实现。
-- [ ] 启动内网模型服务后取得 `litellm-smoke.json -> outcome=passed`；`GET /models` 不能替代该验收。
+- [x] 项目模型网关、chat smoke 与不含正文/凭证的 `soc.pingan_model_gateway_smoke.v1` 报告已实现。
+- [ ] Host DEV 启动项目网关后取得 `model-gateway-smoke.json -> outcome=passed`；本地 `/health` 不能替代真实 EAGW completion 验收。
 - [x] preflight 强制 `SOC_PINGAN_ENV=dev`，并要求 ZEUS 与 Agent Platform 都使用显式 HTTPS host allowlist；不读取旧 `env_profile`。
 - [x] ZEUS signer 已在本项目内实现，不需要 import 整个旧 `util.util_tools`。
 - [x] Agent Platform wire contract 已提取为本项目自包含 HTTP client，不需要旧 Python 包、`PYTHONPATH`、Redis token manager 或 `run_workflow` import。
@@ -332,9 +408,9 @@ mkdir -p "$D12B_REPORT_DIR"
 运行无网络预检和一个 approved direct case：
 
 ```bash
-backend/.venv/bin/python backend/scripts/soc_pingan_litellm_smoke.py \
+backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \
   --confirm-live \
-  --report-path "$SOC_INTERNAL_VALIDATION_ROOT/model/litellm-smoke.json"
+  --report-path "$SOC_INTERNAL_VALIDATION_ROOT/model/model-gateway-smoke.json"
 
 backend/.venv/bin/python backend/scripts/soc_pingan_dev_preflight.py \
   --report-path "$D12B_REPORT_DIR/preflight.json"

@@ -7,9 +7,9 @@ redacted there.
 
 ## Files
 
-- `config.example.yaml`: DeerFlow profile for the OpenAI-compatible LiteLLM
-  endpoint exposed by the legacy `sec-model` process. Its `config_version`
-  must match the root `config.example.yaml`.
+- `config.example.yaml`: DeerFlow profile for this repository's loopback
+  OpenAI-compatible model gateway. The gateway owns the internal EAGW transport;
+  its `config_version` must match the root `config.example.yaml`.
 - `env.example`: shell environment for the model, post-Runtime PingAn tenant
   disposition policy, `asset.locate`, threat intelligence, security-tag lookup,
   and historical software-path lookup.
@@ -31,8 +31,8 @@ redacted there.
 - `../../soc_agent/integrations/pingan/agent_workflow.py`: self-contained HTTP
   client for Agent Platform authentication, workflow creation, polling and
   bounded response parsing. It does not import the legacy Agent Platform project.
-- `../../soc_agent/integrations/pingan/litellm_smoke.py`: one fixed-prompt,
-  credential-free-report smoke for the loopback OpenAI-compatible endpoint.
+- `../../soc_agent/integrations/pingan/model_gateway_smoke.py`: one fixed-prompt,
+  credential-free-report smoke for the project-owned loopback OpenAI-compatible endpoint.
 - `../mcp/pingan_asset/extensions.internal.example.json`: existing MCP server
   registration; credentials stay in the sourced environment.
 
@@ -178,8 +178,8 @@ backend/.venv/
 ```
 
 It uses bundled CPython `3.12.3`, bundled `uv`, and `backend/uv.lock` in strict
-offline mode. It does not use `sudo`, change the system Python, or modify the
-separate `$HOME/sec_know_model/.venv`.
+offline mode. It does not use `sudo`, change the system Python, or depend on a
+second project's virtual environment.
 
 ### PingAn package indexes
 
@@ -255,8 +255,8 @@ a dirty worktree by default. `--allow-dirty` creates a development-only archive
 whose report is explicitly ineligible for final handoff.
 When `--include-private-overlay` is selected, it also rejects obsolete import
 keys (including the retired workflow-operator override), unresolved
-placeholders, developer-specific `/Users/...` paths, missing
-LiteLLM/ZEUS/workflow test configuration, or local config permissions broader
+placeholders, developer-specific `/Users/...` paths, missing model-gateway,
+ZEUS, workflow, or fault-case configuration, or local config permissions broader
 than `0600` before writing any archive.
 
 The standalone internal transfer archive intentionally excludes `.git/`, so
@@ -285,23 +285,70 @@ directly. Keep `matrix_id` and every `case_id` as opaque labels such as
 
 ## Preflight
 
-Ensure the existing internal model stack exposes its LiteLLM gateway at
-`http://localhost:4001/v1/`. SOC code treats that as a standard OpenAI-compatible
-boundary and calls `chat.completions`; it neither imports nor manages the
-`sec_know_model` startup scripts. The provider model ID is
-`DeepSeek_V4_Flash`, mapped to DeerFlow's stable profile name
-`deepseek-v4-flash`.
+The Host DEV driver starts this repository's model gateway at
+`http://127.0.0.1:4001/v1/`. DeerFlow calls its standard
+`chat.completions` boundary using the stable public alias
+`deepseek-v4-flash`; the PingAn gateway maps that alias to the configured EAGW
+scene and upstream model. Do not start the old `sec_know_model`, LiteLLM,
+Celery, or Redis processes.
+
+The legacy queue deadline remains deliberately narrow: only alert tasks with
+`executeType=1` or `executeType=3` use
+`SOC_PINGAN_LEGACY_QUEUE_TTL_SECONDS` (default `1800`). An expired alert does
+not call the model, but the worker still persists the old-compatible expiration
+result and callback outbox entry. Other task types do not inherit this alert
+deadline.
+
+For the internal DEV handoff, the compatibility API deliberately keeps the old
+network shape and listens on `0.0.0.0:8090`, while the model gateway remains
+loopback-only on `127.0.0.1:4001`. Restrict inbound `8090` with the macOS
+firewall to the approved ZEUS DEV/STG callers. The app-specific Bearer/
+`app-key` authentication and bounded request body remain mandatory; do not
+publish `8090` to an untrusted network.
+
+First prove the repository-owned compatibility plane without internal network
+access:
+
+```bash
+backend/.venv/bin/python backend/scripts/soc_pingan_legacy_fake_acceptance.py
+```
+
+That report is intentionally `simulated=true`. After the model gateway smoke
+passes, prepare one approved alert that is still pending in ZEUS:
+
+```bash
+mkdir -p backend/.deer-flow/soc-internal-validation/legacy-compat
+cp backend/samples/pingan_dev/legacy-task-request.example.json \
+  backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+```
+
+Replace every placeholder and the example `alert_data`, use a new `session_id`,
+and ensure its `app_code` has a matching key in
+`SOC_PINGAN_COMPAT_APP_KEYS_JSON`. Then set both legacy provider modes to
+`internal` in `.env.soc-dev.local` and restart Host DEV. Run the real
+submit/status/precheck/Runtime/callback gate:
+
+```bash
+backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
+  --confirm-live \
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
+  --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
+```
+
+The report passes only when the first submission is fresh, an identical replay
+returns the same task, the Runtime produces a run and model name, the lifecycle
+check is real and pending, and the real callback has a delivered append-only
+attempt. It stores hashes and statuses, never the request, result, app key, or
+callback payload. Confirm the same result in the old ZEUS UI before expanding
+from one alert to 5, 50, and then the shadow corpus.
 
 ```bash
 export D12B_ASSET_KEY="<approved-internal-test-value>"
 
-curl -fsS \
-  -H "Authorization: Bearer $PINGAN_LITELLM_API_KEY" \
-  "$PINGAN_LITELLM_BASE_URL/models"
-
-backend/.venv/bin/python backend/scripts/soc_pingan_litellm_smoke.py \
+backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \
   --confirm-live \
-  --report-path backend/.deer-flow/soc-internal-validation/model/litellm-smoke.json
+  --report-path backend/.deer-flow/soc-internal-validation/model/model-gateway-smoke.json
 
 backend/.venv/bin/python backend/scripts/soc_pingan_dev_preflight.py \
   --report-path backend/.deer-flow/soc-internal-validation/d12b/preflight.json
@@ -402,12 +449,12 @@ raw query, UM, or Provider response. It validates the shared service contract,
 not an actual browser or Review TUI render; deployed surface smoke remains a
 separate internal checklist item.
 
-The expected DeerFlow model name is `deepseek-v4-flash`, while the request sent
-to the internal gateway uses `DeepSeek_V4_Flash`. Local DEV persistence remains
+The expected DeerFlow and gateway alias is `deepseek-v4-flash`; the internal
+upstream model and EAGW scene are operator-owned private configuration. Local DEV persistence remains
 the separate SQLite `backend/.deer-flow/data/soc_agent_dev.db` unless an
 explicit SOC database URL overrides it.
 
-The LiteLLM smoke sends one fixed prompt containing no alert or business data.
+The model-gateway smoke sends one fixed prompt containing no alert or business data.
 Its mode-`0600` report records endpoint path, model IDs, status, latency, token
 usage, output length and output SHA-256. It deliberately omits the API key,
 response ID and assistant text. A successful `/models` call alone is not enough;

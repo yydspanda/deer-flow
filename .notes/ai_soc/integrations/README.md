@@ -9,7 +9,8 @@
 | Capability / 能力 | Current nature / 当前性质 | Authoritative task / 归属 | Planned implementation / 计划落点 |
 |---|---|---|---|
 | Legacy model/ZEUS/status/path audit | **Done / reference** | 已完成审计 | [`pingan-legacy-source-audit.md`](pingan-legacy-source-audit.md)；只保留协议和租户边界，不迁移旧控制流 |
-| Internal LiteLLM connectivity | **Code-complete / internal smoke pending** | D12-B environment gate | loopback-only fixed-prompt `chat.completions` smoke 已实现；内网启动 `sec_know_model` 后保存不含正文/凭证的 `soc.pingan_litellm_smoke.v1` pass report |
+| Legacy ZEUS compatibility execution plane | **External implementation + simulation done / internal evidence pending** | `PI-01H` | [`pingan-legacy-compatibility-execution-plane.md`](pingan-legacy-compatibility-execution-plane.md)；保留 task/status/precheck/callback 协议，内部使用持久 Job + SOC Runtime + Outbox，不迁移 Celery/Redis/旧工作流；Fake E2E 与脱敏 live acceptance runner 分别负责外网组合验证和内网真实闭环留证 |
+| Project-owned model gateway | **Code-complete / internal EAGW smoke pending** | `PI-01H4` | loopback-only OpenAI-compatible `chat.completions` gateway、固定无业务数据 smoke、容量门与超时已实现；内网保存不含正文/凭证的 `soc.pingan_model_gateway_smoke.v1` pass report |
 | D12-A asset provider | **Done / fake-only** | D12-A | PingAn provider、portable signer、fallback、MCP/action 契约已完成；不能代替真实验收 |
 | Real `asset.locate` | **Parked / internal evidence pending** | `D12-B` | 自包含 ZEUS signer + Agent Platform HTTP client、旧源码 `YHSYS` PRD private-profile preparer、固定 legacy operator、Apple Silicon 离线 backend toolchain、preflight/direct seven-case runner 与 MCP/Dispatcher/evidence/shared-context acceptance runner 已实现；恢复后只核对剩余环境配置/cases，再做 confirmed matrix -> real evidence report -> deployed Web/TUI smoke |
 | `asset.lookup` simple-record route | **Local scaffold / disabled for PingAn PI-01E** | `PI-01D` route consolidation | 它与 ownership-oriented `asset.locate` 语义不同；PingAn real-only 示例选择 `asset.locate`，paired evaluator 将选中 `asset.lookup` 视为 blocking failure；其他 tenant 若保留它仍须独立真实 adapter/result schema |

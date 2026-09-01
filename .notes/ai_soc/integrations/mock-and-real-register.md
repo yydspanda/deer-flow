@@ -172,6 +172,7 @@ production-shaped adapter/ingress/runner 注入真实配置，不允许到内网
 | `RID-08 PI-03 real quality` | simulation manifest/eval/calibration flow passed；PI-01G 专家执行链路已通，但 NIDS 结果仍暴露 upstream role/direction assertion 可能过度加权 | 批准脱敏 corpus、具名 reviewer、labels/rationale、correlation pairs，包含 network tuple / TCP initiator / attacker-victim 反例 | seal/verify/quality/confidence replay，按 source/scenario/specialist 分层 | 只能由 `human_review` real corpus 产生质量声明或 profile promotion；不用 Runtime 硬编码伪造语义校准 |
 | `RID-09 PI-04 telemetry` | local Snapshot/Web passed | deployed Kafka/model/Provider metrics、Prometheus scrape、owner 和 SLO | lag/throughput/latency/error/cost/schema drift dashboards and alerts | `not_measured` 被真实指标替换并通过值班/留存评审 |
 | `RID-10 PI-05 rollout/actions` | virtual rollout + approval boundary passed，0 external effect | deployed cohort enforcement、具名 owner、feature flag、真实 rollback、EDR/F5/SOAR adapter | Shadow -> Limited Pilot rehearsal、approval-gated dry-run/execute、compensation | fresh gates 全部通过；`pilot_ready` 才可变 true，高风险动作仍默认人工审批 |
+| `RID-11 PI-01H legacy compatibility` | durable Job/lease/event、旧 API、Runtime worker、legacy projection、Callback Outbox/attempt、项目模型网关、Host sidecar、fake E2E 与脱敏 live acceptance runner 已完成 | EAGW/ZEUS/callback 私有配置、真实旧客户端、批准样本与容量参数 | model-gateway completion smoke；live runner 验证 fresh submit/幂等 replay/真实 precheck/Runtime/真实 callback；旧页面回读；告警量 `1 -> 5 -> 50 -> 200/5000+` 与模型并发 `1 -> 2 -> 4 -> 6` 分开测试 | live 报告 `proves_real_internal_connectivity=true`；旧页面可回读；无重复 LLM/丢任务；P95/吞吐/租约/并发参数有证据；Fake E2E 不关闭本项 |
 
 ### 7.1 External freeze audit / 外网冻结审计
 
@@ -184,6 +185,7 @@ production-shaped adapter/ingress/runner 注入真实配置，不允许到内网
 | `RID-06` | external 5/50、internal runner、paired evaluator、real-only composition | runner/config/验收逻辑随源码迁移；external report 不关闭 internal gate | 在隔离 SQLite 上按 `5 -> 50 -> all` 重跑 approved PKL 和 internal-real evidence |
 | `RID-07` | SQLite DEV、local Kafka/Redpanda 协议链 | DEV 继续 SQLite；未制造不存在的 Kafka/K8s/PostgreSQL 参数 | 真实基础设施输入到位后单独验收，不阻塞当前内网 DEV 模型/Provider 测试 |
 | `RID-08..10` | label/quality/Skill backlog、Operations Web、rollout/approval 的 simulation contracts | 产品流程可迁移且 claim boundary 已冻结；所有 real gates 保持 open | 真实 labels/telemetry/owners/cohort/rollback/action adapters 到位后逐项关闭 |
+| `RID-11` | 旧协议兼容 API、durable execution、项目模型网关、Host DEV sidecar、hermetic fake acceptance 与 live acceptance runner | 外网已证明协议/恢复/回调审计可复跑；fake 报告固定 `simulated=true`，live runner 尚无内网证据 | 注入内网 private overlay 后完成 EAGW、ZEUS lifecycle/callback、旧页面和容量验收 |
 
 `scripts/build_pingan_internal_transfer.py` 现在默认拒绝 dirty worktree，并核对 30 个关键 source/sample/
 runner/doc 文件。只有 clean commit 构建的报告可以给出 `final_handoff_eligible=true`；显式
