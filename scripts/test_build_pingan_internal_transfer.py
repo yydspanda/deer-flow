@@ -66,17 +66,21 @@ def test_required_handoff_inventory_exists_in_current_repo() -> None:
     assert missing == []
 
 
-def test_private_overlay_contains_current_workbench_corpus_and_sidecars() -> None:
+def test_private_overlay_keeps_corpus_metadata_but_excludes_large_data() -> None:
     paths = set(PRIVATE_OVERLAY_PATHS)
 
     assert {
         ".secrets/eagw-private-key.der",
-        "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl",
-        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl",
+        "validation/compact_zeus/data/corpus/full_alert_validation_corpus.manifest.json",
         "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.manifest.json",
         "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-index.json",
-        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite",
     } <= paths
+    assert {
+        "datas/source/full_alert_2026_month_forth_sample_200.pkl",
+        "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl",
+        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl",
+        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite",
+    }.isdisjoint(paths)
 
 
 def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None:
@@ -90,6 +94,7 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
         "backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py" in required
     )
     assert "scripts/soc_pingan_host_sidecars.py" in required
+    assert "scripts/soc_pingan_stage_internal_corpus.py" in required
     assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
 
 
@@ -114,7 +119,12 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "source-sha" in runbook
     assert "private-sha" in runbook
     assert TRANSFER_RUNBOOK_NAME in runbook
-    assert "full_alert_dams_labeled_merged.workbench-payloads.sqlite" in runbook
+    assert (
+        "$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl" in runbook
+    )
+    assert "$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl" in runbook
+    assert "soc_pingan_stage_internal_corpus.py --apply" in runbook
+    assert "三个 PKL 和 Workbench payload SQLite 不在 private overlay" in runbook
     assert "不需要额外 nginx/LAN hotfix" in runbook
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
     assert "soc_pingan_model_gateway_smoke.py" in runbook
@@ -162,6 +172,16 @@ def test_private_overlay_config_rejects_placeholder_or_user_path(
 
     _write_private_profiles(tmp_path, config_text="path: /Users/example/deer-flow\n")
     with pytest.raises(ValueError, match="developer-specific path"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_rejects_stale_config_version(tmp_path: Path) -> None:
+    _write_private_profiles(
+        tmp_path,
+        config_text="config_version: 37\nmodels: []\n",
+    )
+
+    with pytest.raises(ValueError, match="config_version"):
         _assert_private_overlay_config_ready(tmp_path)
 
 
@@ -266,8 +286,12 @@ def _write_private_profiles(
     *,
     overrides: dict[str, str] | None = None,
     extra: str = "",
-    config_text: str = "models: []\n",
+    config_text: str = "config_version: 38\nmodels: []\n",
 ) -> None:
+    (root / "config.example.yaml").write_text(
+        "config_version: 38\n",
+        encoding="utf-8",
+    )
     values = {name: f"value-{name.lower()}" for name in PRIVATE_ENV_REQUIRED_KEYS}
     values["SOC_PINGAN_MODEL_GATEWAY_RSA_PRIVATE_KEY_FILE"] = (
         "${SOC_REPO_ROOT}/.secrets/eagw-private-key.der"

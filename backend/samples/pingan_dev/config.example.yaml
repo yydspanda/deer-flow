@@ -1,4 +1,4 @@
-config_version: 36
+config_version: 38
 log_level: info
 
 # This profile keeps the public DeerFlow model name stable while routing it

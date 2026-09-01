@@ -155,6 +155,11 @@ generic `soc_agent` code.
 - Source and private-data/config archives have independent manifests and hashes. Never
   package `*.local`, PKL, XLSX, SQLite, credentials, or generated internal results in the
   source archive.
+- Keep the three large corpus PKLs and Workbench payload SQLite outside both transfer
+  archives. The private overlay owns their frozen manifest/index only. On the target Mac,
+  `scripts/soc_pingan_stage_internal_corpus.py` verifies the separately supplied files
+  from `$HOME/Downloads` before placing them at canonical paths; a missing or mismatched
+  artifact must fail closed before Host DEV starts.
 - Live matrices/runners require explicit confirmation, protected local case files, and
   redacted reports. Prove direct provider behavior, MCP/action dispatch, persisted
   evidence, and Review/Lead-Agent readback separately. A direct smoke does not prove the

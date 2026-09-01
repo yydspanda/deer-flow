@@ -45,6 +45,14 @@ in the private overlay, and must never enter the source archive or report. Build
 from a clean commit and inspect both archives before replacing the previous
 `READY-TO-TRANSFER` contents.
 
+Large PingAn corpus artifacts are transferred separately, not embedded in either
+archive. The private overlay carries the matching corpus manifest/index, and
+`scripts/soc_pingan_stage_internal_corpus.py` must validate every source file under
+`$HOME/Downloads/source` or `$HOME/Downloads/corpus` before atomically placing it in
+the checkout at mode `0600`. Resolve the home directory at runtime; never hard-code a
+developer's `/Users/...` path. Missing or mismatched files fail closed before Host DEV
+check/install.
+
 ## Shell Script Invocation Contract
 
 Root Makefile recipes must invoke repository `.sh` files through

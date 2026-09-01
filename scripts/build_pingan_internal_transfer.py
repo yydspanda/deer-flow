@@ -55,13 +55,9 @@ PRIVATE_OVERLAY_PATHS = (
     ".secrets/eagw-private-key.der",
     "config.pingan-dev.local",
     "validation/original_works/raw_program/Deepseek_Qwen_32B_EDR_Analysis_Ignored_Paths_Sup (1).xlsx",
-    "datas/source/full_alert_2026_month_forth_sample_200.pkl",
-    "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl",
     "validation/compact_zeus/data/corpus/full_alert_validation_corpus.manifest.json",
-    "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl",
     "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.manifest.json",
     "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-index.json",
-    "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite",
     "backend/.deer-flow/pingan-context/software-path-catalog.sqlite",
     "backend/.deer-flow/pingan-context/software-path-catalog.build-report.json",
 )
@@ -145,6 +141,9 @@ PRIVATE_ENV_OBSOLETE_KEYS = frozenset(
     }
 )
 _SHELL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CONFIG_VERSION = re.compile(
+    r"(?m)^\s*config_version\s*:\s*(?P<version>[0-9]+)\s*(?:#.*)?$"
+)
 REQUIRED_HANDOFF_SOURCE_PATHS = (
     ".notes/ai_soc/delivery-roadmap.md",
     ".notes/ai_soc/integrations/README.md",
@@ -221,6 +220,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "scripts/build_pingan_internal_transfer.py",
     "scripts/soc_pingan_macos_host_dev.py",
     "scripts/soc_pingan_host_sidecars.py",
+    "scripts/soc_pingan_stage_internal_corpus.py",
     "scripts/test_build_pingan_macos_offline_bundle.py",
     "scripts/test_soc_pingan_macos_host_dev.py",
     "scripts/test_soc_pingan_host_sidecars.py",
@@ -684,6 +684,14 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
                 f"private overlay config contains a developer-specific path: {path.name}"
             )
 
+    expected_config_version = _read_config_version(root / "config.example.yaml")
+    private_config_version = _read_config_version(config_path)
+    if private_config_version != expected_config_version:
+        raise ValueError(
+            "private config_version does not match config.example.yaml: "
+            f"expected {expected_config_version}, found {private_config_version}"
+        )
+
     key_path = root / ".secrets/eagw-private-key.der"
     if not key_path.is_file() or not key_path.stat().st_size:
         raise ValueError("private overlay is missing the prepared EAGW RSA key")
@@ -773,6 +781,15 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         )
 
 
+def _read_config_version(path: Path) -> int:
+    if not path.is_file():
+        raise ValueError(f"config_version source is missing: {path.name}")
+    match = _CONFIG_VERSION.search(path.read_text(encoding="utf-8"))
+    if match is None:
+        raise ValueError(f"config_version is missing or invalid: {path.name}")
+    return int(match.group("version"))
+
+
 def _shell_export_values(content: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw_line in content.splitlines():
@@ -823,8 +840,9 @@ def _transfer_runbook(
         private_sha = str(private["sha256"])
         private_notice = (
             "The private overlay contains local configuration, credentials, the prepared "
-            "EAGW RSA key, private alert corpora, the workbench index/payload store, and the "
-            "reviewed EDR path catalog. Keep the directory inside the approved environment."
+            "EAGW RSA key, corpus manifests/index, and the reviewed EDR path catalog. The "
+            "three PKL files and Workbench payload SQLite are supplied separately and are "
+            "verified before use. Keep every artifact inside the approved environment."
         )
     return f"""# PingAn Internal Mac DEV Runbook / 平安内网 Mac DEV 操作手册
 
@@ -905,18 +923,46 @@ chmod 600 .env.soc-dev.local config.pingan-dev.local \\
 
 ```text
 .secrets/eagw-private-key.der
-datas/source/full_alert_2026_month_forth_sample_200.pkl
-validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl
 validation/compact_zeus/data/corpus/full_alert_validation_corpus.manifest.json
-validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl
 validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.manifest.json
 validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-index.json
-validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
 ```
 
-因此语料 Workbench 不需要在内网重新生成 4343 条索引。
+三个 PKL 和 Workbench payload SQLite 不在 private overlay；它们已单独保存在内网
+`$HOME/Downloads/source` 与 `$HOME/Downloads/corpus`，必须按下一节校验并落位。
 
-## 4. Host Check And Install / 主机检查与依赖安装
+## 4. Stage Existing Corpus / 落位内网已有语料
+
+当前开发者的 `$HOME` 会自然解析为 `/Users/zhangjianming627`；其他同事无需修改脚本。
+先确认四个文件位于：
+
+```text
+$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl
+$HOME/Downloads/corpus/full_alert_validation_corpus.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
+```
+
+先 dry-run，只校验文件名、大小与 SHA-256，不复制也不解析业务内容：
+
+```bash
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_stage_internal_corpus.py
+```
+
+必须看到 `ready=true`、`applied=false`，且四个文件均为 `source_verified=true`。
+然后原子复制到项目规定路径并设置为 `0600`：
+
+```bash
+python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
+```
+
+第二次必须看到 `ready=true`、`applied=true`，且四个文件均为
+`target_verified=true`。校验基准来自 private overlay 中随包冻结的 corpus manifest/index；
+任何文件缺失、错版本、大小或 SHA-256 不一致都会 fail closed，并且不会覆盖已有目标文件。
+完成后语料 Workbench 可直接使用，不需要在内网重建 4343 条索引。
+
+## 5. Host Check And Install / 主机检查与依赖安装
 
 前置要求：Apple Silicon macOS、Python `3.12+`、uv、Node `22+`、项目固定的
 pnpm、nginx `1.23+`，以及已配置的平安 PyPI/pnpm 镜像。
@@ -945,7 +991,7 @@ unset SOC_DATABASE_URL
 
 DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合并。
 
-## 5. Execution Plane Preflight / 执行面预检
+## 6. Execution Plane Preflight / 执行面预检
 
 项目自身提供 `4001` 模型网关、`8090` 旧 ZEUS 兼容 API、持久 Worker 和 Callback
 Dispatcher；不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis。
@@ -972,7 +1018,7 @@ grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
 三个权限必须都是 `600`，两个 mode 必须都是 `fake`。RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
-## 6. Start Web / 启动 Web
+## 7. Start Web / 启动 Web
 
 ```bash
 cd "$TARGET_REPO"
@@ -1062,7 +1108,7 @@ http://localhost:2026/workspace/soc/corpus-validation
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ```
 
-## 7. Real Integration Follow-up / 真实验收顺序
+## 8. Real Integration Follow-up / 真实验收顺序
 
 ```text
 D12-B preflight
@@ -1117,10 +1163,17 @@ and nginx, use the native no-Docker Host DEV driver. It installs from the approv
 internal package registries and starts without repeating dependency resolution:
 
 ```bash
+python3.12 scripts/soc_pingan_stage_internal_corpus.py
+python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
 python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
 python3.12 scripts/soc_pingan_macos_host_dev.py start --demo-no-auth
 ```
+
+The staging commands verify the separately supplied files under
+`$HOME/Downloads/source` and `$HOME/Downloads/corpus` against the protected
+manifest/index before copying them into the checkout. Large PKL and Workbench
+payload SQLite files are not part of either transfer archive.
 
 `--demo-no-auth` 仅用于可信 DEV 演示；全部访问者共享一个合成管理员身份。正式身份与权限验收时去掉该参数。
 告警演练默认支持 3 条不同告警并行，同一告警由服务端防重；可通过
@@ -1144,12 +1197,14 @@ def _private_readme(timestamp: str) -> str:
     return f"""# PingAn Internal Private Overlay
 
 Built at `{timestamp}`. This archive contains local credentials/configuration and
-private alert-derived data. It is intentionally separate from source control and
-must remain mode `0600`, inside the approved environment only.
+reviewed tenant artifacts, including corpus manifests/index but not the three large
+PKL files or Workbench payload SQLite. It is intentionally separate from source
+control and must remain mode `0600`, inside the approved environment only.
 
 Extract it over the source bundle's `deer-flow-pingan-internal/` directory. Do
-not commit its contents and do not copy generated batch artifacts back outside
-the approved environment without review.
+not commit its contents. Then run `scripts/soc_pingan_stage_internal_corpus.py`
+against the separately supplied files before Host DEV check/install. Do not copy
+generated batch artifacts back outside the approved environment without review.
 """
 
 

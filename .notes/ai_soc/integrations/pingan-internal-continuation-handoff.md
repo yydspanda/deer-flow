@@ -62,7 +62,7 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 `backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/` 中生成本次交付的四类文件：
 
 - `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
-- `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、200 条兼容性 PKL、212 条 canonical Memory DEV corpus、4343 条 DAMS 合并语料及其 manifest/index/payload store、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
+- `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、corpus manifest/index、历史 EDR XLSX 及其已编译路径目录；不再携带三个大 PKL 或 Workbench payload SQLite，只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
 - `PINGAN-INTERNAL-MAC-RUNBOOK.md`：由构建器自动生成，固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令；不再手工维护时间戳，也不再携带独立 nginx/LAN hotfix。
 
@@ -79,6 +79,7 @@ external/internal shadow、paired evaluator、RID 台账和交接文档。任一
 ```bash
 PYTHONPATH=. backend/.venv/bin/pytest -q \
   scripts/test_build_pingan_internal_transfer.py \
+  scripts/test_soc_pingan_stage_internal_corpus.py \
   scripts/test_build_pingan_macos_offline_bundle.py \
   backend/tests/test_soc_pingan_agent_workflow.py \
   backend/tests/test_soc_pingan_legacy_workflow_profile.py \
@@ -119,6 +120,26 @@ mv "$TRANSFER_ROOT/deer-flow-pingan-internal" "$TARGET_REPO"
 cd "$TARGET_REPO"
 ```
 
+三个 PKL 与 Workbench payload SQLite 已单独保存在内网，不再重复打包。当前开发者的 `$HOME`
+自然解析为 `/Users/zhangjianming627`，其他同事仍使用自己的 home。解压后必须先校验并落位：
+
+```text
+$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl
+$HOME/Downloads/corpus/full_alert_validation_corpus.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
+```
+
+```bash
+python3.12 scripts/soc_pingan_stage_internal_corpus.py
+python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
+```
+
+第一条只做 dry-run，必须为 `ready=true`、`applied=false`；第二条才原子复制并设置 `0600`，
+必须为 `ready=true`、`applied=true` 且四项 `target_verified=true`。脚本使用 private overlay
+中的 manifest/index 锁定 SHA-256 与已声明大小，不反序列化 PKL、不读取 SQLite 业务内容；任何错版本
+或缺文件都会在 Host DEV 安装前 fail closed。
+
 当前已准备 Python `3.12.7`、uv、Node `24`、pnpm 内网源和 nginx `1.23` 的 Mac 使用原生、无 Docker
 Host DEV 路径。它验证内部 registry，执行一次锁定安装，后续固定跳过依赖同步并关闭 Next.js 遥测：
 
@@ -149,7 +170,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ```
 
-安装完成后动态解析 checkout、加载私有环境并检查文件权限与语料 sidecar：
+落位和安装完成后动态解析 checkout、加载私有环境并检查文件权限与语料 sidecar：
 
 ```bash
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"

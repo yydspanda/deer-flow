@@ -29,6 +29,8 @@ composition/extensions，真实值只通过环境变量注入，不再现场增�
 - [x] Agent Platform wire contract 已从旧源码提取到本项目自包含 HTTP client，不再 import 旧项目的 `run_workflow`。
 - [x] 当前内网 Apple Silicon Mac 已准备 Python `3.12.7`、uv、Node `24`、pnpm 内网源与 nginx `1.23`，
   可使用无 Docker Host DEV；CPython `3.12.3` 离线工具链保留为备用。
+- [x] 三个 PKL 与 Workbench payload SQLite 已单独放在内网 `$HOME/Downloads/source|corpus`；
+  private overlay 只携带匹配的 manifest/index，解压后由 staging 脚本校验和落位。
 - [x] 已提供项目自有 OpenAI-compatible 模型网关和固定无业务数据的 `chat.completions` smoke；报告不保存 key、响应 ID 或模型原文。
 - [ ] 在内网由 Host DEV 启动项目模型网关后执行 smoke，并保存 `outcome=passed` 的 `0600` 报告。
 - [x] Agent Platform 的 `YHSYS` PRD URL、credential 与固定 `message.by=WANGWENBIN520` 已从旧源码确认；迁移器只把 secret 写入 Git-ignored `0600` env，真实调用仍需显式 PRD confirmation 和 `--confirm-live`。
@@ -87,7 +89,27 @@ config.pingan-dev.local               # Git ignored; real values allowed
 .env.soc-dev.local                    # Git ignored; real values allowed
 ```
 
-### 3.2 Offline Python toolchain / 离线 Python 工具链
+### 3.2 Existing corpus staging / 已有语料落位
+
+大语料不再重复进入 source/private archive。内网 checkout 解压后，先确认以下四个文件：
+
+```text
+$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl
+$HOME/Downloads/corpus/full_alert_validation_corpus.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
+```
+
+```bash
+python3.12 scripts/soc_pingan_stage_internal_corpus.py
+python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
+```
+
+第一条是无写入 dry-run；第二条只在四项均通过随包 manifest/index 的文件名、大小与 SHA-256
+验证后，才以 mode `0600` 原子替换 canonical target。脚本使用 `Path.home()`，不会写死
+`/Users/zhangjianming627`，同事机器可直接复用。它不反序列化 PKL，也不读取 SQLite 业务表。
+
+### 3.3 Offline Python toolchain / 离线 Python 工具链
 
 当前已准备好系统工具的内网 Mac 优先执行：
 
@@ -108,7 +130,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
   `backend/samples/pingan_dev/uv-index.env.example` 提供 `UV_DEFAULT_INDEX` 和精确 host:port 的
   `UV_INSECURE_HOST`。它不进入仓库全局配置，也不替代当前 lock 对应的离线包。
 
-### 3.3 Local-only ZEUS settings / 只留内网的 ZEUS 配置
+### 3.4 Local-only ZEUS settings / 只留内网的 ZEUS 配置
 
 下列实际值直接写入 `.env.soc-dev.local`，该文件必须保持 Git ignored：
 
@@ -151,7 +173,7 @@ Workflow profile。输出只包含 profile 元数据、源/key hash 和凭证存
 - PRD profile 同时锁定 environment/base URL/allowlist/secret，并需要显式 confirmation；真正发请求还必须由 live runner 的 `--confirm-live` 二次确认。
 - 旧资产归属修正规则是否仍有效；如存在新的 BU/company code override，提供脱敏规则表。
 
-### 3.4 D12-B test matrix / D12-B 测试矩阵
+### 3.5 D12-B test matrix / D12-B 测试矩阵
 
 测试值不需要带出内网。请在 Mac 上准备一个 gitignored JSON/YAML，至少包含：
 

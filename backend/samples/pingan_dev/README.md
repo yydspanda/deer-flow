@@ -87,6 +87,27 @@ Use this path when the internal Apple Silicon Mac already provides:
 - nginx `1.23+`; and
 - `git`, `make`, `curl`, `tar`, `shasum`, and `lsof`.
 
+The source and private-overlay archives deliberately exclude the three large PKLs and
+the Workbench payload SQLite. Keep those files under the current user's Downloads
+directory and stage them before `check` or `install`:
+
+```text
+$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl
+$HOME/Downloads/corpus/full_alert_validation_corpus.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl
+$HOME/Downloads/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
+```
+
+```bash
+python3.12 scripts/soc_pingan_stage_internal_corpus.py
+python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
+```
+
+The first command is a no-write dry run. The second copies only after every source
+matches the corpus manifest/index shipped in the private overlay, sets targets to mode
+`0600`, and fails closed on any missing or mismatched artifact. `$HOME` resolves to
+`/Users/zhangjianming627` for the current DEV Mac and remains portable for coworkers.
+
 The checked-in driver validates those prerequisites without inspecting or requiring
 Docker. It installs the locked backend and frontend dependencies from the configured
 internal registries, records a local mode-`0600` report, and starts the normal Gateway,
