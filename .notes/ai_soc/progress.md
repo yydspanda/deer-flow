@@ -23,6 +23,13 @@
 
 ## Recent Completion Records / 近期完成记录
 
+### 2026-09-01 — PingAn private-profile migration and transfer freeze
+
+- **Task:** `PI-01`
+- **Status:** `Done`
+- **Outcome:** 新增只读 AST profile preparer，从已审阅旧源码生成项目自有 EAGW 网关、旧 ZEUS ingress 与 `YHSYS` Workflow 的 Git-ignored 私有配置；RSA key 独立保存为 mode-`0600` private-overlay 文件。Transfer builder 拒绝旧 LiteLLM 变量、占位值、宽权限 key、非 loopback 模型网关、非安全初始 lifecycle/callback 模式及不一致 app-key，并随包生成逐步内网安装、Fake、model smoke、live compatibility 与递进 shadow 手册。
+- **Verification:** 真实旧源码 dry-run 不执行旧代码且 `secret_in_output=false`；136 项兼容执行面/Host DEV/transfer 回归与 hermetic Fake E2E 通过。真实 EAGW、ZEUS 生命周期/回调和旧页面回读仍由内网 live acceptance 关闭。
+
 ### 2026-09-01 — Legacy ZEUS compatibility execution plane
 
 - **Task:** `PI-01`
@@ -84,13 +91,6 @@
 - **Task:** `PI-03`
 - **Status:** `Done`
 - **Outcome:** Confirmed Memory 台账、修订、Match Test 和 evidence coverage 等价投影完成；调查缺口保留为未来 selected-case Agent 输入，不直接驱动 MCP。
-- **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
-
-### 2026-08-25 — Capability walkthrough and reporting package
-
-- **Task:** `PI-04`
-- **Status:** `Done`
-- **Outcome:** 完成可复跑能力演示路线、项目摘要、技术方案和 FAQ，并明确真实、mock、shadow 与未验收边界。
 - **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
 
 ## Update Contract / 更新约定

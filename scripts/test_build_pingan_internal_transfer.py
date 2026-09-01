@@ -70,6 +70,7 @@ def test_private_overlay_contains_current_workbench_corpus_and_sidecars() -> Non
     paths = set(PRIVATE_OVERLAY_PATHS)
 
     assert {
+        ".secrets/eagw-private-key.der",
         "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl",
         "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl",
         "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.manifest.json",
@@ -85,6 +86,9 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "backend/scripts/soc_pingan_legacy_api.py" in required
     assert "backend/scripts/soc_pingan_legacy_worker.py" in required
     assert "backend/scripts/soc_pingan_legacy_fake_acceptance.py" in required
+    assert (
+        "backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py" in required
+    )
     assert "scripts/soc_pingan_host_sidecars.py" in required
     assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
 
@@ -116,8 +120,16 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "soc_pingan_model_gateway_smoke.py" in runbook
     assert "soc_pingan_legacy_fake_acceptance.py" in runbook
     assert "soc_pingan_legacy_live_acceptance.py" in runbook
+    assert "soc_pingan_prepare_legacy_model_gateway_profile.py" in runbook
+    assert ".secrets/eagw-private-key.der" in runbook
     assert "proves_real_internal_connectivity=true" in runbook
     assert "task-request.local.json" in runbook
+    assert 'shasum -a 256 \\\n  "deer-flow-pingan-source' in runbook
+    assert (
+        "chmod 600 .env.soc-dev.local config.pingan-dev.local \\\n"
+        "  .secrets/eagw-private-key.der"
+    ) in runbook
+    assert "soc_pingan_model_gateway_smoke.py \\\n  --confirm-live" in runbook
 
 
 def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:
@@ -150,6 +162,38 @@ def test_private_overlay_config_rejects_placeholder_or_user_path(
 
     _write_private_profiles(tmp_path, config_text="path: /Users/example/deer-flow\n")
     with pytest.raises(ValueError, match="developer-specific path"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_rejects_permissive_or_missing_gateway_key(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(tmp_path)
+    key_path = tmp_path / ".secrets/eagw-private-key.der"
+    key_path.chmod(0o644)
+    with pytest.raises(ValueError, match="RSA key must be mode 0600"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+    key_path.unlink()
+    with pytest.raises(ValueError, match="missing the prepared EAGW RSA key"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_rejects_live_or_incoherent_transfer_profile(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        overrides={"SOC_PINGAN_LEGACY_CALLBACK_MODE": "internal"},
+    )
+    with pytest.raises(ValueError, match="safe transfer profile"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+    _write_private_profiles(
+        tmp_path,
+        overrides={"SOC_PINGAN_MODEL_GATEWAY_API_KEYS": "different-key"},
+    )
+    with pytest.raises(ValueError, match="client key is not accepted"):
         _assert_private_overlay_config_ready(tmp_path)
 
 
@@ -193,6 +237,7 @@ def test_transfer_archive_round_trip_verifies_manifest_digests(tmp_path: Path) -
         Path("datas/private.pkl"),
         Path("data/catalog.sqlite"),
         Path("knowledge.xlsx"),
+        Path(".secrets/eagw-private-key.der"),
     ],
 )
 def test_source_archive_rejects_private_inputs(relative: Path) -> None:
@@ -224,6 +269,32 @@ def _write_private_profiles(
     config_text: str = "models: []\n",
 ) -> None:
     values = {name: f"value-{name.lower()}" for name in PRIVATE_ENV_REQUIRED_KEYS}
+    values["SOC_PINGAN_MODEL_GATEWAY_RSA_PRIVATE_KEY_FILE"] = (
+        "${SOC_REPO_ROOT}/.secrets/eagw-private-key.der"
+    )
+    values.update(
+        {
+            "PINGAN_MODEL_GATEWAY_BASE_URL": "http://127.0.0.1:4001/v1",
+            "PINGAN_MODEL_GATEWAY_API_KEY": "loopback-test-key",
+            "PINGAN_MODEL_GATEWAY_MODEL": "deepseek-v4-flash",
+            "SOC_PINGAN_MODEL_GATEWAY_ENABLED": "true",
+            "SOC_PINGAN_MODEL_GATEWAY_HOST": "127.0.0.1",
+            "SOC_PINGAN_MODEL_GATEWAY_PORT": "4001",
+            "SOC_PINGAN_MODEL_GATEWAY_API_KEYS": "loopback-test-key",
+            "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
+            "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
+            "SOC_ANALYZER_MODE": "llm",
+            "SOC_LLM_MODEL": "deepseek-v4-flash",
+            "SOC_PINGAN_COMPAT_ENABLED": "true",
+            "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
+            "SOC_PINGAN_COMPAT_PORT": "8090",
+            "SOC_PINGAN_COMPAT_APP_KEYS_JSON": '{"common":"compat-test-key"}',
+            "SOC_PINGAN_LEGACY_LIFECYCLE_MODE": "fake",
+            "SOC_PINGAN_LEGACY_CALLBACK_MODE": "fake",
+            "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
+            "SOC_PINGAN_ENV": "dev",
+        }
+    )
     values.update(overrides or {})
     env_path = root / ".env.soc-dev.local"
     env_path.write_text(
@@ -233,5 +304,9 @@ def _write_private_profiles(
     )
     config_path = root / "config.pingan-dev.local"
     config_path.write_text(config_text, encoding="utf-8")
+    key_path = root / ".secrets/eagw-private-key.der"
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_bytes(b"test-private-key")
     env_path.chmod(0o600)
     config_path.chmod(0o600)
+    key_path.chmod(0o600)

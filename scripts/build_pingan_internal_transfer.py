@@ -48,10 +48,11 @@ SOURCE_FORBIDDEN_NAMES = frozenset(
     }
 )
 SOURCE_FORBIDDEN_SUFFIXES = frozenset(
-    {".db", ".key", ".pem", ".pkl", ".sqlite", ".sqlite3", ".xlsx"}
+    {".db", ".der", ".key", ".pem", ".pkl", ".sqlite", ".sqlite3", ".xlsx"}
 )
 PRIVATE_OVERLAY_PATHS = (
     ".env.soc-dev.local",
+    ".secrets/eagw-private-key.der",
     "config.pingan-dev.local",
     "validation/original_works/raw_program/Deepseek_Qwen_32B_EDR_Analysis_Ignored_Paths_Sup (1).xlsx",
     "datas/source/full_alert_2026_month_forth_sample_200.pkl",
@@ -69,7 +70,13 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
         "PINGAN_MODEL_GATEWAY_BASE_URL",
         "PINGAN_MODEL_GATEWAY_API_KEY",
         "PINGAN_MODEL_GATEWAY_MODEL",
+        "PINGAN_MODEL_GATEWAY_SMOKE_THINKING_ENABLED",
         "SOC_PINGAN_MODEL_GATEWAY_ENABLED",
+        "SOC_PINGAN_MODEL_GATEWAY_HOST",
+        "SOC_PINGAN_MODEL_GATEWAY_PORT",
+        "SOC_PINGAN_MODEL_GATEWAY_API_KEYS",
+        "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS",
+        "SOC_PINGAN_MODEL_GATEWAY_UPSTREAM_MODEL",
         "SOC_PINGAN_MODEL_GATEWAY_PROVIDER",
         "SOC_PINGAN_MODEL_GATEWAY_UPSTREAM_BASE_URL",
         "SOC_PINGAN_MODEL_GATEWAY_ALLOWED_HOSTS",
@@ -81,16 +88,31 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
         "SOC_PINGAN_MODEL_GATEWAY_OPENAPI_CREDENTIAL",
         "SOC_PINGAN_MODEL_GATEWAY_RSA_PRIVATE_KEY_FILE",
         "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY",
+        "SOC_PINGAN_MODEL_GATEWAY_ADMISSION_TIMEOUT_SECONDS",
+        "SOC_PINGAN_MODEL_GATEWAY_UPSTREAM_TIMEOUT_SECONDS",
+        "SOC_PINGAN_MODEL_GATEWAY_MAX_REQUEST_BYTES",
+        "SOC_ANALYZER_MODE",
+        "SOC_LLM_MODEL",
+        "SOC_LLM_MAX_CONCURRENCY",
+        "SOC_LLM_CALL_TIMEOUT_SECONDS",
         "SOC_PINGAN_COMPAT_ENABLED",
+        "SOC_PINGAN_COMPAT_HOST",
+        "SOC_PINGAN_COMPAT_PORT",
         "SOC_PINGAN_COMPAT_APP_KEYS_JSON",
+        "SOC_PINGAN_COMPAT_AUTO_MIGRATE",
         "SOC_PINGAN_COMPAT_MAX_REQUEST_BYTES",
         "SOC_PINGAN_LEGACY_QUEUE_TTL_SECONDS",
         "SOC_PINGAN_LEGACY_LIFECYCLE_MODE",
         "SOC_PINGAN_LEGACY_CALLBACK_MODE",
         "SOC_PINGAN_LEGACY_WORKER_CONCURRENCY",
+        "SOC_PINGAN_LEGACY_POLL_INTERVAL_SECONDS",
         "SOC_PINGAN_LEGACY_WORKER_LEASE_SECONDS",
         "SOC_PINGAN_LEGACY_WORKER_MAX_ATTEMPTS",
+        "SOC_PINGAN_LEGACY_WORKER_RETRY_BACKOFF_SECONDS",
+        "SOC_PINGAN_LEGACY_CALLBACK_LEASE_SECONDS",
         "SOC_PINGAN_LEGACY_CALLBACK_MAX_ATTEMPTS",
+        "SOC_PINGAN_LEGACY_CALLBACK_RETRY_BACKOFF_SECONDS",
+        "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE",
         "SOC_PINGAN_ENV",
         "SOC_PINGAN_ASSET_PROVIDER_MODE",
         "SOC_PINGAN_ZEUS_BASE_URL",
@@ -112,6 +134,9 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
 )
 PRIVATE_ENV_OBSOLETE_KEYS = frozenset(
     {
+        "PINGAN_LITELLM_BASE_URL",
+        "PINGAN_LITELLM_API_KEY",
+        "PINGAN_LITELLM_MODEL",
         "env_profile",
         "SOC_PINGAN_PROVIDER_IMPORT_PATHS",
         "SOC_PINGAN_ZEUS_SIGNER_IMPORT",
@@ -156,6 +181,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/scripts/soc_pingan_legacy_live_acceptance.py",
     "backend/scripts/soc_pingan_security_tag_mcp_server.py",
     "backend/scripts/soc_pingan_threat_intel_mcp_server.py",
+    "backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py",
     "backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py",
     "backend/app/pingan_compat/__init__.py",
     "backend/app/pingan_compat/app.py",
@@ -166,6 +192,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/db/models.py",
     "backend/soc_agent/integrations/pingan/agent_workflow.py",
     "backend/soc_agent/integrations/pingan/asset_location.py",
+    "backend/soc_agent/integrations/pingan/legacy_model_gateway_profile.py",
     "backend/soc_agent/integrations/pingan/legacy_workflow_profile.py",
     "backend/soc_agent/integrations/pingan/model_gateway.py",
     "backend/soc_agent/integrations/pingan/model_gateway_smoke.py",
@@ -657,6 +684,12 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
                 f"private overlay config contains a developer-specific path: {path.name}"
             )
 
+    key_path = root / ".secrets/eagw-private-key.der"
+    if not key_path.is_file() or not key_path.stat().st_size:
+        raise ValueError("private overlay is missing the prepared EAGW RSA key")
+    if key_path.stat().st_mode & 0o077:
+        raise ValueError("private overlay EAGW RSA key must be mode 0600")
+
     values = _shell_export_values(env_path.read_text(encoding="utf-8"))
     obsolete = sorted(PRIVATE_ENV_OBSOLETE_KEYS & values.keys())
     if obsolete:
@@ -676,6 +709,67 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
     if unresolved:
         raise ValueError(
             "private environment contains unresolved values: " + ", ".join(unresolved)
+        )
+    if values["SOC_PINGAN_MODEL_GATEWAY_RSA_PRIVATE_KEY_FILE"] != (
+        "${SOC_REPO_ROOT}/.secrets/eagw-private-key.der"
+    ):
+        raise ValueError(
+            "private environment must use the portable prepared EAGW RSA key path"
+        )
+    expected_values = {
+        "PINGAN_MODEL_GATEWAY_BASE_URL": "http://127.0.0.1:4001/v1",
+        "PINGAN_MODEL_GATEWAY_MODEL": "deepseek-v4-flash",
+        "SOC_PINGAN_MODEL_GATEWAY_ENABLED": "true",
+        "SOC_PINGAN_MODEL_GATEWAY_HOST": "127.0.0.1",
+        "SOC_PINGAN_MODEL_GATEWAY_PORT": "4001",
+        "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
+        "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
+        "SOC_ANALYZER_MODE": "llm",
+        "SOC_LLM_MODEL": "deepseek-v4-flash",
+        "SOC_PINGAN_COMPAT_ENABLED": "true",
+        "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
+        "SOC_PINGAN_COMPAT_PORT": "8090",
+        "SOC_PINGAN_LEGACY_LIFECYCLE_MODE": "fake",
+        "SOC_PINGAN_LEGACY_CALLBACK_MODE": "fake",
+        "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
+        "SOC_PINGAN_ENV": "dev",
+    }
+    mismatched = sorted(
+        name for name, expected in expected_values.items() if values[name] != expected
+    )
+    if mismatched:
+        raise ValueError(
+            "private environment is not in the safe transfer profile: "
+            + ", ".join(mismatched)
+        )
+    service_api_keys = {
+        value.strip()
+        for value in values["SOC_PINGAN_MODEL_GATEWAY_API_KEYS"].split(",")
+        if value.strip()
+    }
+    if values["PINGAN_MODEL_GATEWAY_API_KEY"] not in service_api_keys:
+        raise ValueError(
+            "private model-gateway client key is not accepted by the loopback service"
+        )
+    try:
+        compat_app_keys = json.loads(values["SOC_PINGAN_COMPAT_APP_KEYS_JSON"])
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "private compatibility app-key mapping is invalid JSON"
+        ) from exc
+    if (
+        not isinstance(compat_app_keys, dict)
+        or not compat_app_keys
+        or not all(
+            isinstance(name, str)
+            and name.strip()
+            and isinstance(value, str)
+            and value.strip()
+            for name, value in compat_app_keys.items()
+        )
+    ):
+        raise ValueError(
+            "private compatibility app-key mapping requires non-empty string pairs"
         )
 
 
@@ -728,9 +822,9 @@ def _transfer_runbook(
         private_name = Path(str(private["path"])).name
         private_sha = str(private["sha256"])
         private_notice = (
-            "The private overlay contains local configuration, credentials, private alert "
-            "corpora, the workbench index/payload store, and the reviewed EDR path catalog. "
-            "Keep the directory inside the approved environment."
+            "The private overlay contains local configuration, credentials, the prepared "
+            "EAGW RSA key, private alert corpora, the workbench index/payload store, and the "
+            "reviewed EDR path catalog. Keep the directory inside the approved environment."
         )
     return f"""# PingAn Internal Mac DEV Runbook / 平安内网 Mac DEV 操作手册
 
@@ -741,6 +835,9 @@ def _transfer_runbook(
 
 本手册由 `scripts/build_pingan_internal_transfer.py` 随包生成。文件名、commit 和
 SHA-256 与本次交付一致，不需要额外 nginx/LAN hotfix。
+外网冻结前已依次运行 `soc_pingan_prepare_legacy_model_gateway_profile.py --apply` 和
+`soc_pingan_prepare_legacy_workflow_profile.py --apply`。旧源码不进入 source archive；解析出的
+凭证和 RSA key 只进入受保护 private overlay，内网不需要再依赖旧项目。
 
 ## 1. Package Identity / 包身份
 
@@ -768,8 +865,8 @@ SHA-256：
 export TRANSFER_DIR="$HOME/READY-TO-TRANSFER"
 cd "$TRANSFER_DIR"
 
-shasum -a 256 \
-  "{source_name}" \
+shasum -a 256 \\
+  "{source_name}" \\
   "{private_name}"
 ```
 
@@ -799,12 +896,15 @@ tar -xzf "$TRANSFER_DIR/{private_name}" -C "$STAGE_DIR"
 mv "$STAGE_DIR/deer-flow-pingan-internal" "$TARGET_REPO"
 cd "$TARGET_REPO"
 
-chmod 600 .env.soc-dev.local config.pingan-dev.local
+chmod 700 .secrets
+chmod 600 .env.soc-dev.local config.pingan-dev.local \\
+  .secrets/eagw-private-key.der
 ```
 
 本次私有包同时包含：
 
 ```text
+.secrets/eagw-private-key.der
 datas/source/full_alert_2026_month_forth_sample_200.pkl
 validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl
 validation/compact_zeus/data/corpus/full_alert_validation_corpus.manifest.json
@@ -860,8 +960,17 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_fake_acceptance.py
 
 报告必须为 `passed=true`，但不能据此关闭任何真实内网门禁。
 
-`.env.soc-dev.local` 中的 EAGW RSA 私钥路径应指向仓库内未跟踪文件，例如
-`.secrets/eagw-private-key.pem`；文件只在内网创建并设为 `0600`，不得放入源代码包。
+确认私有配置和 EAGW key 已随包落位，且初始兼容模式仍为 `fake`：
+
+```bash
+stat -f '%Lp %N' \\
+  .env.soc-dev.local config.pingan-dev.local .secrets/eagw-private-key.der
+grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
+  .env.soc-dev.local
+```
+
+三个权限必须都是 `600`，两个 mode 必须都是 `fake`。RSA key 只存在于 private overlay，
+不得复制到 source archive、Git 或验收报告。
 
 ## 6. Start Web / 启动 Web
 
@@ -879,8 +988,8 @@ Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机�
 
 ```bash
 source ./.env.soc-dev.local
-backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \
-  --confirm-live \
+backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \\
+  --confirm-live \\
   --report-path backend/.deer-flow/soc-internal-validation/model/model-gateway-smoke.json
 ```
 
@@ -891,7 +1000,7 @@ backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \
 
 ```bash
 mkdir -p backend/.deer-flow/soc-internal-validation/legacy-compat
-cp backend/samples/pingan_dev/legacy-task-request.example.json \
+cp backend/samples/pingan_dev/legacy-task-request.example.json \\
   backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
 chmod 600 backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
 ```
@@ -909,9 +1018,9 @@ SOC_PINGAN_LEGACY_CALLBACK_MODE=internal
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 source ./.env.soc-dev.local
-backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
-  --confirm-live \
-  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
+backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
+  --confirm-live \\
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \\
   --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
 ```
 

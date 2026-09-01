@@ -36,14 +36,19 @@
 
 ```bash
 backend/.venv/bin/python \
+  backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py --apply
+backend/.venv/bin/python \
   backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 git status --short
 python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
 ```
 
-第一条命令只静态解析旧源码并更新 `0600` 的 Git-ignored env；输出必须是
-`credential_present=true`、`secret_in_output=false`，不得出现 secret。旧源码本身被 source bundle 排除，
-实际凭证只随 private overlay 进入内网。
+前两条命令都只静态解析旧源码，不 import/执行旧项目。模型 preparer 选择已审阅 STG
+`DeepSeek_V4_Flash`，迁移本地 loopback key，生成 `0600` 的
+`.secrets/eagw-private-key.der`，并把 lifecycle/callback 初始化为 `fake`；Workflow preparer 导入
+`YHSYS` PRD profile。两份输出都必须是 `credential_present=true`、
+`secret_in_output=false`，模型报告还必须有 `compatibility_key_present=true`，不得出现 secret。
+旧源码本身被 source bundle 排除，实际 env/key 只随 private overlay 进入内网。
 
 最终交接包要求 `git status --short` 无输出。构建器默认拒绝 dirty worktree，保证 source archive 可以对应到唯一
 commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
@@ -57,7 +62,7 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 `backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/` 中生成本次交付的四类文件：
 
 - `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
-- `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、200 条兼容性 PKL、212 条 canonical Memory DEV corpus、4343 条 DAMS 合并语料及其 manifest/index/payload store、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
+- `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、200 条兼容性 PKL、212 条 canonical Memory DEV corpus、4343 条 DAMS 合并语料及其 manifest/index/payload store、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
 - `PINGAN-INTERNAL-MAC-RUNBOOK.md`：由构建器自动生成，固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令；不再手工维护时间戳，也不再携带独立 nginx/LAN hotfix。
 

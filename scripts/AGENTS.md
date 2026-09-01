@@ -37,6 +37,14 @@ idempotent replay, real pending-alert lifecycle evidence, a Runtime run/model,
 and a delivered real callback attempt. Reports must contain hashes and state
 only, never request/result bodies or credentials.
 
+Final PingAn transfer packaging first runs the model-gateway and workflow
+legacy-profile preparers in the external preparation checkout. Both are static AST
+readers: they must not import or execute legacy packages. The generated
+`.env.soc-dev.local` and `.secrets/eagw-private-key.der` are mode `0600`, belong only
+in the private overlay, and must never enter the source archive or report. Build only
+from a clean commit and inspect both archives before replacing the previous
+`READY-TO-TRANSFER` contents.
+
 ## Backend Static Analysis Commands
 
 The root `detect-thread-boundaries` target statically inventories execution

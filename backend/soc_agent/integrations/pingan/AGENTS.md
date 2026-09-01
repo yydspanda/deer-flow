@@ -147,6 +147,11 @@ generic `soc_agent` code.
   `scripts/build_pingan_macos_offline_bundle.py`. Resolve checkout paths at runtime; do
   not commit fixed `/Users/...` paths. Private overlay builders reject placeholders,
   stale legacy import keys, permissive local config, and secrets in source archives.
+- Before a final private-overlay build, run both legacy profile preparers in the external
+  preparation checkout. They parse reviewed source with AST only, never import old code,
+  and write the Git-ignored env plus `.secrets/eagw-private-key.der` at mode `0600`.
+  Reports expose only hashes/presence flags. The model preparer starts lifecycle and
+  callback modes as `fake`; only internal live acceptance may switch both to `internal`.
 - Source and private-data/config archives have independent manifests and hashes. Never
   package `*.local`, PKL, XLSX, SQLite, credentials, or generated internal results in the
   source archive.

@@ -129,12 +129,16 @@ SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD
 
 ```bash
 backend/.venv/bin/python \
+  backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py --apply
+backend/.venv/bin/python \
   backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 ```
 
-该脚本只用 AST 静态读取旧 `agent_config.py`，不 import/执行旧项目；输出只包含 profile 元数据和
-`credential_present=true`，不包含 secret 或 secret hash。旧源码本身不进入 source bundle，写好的 env
-只进入受保护 private overlay。
+两个脚本只用 AST 静态读取已审阅旧源码，不 import/执行旧项目。第一个选择 STG
+`DeepSeek_V4_Flash`、迁移 loopback key/旧 ingress app-key、生成
+`.secrets/eagw-private-key.der`，并将真实生命周期和回调保持在 `fake`；第二个迁移 `YHSYS` PRD
+Workflow profile。输出只包含 profile 元数据、源/key hash 和凭证存在标记，始终为
+`secret_in_output=false`。旧源码本身不进入 source bundle，写好的 env/key 只进入受保护 private overlay。
 
 还需确认：
 

@@ -217,14 +217,21 @@ never prints the secret:
 
 ```bash
 backend/.venv/bin/python \
+  backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py --apply
+backend/.venv/bin/python \
   backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 ```
 
-Its JSON output must show `environment=prd`, `app_id=YHSYS`,
-`operator=WANGWENBIN520`, `credential_present=true`, and
-`secret_in_output=false`. The old source is deliberately excluded from the
-source archive; the resulting `.env.soc-dev.local` travels only in the protected
-private overlay.
+The model preparer statically selects the reviewed STG `DeepSeek_V4_Flash`
+profile (DEV may use the STG gateway), migrates the old local loopback API key,
+creates `.secrets/eagw-private-key.der`, and initializes lifecycle/callback modes
+to `fake`. Its JSON output must show `environment=stg`,
+`model_config_name=DeepSeek_V4_Flash`, `credential_present=true`,
+`compatibility_key_present=true`, and `secret_in_output=false`. The workflow
+output must show `environment=prd`, `app_id=YHSYS`, `operator=WANGWENBIN520`,
+`credential_present=true`, and `secret_in_output=false`. Both commands are
+idempotent. The old source is deliberately excluded from the source archive;
+the resulting env and DER key travel only in the protected private overlay.
 
 If root `extensions_config.json` is absent, create it from
 `backend/samples/pingan_dev/extensions.example.json`. If it already exists,
@@ -265,7 +272,8 @@ Mac, verify the private-overlay permissions instead; both results must start
 with `600`:
 
 ```bash
-stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local
+stat -f '%Lp %N' \
+  .env.soc-dev.local config.pingan-dev.local .secrets/eagw-private-key.der
 ```
 
 Prepare the private D12-B matrix separately. It contains approved IP/host/UM
