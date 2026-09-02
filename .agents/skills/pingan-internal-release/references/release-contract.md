@@ -11,10 +11,15 @@ documents.
   developer's username.
 - Runtime: `scripts/soc_pingan_macos_host_dev.py`, Python `3.12+`, project uv
   environment, pinned pnpm, and non-root nginx.
-- Persistence: local SOC SQLite for DEV only. Preserve
-  `backend/.deer-flow/data` together with SQLite WAL/SHM/journal sidecars.
+- Persistence: checkout-owned, isolated SOC SQLite files for DEV and STG. Preserve
+  `backend/.deer-flow/data` together with SQLite WAL/SHM/journal sidecars; switching
+  the deployment profile selects `soc_agent_dev.db` or `soc_agent_stg.db` without
+  copying records between them.
 - Private configuration: `.env.soc-dev.local`, `config.pingan-dev.local`, RSA
   material, and PingAn profiles use the separate private-overlay boundary.
+- Governed PingAn mapping: project DEV activates the stored ZEUS PRD profile;
+  project STG activates the stored ZEUS STG profile. Model/Agent Platform targets,
+  Provider execution modes, and action authority remain independently configured.
 - Large corpus PKLs and Workbench payload SQLite remain separately staged from
   approved internal storage and are never source-update payloads.
 
