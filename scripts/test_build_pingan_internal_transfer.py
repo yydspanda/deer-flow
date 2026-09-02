@@ -155,6 +155,12 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "无敏感合成协议夹具" in runbook
     assert "不读取历史小 JSON" in runbook
     assert "soc_pingan_legacy_live_acceptance.py" in runbook
+    live_acceptance = runbook.split("然后验证真实旧 ZEUS 兼容闭环", maxsplit=1)[
+        1
+    ].split("单条真实验收结束", maxsplit=1)[0]
+    assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in live_acceptance
+    assert "--resume-existing" in live_acceptance
+    assert "resumed_existing_confirmed=true" in live_acceptance
     assert "soc_pingan_prepare_legacy_live_request.py" in runbook
     assert "soc_pingan_set_legacy_provider_mode.py" in runbook
     assert "手工编辑请求 JSON" in runbook
@@ -169,7 +175,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
         for block in re.findall(r"```bash\n(.*?)```", runbook, flags=re.DOTALL)
         if "source ./.env.soc-dev.local" in block
     ]
-    assert len(local_env_blocks) == 3
+    assert len(local_env_blocks) == 4
     for block in local_env_blocks:
         assert 'export TARGET_REPO="$HOME/deer-flow"' in block
         assert 'cd "$TARGET_REPO"' in block

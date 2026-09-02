@@ -2130,6 +2130,13 @@ LessonRule
   source index、payload hash、快照状态与内外层 ID，自动生成 fresh session 和 mode-`0600`
   `.local.json`；其报告禁止包含业务正文。Lifecycle/callback mode 必须由同一配置命令成对切换，
   任一 key 缺失、重复或不可解析时 fail closed。
+- 旧协议 live acceptance 必须显式使用 checkout 解析出的绝对 `SOC_DATABASE_URL`，并在首次连接
+  `8090` 前验证 SQLite 文件、`soc_alembic_version` 及 Processing Job/Callback 表；证据库不可用时
+  不得产生外部副作用。若 durable submit 后客户端在状态、事件或报告读取阶段失败，只允许保留完全
+  相同的 mode-`0600` 请求并显式 `--resume-existing`：相同幂等 identity 必须返回原 Job，已完成的
+  Runtime 与 callback 不得重跑。只有首次响应已离开 `PENDING` 才能确认是既有任务；否则保持原
+  请求并稍后重试，不能用 resume flag 冒充恢复证据。恢复报告以 `resumed_existing_confirmed=true` 代替 fresh gate，
+  但同 Job replay、真实 lifecycle、Runtime lineage、delivered non-mocked callback 仍全部必需。
 
 ## 八、事件与通信规范
 

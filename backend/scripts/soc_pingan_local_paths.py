@@ -18,11 +18,13 @@ def resolve_repo_root(script_path: Path = Path(__file__)) -> Path:
 
 
 def resolved_paths(root: Path) -> dict[str, str]:
+    database_path = root / "backend" / ".deer-flow" / "data" / "soc_agent_dev.db"
     return {
         "SOC_REPO_ROOT": str(root),
         "DEER_FLOW_CONFIG_PATH": str(root / "config.pingan-dev.local"),
         "DEER_FLOW_EXTENSIONS_CONFIG_PATH": str(root / "backend" / "samples" / "pingan_dev" / "extensions.example.json"),
-        "SOC_DEV_SQLITE_PATH": str(root / "backend" / ".deer-flow" / "data" / "soc_agent_dev.db"),
+        "SOC_DEV_SQLITE_PATH": str(database_path),
+        "SOC_DATABASE_URL": "sqlite+pysqlite:///" + str(database_path),
         "SOC_INTERNAL_VALIDATION_ROOT": str(root / "backend" / ".deer-flow" / "soc-internal-validation"),
     }
 

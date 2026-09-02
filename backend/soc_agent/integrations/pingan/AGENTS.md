@@ -145,6 +145,12 @@ generic `soc_agent` code.
   replay returns one job, read non-mocked lifecycle evidence and Runtime lineage from the
   same database, and require a delivered non-mocked callback attempt. Never place the
   request, result, callback payload, or app key in its report.
+- Resolve the live-acceptance evidence store from the checkout-owned absolute
+  `SOC_DATABASE_URL`/`SOC_DEV_SQLITE_PATH`, never from the caller's working directory.
+  Before any `8090` submission, require a readable `soc_alembic_version` and the durable
+  Processing Job/Callback tables. If a client fails after submission, preserve the exact
+  private request and use explicit resume mode: the same idempotency identity must return
+  the existing Job, and completed Runtime/callback work must not execute again.
 - Prepare that live request through the PingAn request-preparation boundary: the operator
   supplies only the approved pending `alert_id`; the boundary verifies the frozen
   Workbench index/payload-store identity, preserves the complete `alert_data`, creates a

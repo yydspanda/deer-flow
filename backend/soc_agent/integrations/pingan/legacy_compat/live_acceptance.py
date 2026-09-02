@@ -44,7 +44,7 @@ class PingAnLegacyLiveAcceptanceReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.pingan_legacy_live_acceptance.v1"] = "soc.pingan_legacy_live_acceptance.v1"
+    schema_version: Literal["soc.pingan_legacy_live_acceptance.v2"] = "soc.pingan_legacy_live_acceptance.v2"
     outcome: PingAnLegacyLiveAcceptanceOutcome
     passed: bool
     simulated: Literal[False] = False
@@ -56,6 +56,7 @@ class PingAnLegacyLiveAcceptanceReport(BaseModel):
     alert_id_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     task_id: str | None = None
     fresh_submission_confirmed: bool = False
+    resumed_existing_confirmed: bool = False
     idempotent_replay_confirmed: bool = False
     submission_status: str | None = None
     replay_status: str | None = None
@@ -85,8 +86,9 @@ def run_pingan_legacy_live_acceptance(
     repository: ProcessingJobRepository,
     client: httpx.Client | None = None,
     sleeper: Callable[[float], None] = time.sleep,
+    resume_existing: bool = False,
 ) -> PingAnLegacyLiveAcceptanceReport:
-    """Submit one fresh task, prove replay idempotency, then verify real callback."""
+    """Submit or resume one task, prove replay idempotency, and verify real evidence."""
 
     started = time.monotonic()
     state: dict[str, Any] = {}
@@ -153,13 +155,18 @@ def run_pingan_legacy_live_acceptance(
         state.update(
             task_id=first.id,
             submission_status=first.status,
-            fresh_submission_confirmed=first.status == "PENDING",
+            fresh_submission_confirmed=first.status == "PENDING" and not resume_existing,
+            resumed_existing_confirmed=resume_existing and first.status != "PENDING",
             http_status=first_http_status,
         )
-        if not state["fresh_submission_confirmed"]:
+        if not state["fresh_submission_confirmed"] and not state["resumed_existing_confirmed"]:
+            if resume_existing:
+                error_message = "Compatibility API still reports PENDING, so this run cannot prove that it resumed a previously submitted task; retry the same private request later."
+            else:
+                error_message = "Compatibility API returned an existing task; use a fresh session/request or explicitly resume this exact request."
             raise _AcceptanceError(
                 outcome="invalid_response",
-                error_message="Compatibility API returned an existing task; use a fresh session/request for live acceptance.",
+                error_message=error_message,
             )
 
         replay, replay_http_status = _submit(
@@ -360,7 +367,7 @@ def _inspect_runtime_result(result: Any, *, state: dict[str, Any]) -> None:
     if not state["run_id_present"] or not state["model_name_present"] or lineage.get("skipped_before_analysis") is True:
         raise _AcceptanceError(
             outcome="runtime_not_executed",
-            error_message="Compatibility task was skipped before a fresh SOC Runtime analysis.",
+            error_message="Compatibility task was skipped before a completed SOC Runtime analysis.",
         )
 
 

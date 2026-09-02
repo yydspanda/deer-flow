@@ -265,8 +265,9 @@ backend/.deer-flow/data/soc_agent_dev.db
    `.local.json`。
 4. 用 Provider-mode 命令把 lifecycle/callback 同时改为 `internal` 并重启 Host DEV；不存在运行时
    fake fallback，也不手工编辑私有环境文件。
-5. 运行 live acceptance；它会提交同一请求两次验证幂等，只产生一个 Job，然后轮询旧 status 接口，
-   最后从同一 SOC DB 核对真实 precheck、Runtime run、Callback Outbox 与 append-only attempt。
+5. 运行 live acceptance；它先验证 checkout 解析出的绝对 SOC DB 与 `0027` 证据表，再提交同一请求
+   两次验证幂等，只产生一个 Job，然后轮询旧 status 接口，最后从同一 SOC DB 核对真实 precheck、
+   Runtime run、Callback Outbox 与 append-only attempt。
 6. 在旧 ZEUS 页面核对结果已回写、任务状态一致且没有重复结果；脚本通过不能替代页面 readback。
 
 准备私有请求：
@@ -302,15 +303,21 @@ source ./.env.soc-dev.local
 
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
   --confirm-live \
+  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH" \
   --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
   --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
 ```
+
+如果同一命令已经提交任务，但客户端随后因本地 DB 路径、终端中断或报告读取失败，禁止重新准备请求。
+保留原 `task-request.local.json`，在上述命令中增加 `--resume-existing`；恢复模式仍证明相同请求返回
+同一个 Job，并从本地持久化证据继续验收，不重新运行已经完成的 Runtime/模型或 callback。首次响应
+必须已经离开 `PENDING` 才能标记恢复成功；仍为 `PENDING` 时保持请求不变并稍后重试。
 
 真实通过必须同时满足：
 
 | Evidence | Required value |
 |---|---|
-| Fresh submission | `fresh_submission_confirmed=true` |
+| Submission or recovery | `fresh_submission_confirmed=true` 或 `resumed_existing_confirmed=true` |
 | Duplicate replay | `idempotent_replay_confirmed=true`，仍为同一个 `task_id` |
 | Legacy status | `terminal_status=SUCCESS` |
 | Runtime | `run_id_present=true`、`model_name_present=true` |

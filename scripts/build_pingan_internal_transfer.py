@@ -1392,11 +1392,36 @@ eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --she
 source ./.env.soc-dev.local
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
   --confirm-live \\
+  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH" \\
   --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \\
   --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
 ```
 
-只有报告同时满足 `outcome=passed`、`fresh_submission_confirmed=true`、
+脚本会在连接 `8090` 前验证绝对 SQLite 路径、`soc_alembic_version` 和 Processing Job/Callback
+表；本地证据库不可用时不会提交任务。如果前一次运行已提交同一请求，但客户端在读取本地证据或
+生成报告时失败，**不要重新运行请求准备器，也不要更换 `session_id`**。保留原
+`task-request.local.json`，直接执行下面的恢复命令：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
+  --confirm-live \\
+  --resume-existing \\
+  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH" \\
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \\
+  --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
+```
+
+恢复模式仍会提交两次完全相同的幂等请求并要求返回同一个 `task_id`，但会读取已有 Job 的终态、
+Runtime lineage、生命周期事件和 Callback Outbox，不会创建第二个 Job，也不会重新运行已完成的模型
+研判或回调。首次响应必须已经进入 `STARTED/SUCCESS/FAILURE` 才能证明是既有任务；若仍为
+`PENDING`，保持请求不变并稍后再次执行恢复命令。
+
+只有报告同时满足 `outcome=passed`、`fresh_submission_confirmed=true` **或**
+`resumed_existing_confirmed=true`，并且
 `idempotent_replay_confirmed=true`、`run_id_present=true`、`lifecycle_mocked=false`、
 `callback_status=delivered`、`callback_mocked=false` 和
 `proves_real_internal_connectivity=true`，才证明 `8090 submit -> ZEUS precheck -> Runtime/LLM ->

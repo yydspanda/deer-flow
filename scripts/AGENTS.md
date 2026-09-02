@@ -47,6 +47,12 @@ provider modes set to `internal`. Its pass gate requires a fresh durable job,
 idempotent replay, real pending-alert lifecycle evidence, a Runtime run/model,
 and a delivered real callback attempt. Reports must contain hashes and state
 only, never request/result bodies or credentials.
+The live command must receive the checkout-resolved absolute SOC database URL and
+must verify the SOC migration/evidence tables before its first network request. A
+failure after durable submission is recovered only with the same private request and
+explicit `--resume-existing`; do not prepare a new session or rerun completed Runtime
+and callback work. A resumed pass replaces the fresh-submission gate only, while all
+idempotency, lifecycle, Runtime, and real-callback gates remain mandatory.
 
 Final PingAn transfer packaging first runs the model-gateway and workflow
 legacy-profile preparers in the external preparation checkout. Both are static AST

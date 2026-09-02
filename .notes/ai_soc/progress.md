@@ -6,8 +6,8 @@
 
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H` 外网实现与内网交付契约已冻结；下一阶段只注入 PingAn private overlay，关闭真实 EAGW、ZEUS 生命周期/回调、旧页面回读和容量门禁，不改通用 Runtime 契约。
-- **Next Gate:** 在内网 Apple Silicon DEV 留存已通过的 EAGW completion 报告；随后只输入一个获批 pending `alert_id`，由请求准备器自动装配旧 `zeus/alert_agent` 完整请求并运行 live acceptance，关闭 ZEUS task/status/precheck/callback 门禁；再完成旧页面回读、告警 `1 -> 5 -> 50 -> 200/5000+` 递进 shadow，以及模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
+- **Current Objective:** `PI-01H` 已进入真实内网验收；保持原幂等请求恢复首次 live run，关闭 ZEUS 生命周期/回调和旧页面回读门禁，不改通用 Runtime 契约。
+- **Next Gate:** 用同一 mode-`0600` 请求执行 `--resume-existing`，从绝对 SOC SQLite 回读已有 Job、Runtime、真实 precheck 和 Callback Outbox 并生成通过报告；禁止重新生成 session 或重复模型调用。随后完成旧页面回读、告警 `1 -> 5 -> 50 -> 200/5000+` 递进 shadow，以及模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-02`
 
@@ -22,6 +22,13 @@
 | Upstream baseline | `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`；2026-08-26 测量为 ahead `261` / behind `0` |
 
 ## Recent Completion Records / 近期完成记录
+
+### 2026-09-02 — Legacy live-acceptance recovery hardening
+
+- **Task:** `PI-01`
+- **Status:** `Done`
+- **Outcome:** Host DEV 路径解析器统一导出 checkout-owned 绝对 `SOC_DATABASE_URL`；live acceptance 在任何 `8090` 请求前验证 SQLite 文件、`soc_alembic_version` 和 Processing Job/Callback 表。报告契约升级为 v2，并增加显式 `--resume-existing`：客户端在 durable submit 后失败时复用原请求和 Job，保留幂等、真实生命周期、Runtime lineage 与 callback 门禁，不重复执行已完成模型或回调。生成式 Runbook 固定携带绝对 DB URL 和完整恢复命令。
+- **Verification:** legacy/Processing Job/live/CLI/架构回归 `73 passed`；Host DEV/sidecar/corpus/transfer 回归 `70 passed`。真实内网恢复报告与旧 ZEUS 页面回读仍待执行，外网回归不关闭该门禁。
 
 ### 2026-09-01 — PingAn private-profile migration and transfer freeze
 
@@ -85,13 +92,6 @@
 - **Status:** `Done`
 - **Outcome:** 合并 `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`，保留上游 Subagent/MCP/Gateway/Frontend 能力与 SOC 增量边界。
 - **Verification:** 后端重点回归 959 项、前端 1,089 项单测及 lint/type-check 通过；宿主 DNS 导致的 5 个浏览器 SSRF 环境失败未通过放宽安全策略规避。
-
-### 2026-08-25 — Memory governance and evidence-gap correction
-
-- **Task:** `PI-03`
-- **Status:** `Done`
-- **Outcome:** Confirmed Memory 台账、修订、Match Test 和 evidence coverage 等价投影完成；调查缺口保留为未来 selected-case Agent 输入，不直接驱动 MCP。
-- **Archive:** [`2026-08`](../archive/ai_soc/progress/2026-08.md)
 
 ## Update Contract / 更新约定
 

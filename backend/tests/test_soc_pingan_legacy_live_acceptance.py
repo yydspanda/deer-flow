@@ -62,10 +62,12 @@ def test_live_acceptance_proves_submit_replay_runtime_lifecycle_and_callback() -
         )
 
     assert report.passed is True
+    assert report.schema_version == "soc.pingan_legacy_live_acceptance.v2"
     assert report.outcome == "passed"
     assert report.simulated is False
     assert report.proves_real_internal_connectivity is True
     assert report.idempotent_replay_confirmed is True
+    assert report.resumed_existing_confirmed is False
     assert report.terminal_status == "SUCCESS"
     assert report.run_id_present is True
     assert report.lifecycle_mocked is False
@@ -82,6 +84,99 @@ def test_live_acceptance_proves_submit_replay_runtime_lifecycle_and_callback() -
     assert "compat-secret" not in serialized
     assert "sensitive-message" not in serialized
     assert "转交" not in serialized
+
+
+def test_live_acceptance_can_resume_existing_terminal_task_without_reexecution() -> None:
+    calls: list[tuple[str, str]] = []
+    terminal = {
+        "id": "JOB-1",
+        "status": "SUCCESS",
+        "result": {
+            "model_name": "deepseek-v4-flash-0731",
+            "soc_lineage": {
+                "run_id": "RUN-1",
+                "external_lifecycle_state": "pending",
+            },
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        assert request.method == "POST"
+        return httpx.Response(200, json=terminal)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = run_pingan_legacy_live_acceptance(
+            _task_request(),
+            _valid_env(),
+            repository=_EvidenceRepository(),
+            client=client,
+            sleeper=lambda _seconds: None,
+            resume_existing=True,
+        )
+
+    assert report.passed is True
+    assert report.fresh_submission_confirmed is False
+    assert report.resumed_existing_confirmed is True
+    assert report.idempotent_replay_confirmed is True
+    assert report.terminal_status == "SUCCESS"
+    assert calls == [
+        ("POST", "/workflow/task"),
+        ("POST", "/workflow/task"),
+    ]
+
+
+def test_live_acceptance_rejects_existing_terminal_task_without_resume() -> None:
+    terminal = {
+        "id": "JOB-1",
+        "status": "SUCCESS",
+        "result": {
+            "model_name": "deepseek-v4-flash-0731",
+            "soc_lineage": {
+                "run_id": "RUN-1",
+                "external_lifecycle_state": "pending",
+            },
+        },
+    }
+
+    with httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=terminal))) as client:
+        report = run_pingan_legacy_live_acceptance(
+            _task_request(),
+            _valid_env(),
+            repository=_EvidenceRepository(),
+            client=client,
+        )
+
+    assert report.passed is False
+    assert report.outcome == "invalid_response"
+    assert report.resumed_existing_confirmed is False
+
+
+def test_live_acceptance_resume_requires_evidence_task_already_advanced() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={"id": "JOB-1", "status": "PENDING", "result": None},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = run_pingan_legacy_live_acceptance(
+            _task_request(),
+            _valid_env(),
+            repository=_EvidenceRepository(),
+            client=client,
+            resume_existing=True,
+        )
+
+    assert report.passed is False
+    assert report.outcome == "invalid_response"
+    assert report.fresh_submission_confirmed is False
+    assert report.resumed_existing_confirmed is False
+    assert calls == 1
 
 
 def test_live_acceptance_refuses_fake_provider_modes_before_network() -> None:

@@ -18,4 +18,5 @@ def test_pingan_local_paths_resolve_from_script_location_not_user_home() -> None
     assert resolved == repo_root
     assert values["SOC_REPO_ROOT"] == str(repo_root)
     assert values["DEER_FLOW_CONFIG_PATH"] == str(repo_root / "config.pingan-dev.local")
+    assert values["SOC_DATABASE_URL"] == ("sqlite+pysqlite:///" + str(repo_root / "backend/.deer-flow/data/soc_agent_dev.db"))
     assert "/Users/zhangjianming627" not in "\n".join(values.values())
