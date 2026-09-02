@@ -58,6 +58,7 @@ def test_http_port_preserves_search_tag_content_wire_contract() -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         sent["url"] = str(request.url)
+        sent["raw_body"] = request.content.decode()
         sent["body"] = json.loads(request.content)
         sent["headers"] = dict(request.headers)
         return httpx.Response(200, json=_active_response(_ENTITY))
@@ -81,7 +82,9 @@ def test_http_port_preserves_search_tag_content_wire_contract() -> None:
     }
     assert sent["url"] == "https://isec.example.internal/public/searchTagContent"
     assert sent["body"] == {"keywords": [_ENTITY]}
+    assert sent["raw_body"] == json.dumps({"keywords": [_ENTITY]})
     assert sent["headers"]["app-sign"] == "signed"
+    assert sent["headers"]["content-type"] == "application/json"
 
 
 def test_http_port_rejects_unsafe_host_oversized_and_invalid_json() -> None:

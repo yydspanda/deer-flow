@@ -43,6 +43,7 @@ def test_http_search_port_preserves_legacy_signing_and_wire_contract() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         sent["url"] = str(request.url)
         sent["headers"] = dict(request.headers)
+        sent["raw_body"] = request.content.decode()
         sent["body"] = json.loads(request.content)
         return httpx.Response(200, json={"code": "200", "data": []})
 
@@ -71,7 +72,9 @@ def test_http_search_port_preserves_legacy_signing_and_wire_contract() -> None:
     }
     assert sent["url"] == "https://isec.example.internal/public/searchAssetInfo"
     assert sent["body"] == expected_body
+    assert sent["raw_body"] == json.dumps(expected_body)
     assert sent["headers"]["x-isec-signature"] == "signed-value"
+    assert sent["headers"]["content-type"] == "application/json"
     assert sent["headers"]["companycode"] == "all"
 
 

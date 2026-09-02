@@ -568,6 +568,7 @@ class SqlAlchemyProcessingJobRepository:
         dispatcher_id: str,
         error_code: str,
         error_message: str,
+        response_metadata: dict[str, Any] | None = None,
         available_at: datetime,
         now: datetime | None = None,
         dead_letter: bool = False,
@@ -589,6 +590,7 @@ class SqlAlchemyProcessingJobRepository:
                 completed_at=observed_at,
                 error_code=error_code,
                 error_message=error_message,
+                response_metadata=response_metadata,
             )
             row.status = CallbackOutboxStatus.DEAD_LETTER.value if dead_letter else CallbackOutboxStatus.RETRY_WAIT.value
             row.available_at = _as_utc(available_at)
@@ -596,6 +598,8 @@ class SqlAlchemyProcessingJobRepository:
             row.lease_expires_at = None
             row.last_error_code = error_code
             row.last_error_message = error_message
+            if response_metadata is not None:
+                row.response_metadata = response_metadata
             row.updated_at = observed_at
             session.commit()
             return _callback_from_row(row)

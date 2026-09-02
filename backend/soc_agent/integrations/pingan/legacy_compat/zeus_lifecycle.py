@@ -14,7 +14,10 @@ from soc_agent.integrations.pingan.legacy_compat.contracts import (
     PingAnAlertLifecycleCheck,
     PingAnAlertLifecycleState,
 )
-from soc_agent.integrations.pingan.zeus_signing import isec_sign
+from soc_agent.integrations.pingan.zeus_signing import (
+    isec_sign,
+    serialize_isec_json_body,
+)
 
 _STATUS_NAMES = {
     0: "已忽略",
@@ -97,6 +100,8 @@ class HttpPingAnZeusAlertLifecyclePort:
                 app_key=self._app_key,
             )
         )
+        headers["Content-Type"] = "application/json"
+        wire_body = serialize_isec_json_body(request_body)
         url = urljoin(self._base_url, self._endpoint_path)
         if (urlparse(url).hostname or "").lower() not in self._hosts:
             raise PingAnAlertLifecycleConfigurationError("resolved ZEUS lifecycle URL left the configured allowlist")
@@ -105,7 +110,7 @@ class HttpPingAnZeusAlertLifecyclePort:
         try:
             response = client.post(
                 url,
-                json=request_body,
+                content=wire_body,
                 headers=headers,
                 timeout=self._timeout_seconds,
             )
@@ -163,10 +168,12 @@ class PingAnAlertLifecycleService:
             ).encode("utf-8")
         ).hexdigest()
         code = response.get("code")
-        if code is not None and str(code) != "200":
+        provider_code = _bounded_scalar_text(code)
+        if provider_code is not None and provider_code != "200":
             return PingAnAlertLifecycleCheck(
                 alert_id=alert_id,
                 state=PingAnAlertLifecycleState.UNKNOWN,
+                provider_code=provider_code,
                 reason="provider_business_error",
                 mocked=self._port.mocked,
                 response_sha256=response_hash,
@@ -179,6 +186,7 @@ class PingAnAlertLifecycleService:
             return PingAnAlertLifecycleCheck(
                 alert_id=alert_id,
                 state=PingAnAlertLifecycleState.UNKNOWN,
+                provider_code=provider_code,
                 reason="malformed_or_missing_status",
                 mocked=self._port.mocked,
                 response_sha256=response_hash,
@@ -196,11 +204,19 @@ class PingAnAlertLifecycleService:
         return PingAnAlertLifecycleCheck(
             alert_id=alert_id,
             state=state,
+            provider_code=provider_code,
             provider_status=str(status_code),
             reason=reason,
             mocked=self._port.mocked,
             response_sha256=response_hash,
         )
+
+
+def _bounded_scalar_text(value: Any) -> str | None:
+    if value is None or isinstance(value, (Mapping, list, tuple, set)):
+        return None
+    normalized = str(value).strip()
+    return normalized[:128] or None
 
 
 __all__ = [

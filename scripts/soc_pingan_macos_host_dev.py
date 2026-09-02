@@ -12,6 +12,7 @@ import platform
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -58,6 +59,7 @@ DEV_CORPUS = (
 )
 DEV_CORPUS_INDEX = DEV_CORPUS.with_suffix(".workbench-index.json")
 DEV_CORPUS_PAYLOAD_STORE = DEV_CORPUS.with_suffix(".workbench-payloads.sqlite")
+SOC_DEV_DATABASE_RELATIVE_PATH = Path("backend/.deer-flow/data/soc_agent_dev.db")
 
 MIN_PYTHON = (3, 12)
 MIN_NODE_MAJOR = 22
@@ -473,6 +475,7 @@ def start_runtime(
         load_local_runtime_environment(start_environment),
         local_only=local_only,
     )
+    runtime_environment = prepare_soc_database(runtime_environment)
     if (
         resolved_origins
         and runtime_environment.get("SOC_PINGAN_COMPAT_ENABLED", "true").strip().lower()
@@ -548,6 +551,49 @@ def build_start_command(*, daemon: bool, demo_no_auth: bool = False) -> list[str
     if daemon:
         command.append("--daemon")
     return command
+
+
+def prepare_soc_database(
+    environment: dict[str, str],
+    *,
+    root: Path = ROOT,
+    run: Callable[..., Any] = subprocess.run,
+) -> dict[str, str]:
+    """Upgrade the Host DEV SOC database once before any sidecar starts."""
+
+    backend = root / "backend"
+    database_path = (root / SOC_DEV_DATABASE_RELATIVE_PATH).resolve()
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    resolved = dict(environment)
+    resolved.update(
+        {
+            "SOC_DATABASE_URL": database_url,
+            "SOC_PINGAN_COMPAT_AUTO_MIGRATE": "false",
+            "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
+        }
+    )
+    print(f"Preparing SOC SQLite schema: {database_path}", flush=True)
+    try:
+        run(
+            [
+                str(backend / ".venv/bin/python"),
+                "-m",
+                "soc_agent.cli",
+                "db",
+                "upgrade",
+                "--database-url",
+                database_url,
+            ],
+            cwd=backend,
+            env=resolved,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise HostDevError(
+            "SOC database preparation failed before sidecar startup; no Host DEV "
+            "service was started"
+        ) from exc
+    return resolved
 
 
 def build_start_environment(
@@ -718,7 +764,34 @@ def runtime_status() -> dict[str, Any]:
             "frontend_3000": _tcp_port_open(3000),
             "nginx_2026": _tcp_port_open(2026),
         },
+        "soc_database": soc_database_status(),
         "sidecars": sidecar_status(specs, runtime_dir=SIDECAR_RUNTIME_DIR),
+    }
+
+
+def soc_database_status(*, root: Path = ROOT) -> dict[str, Any]:
+    """Read the SOC schema revision without creating a missing SQLite file."""
+
+    database_path = (root / SOC_DEV_DATABASE_RELATIVE_PATH).resolve()
+    base = {"path": str(database_path)}
+    if not database_path.is_file():
+        return {"status": "missing", **base}
+    try:
+        with sqlite3.connect(
+            f"file:{database_path.as_posix()}?mode=ro",
+            uri=True,
+        ) as connection:
+            row = connection.execute(
+                "SELECT version_num FROM soc_alembic_version"
+            ).fetchone()
+    except sqlite3.Error:
+        return {"status": "schema_unavailable", **base}
+    if row is None or not row[0]:
+        return {"status": "schema_unavailable", **base}
+    return {
+        "status": "ready",
+        **base,
+        "schema_revision": str(row[0]),
     }
 
 

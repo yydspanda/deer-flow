@@ -1,0 +1,6 @@
+interface:
+  display_name: "PingAn Internal Release"
+  short_description: "Build safe full or incremental offline SOC releases"
+  default_prompt: "Use $pingan-internal-release to prepare and verify the appropriate DeerFlow SOC package for the PingAn internal Mac environment."
+policy:
+  allow_implicit_invocation: true

@@ -45,6 +45,10 @@ generic `soc_agent` code.
 
 ## Provider Rules
 
+- PingAn ISEC `App-Sign` covers the exact JSON body bytes sent on the wire. Serialize
+  once with `serialize_isec_json_body()`, sign that representation, and pass those same
+  bytes with `content=` plus `Content-Type: application/json`. Never sign a Python
+  object and then use an HTTP client's `json=` argument, which may reserialize it.
 - Internal dependencies unavailable outside PingAn use explicit fake/mock modes with
   `mocked=true`. A simulated pass never closes Real Integration Debt. Internal mode must
   fail closed and must never fall back to fake data after configuration/provider failure.
@@ -145,12 +149,18 @@ generic `soc_agent` code.
   replay returns one job, read non-mocked lifecycle evidence and Runtime lineage from the
   same database, and require a delivered non-mocked callback attempt. Never place the
   request, result, callback payload, or app key in its report.
+- Before a model-backed live task, run the read-only ZEUS lifecycle smoke against the
+  prepared request. Only a non-mocked pending result may continue. Persist/report only
+  bounded provider code/status, response hash, and failure category; never response text.
 - Resolve the live-acceptance evidence store from the checkout-owned absolute
   `SOC_DATABASE_URL`/`SOC_DEV_SQLITE_PATH`, never from the caller's working directory.
   Before any `8090` submission, require a readable `soc_alembic_version` and the durable
   Processing Job/Callback tables. If a client fails after submission, preserve the exact
   private request and use explicit resume mode: the same idempotency identity must return
   the existing Job, and completed Runtime/callback work must not execute again.
+  Resume is only for a client/report-reading failure after valid persisted provider work.
+  A Job with unknown lifecycle, dead-letter callback, or code/config changed after its
+  execution remains immutable failure evidence and requires a fresh session/Job.
 - Prepare that live request through the PingAn request-preparation boundary: the operator
   supplies only the approved pending `alert_id`; the boundary verifies the frozen
   Workbench index/payload-store identity, preserves the complete `alert_data`, creates a

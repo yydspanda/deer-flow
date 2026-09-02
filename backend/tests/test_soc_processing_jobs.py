@@ -411,6 +411,7 @@ def test_callback_retry_is_independent_from_completed_analysis() -> None:
         dispatcher_id="callback-1",
         error_code="timeout",
         error_message="callback timed out",
+        response_metadata={"http_status": 502, "provider_code": "40100"},
         available_at=now + timedelta(seconds=10),
         now=now + timedelta(seconds=4),
     )
@@ -421,6 +422,14 @@ def test_callback_retry_is_independent_from_completed_analysis() -> None:
     assert retry_attempts[0].outcome is CallbackAttemptOutcome.RETRY_SCHEDULED
     assert retry_attempts[0].dispatcher_id == "callback-1"
     assert retry_attempts[0].error_code == "timeout"
+    assert retry_attempts[0].response_metadata == {
+        "http_status": 502,
+        "provider_code": "40100",
+    }
+    assert retrying.response_metadata == {
+        "http_status": 502,
+        "provider_code": "40100",
+    }
     assert (
         repository.claim_next_callback(
             destination="pingan.zeus.alert_callback",

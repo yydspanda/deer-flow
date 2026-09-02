@@ -87,3 +87,4 @@ backend/soc_agent/.understand-anything/
 
 # Monocle agent-observability trace output (local file exporter)
 .monocle/
+validation/git-commit-pack.zip

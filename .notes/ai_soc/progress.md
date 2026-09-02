@@ -6,8 +6,8 @@
 
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H` 已进入真实内网验收；保持原幂等请求恢复首次 live run，关闭 ZEUS 生命周期/回调和旧页面回读门禁，不改通用 Runtime 契约。
-- **Next Gate:** 用同一 mode-`0600` 请求执行 `--resume-existing`，从绝对 SOC SQLite 回读已有 Job、Runtime、真实 precheck 和 Callback Outbox 并生成通过报告；禁止重新生成 session 或重复模型调用。随后完成旧页面回读、告警 `1 -> 5 -> 50 -> 200/5000+` 递进 shadow，以及模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
+- **Current Objective:** `PI-01H` 已进入真实内网验收；修复 ISEC 签名 body/wire 不一致，先用只读 lifecycle smoke 关闭签名和 pending 门禁，再创建 fresh Job 验证 local compatibility 与 ZEUS-originated 闭环，不改通用 Runtime 契约。
+- **Next Gate:** 交付新代码后，对一个获批 pending 告警运行 `soc_pingan_zeus_lifecycle_smoke.py`，必须得到 `code=200/status=1/mocked=false`；旧 `JOB-C74CA58703344AB1` 保留为不可变失败证据，不使用 `--resume-existing`。随后创建 fresh session/Job，分别完成 local live acceptance、ZEUS 上游真实发起与旧页面回读，再进入 `1 -> 5 -> 50 -> 200/5000+` shadow 和模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-02`
 
@@ -23,12 +23,12 @@
 
 ## Recent Completion Records / 近期完成记录
 
-### 2026-09-02 — Legacy live-acceptance recovery hardening
+### 2026-09-02 — Legacy live-acceptance recovery and signed-wire hardening
 
 - **Task:** `PI-01`
 - **Status:** `Done`
-- **Outcome:** Host DEV 路径解析器统一导出 checkout-owned 绝对 `SOC_DATABASE_URL`；live acceptance 在任何 `8090` 请求前验证 SQLite 文件、`soc_alembic_version` 和 Processing Job/Callback 表。报告契约升级为 v2，并增加显式 `--resume-existing`：客户端在 durable submit 后失败时复用原请求和 Job，保留幂等、真实生命周期、Runtime lineage 与 callback 门禁，不重复执行已完成模型或回调。生成式 Runbook 固定携带绝对 DB URL 和完整恢复命令。
-- **Verification:** legacy/Processing Job/live/CLI/架构回归 `73 passed`；Host DEV/sidecar/corpus/transfer 回归 `70 passed`。真实内网恢复报告与旧 ZEUS 页面回读仍待执行，外网回归不关闭该门禁。
+- **Outcome:** Host DEV 路径解析器统一导出 checkout-owned 绝对 `SOC_DATABASE_URL`；启动器在任何 Sidecar/Web 进程前集中完成 SOC migration，并关闭 API/Worker 的重复自动迁移。新建 SQLite 首次发生瞬时 `disk I/O error` 时，只清理本次失败产生的半库并重试一次；调用前已存在的数据库绝不自动删除。`status` 增加数据库路径、状态和 revision，生成式 Runbook 删除手工建库分支。live acceptance 在任何 `8090` 请求前验证 SQLite 文件、`soc_alembic_version` 和 Processing Job/Callback 表，并提供显式恢复模式。内网首轮真实证据进一步定位 `code=40100/签名验证失败`：旧实现签名 `json.dumps`，却让 HTTPX `json=` 重新压缩 wire body。现已让 lifecycle/callback/asset/TI/security-tag 五个 ISEC Provider 一次序列化并以相同 bytes 签名和发送；报告契约升级为 v3，失败 callback 的 HTTP/provider code 与 response hash 可安全持久化。新增模型调用前的只读 lifecycle/signature smoke，并把 local self-submit 与 ZEUS-originated 最终验收分开。
+- **Verification:** migration/legacy/Processing Job 回归、Host DEV/sidecar/transfer 回归继续覆盖瞬时新库失败、已有库非破坏性失败、数据库先于 Sidecar 启动及只读状态检查；签名 wire/body、五类 Provider、lifecycle smoke、安全诊断和 live report 聚焦回归通过。真实内网已人工证明 SQLite 可升级到 `0027_processing_jobs`、六个进程全部启动、模型网关 completion 通过；新签名代码和 lifecycle smoke 仍需随下一交付在内网复验。
 
 ### 2026-09-01 — PingAn private-profile migration and transfer freeze
 

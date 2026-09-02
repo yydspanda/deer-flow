@@ -62,7 +62,7 @@ def test_live_acceptance_proves_submit_replay_runtime_lifecycle_and_callback() -
         )
 
     assert report.passed is True
-    assert report.schema_version == "soc.pingan_legacy_live_acceptance.v2"
+    assert report.schema_version == "soc.pingan_legacy_live_acceptance.v3"
     assert report.outcome == "passed"
     assert report.simulated is False
     assert report.proves_real_internal_connectivity is True
@@ -71,6 +71,10 @@ def test_live_acceptance_proves_submit_replay_runtime_lifecycle_and_callback() -
     assert report.terminal_status == "SUCCESS"
     assert report.run_id_present is True
     assert report.lifecycle_mocked is False
+    assert report.lifecycle_provider_code == "200"
+    assert report.lifecycle_provider_status == "1"
+    assert report.lifecycle_reason == "ZEUS alert remains pending review"
+    assert report.lifecycle_response_sha256 == "a" * 64
     assert report.callback_status is CallbackOutboxStatus.DELIVERED
     assert report.callback_mocked is False
     assert report.callback_attempt_count == 1
@@ -282,6 +286,53 @@ def test_live_acceptance_fails_when_callback_was_delivered_by_fake_port() -> Non
     assert report.proves_real_internal_connectivity is False
 
 
+def test_live_acceptance_reports_safe_lifecycle_and_callback_failure_metadata() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"id": "JOB-1", "status": "PENDING", "result": None},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "JOB-1",
+                "status": "SUCCESS",
+                "result": {
+                    "model_name": "deepseek-v4-flash-0731",
+                    "soc_lineage": {
+                        "run_id": "RUN-1",
+                        "external_lifecycle_state": "unknown",
+                    },
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = run_pingan_legacy_live_acceptance(
+            _task_request(),
+            _valid_env(),
+            repository=_FailedEvidenceRepository(),
+            client=client,
+            sleeper=lambda _seconds: None,
+        )
+
+    assert report.outcome == "lifecycle_not_real"
+    assert report.lifecycle_state == "unknown"
+    assert report.lifecycle_provider_code == "40100"
+    assert report.lifecycle_reason == "provider_business_error"
+    assert report.lifecycle_response_sha256 == "a" * 64
+    assert report.callback_status is CallbackOutboxStatus.DEAD_LETTER
+    assert report.callback_attempt_count == 1
+    assert report.callback_last_error_code == "PingAnAlertCallbackResponseError"
+    assert report.callback_http_status == 200
+    assert report.callback_provider_code == "40100"
+    assert report.callback_response_sha256 == "b" * 64
+    serialized = report.model_dump_json()
+    assert "签名验证失败" not in serialized
+    assert "private-detail" not in serialized
+
+
 class _EvidenceRepository:
     def __init__(self, *, callback_mocked: bool = False) -> None:
         self._callback_mocked = callback_mocked
@@ -298,7 +349,16 @@ class _EvidenceRepository:
                 worker_id="worker-1",
                 attempt=1,
                 occurred_at=datetime(2026, 9, 1, tzinfo=UTC),
-                details={"lifecycle": {"state": "pending", "mocked": False}},
+                details={
+                    "lifecycle": {
+                        "state": "pending",
+                        "provider_code": "200",
+                        "provider_status": "1",
+                        "reason": "ZEUS alert remains pending review",
+                        "mocked": False,
+                        "response_sha256": "a" * 64,
+                    }
+                },
             )
         ]
 
@@ -340,6 +400,83 @@ class _EvidenceRepository:
                 response_metadata={
                     "http_status": 200,
                     "mocked": self._callback_mocked,
+                },
+            )
+        ]
+
+
+class _FailedEvidenceRepository(_EvidenceRepository):
+    def list_events(self, job_id: str) -> list[SocProcessingJobEvent]:
+        return [
+            SocProcessingJobEvent(
+                event_id="EVT-FAIL",
+                job_id=job_id,
+                event_type="analysis_started",
+                sequence=1,
+                from_status=ProcessingJobStatus.PRECHECKING,
+                to_status=ProcessingJobStatus.ANALYZING,
+                worker_id="worker-1",
+                attempt=1,
+                occurred_at=datetime(2026, 9, 2, tzinfo=UTC),
+                details={
+                    "lifecycle": {
+                        "state": "unknown",
+                        "provider_code": "40100",
+                        "provider_status": None,
+                        "reason": "provider_business_error",
+                        "mocked": False,
+                        "response_sha256": "a" * 64,
+                        "private_message": "签名验证失败-private-detail",
+                    }
+                },
+            )
+        ]
+
+    def list_callbacks(self, job_id: str) -> list[SocCallbackOutboxRecord]:
+        now = datetime(2026, 9, 2, tzinfo=UTC)
+        return [
+            SocCallbackOutboxRecord(
+                outbox_id="OUT-FAIL",
+                job_id=job_id,
+                destination="pingan.zeus.alert_callback",
+                idempotency_key="callback-fail",
+                status=CallbackOutboxStatus.DEAD_LETTER,
+                payload={"secret": "private-detail"},
+                attempt_count=1,
+                available_at=now,
+                last_error_code="PingAnAlertCallbackResponseError",
+                last_error_message="ZEUS callback delivery failed",
+                response_metadata={
+                    "http_status": 200,
+                    "provider_code": "40100",
+                    "response_sha256": "b" * 64,
+                    "mocked": False,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+
+    def list_callback_attempts(self, outbox_id: str) -> list[SocCallbackAttemptRecord]:
+        now = datetime(2026, 9, 2, tzinfo=UTC)
+        return [
+            SocCallbackAttemptRecord(
+                attempt_id="ATT-FAIL",
+                outbox_id=outbox_id,
+                job_id="JOB-1",
+                destination="pingan.zeus.alert_callback",
+                attempt_number=1,
+                dispatcher_id="dispatcher-1",
+                outcome=CallbackAttemptOutcome.DEAD_LETTER,
+                started_at=now,
+                completed_at=now,
+                error_code="PingAnAlertCallbackResponseError",
+                error_message="ZEUS callback delivery failed",
+                response_metadata={
+                    "http_status": 200,
+                    "provider_code": "40100",
+                    "response_sha256": "b" * 64,
+                    "mocked": False,
                 },
             )
         ]

@@ -58,6 +58,7 @@ def test_http_port_preserves_indicator_search_wire_contract() -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         sent["url"] = str(request.url)
+        sent["raw_body"] = request.content.decode()
         sent["body"] = json.loads(request.content)
         sent["headers"] = dict(request.headers)
         return httpx.Response(200, json=_response(_IP))
@@ -81,7 +82,9 @@ def test_http_port_preserves_indicator_search_wire_contract() -> None:
     }
     assert sent["url"] == "https://isec.example.internal/public/indicatorSearch"
     assert sent["body"] == {"resource": _IP}
+    assert sent["raw_body"] == json.dumps({"resource": _IP})
     assert sent["headers"]["app-sign"] == "signed"
+    assert sent["headers"]["content-type"] == "application/json"
 
 
 def test_http_port_rejects_unsafe_host_and_oversized_response() -> None:

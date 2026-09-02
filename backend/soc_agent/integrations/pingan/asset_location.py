@@ -27,7 +27,10 @@ from soc_agent.integrations.pingan.agent_workflow import (
     HttpPingAnAgentWorkflowPort,
     PingAnAgentWorkflowHttpConfig,
 )
-from soc_agent.integrations.pingan.zeus_signing import isec_sign
+from soc_agent.integrations.pingan.zeus_signing import (
+    isec_sign,
+    serialize_isec_json_body,
+)
 
 PINGAN_LEGACY_WORKFLOW_APP_ID = "YHSYS"
 PINGAN_LEGACY_WORKFLOW_OPERATOR = "WANGWENBIN520"
@@ -279,6 +282,8 @@ class HttpPingAnZeusAssetSearchPort:
             )
         )
         headers["companyCode"] = self._company_code_header
+        headers["Content-Type"] = "application/json"
+        wire_body = serialize_isec_json_body(request_body)
         client = self._client or httpx.Client()
         owns_client = self._client is None
         try:
@@ -288,7 +293,7 @@ class HttpPingAnZeusAssetSearchPort:
                 raise PingAnAssetProviderConfigurationError("resolved ZEUS asset URL left the configured host allowlist")
             response = client.post(
                 url,
-                json=request_body,
+                content=wire_body,
                 headers=headers,
                 timeout=self._timeout_seconds,
             )

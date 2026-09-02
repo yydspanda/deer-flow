@@ -96,6 +96,11 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "backend/scripts/soc_pingan_legacy_api.py" in required
     assert "backend/scripts/soc_pingan_legacy_worker.py" in required
     assert "backend/scripts/soc_pingan_legacy_fake_acceptance.py" in required
+    assert "backend/scripts/soc_pingan_zeus_lifecycle_smoke.py" in required
+    assert (
+        "backend/soc_agent/integrations/pingan/legacy_compat/lifecycle_smoke.py"
+        in required
+    )
     assert "backend/scripts/soc_pingan_prepare_legacy_live_request.py" in required
     assert "backend/scripts/soc_pingan_set_legacy_provider_mode.py" in required
     assert (
@@ -142,9 +147,16 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     clean_install = runbook.split(
         "## 3. Install Or Data-Preserving Redeploy", maxsplit=1
     )[1].split("## 4. Stage Existing Corpus", maxsplit=1)[0]
-    assert "soc_pingan_macos_host_dev.py stop" not in clean_install
-    assert 'rm -rf "$TARGET_REPO"' not in clean_install
+    routine_install = clean_install.split("### 3.1 Stateless DEV Reset", maxsplit=1)[0]
+    assert "soc_pingan_macos_host_dev.py stop" not in routine_install
+    assert 'rm -rf "$TARGET_REPO"' not in routine_install
     assert "exit 1" not in clean_install
+    assert "### 3.1 Stateless DEV Reset / 无状态 DEV 清洁重装" in runbook
+    assert 'TARGET_REPO="$HOME/deer-flow"' in clean_install
+    assert "DELETE-OLD-DEV" in clean_install
+    assert "for port in 3000 8001 2026 4001 8090" in clean_install
+    assert '/bin/rm -rf "$TARGET_REPO"' in clean_install
+    assert "旧 SQLite、Memory、账号和内网验收结果都会永久删除" in clean_install
     assert "三个 PKL 和 Workbench payload SQLite 不在 private overlay" in runbook
     assert "不需要额外 nginx/LAN hotfix" in runbook
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
@@ -155,9 +167,16 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "无敏感合成协议夹具" in runbook
     assert "不读取历史小 JSON" in runbook
     assert "soc_pingan_legacy_live_acceptance.py" in runbook
-    live_acceptance = runbook.split("然后验证真实旧 ZEUS 兼容闭环", maxsplit=1)[
-        1
-    ].split("单条真实验收结束", maxsplit=1)[0]
+    assert "soc_pingan_zeus_lifecycle_smoke.py" in runbook
+    assert runbook.index("soc_pingan_zeus_lifecycle_smoke.py") < runbook.index(
+        "soc_pingan_legacy_live_acceptance.py"
+    )
+    assert "provider_code=200" in runbook
+    assert "旧失败 Job 不能通过 `--resume-existing`" in runbook
+    assert "ZEUS 上游真实发起" in runbook
+    live_acceptance = runbook.split("只有要验证真实旧 ZEUS", maxsplit=1)[1].split(
+        "单条真实验收结束", maxsplit=1
+    )[0]
     assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in live_acceptance
     assert "--resume-existing" in live_acceptance
     assert "resumed_existing_confirmed=true" in live_acceptance
@@ -211,7 +230,27 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert 'shasum -a 256 \\\n  "deer-flow-pingan-source' in runbook
     assert "soc_pingan_model_gateway_smoke.py \\\n  --confirm-live" in runbook
     assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in runbook
-    assert "SELECT version_num FROM soc_alembic_version" in runbook
+    host_install = runbook.split("## 5. Host Check And Install", maxsplit=1)[1].split(
+        "## 6. Execution Plane Preflight", maxsplit=1
+    )[0]
+    assert "soc_agent.cli db upgrade" not in host_install
+    assert "Host DEV `start` 统一负责 SOC SQLite migration" in host_install
+    assert "新空库发生一次瞬时 `disk I/O error`" in host_install
+    assert "不要重复执行已经通过的阶段" in host_install
+    assert "不再建库或重启，直接执行模型 Smoke/后续验收" in host_install
+    assert "SOC database preparation failed before sidecar startup" in host_install
+    assert "## 7. Ensure Host DEV Is Running / 确认服务已运行" in runbook
+    assert "**跳过下面的启动命令**" in runbook
+    assert "只有服务尚未运行时才执行" in runbook
+    assert "只需要页面演示或本地研判时在此停止" in runbook
+    assert "不需要提供告警 ID，也不要切换 internal Provider" in runbook
+    assert "SOC 数据库后来被删除或重建" in runbook
+    assert "不得复用" in runbook
+    assert "确认 Core 全部为 `true`、三个 Sidecar 都为 `running`" in runbook
+    assert "首次提交这份\n新请求" in runbook
+    assert "`soc_database.status=ready`" in runbook
+    assert "`soc_database.schema_revision=0027_processing_jobs`" in runbook
+    assert all("unset SOC_DATABASE_URL" not in block for block in local_env_blocks)
     assert "正常重部署不要删除 `deerflow.db` 或 `soc_agent_dev.db`" in runbook
 
 

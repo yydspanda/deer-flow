@@ -22,6 +22,10 @@ from soc_agent.integrations.pingan.legacy_compat.contracts import (
 from soc_agent.integrations.pingan.legacy_compat.execution import (
     PingAnLegacyExecutionSupervisor,
 )
+from soc_agent.integrations.pingan.legacy_compat.lifecycle_smoke import (
+    PingAnZeusLifecycleSmokeReport,
+    run_pingan_zeus_lifecycle_smoke,
+)
 from soc_agent.integrations.pingan.legacy_compat.live_acceptance import (
     PingAnLegacyLiveAcceptanceReport,
     run_pingan_legacy_live_acceptance,
@@ -80,6 +84,7 @@ __all__ = [
     "PingAnLegacyWorkerSettings",
     "PingAnLegacyJobWorker",
     "PingAnLegacyLiveAcceptanceReport",
+    "PingAnZeusLifecycleSmokeReport",
     "PingAnLegacyProviderModeConfigurationError",
     "PingAnLegacyProviderModeReport",
     "PingAnLegacyProviderModeValue",
@@ -98,6 +103,7 @@ __all__ = [
     "extract_pingan_legacy_task_metadata",
     "project_legacy_task_status",
     "run_pingan_legacy_live_acceptance",
+    "run_pingan_zeus_lifecycle_smoke",
     "set_pingan_legacy_provider_mode",
     "prepare_pingan_legacy_live_request",
     "build_pingan_callback_port",

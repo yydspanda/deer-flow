@@ -12,7 +12,10 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from soc_agent.contracts import SocCallbackOutboxRecord
-from soc_agent.integrations.pingan.zeus_signing import isec_sign
+from soc_agent.integrations.pingan.zeus_signing import (
+    isec_sign,
+    serialize_isec_json_body,
+)
 from soc_agent.protocols import ProcessingJobRepository
 
 PINGAN_ALERT_CALLBACK_DESTINATION = "pingan.zeus.alert_callback"
@@ -27,7 +30,14 @@ class PingAnAlertCallbackConfigurationError(ValueError):
 
 
 class PingAnAlertCallbackResponseError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        response_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.response_metadata = _safe_response_metadata(response_metadata)
 
 
 class HttpPingAnZeusAlertCallbackPort:
@@ -76,6 +86,8 @@ class HttpPingAnZeusAlertCallbackPort:
                 app_key=self._app_key,
             )
         )
+        headers["Content-Type"] = "application/json"
+        wire_body = serialize_isec_json_body(request_body)
         url = urljoin(self._base_url, self._endpoint_path)
         if (urlparse(url).hostname or "").lower() not in self._hosts:
             raise PingAnAlertCallbackConfigurationError("resolved ZEUS callback URL left the configured host allowlist")
@@ -84,13 +96,28 @@ class HttpPingAnZeusAlertCallbackPort:
         try:
             response = client.post(
                 url,
-                json=request_body,
+                content=wire_body,
                 headers=headers,
                 timeout=self._timeout_seconds,
             )
-            response.raise_for_status()
+            response_metadata = {
+                "http_status": response.status_code,
+                "provider_code": None,
+                "response_sha256": hashlib.sha256(response.content).hexdigest(),
+                "mocked": False,
+            }
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise PingAnAlertCallbackResponseError(
+                    "ZEUS callback returned a non-success HTTP status",
+                    response_metadata=response_metadata,
+                ) from exc
             if len(response.content) > self._max_response_bytes:
-                raise PingAnAlertCallbackResponseError("ZEUS callback response exceeded the configured size limit")
+                raise PingAnAlertCallbackResponseError(
+                    "ZEUS callback response exceeded the configured size limit",
+                    response_metadata=response_metadata,
+                )
             try:
                 body = response.json()
             except ValueError:
@@ -99,16 +126,18 @@ class HttpPingAnZeusAlertCallbackPort:
             if owns_client:
                 client.close()
         if body is not None and not isinstance(body, Mapping):
-            raise PingAnAlertCallbackResponseError("ZEUS callback returned a non-object JSON response")
-        provider_code = body.get("code") if isinstance(body, Mapping) else None
-        if provider_code is not None and str(provider_code) != "200":
-            raise PingAnAlertCallbackResponseError("ZEUS callback returned a non-success business code")
-        return {
-            "http_status": response.status_code,
-            "provider_code": (str(provider_code) if provider_code is not None else None),
-            "response_sha256": hashlib.sha256(response.content).hexdigest(),
-            "mocked": False,
-        }
+            raise PingAnAlertCallbackResponseError(
+                "ZEUS callback returned a non-object JSON response",
+                response_metadata=response_metadata,
+            )
+        provider_code = _bounded_scalar_text(body.get("code")) if isinstance(body, Mapping) else None
+        response_metadata["provider_code"] = provider_code
+        if provider_code is not None and provider_code != "200":
+            raise PingAnAlertCallbackResponseError(
+                "ZEUS callback returned a non-success business code",
+                response_metadata=response_metadata,
+            )
+        return response_metadata
 
 
 class StaticPingAnZeusAlertCallbackPort:
@@ -132,12 +161,18 @@ class StaticPingAnZeusAlertCallbackPort:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        return {
+        metadata = {
             "http_status": 200,
             "provider_code": (str(value.get("code")) if value.get("code") is not None else None),
             "response_sha256": hashlib.sha256(encoded).hexdigest(),
             "mocked": True,
         }
+        if metadata["provider_code"] not in {None, "200"}:
+            raise PingAnAlertCallbackResponseError(
+                "ZEUS callback returned a non-success business code",
+                response_metadata=metadata,
+            )
+        return metadata
 
 
 class PingAnLegacyCallbackDispatcher:
@@ -178,11 +213,13 @@ class PingAnLegacyCallbackDispatcher:
         except Exception as exc:
             failed_at = self._now()
             retry_at = failed_at + timedelta(seconds=self._retry_backoff_seconds * max(1, min(claimed.attempt_count, 10)))
+            response_metadata = getattr(exc, "response_metadata", None)
             return self._repository.mark_callback_retry(
                 claimed.outbox_id,
                 dispatcher_id=self._dispatcher_id,
                 error_code=type(exc).__name__,
                 error_message="ZEUS callback delivery failed",
+                response_metadata=(dict(response_metadata) if isinstance(response_metadata, Mapping) else None),
                 available_at=retry_at,
                 now=failed_at,
                 dead_letter=claimed.attempt_count >= self._max_attempts,
@@ -194,6 +231,34 @@ class PingAnLegacyCallbackDispatcher:
             response_metadata=metadata,
             now=delivered_at,
         )
+
+
+def _safe_response_metadata(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    metadata: dict[str, Any] = {}
+    http_status = value.get("http_status")
+    if isinstance(http_status, int) and not isinstance(http_status, bool):
+        metadata["http_status"] = http_status
+    provider_code = _bounded_scalar_text(value.get("provider_code"))
+    if provider_code is not None:
+        metadata["provider_code"] = provider_code
+    response_sha256 = _bounded_scalar_text(value.get("response_sha256"))
+    if response_sha256 is not None and len(response_sha256) == 64 and all(character in "0123456789abcdefABCDEF" for character in response_sha256):
+        metadata["response_sha256"] = response_sha256.lower()
+    mocked = value.get("mocked")
+    if isinstance(mocked, bool):
+        metadata["mocked"] = mocked
+    return metadata
+
+
+def _bounded_scalar_text(value: Any) -> str | None:
+    if value is None or isinstance(value, (Mapping, list, tuple, set)):
+        return None
+    normalized = str(value).strip()
+    return normalized[:128] or None
 
 
 __all__ = [

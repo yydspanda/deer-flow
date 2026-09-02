@@ -194,6 +194,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/scripts/soc_pingan_legacy_api.py",
     "backend/scripts/soc_pingan_legacy_worker.py",
     "backend/scripts/soc_pingan_legacy_fake_acceptance.py",
+    "backend/scripts/soc_pingan_zeus_lifecycle_smoke.py",
     "backend/scripts/soc_pingan_legacy_live_acceptance.py",
     "backend/scripts/soc_pingan_prepare_legacy_live_request.py",
     "backend/scripts/soc_pingan_set_legacy_provider_mode.py",
@@ -218,6 +219,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/integrations/pingan/legacy_compat/callback.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/contracts.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/execution.py",
+    "backend/soc_agent/integrations/pingan/legacy_compat/lifecycle_smoke.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/live_acceptance.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/provider_mode.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/request_preparation.py",
@@ -1196,6 +1198,72 @@ shell 状态。它在子 Bash 中依次校验准确 SHA-256、解压并检查新
 账号、研判、Memory、审核或任务数据时，才可把残库和 `-wal`/`-shm`/`-journal` 一并移动到带时间戳
 的隔离备份目录后重新初始化；仍不要直接 `rm`。
 
+### 3.1 Stateless DEV Reset / 无状态 DEV 清洁重装
+
+如果安装器报告 `existing target is not a recognized Host DEV checkout`，说明
+`$HOME/deer-flow` 存在，但它不是当前安装器能够安全停服和保留状态的完整旧部署。停止端口进程并不会
+消除这个目录检查。仅当已明确确认该目录只是废弃部署包，而且其中的旧 SQLite、Memory、账号和内网验收结果都会永久删除时，
+才执行下面的清洁重装。正常升级禁止使用本节。
+
+下面的命令会先展示 `3000/8001/2026/4001/8090` 的监听者，只有输入完整确认短语
+`DELETE-OLD-DEV` 后，才终止这些 DEV 端口上的残留进程并删除固定目标 `$HOME/deer-flow`：
+
+```bash
+bash <<'BASH'
+TARGET_REPO="$HOME/deer-flow"
+
+printf 'Target to delete: %s\n' "$TARGET_REPO"
+for port in 3000 8001 2026 4001 8090; do
+  printf '\n===== TCP %s =====\n' "$port"
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+done
+
+read -r -p 'Type DELETE-OLD-DEV to permanently remove this stateless DEV deployment: ' confirmation
+if [[ "$confirmation" != "DELETE-OLD-DEV" ]]; then
+  echo 'Cancelled; no process or file was changed.'
+else
+  pids="$(
+    for port in 3000 8001 2026 4001 8090; do
+      lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null
+    done | sort -u
+  )"
+  if [[ -n "$pids" ]]; then
+    kill -TERM $pids 2>/dev/null || true
+    sleep 3
+  fi
+
+  remaining="$(
+    for port in 3000 8001 2026 4001 8090; do
+      lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null
+    done | sort -u
+  )"
+  if [[ -n "$remaining" ]]; then
+    kill -KILL $remaining 2>/dev/null || true
+    sleep 1
+  fi
+
+  remaining="$(
+    for port in 3000 8001 2026 4001 8090; do
+      lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null
+    done | sort -u
+  )"
+  if [[ -n "$remaining" ]]; then
+    echo "Refusing to delete while DEV ports remain occupied: $remaining"
+  else
+    /bin/rm -rf "$TARGET_REPO"
+    if [[ ! -e "$TARGET_REPO" ]]; then
+      echo "Old stateless DEV deployment removed: $TARGET_REPO"
+    else
+      echo "Removal failed; inspect permissions before retrying."
+    fi
+  fi
+fi
+BASH
+```
+
+看到 `Old stateless DEV deployment removed` 后，重新执行本节上方的
+`bash "$HOME/READY-TO-TRANSFER/{installer_name}"`。新部署会从空库开始，不恢复任何旧运行状态。
+
 本次私有包同时包含：
 
 ```text
@@ -1257,42 +1325,24 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 安装器使用冻结 lock、内部镜像和独立 `backend/.venv`。不要执行 `uv lock`，
 也不要让 pnpm/Python 访问公网。
 
-初始化 SOC SQLite：
+不再手工初始化 SOC SQLite。Host DEV `start` 统一负责 SOC SQLite migration：它先从当前 checkout
+解析绝对 `soc_agent_dev.db` 路径，在任何 Sidecar 和 Web 服务启动前升级 Schema，并把 Sidecar 的
+重复自动迁移关闭。新空库发生一次瞬时 `disk I/O error` 时，启动器只清理本次失败产生的半库并安全
+重试一次；调用前已经存在的数据库永远不会被自动删除或重建。
 
-```bash
-export TARGET_REPO="$HOME/deer-flow"
-cd "$TARGET_REPO"
-eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
-source ./.env.soc-dev.local
-unset SOC_DATABASE_URL
+DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合并。SOC 的版本表是
+`soc_alembic_version`；`alembic_version` 属于 DeerFlow 主库。迁移失败会发生在 Sidecar 启动之前，
+命令直接返回失败，不会再表现为 `legacy-api exited during startup`。不要额外执行 `source`、
+`unset SOC_DATABASE_URL` 或手工重复 migration。
 
-(
-  cd backend
-  .venv/bin/python -m soc_agent.cli db upgrade \\
-    --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"
-)
+按下面的状态决定下一步，不要重复执行已经通过的阶段：
 
-backend/.venv/bin/python - <<'PY'
-import os
-import sqlite3
-from pathlib import Path
-
-path = Path(os.environ["SOC_DEV_SQLITE_PATH"])
-if not path.is_file():
-    raise SystemExit(f"SOC SQLite was not created: {{path}}")
-with sqlite3.connect(path) as connection:
-    row = connection.execute(
-        "SELECT version_num FROM soc_alembic_version"
-    ).fetchone()
-if row is None:
-    raise SystemExit("SOC migration version is missing")
-print({{"soc_database": str(path), "soc_schema_revision": row[0]}})
-PY
-```
-
-DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合并。
-SOC 的版本表是 `soc_alembic_version`；`alembic_version` 属于 DeerFlow 主库，不能拿它检查
-`soc_agent_dev.db`。必须先成功执行 migration，再做版本查询，避免 SQLite 因一次过早连接创建空文件。
+| 看到的状态 | 下一步 |
+|---|---|
+| 尚未执行 `start` | 先完成下一节 Fake E2E，再执行第 7 节 `start` |
+| `status` 中 Core/Sidecars 全部运行，且 `soc_database.status=ready` | 不再建库或重启，直接执行模型 Smoke/后续验收 |
+| `SOC database preparation failed before sidecar startup` | 服务尚未启动；保留已有数据库排查。仅确认是无业务数据的新建残库时，才使用第 3.1 节清洁重装 |
+| `legacy-api exited during startup` | 只可能来自旧交付包或非数据库启动错误；先查 Sidecar 日志，不要盲目删库 |
 
 ## 6. Execution Plane Preflight / 执行面预检
 
@@ -1325,7 +1375,19 @@ grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
 三个权限必须都是 `600`，两个 mode 必须都是 `fake`。RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
-## 7. Start Web / 启动 Web
+## 7. Ensure Host DEV Is Running / 确认服务已运行
+
+先查看状态：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py status
+```
+
+如果 Core 全部为 `true`、三个 Sidecar 都为 `running`，并且
+`soc_database.status=ready`，说明本次 checkout 已经启动，**跳过下面的启动命令**，直接执行模型
+Smoke。只有服务尚未运行时才执行：
 
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
@@ -1334,9 +1396,11 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 python3.12 scripts/soc_pingan_macos_host_dev.py status
 ```
 
-Host DEV 驱动会先启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，再启动
+Host DEV 驱动会先准备 SOC 数据库，再启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，最后启动
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
 Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机使用时加 `--local-only`。
+`status` 必须同时显示 `soc_database.status=ready` 和
+`soc_database.schema_revision=0027_processing_jobs`；缺失或较旧版本都不能继续真实验收。
 
 服务启动后执行无业务数据的真实模型 smoke：
 
@@ -1354,8 +1418,11 @@ backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \\
 `max_tokens_requested=128`；它与当前 SOC Runtime 默认模式一致。usage 缺失时允许记录为不可用，
 不得伪造 Token。Thinking 能力是独立的显式验收，不得用它阻塞基础连通性。
 
-然后验证真实旧 ZEUS 兼容闭环。运行请求准备器，并在提示后只输入一个获批且当前仍处于
-“待审阅”的 ZEUS `alert_id`：
+到这里，Web 演示、Fake E2E 和真实模型连通性已经完成。只需要页面演示或本地研判时在此停止，
+**不需要提供告警 ID，也不要切换 internal Provider**。
+
+只有要验证真实旧 ZEUS `submit -> precheck -> Runtime -> status -> callback` 闭环时，才运行请求
+准备器，并在提示后输入一个获批且当前仍处于“待审阅”的 ZEUS `alert_id`：
 
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
@@ -1371,6 +1438,10 @@ backend/.venv/bin/python \\
 `backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json`。不需要、也不允许
 手工编辑请求 JSON；报告只输出 ID、Hash、大小和状态，不输出告警正文。
 
+如果此前请求已经提交，而 SOC 数据库后来被删除或重建，旧 Job 的幂等与审计链已经丢失：不得复用
+旧 `task-request.local.json`、旧 `session_id` 或 `--resume-existing`。只能由操作员批准另一条仍待审告警，
+生成新请求。只有数据库和原 Job 均保留时，才允许按后文恢复命令继续同一请求。
+
 `SOC_PINGAN_COMPAT_APP_KEYS_JSON` 的 value 构成旧协议允许的 Bearer/`app-key` 集合，映射标签
 （当前为 `common`）不要求等于 `app_code`。随后用下面的可复制命令把两个 Provider mode 从
 `fake` 切换为 `internal`，无需打开 `.env.soc-dev.local`：
@@ -1383,11 +1454,39 @@ backend/.venv/bin/python \\
   --mode internal
 ```
 
+在启动完整 Worker、调用模型和创建新 Job 之前，先复用同一私有请求执行一次只读 ZEUS 生命周期
+Smoke。它会发送与生产 Provider 完全相同的签名 JSON 字节，但不会提交本地任务、调用模型或触发回调：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+backend/.venv/bin/python backend/scripts/soc_pingan_zeus_lifecycle_smoke.py \\
+  --confirm-live \\
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \\
+  --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/lifecycle-smoke.json
+```
+
+只有报告同时满足 `outcome=pending`、`passed=true`、`provider_code=200`、
+`provider_status=1`、`mocked=false`，才继续完整任务。`provider_code=40100` 表示签名/鉴权未通过；
+此时立即停止，不消耗模型资源，并检查交付版本与内网 private overlay。报告只保留状态、业务码和响应
+SHA-256，不保存 ZEUS 响应正文。
+
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+python3.12 scripts/soc_pingan_macos_host_dev.py status
+```
+
+确认 Core 全部为 `true`、三个 Sidecar 都为 `running`，且 SOC 数据库为 `ready` 后，首次提交这份
+新请求：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
@@ -1399,7 +1498,8 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
 
 脚本会在连接 `8090` 前验证绝对 SQLite 路径、`soc_alembic_version` 和 Processing Job/Callback
 表；本地证据库不可用时不会提交任务。如果前一次运行已提交同一请求，但客户端在读取本地证据或
-生成报告时失败，**不要重新运行请求准备器，也不要更换 `session_id`**。保留原
+生成报告时失败，并且已持久化的 lifecycle/Runtime/callback 本身均成功，**不要重新运行请求准备器，
+也不要更换 `session_id`**。保留原
 `task-request.local.json`，直接执行下面的恢复命令：
 
 ```bash
@@ -1420,13 +1520,20 @@ Runtime lineage、生命周期事件和 Callback Outbox，不会创建第二个 
 研判或回调。首次响应必须已经进入 `STARTED/SUCCESS/FAILURE` 才能证明是既有任务；若仍为
 `PENDING`，保持请求不变并稍后再次执行恢复命令。
 
+如果旧 Job 已记录 `lifecycle_state=unknown`、Callback `dead_letter`，或者修复了签名/Provider/Worker
+代码，旧失败 Job 不能通过 `--resume-existing` 变成成功证据：其历史事件和 attempt 是不可变审计。
+先让只读生命周期 Smoke 通过，再用请求准备器生成新的 `session_id` 和新 Job；原失败 Job 保留用于
+复盘，不删除数据库。
+
 只有报告同时满足 `outcome=passed`、`fresh_submission_confirmed=true` **或**
 `resumed_existing_confirmed=true`，并且
 `idempotent_replay_confirmed=true`、`run_id_present=true`、`lifecycle_mocked=false`、
 `callback_status=delivered`、`callback_mocked=false` 和
-`proves_real_internal_connectivity=true`，才证明 `8090 submit -> ZEUS precheck -> Runtime/LLM ->
-status -> ZEUS callback` 真实闭环。脚本不会输出告警正文、App Key 或回调正文；随后仍须在旧 ZEUS 页面
-核对回写结果可见且任务状态一致。如果真实 ZEUS precheck 表明这条快照告警已经被处理，验收会在
+`proves_real_internal_connectivity=true`，才证明本机兼容入口、真实 ZEUS precheck、Runtime/LLM 与
+callback transport 的组合连通。脚本不会输出告警正文、App Key 或回调正文。最终旧系统兼容门禁还
+必须由 ZEUS 上游真实发起 `POST /workflow/task`，并在旧 ZEUS 页面核对返回的 Job、回写结果和任务状态；
+本机自提交不能替代这一步。如果 ZEUS callback 要求上游先登记 `taskId`，本机自提交的 callback 拒绝
+属于组件验收边界，不应伪装为完整业务闭环。如果真实 ZEUS precheck 表明这条快照告警已经被处理，验收会在
 模型调用前 fail closed；重新运行请求准备器并输入另一个当前待审阅 ID 即可。
 
 单条真实验收结束且暂不继续测试时，用下面命令恢复 fake Provider 并重启，避免后续演练误触真实回调：
@@ -1481,7 +1588,9 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ```text
 D12-B preflight
   -> model gateway completion smoke
-  -> legacy 8090 submit/status/precheck/callback live acceptance
+  -> read-only ZEUS lifecycle/signature smoke
+  -> local legacy 8090 submit/status/precheck/callback acceptance
+  -> ZEUS-originated submit + old-page readback
   -> ZEUS asset direct smoke
   -> MCP asset.locate smoke
   -> InvestigationEvidence 回读

@@ -263,12 +263,15 @@ backend/.deer-flow/data/soc_agent_dev.db
 3. 选一条 ZEUS 中仍为“待审阅”的已批准 DEV 告警，只向请求准备器输入 `alert_id`；脚本从
    Workbench payload store 提取完整 `alert_data`、生成新的 `session_id`，并写入 `0600` 的
    `.local.json`。
-4. 用 Provider-mode 命令把 lifecycle/callback 同时改为 `internal` 并重启 Host DEV；不存在运行时
-   fake fallback，也不手工编辑私有环境文件。
-5. 运行 live acceptance；它先验证 checkout 解析出的绝对 SOC DB 与 `0027` 证据表，再提交同一请求
+4. 用 Provider-mode 命令把 lifecycle/callback 同时改为 `internal`；不存在运行时 fake fallback，
+   也不手工编辑私有环境文件。
+5. 先用同一请求运行只读 lifecycle/signature smoke。只有真实 ZEUS 返回 `code=200`、`status=1`
+   才重启并继续；签名、鉴权、schema 或告警已处理会在调用模型前停止。
+6. 运行本机 live acceptance；它先验证 checkout 解析出的绝对 SOC DB 与 `0027` 证据表，再提交同一请求
    两次验证幂等，只产生一个 Job，然后轮询旧 status 接口，最后从同一 SOC DB 核对真实 precheck、
    Runtime run、Callback Outbox 与 append-only attempt。
-6. 在旧 ZEUS 页面核对结果已回写、任务状态一致且没有重复结果；脚本通过不能替代页面 readback。
+7. 由 ZEUS 上游真实调用本项目 `/workflow/task`，再在旧 ZEUS 页面核对返回 Job、结果回写和任务状态；
+   本机自提交只证明组件组合，不能替代该最终门禁。
 
 准备私有请求：
 
@@ -291,7 +294,25 @@ backend/.venv/bin/python \
   --mode internal
 ```
 
-重启并执行：
+先执行只读生命周期 Smoke；它不会创建 Job、调用模型或触发回调：
+
+```bash
+export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+
+backend/.venv/bin/python backend/scripts/soc_pingan_zeus_lifecycle_smoke.py \
+  --confirm-live \
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
+  --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/lifecycle-smoke.json
+```
+
+只有 `outcome=pending`、`passed=true`、`provider_code=200`、`provider_status=1`、
+`mocked=false` 才继续。`provider_code=40100` 是签名/鉴权失败，必须先修复交付代码或 private overlay；
+不要用完整任务反复消耗模型资源。
+
+只读检查通过后重启并执行本机组合验收：
 
 ```bash
 export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
@@ -308,10 +329,15 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
   --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
 ```
 
-如果同一命令已经提交任务，但客户端随后因本地 DB 路径、终端中断或报告读取失败，禁止重新准备请求。
+如果同一命令已经提交任务，已持久化的 lifecycle/Runtime/callback 均正常，但客户端随后仅因本地 DB
+路径、终端中断或报告读取失败，禁止重新准备请求。
 保留原 `task-request.local.json`，在上述命令中增加 `--resume-existing`；恢复模式仍证明相同请求返回
 同一个 Job，并从本地持久化证据继续验收，不重新运行已经完成的 Runtime/模型或 callback。首次响应
 必须已经离开 `PENDING` 才能标记恢复成功；仍为 `PENDING` 时保持请求不变并稍后重试。
+
+若已有 Job 的 lifecycle 是 `unknown`、callback 是 `dead_letter`，或在该 Job 执行后修改了签名、
+Provider、Worker 代码，不能用 `--resume-existing` 把旧失败事实变成成功。保留旧 Job 作审计；先让只读
+Smoke 通过，再由请求准备器生成 fresh session/Job。无需清库。
 
 真实通过必须同时满足：
 
@@ -321,14 +347,19 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
 | Duplicate replay | `idempotent_replay_confirmed=true`，仍为同一个 `task_id` |
 | Legacy status | `terminal_status=SUCCESS` |
 | Runtime | `run_id_present=true`、`model_name_present=true` |
-| ZEUS lifecycle | `lifecycle_state=pending`、`lifecycle_mocked=false` |
-| Callback | `callback_status=delivered`、至少一条 delivered attempt、`callback_mocked=false` |
+| ZEUS lifecycle | `lifecycle_state=pending`、`lifecycle_provider_code=200`、`lifecycle_provider_status=1`、`lifecycle_mocked=false` |
+| Callback | `callback_status=delivered`、至少一条 delivered attempt、`callback_mocked=false`；失败时报告保留 bounded HTTP/provider code 和 response hash |
 | Aggregate gate | `outcome=passed`、`proves_real_internal_connectivity=true` |
 
-报告不包含 App Key、告警正文、模型正文或回调 payload，只保留哈希、状态、耗时和审计结论。
+报告契约为 `soc.pingan_legacy_live_acceptance.v3`，不包含 App Key、告警正文、模型正文或回调 payload，
+只保留哈希、状态、bounded provider code、耗时和审计结论。
 `FAILURE`、已经被处理、排队过期、unknown lifecycle、fake callback 都是有价值的负例，但不能关闭本门禁。
 若真实 precheck 发现语料快照中的待审阅告警现已处理，Worker 会在模型调用前停止；重新运行请求准备器并
 输入另一个当前待审阅 ID，不得删除该门禁。
+
+即使本机报告通过，也必须由 ZEUS 上游真实发起一次旧请求并完成旧页面 readback。如果 ZEUS callback
+要求上游先登记返回的 `taskId`，本机自提交 callback 被拒绝属于预期的组件边界；不能把它描述为业务
+端到端已经通过。
 
 单条通过后按 `5 -> 50 -> 200/5000+` 扩容，不直接全量：
 
@@ -499,17 +530,17 @@ backend/.venv/bin/python backend/scripts/soc_pingan_d12b_matrix.py \
 Preflight 不发网络请求。外网只会因为真实内网 URL/credential 仍是占位值而失败；不存在“缺少旧
 `run_workflow` 包”的前置条件。内网必须先让 preflight 完整通过，不能跳过后强行请求。
 
-然后进入 `backend/` 初始化独立 SQLite 并执行 MCP：
+Host DEV 启动器统一在任何 Sidecar/Web 进程之前解析绝对 SOC SQLite 路径并执行 migration，
+这里不再手工重复建库。`python3.12 scripts/soc_pingan_macos_host_dev.py status` 必须显示
+`soc_database.status=ready` 和当前 Schema revision；启动失败时先解决数据库错误，不得绕过后直接
+启动兼容 API 或 Worker。新空库遇到一次瞬时 `disk I/O error` 可由 migration runner 清理本次产生的
+半库并重试一次；调用前已存在的数据库永远不自动删除。
+
+然后进入 `backend/` 执行 MCP：
 
 ```bash
 cd backend
-unset SOC_DATABASE_URL
-./.venv/bin/python -m soc_agent.cli db upgrade \
-  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"
 ```
-
-这里显式使用 `soc_pingan_local_paths.py` 已导出的绝对路径，避免模型配置错误掩盖 SQLite 配置；
-migration 会创建缺失的父目录，且不会删除已有数据库。
 
 工具发现：
 

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+import scripts.soc_pingan_macos_host_dev as host_dev
 from scripts.soc_pingan_macos_host_dev import (
     HostDevError,
     _validate_locked_requirements,
@@ -23,7 +25,9 @@ from scripts.soc_pingan_macos_host_dev import (
     normalize_internal_npm_registry,
     parse_args,
     parse_version,
+    prepare_soc_database,
     resolve_start_allowed_origins,
+    soc_database_status,
     validate_local_config_profile,
 )
 
@@ -242,6 +246,128 @@ def test_demo_no_auth_start_is_explicit_and_does_not_change_secure_default() -> 
 
     secure_command = build_start_command(daemon=True)
     assert "export DEER_FLOW_AUTH_DISABLED=1" not in secure_command[2]
+
+
+def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    resolved = prepare_soc_database(
+        {"EXISTING": "value"},
+        root=tmp_path,
+        run=fake_run,
+    )
+    database_path = tmp_path / "backend/.deer-flow/data/soc_agent_dev.db"
+    database_url = f"sqlite+pysqlite:///{database_path}"
+
+    assert resolved["SOC_DATABASE_URL"] == database_url
+    assert resolved["SOC_PINGAN_COMPAT_AUTO_MIGRATE"] == "false"
+    assert resolved["SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE"] == "false"
+    assert calls == [
+        (
+            [
+                str(tmp_path / "backend/.venv/bin/python"),
+                "-m",
+                "soc_agent.cli",
+                "db",
+                "upgrade",
+                "--database-url",
+                database_url,
+            ],
+            {
+                "cwd": tmp_path / "backend",
+                "env": resolved,
+                "check": True,
+            },
+        )
+    ]
+
+
+def test_soc_database_status_reads_schema_without_creating_database(
+    tmp_path: Path,
+) -> None:
+    missing = soc_database_status(root=tmp_path)
+
+    assert missing["status"] == "missing"
+    database_path = tmp_path / "backend/.deer-flow/data/soc_agent_dev.db"
+    assert not database_path.exists()
+
+    database_path.parent.mkdir(parents=True)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE soc_alembic_version(version_num VARCHAR(64) NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO soc_alembic_version(version_num) VALUES (?)",
+            ("0027_processing_jobs",),
+        )
+
+    ready = soc_database_status(root=tmp_path)
+
+    assert ready == {
+        "status": "ready",
+        "path": str(database_path),
+        "schema_revision": "0027_processing_jobs",
+    }
+
+
+def test_start_runtime_prepares_database_before_sidecars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(host_dev, "inspect_host", lambda **kwargs: {})
+    monkeypatch.setattr(host_dev, "validate_runtime_files", lambda: None)
+    monkeypatch.setattr(
+        host_dev,
+        "resolve_start_allowed_origins",
+        lambda *args, **kwargs: (),
+    )
+    monkeypatch.setattr(host_dev, "build_start_environment", lambda **kwargs: {})
+    monkeypatch.setattr(
+        host_dev,
+        "load_local_runtime_environment",
+        lambda environment: {"LOCAL": "value"},
+    )
+    monkeypatch.setattr(
+        host_dev,
+        "constrain_sidecar_bindings",
+        lambda environment, **kwargs: environment,
+    )
+
+    def fake_prepare(environment):  # noqa: ANN001
+        events.append("database")
+        return {**environment, "SOC_DATABASE_URL": "sqlite:///prepared.db"}
+
+    monkeypatch.setattr(host_dev, "prepare_soc_database", fake_prepare)
+    monkeypatch.setattr(
+        host_dev,
+        "build_pingan_sidecar_specs",
+        lambda **kwargs: (),
+    )
+    monkeypatch.setattr(
+        host_dev,
+        "start_sidecars",
+        lambda *args, **kwargs: events.append("sidecars"),
+    )
+    monkeypatch.setattr(host_dev, "build_start_command", lambda **kwargs: ["true"])
+    monkeypatch.setattr(
+        host_dev.subprocess,
+        "run",
+        lambda *args, **kwargs: events.append("core"),
+    )
+
+    host_dev.start_runtime(
+        python_executable=sys.executable,
+        daemon=True,
+        local_only=True,
+    )
+
+    assert events == ["database", "sidecars", "core"]
 
 
 def test_start_plan_applies_explicit_lan_origin_after_private_env() -> None:

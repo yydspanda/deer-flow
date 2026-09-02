@@ -82,9 +82,10 @@ class PingAnAlertLifecycleCheck(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "soc.pingan_alert_lifecycle_check.v1"
+    schema_version: str = "soc.pingan_alert_lifecycle_check.v2"
     alert_id: str
     state: PingAnAlertLifecycleState
+    provider_code: str | None = Field(default=None, max_length=128)
     provider_status: str | None = None
     reason: str | None = None
     mocked: bool

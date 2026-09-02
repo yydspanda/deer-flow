@@ -126,6 +126,11 @@ file for SOC code. The authoritative product and engineering documents are:
   evidence as production proof.
 - Repositories implement protocols from `soc_agent/protocols.py`. Migrations live under
   `soc_agent/db/migrations/`, use `soc db upgrade`, and own `soc_alembic_version`.
+- A brand-new local SQLite migration may remove only the artifacts created by that same
+  failed initialization and retry one transient `disk I/O error`. Never delete, replace,
+  stamp, or destructively retry a database that existed before migration began; preserve
+  it for explicit operator recovery. PingAn Host DEV centralizes this migration before
+  starting sidecars and disables their duplicate auto-migration path.
 - Long-running external submissions use the vendor-neutral `ProcessingJobRepository`,
   not request-scoped background tasks. Persist before acknowledging, claim by bounded
   lease, recover expired work, and keep a stable Runtime idempotency key so a crash after

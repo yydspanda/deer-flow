@@ -22,7 +22,10 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from soc_agent.contracts import SocSecurityTagRecord
-from soc_agent.integrations.pingan.zeus_signing import isec_sign
+from soc_agent.integrations.pingan.zeus_signing import (
+    isec_sign,
+    serialize_isec_json_body,
+)
 
 _SOURCE_NAME = "pingan_zeus_search_tag_content"
 _MAX_RECORDS = 100
@@ -202,6 +205,8 @@ class HttpPingAnZeusSecurityTagPort:
     def query(self, *, entity_key: str) -> Mapping[str, Any]:
         request_body = {"keywords": [entity_key]}
         headers = dict(self._signer(data=request_body, app_id=self._app_id, app_key=self._app_key))
+        headers["Content-Type"] = "application/json"
+        wire_body = serialize_isec_json_body(request_body)
         url = urljoin(self._base_url, self._endpoint_path)
         if (urlparse(url).hostname or "").lower() not in self._allowed_hosts:
             raise PingAnSecurityTagConfigurationError("resolved ZEUS security-tag URL left the configured host allowlist")
@@ -210,7 +215,7 @@ class HttpPingAnZeusSecurityTagPort:
         try:
             response = client.post(
                 url,
-                json=request_body,
+                content=wire_body,
                 headers=headers,
                 timeout=self._timeout_seconds,
             )

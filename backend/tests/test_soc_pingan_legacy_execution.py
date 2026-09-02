@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -24,6 +26,7 @@ from soc_agent.db import SqlAlchemyProcessingJobRepository, create_soc_tables
 from soc_agent.integrations.pingan.legacy_compat import (
     HttpPingAnZeusAlertCallbackPort,
     HttpPingAnZeusAlertLifecyclePort,
+    PingAnAlertCallbackResponseError,
     PingAnAlertLifecycleService,
     PingAnAlertLifecycleState,
     PingAnLegacyCallbackDispatcher,
@@ -112,7 +115,9 @@ def test_lifecycle_http_port_preserves_signed_get_alert_brief_contract() -> None
         "app_key": "secret",
     }
     assert sent["url"] == "https://zeus.example.internal/public/getAlertBrief"
+    assert sent["body"] == json.dumps({"alertId": 1965449})
     assert sent["headers"]["app-sign"] == "signed"
+    assert sent["headers"]["content-type"] == "application/json"
 
 
 def test_lifecycle_service_distinguishes_pending_handled_and_unknown() -> None:
@@ -121,13 +126,35 @@ def test_lifecycle_service_distinguishes_pending_handled_and_unknown() -> None:
     unknown = PingAnAlertLifecycleService(port=StaticPingAnZeusAlertLifecyclePort({"A-3": httpx.ReadTimeout("internal detail must not leak")})).check("A-3")
 
     assert pending.state is PingAnAlertLifecycleState.PENDING
+    assert pending.provider_code == "200"
     assert pending.provider_status == "1"
     assert handled.state is PingAnAlertLifecycleState.HANDLED
+    assert handled.provider_code == "200"
     assert handled.provider_status == "5"
     assert "待复核" in (handled.reason or "")
     assert unknown.state is PingAnAlertLifecycleState.UNKNOWN
     assert unknown.reason == "provider_unavailable:ReadTimeout"
     assert "internal detail" not in unknown.model_dump_json()
+
+
+def test_lifecycle_service_preserves_safe_business_error_diagnostics() -> None:
+    result = PingAnAlertLifecycleService(
+        port=StaticPingAnZeusAlertLifecyclePort(
+            {
+                "A-1": {
+                    "code": 40100,
+                    "message": "签名验证失败-private-detail",
+                }
+            }
+        )
+    ).check("A-1")
+
+    assert result.state is PingAnAlertLifecycleState.UNKNOWN
+    assert result.provider_code == "40100"
+    assert result.provider_status is None
+    assert result.reason == "provider_business_error"
+    assert result.response_sha256 is not None
+    assert "签名验证失败" not in result.model_dump_json()
 
 
 def test_lifecycle_service_preserves_legacy_status_names() -> None:
@@ -378,11 +405,45 @@ def test_callback_http_port_preserves_signed_alert_model_callback_contract() -> 
         "app_key": "secret",
     }
     assert sent["url"] == "https://zeus.example.internal/public/alertModelCallback"
+    assert sent["body"] == json.dumps(payload)
     assert sent["headers"]["app-sign"] == "signed"
+    assert sent["headers"]["content-type"] == "application/json"
     assert metadata["http_status"] == 200
     assert metadata["provider_code"] == "200"
     assert metadata["mocked"] is False
     assert "message" not in metadata
+
+
+def test_callback_http_port_exposes_safe_business_error_metadata() -> None:
+    payload = {
+        "taskId": "JOB-1",
+        "status": "SUCCESS",
+        "result": {"alert_action": "转交"},
+    }
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"code": 40100, "message": "签名验证失败-private-detail"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        port = HttpPingAnZeusAlertCallbackPort(
+            base_url="https://zeus.example.internal",
+            app_id="SEC-MODEL",
+            app_key="secret",
+            allowed_hosts=["zeus.example.internal"],
+            signer=lambda **_kwargs: {"App-Sign": "signed"},
+            client=client,
+        )
+        with pytest.raises(PingAnAlertCallbackResponseError) as error:
+            port.send(payload)
+
+    assert error.value.response_metadata["http_status"] == 200
+    assert error.value.response_metadata["provider_code"] == "40100"
+    assert error.value.response_metadata["mocked"] is False
+    assert len(error.value.response_metadata["response_sha256"]) == 64
+    assert "签名验证失败" not in str(error.value)
 
 
 def test_callback_failure_retries_only_outbox_and_never_repeats_analysis() -> None:
@@ -431,4 +492,61 @@ def test_callback_failure_retries_only_outbox_and_never_repeats_analysis() -> No
     assert delivered.status is CallbackOutboxStatus.DELIVERED
     assert len(transport.calls) == 2
     assert len(analyzer.calls) == 1
+    assert repository.get(task.id).status is ProcessingJobStatus.COMPLETED
+
+
+def test_callback_failure_persists_safe_provider_metadata() -> None:
+    repository = _repository()
+    task_service = PingAnLegacyTaskService(repository=repository)
+    now = datetime(2026, 9, 2, 3, 0, tzinfo=UTC)
+    task = task_service.submit(_request(), now=now)
+    worker = PingAnLegacyJobWorker(
+        repository=repository,
+        lifecycle_service=PingAnAlertLifecycleService(port=StaticPingAnZeusAlertLifecyclePort({"1965449": {"code": 200, "data": {"status": 1}}})),
+        analysis_service=_AnalysisService(),
+        result_mapper=PingAnLegacyResultMapper(),
+        worker_id="worker-1",
+        lease_seconds=300,
+        now=lambda: now + timedelta(seconds=1),
+    )
+    completed = worker.run_once()
+    assert completed is not None
+    metadata = {
+        "http_status": 200,
+        "provider_code": "40100",
+        "response_sha256": "a" * 64,
+        "mocked": False,
+    }
+    unsafe_metadata = {**metadata, "private_message": "do-not-persist"}
+    dispatcher = PingAnLegacyCallbackDispatcher(
+        repository=repository,
+        port=StaticPingAnZeusAlertCallbackPort(
+            [
+                PingAnAlertCallbackResponseError(
+                    "ZEUS callback returned a non-success business code",
+                    response_metadata=unsafe_metadata,
+                )
+            ]
+        ),
+        dispatcher_id="callback-1",
+        lease_seconds=30,
+        max_attempts=1,
+        retry_backoff_seconds=0,
+        now=iter(
+            [
+                now + timedelta(seconds=2),
+                now + timedelta(seconds=3),
+            ]
+        ).__next__,
+    )
+
+    failed = dispatcher.run_once()
+
+    assert failed is not None
+    assert failed.status is CallbackOutboxStatus.DEAD_LETTER
+    assert failed.response_metadata == metadata
+    assert "private_message" not in failed.response_metadata
+    attempts = repository.list_callback_attempts(failed.outbox_id)
+    assert len(attempts) == 1
+    assert attempts[0].response_metadata == metadata
     assert repository.get(task.id).status is ProcessingJobStatus.COMPLETED

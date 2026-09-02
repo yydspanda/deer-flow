@@ -14,7 +14,12 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from soc_agent.contracts import CallbackAttemptOutcome, CallbackOutboxStatus
+from soc_agent.contracts import (
+    CallbackAttemptOutcome,
+    CallbackOutboxStatus,
+    SocCallbackAttemptRecord,
+    SocCallbackOutboxRecord,
+)
 from soc_agent.integrations.pingan.legacy_compat.contracts import (
     PingAnLegacyTaskRequest,
     PingAnLegacyTaskResponse,
@@ -44,7 +49,7 @@ class PingAnLegacyLiveAcceptanceReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.pingan_legacy_live_acceptance.v2"] = "soc.pingan_legacy_live_acceptance.v2"
+    schema_version: Literal["soc.pingan_legacy_live_acceptance.v3"] = "soc.pingan_legacy_live_acceptance.v3"
     outcome: PingAnLegacyLiveAcceptanceOutcome
     passed: bool
     simulated: Literal[False] = False
@@ -69,9 +74,17 @@ class PingAnLegacyLiveAcceptanceReport(BaseModel):
     model_name: str | None = None
     lifecycle_state: str | None = None
     lifecycle_mocked: bool | None = None
+    lifecycle_provider_code: str | None = None
+    lifecycle_provider_status: str | None = None
+    lifecycle_reason: str | None = None
+    lifecycle_response_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     callback_status: CallbackOutboxStatus | None = None
     callback_attempt_count: int = Field(default=0, ge=0)
     callback_mocked: bool | None = None
+    callback_last_error_code: str | None = None
+    callback_http_status: int | None = None
+    callback_provider_code: str | None = None
+    callback_response_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     duration_ms: int = Field(ge=0)
     http_status: int | None = None
     error_type: str | None = None
@@ -215,6 +228,7 @@ def run_pingan_legacy_live_acceptance(
                 error_message="Compatibility task reached the legacy FAILURE state.",
             )
         _inspect_runtime_result(terminal.result, state=state)
+        _snapshot_callback(repository, first.id, state=state)
         _inspect_lifecycle(repository, first.id, state=state)
         _wait_for_real_callback(
             repository,
@@ -389,6 +403,10 @@ def _inspect_lifecycle(
         )
     state["lifecycle_mocked"] = lifecycle.get("mocked")
     state["lifecycle_state"] = _optional_text(lifecycle.get("state")) or state.get("lifecycle_state")
+    state["lifecycle_provider_code"] = _bounded_text(lifecycle.get("provider_code"))
+    state["lifecycle_provider_status"] = _bounded_text(lifecycle.get("provider_status"))
+    state["lifecycle_reason"] = _bounded_text(lifecycle.get("reason"))
+    state["lifecycle_response_sha256"] = _sha256_or_none(lifecycle.get("response_sha256"))
     if state["lifecycle_mocked"] is not False or state["lifecycle_state"] != "pending":
         raise _AcceptanceError(
             outcome="lifecycle_not_real",
@@ -406,24 +424,15 @@ def _wait_for_real_callback(
     sleeper: Callable[[float], None],
 ) -> None:
     while True:
-        callbacks = repository.list_callbacks(job_id)
-        if len(callbacks) > 1:
-            raise _AcceptanceError(
-                outcome="invalid_response",
-                error_message="Compatibility task produced multiple callback outbox records.",
-            )
-        if callbacks:
-            callback = callbacks[0]
-            state["callback_status"] = callback.status
-            state["callback_attempt_count"] = callback.attempt_count
-            metadata = callback.response_metadata or {}
-            state["callback_mocked"] = metadata.get("mocked")
+        callback, latest_attempt = _snapshot_callback(
+            repository,
+            job_id,
+            state=state,
+        )
+        if callback is not None:
             if callback.status is CallbackOutboxStatus.DELIVERED:
-                attempts = repository.list_callback_attempts(callback.outbox_id)
-                state["callback_attempt_count"] = len(attempts)
-                delivered_attempt = attempts[-1] if attempts else None
-                attempt_metadata = (delivered_attempt.response_metadata if delivered_attempt is not None else None) or {}
-                if state["callback_mocked"] is not False or delivered_attempt is None or delivered_attempt.outcome is not CallbackAttemptOutcome.DELIVERED or attempt_metadata.get("mocked") is not False:
+                attempt_metadata = (latest_attempt.response_metadata if latest_attempt is not None else None) or {}
+                if state["callback_mocked"] is not False or latest_attempt is None or latest_attempt.outcome is not CallbackAttemptOutcome.DELIVERED or attempt_metadata.get("mocked") is not False:
                     raise _AcceptanceError(
                         outcome="callback_not_real",
                         error_message="Callback was delivered by a fake provider, not real ZEUS.",
@@ -439,6 +448,40 @@ def _wait_for_real_callback(
             poll_interval=poll_interval,
             sleeper=sleeper,
         )
+
+
+def _snapshot_callback(
+    repository: ProcessingJobRepository,
+    job_id: str,
+    *,
+    state: dict[str, Any],
+) -> tuple[SocCallbackOutboxRecord | None, SocCallbackAttemptRecord | None]:
+    callbacks = repository.list_callbacks(job_id)
+    if len(callbacks) > 1:
+        raise _AcceptanceError(
+            outcome="invalid_response",
+            error_message="Compatibility task produced multiple callback outbox records.",
+        )
+    if not callbacks:
+        return None, None
+    callback = callbacks[0]
+    attempts = repository.list_callback_attempts(callback.outbox_id)
+    latest_attempt = attempts[-1] if attempts else None
+    state["callback_status"] = callback.status
+    state["callback_attempt_count"] = max(callback.attempt_count, len(attempts))
+    state["callback_last_error_code"] = _bounded_text(callback.last_error_code or (latest_attempt.error_code if latest_attempt is not None else None))
+    metadata = dict(callback.response_metadata or {})
+    latest_response_attempt = next(
+        (attempt for attempt in reversed(attempts) if attempt.response_metadata),
+        None,
+    )
+    if latest_response_attempt is not None:
+        metadata.update(latest_response_attempt.response_metadata or {})
+    state["callback_mocked"] = metadata.get("mocked")
+    state["callback_http_status"] = _optional_int(metadata.get("http_status"))
+    state["callback_provider_code"] = _bounded_text(metadata.get("provider_code"))
+    state["callback_response_sha256"] = _sha256_or_none(metadata.get("response_sha256"))
+    return callback, latest_attempt
 
 
 def _sleep_before_poll(
@@ -524,6 +567,31 @@ def _optional_text(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _bounded_text(value: Any, *, max_length: int = 128) -> str | None:
+    normalized = _optional_text(value)
+    if normalized is None:
+        return None
+    return normalized[:max_length]
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sha256_or_none(value: Any) -> str | None:
+    normalized = _optional_text(value)
+    if normalized is None or len(normalized) != 64:
+        return None
+    if any(character not in "0123456789abcdefABCDEF" for character in normalized):
+        return None
+    return normalized.lower()
 
 
 def _contains_placeholder(value: Any) -> bool:

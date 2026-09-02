@@ -36,7 +36,7 @@ def _build_isec_headers(
     timestamp: str,
     nonce: str,
 ) -> dict[str, str]:
-    request_body = "" if data is None else json.dumps(data)
+    request_body = serialize_isec_json_body(data).decode("utf-8")
     sign_module = "@@".join((app_id, timestamp, nonce, "SHA256", request_body, app_key))
     return {
         "x-sec-route-env": "gray",
@@ -50,4 +50,12 @@ def _build_isec_headers(
     }
 
 
-__all__ = ["isec_sign"]
+def serialize_isec_json_body(data: Any) -> bytes:
+    """Serialize the exact legacy JSON bytes covered by ``App-Sign``."""
+
+    if data is None:
+        return b""
+    return json.dumps(data).encode("utf-8")
+
+
+__all__ = ["isec_sign", "serialize_isec_json_body"]

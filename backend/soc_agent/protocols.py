@@ -210,6 +210,7 @@ class ProcessingJobRepository(Protocol):
         dispatcher_id: str,
         error_code: str,
         error_message: str,
+        response_metadata: dict[str, Any] | None = None,
         available_at: datetime,
         now: datetime | None = None,
         dead_letter: bool = False,

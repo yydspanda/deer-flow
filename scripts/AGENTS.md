@@ -16,6 +16,13 @@ reviewed tenant policy enabled, and external action execution disabled. It must 
 the canonical Memory corpus plus the merged corpus/index/payload store before
 starting. It must not add Docker as a prerequisite, hard-code a developer home
 path, or create a second Gateway/frontend/nginx implementation.
+Before starting any sidecar, `start` must resolve the absolute local SOC SQLite URL,
+run the SOC migration once, and pass that URL to the API/worker with their own
+auto-migration disabled. `status` reports the persisted `soc_alembic_version` without
+creating a missing database. A pristine SQLite initialization may clean its own partial
+artifacts and retry one transient `disk I/O error`; an existing database is never deleted
+or retried destructively. Generated Runbooks therefore must not require operators to
+source local profiles and repeat migration manually.
 After external corpus staging, `check` must also validate all runtime files,
 mode-`0600` local profiles, the project model-gateway references, isolated SQLite
 configuration, and the non-root nginx config. It must reject retired LiteLLM model
@@ -47,12 +54,22 @@ provider modes set to `internal`. Its pass gate requires a fresh durable job,
 idempotent replay, real pending-alert lifecycle evidence, a Runtime run/model,
 and a delivered real callback attempt. Reports must contain hashes and state
 only, never request/result bodies or credentials.
+Run `soc_pingan_zeus_lifecycle_smoke.py` first against the same prepared request.
+It is read-only and must prove `provider_code=200`, `provider_status=1`, and
+`mocked=false` before a model-backed task is submitted. All ISEC providers must sign
+the exact serialized bytes later passed to HTTPX with `content=`; `json=` must not
+reserialize a signed body.
 The live command must receive the checkout-resolved absolute SOC database URL and
 must verify the SOC migration/evidence tables before its first network request. A
 failure after durable submission is recovered only with the same private request and
 explicit `--resume-existing`; do not prepare a new session or rerun completed Runtime
 and callback work. A resumed pass replaces the fresh-submission gate only, while all
 idempotency, lifecycle, Runtime, and real-callback gates remain mandatory.
+Do not resume a Job whose persisted provider/worker result itself failed, or after
+changing signing/provider/worker code. Keep that Job as audit evidence and create a fresh
+session only after the read-only lifecycle smoke passes. Local self-submission proves the
+component path; definitive compatibility still requires ZEUS-originated submission and
+old-page readback.
 
 Final PingAn transfer packaging first runs the model-gateway and workflow
 legacy-profile preparers in the external preparation checkout. Both are static AST

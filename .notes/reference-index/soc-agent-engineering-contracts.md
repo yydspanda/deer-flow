@@ -1050,7 +1050,7 @@ SOC Agent chat stream 约束：
   - `asset.lookup` 可以登记为 read-only policy action，但不能默认加入 chat router 白名单；运行态调用只能通过显式 `soc_route=asset.lookup`、显式 `action_payload.asset_key`、显式 router allowlist 和注入的 action adapter registry 打开。
   - `asset.locate` 是 read-only business ownership / BU location action，用于把已提取资产定位到公司、业务组、处置归属或 mock 远程查询结果；它和 `asset.lookup` 一样不能默认加入 chat router 白名单，只能通过显式 proposal、router allowlist 和注入的 MCP-backed action adapter registry 打开。
   - PingAn `asset.locate` provider 只能位于 `soc_agent.integrations.pingan`；`actions/contracts/core/domain/pipeline` 不得 import 该 vendor package。provider 输入必须是已提取的 `asset_key`、类型、可选角色/UM 和 bounded context refs，不能重新执行资产抽取、攻击/受害角色裁决或处置目标选择。
-  - D12 PingAn provider 保留经审阅的 ZEUS `/public/searchAssetInfo` 请求体与 `isec_sign(data, app_id, app_key)` 鉴权边界，以及 `searchAssetInfo -> asset_to_bu -> UM` 降级语义。Portable signer 固定为 PingAn-owned `soc_agent.integrations.pingan.zeus_signing:isec_sign`，不得恢复旧模块的默认 App Key 或 import 整个 `util.util_tools`；endpoint、secret、workflow runner/ID、operator 和 tenant ownership override 只能来自显式环境/配置。真实值可写入已验证 Git-ignored 且权限受限的 `*.local` 文件，不能进入通用 Runtime 或 commit。
+  - D12 PingAn provider 保留经审阅的 ZEUS `/public/searchAssetInfo` 请求体与 `isec_sign(data, app_id, app_key)` 鉴权边界，以及 `searchAssetInfo -> asset_to_bu -> UM` 降级语义。Portable signer 固定为 PingAn-owned `soc_agent.integrations.pingan.zeus_signing:isec_sign`，不得恢复旧模块的默认 App Key 或 import 整个 `util.util_tools`；endpoint、secret、workflow runner/ID、operator 和 tenant ownership override 只能来自显式环境/配置。ISEC 签名覆盖最终 HTTP body 字节：所有签名 Provider 必须由同一 serializer 一次生成 body，并将该 bytes 同时用于签名和 `content=` 发送，禁止签名后再通过 HTTP client `json=` 二次序列化。真实值可写入已验证 Git-ignored 且权限受限的 `*.local` 文件，不能进入通用 Runtime 或 commit。
   - D12-A `fake` 和 D12-B `internal` 模式必须互斥。fake transport/result 必须声明 `mocked=true`、`provider_mode=fake`、`decision_impact=none`；internal 配置缺失或 import/provider 失败必须 fail closed，禁止静默回退 fake。只有真实 `mocked=false` smoke 才能作为 PA-12/PI-01 real-provider 证据。
   - 多个有效资产归属必须返回 bounded candidates 与 `ambiguous=true`，不能默认选择第一条；原始 provider response、签名 header 和 secret 不得进入 `SocAgentActionResult`、`InvestigationEvidence` 或 smoke 报告。每个 attempt 至少记录 stage、lookup kind、`found|not_found|failed`、candidate count、mock provenance、sanitized error 和 `duration_ms`。只有明确 `not_found` 才可进入下一层；authentication/network/timeout/schema failure 必须立即 fail closed，不能伪装成查无。provider 不得直接修改 verdict、ReviewQueue、memory 或 action authority。
   - PingAn `threat_intel.ip_reputation.lookup` provider 只能位于 `soc_agent.integrations.pingan`；generic contracts/core/domain 只消费 `SocThreatIntelReputationRecord` 和 typed MCP result。内部模式必须复用 portable `isec_sign`、共享 ZEUS credential、HTTPS 和显式 host allowlist，配置/HTTP/timeout/schema failure 必须与正常 not-found 分离且禁止 fake fallback。
@@ -2137,6 +2137,12 @@ LessonRule
   Runtime 与 callback 不得重跑。只有首次响应已离开 `PENDING` 才能确认是既有任务；否则保持原
   请求并稍后重试，不能用 resume flag 冒充恢复证据。恢复报告以 `resumed_existing_confirmed=true` 代替 fresh gate，
   但同 Job replay、真实 lifecycle、Runtime lineage、delivered non-mocked callback 仍全部必需。
+- 完整 live task 之前必须用同一 mode-`0600` 请求运行只读 ZEUS lifecycle/signature smoke；只有
+  `provider_code=200`、`provider_status=1`、`state=pending`、`mocked=false` 才能继续。业务错误只记录
+  bounded provider code/status、response SHA-256 和分类，禁止保存响应正文。若 Job 已持久化 unknown
+  lifecycle、dead-letter callback，或执行后发生 signer/provider/worker 代码变更，该 Job 是不可变失败
+  证据，不能用 `--resume-existing` 重算；先让只读 smoke 通过，再生成 fresh session/Job。local self-submit
+  只证明组件组合，最终兼容门禁仍要求 ZEUS 上游真实发起并完成旧页面 readback。
 
 ## 八、事件与通信规范
 
