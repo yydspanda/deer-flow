@@ -1375,19 +1375,9 @@ grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
 三个权限必须都是 `600`，两个 mode 必须都是 `fake`。RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
-## 7. Ensure Host DEV Is Running / 确认服务已运行
+## 7. Start Host DEV / 启动服务
 
-先查看状态：
-
-```bash
-export TARGET_REPO="$HOME/deer-flow"
-cd "$TARGET_REPO"
-python3.12 scripts/soc_pingan_macos_host_dev.py status
-```
-
-如果 Core 全部为 `true`、三个 Sidecar 都为 `running`，并且
-`soc_database.status=ready`，说明本次 checkout 已经启动，**跳过下面的启动命令**，直接执行模型
-Smoke。只有服务尚未运行时才执行：
+首次按本 Runbook 顺序执行到这里时，Host DEV 尚未启动。直接执行一次启动命令，再查看状态：
 
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
@@ -1395,6 +1385,10 @@ cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 python3.12 scripts/soc_pingan_macos_host_dev.py status
 ```
+
+只有本节曾经执行过、终端中断后回来继续验收时，才先单独运行 `status`。如果 Core 全部为 `true`、
+三个 Sidecar 都为 `running`，且 `soc_database.status=ready`，不要重复 `start`，直接执行模型 Smoke；
+否则重新执行上面的启动块。
 
 Host DEV 驱动会先准备 SOC 数据库，再启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，最后启动
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant

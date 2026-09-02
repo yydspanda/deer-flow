@@ -87,6 +87,10 @@ Runbook step.
 Interactive `read` commands inside a `bash <<'MARKER'` block must read from
 `/dev/tty`; otherwise they consume the next line of the heredoc as user input
 and corrupt the remaining shell program.
+Generated Runbooks must present the normal first-run sequence as the primary
+path. Put status probes that exist only for interrupted-run recovery after that
+sequence, rather than implying a service can already be running before its first
+start step.
 Clean installation must be delegated to the generated standalone
 `INSTALL-PINGAN-MAC.sh` and invoked with `bash`, never sourced. The installer
 resolves the transfer directory from its own `BASH_SOURCE`, verifies the exact

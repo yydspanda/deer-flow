@@ -243,9 +243,10 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "不要重复执行已经通过的阶段" in host_install
     assert "不再建库或重启，直接执行模型 Smoke/后续验收" in host_install
     assert "SOC database preparation failed before sidecar startup" in host_install
-    assert "## 7. Ensure Host DEV Is Running / 确认服务已运行" in runbook
-    assert "**跳过下面的启动命令**" in runbook
-    assert "只有服务尚未运行时才执行" in runbook
+    assert "## 7. Start Host DEV / 启动服务" in runbook
+    assert "首次按本 Runbook 顺序执行到这里时，Host DEV 尚未启动" in runbook
+    assert "只有本节曾经执行过、终端中断后回来继续验收时" in runbook
+    assert "不要重复 `start`" in runbook
     assert "只需要页面演示或本地研判时在此停止" in runbook
     assert "不需要提供告警 ID，也不要切换 internal Provider" in runbook
     assert "SOC 数据库后来被删除或重建" in runbook
