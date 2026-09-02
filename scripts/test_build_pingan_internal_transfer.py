@@ -139,9 +139,9 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl" in runbook
     assert "soc_pingan_stage_internal_corpus.py --apply" in runbook
     assert f'bash "$HOME/READY-TO-TRANSFER/{TRANSFER_INSTALLER_NAME}"' in runbook
-    clean_install = runbook.split("## 3. Clean Install", maxsplit=1)[1].split(
-        "## 4. Stage Existing Corpus", maxsplit=1
-    )[0]
+    clean_install = runbook.split(
+        "## 3. Install Or Data-Preserving Redeploy", maxsplit=1
+    )[1].split("## 4. Stage Existing Corpus", maxsplit=1)[0]
     assert "soc_pingan_macos_host_dev.py stop" not in clean_install
     assert 'rm -rf "$TARGET_REPO"' not in clean_install
     assert "exit 1" not in clean_install
@@ -205,6 +205,8 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert 'shasum -a 256 \\\n  "deer-flow-pingan-source' in runbook
     assert "soc_pingan_model_gateway_smoke.py \\\n  --confirm-live" in runbook
     assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in runbook
+    assert "SELECT version_num FROM soc_alembic_version" in runbook
+    assert "正常重部署不要删除 `deerflow.db` 或 `soc_agent_dev.db`" in runbook
 
 
 def test_transfer_installer_is_self_contained_and_orders_destructive_steps() -> None:
@@ -241,6 +243,15 @@ def test_transfer_installer_is_self_contained_and_orders_destructive_steps() -> 
     )
     assert installer.index('mv -- "$TARGET_REPO" "$BACKUP_REPO"') < installer.index(
         'mv -- "$STAGED_REPO" "$TARGET_REPO"'
+    )
+    assert '"backend/.deer-flow/data"' in installer
+    assert '"backend/.deer-flow/.jwt_secret"' in installer
+    assert '"backend/.deer-flow/users"' in installer
+    assert installer.index('mv -- "$STAGED_REPO" "$TARGET_REPO"') < installer.index(
+        "if ! restore_persistent_state"
+    )
+    assert installer.index("if ! restore_persistent_state") < installer.index(
+        'rm -rf -- "$BACKUP_REPO"'
     )
     assert '"$TARGET_REPO/.env.soc-dev.local"' in installer
     assert '"$TARGET_REPO/.secrets/eagw-private-key.der"' in installer
@@ -301,6 +312,7 @@ def test_transfer_installer_replaces_checkout_without_parent_shell_state(
             ".env.soc-dev.local": "export TEST=1\n",
             "config.pingan-dev.local": "config_version: 38\n",
             ".secrets/eagw-private-key.der": "private-key",
+            "backend/.deer-flow/pingan-context/catalog.txt": "new catalog\n",
         },
     )
     installer_path = transfer_dir / TRANSFER_INSTALLER_NAME
@@ -328,6 +340,34 @@ def test_transfer_installer_replaces_checkout_without_parent_shell_state(
         encoding="utf-8",
     )
     (old_repo / "old-marker.txt").write_text("old checkout\n", encoding="utf-8")
+    (old_repo / "backend/.deer-flow/data").mkdir(parents=True)
+    (old_repo / "backend/.deer-flow/data/deerflow.db").write_text(
+        "deerflow-state\n",
+        encoding="utf-8",
+    )
+    (old_repo / "backend/.deer-flow/data/soc_agent_dev.db").write_text(
+        "soc-state\n",
+        encoding="utf-8",
+    )
+    (old_repo / "backend/.deer-flow/.jwt_secret").write_text(
+        "stable-secret\n",
+        encoding="utf-8",
+    )
+    (old_repo / "backend/.deer-flow/users/alice").mkdir(parents=True)
+    (old_repo / "backend/.deer-flow/users/alice/memory.json").write_text(
+        '{"memory": "keep"}\n',
+        encoding="utf-8",
+    )
+    (old_repo / "backend/.deer-flow/pingan-context").mkdir(parents=True)
+    (old_repo / "backend/.deer-flow/pingan-context/catalog.txt").write_text(
+        "stale catalog\n",
+        encoding="utf-8",
+    )
+    (old_repo / "backend/.deer-flow/internal-host-dev").mkdir(parents=True)
+    (old_repo / "backend/.deer-flow/internal-host-dev/stale.pid").write_text(
+        "123\n",
+        encoding="utf-8",
+    )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(
@@ -356,6 +396,24 @@ def test_transfer_installer_replaces_checkout_without_parent_shell_state(
     assert (home / "old-host-stopped").is_file()
     assert (home / "deer-flow/source-marker.txt").read_text() == "new checkout\n"
     assert not (home / "deer-flow/old-marker.txt").exists()
+    assert (
+        home / "deer-flow/backend/.deer-flow/data/deerflow.db"
+    ).read_text() == "deerflow-state\n"
+    assert (
+        home / "deer-flow/backend/.deer-flow/data/soc_agent_dev.db"
+    ).read_text() == "soc-state\n"
+    assert (
+        home / "deer-flow/backend/.deer-flow/.jwt_secret"
+    ).read_text() == "stable-secret\n"
+    assert (
+        home / "deer-flow/backend/.deer-flow/users/alice/memory.json"
+    ).read_text() == '{"memory": "keep"}\n'
+    assert (
+        home / "deer-flow/backend/.deer-flow/pingan-context/catalog.txt"
+    ).read_text() == "new catalog\n"
+    assert not (
+        home / "deer-flow/backend/.deer-flow/internal-host-dev/stale.pid"
+    ).exists()
     assert (home / "deer-flow/.env.soc-dev.local").stat().st_mode & 0o777 == 0o600
     assert (
         home / "deer-flow/.secrets/eagw-private-key.der"

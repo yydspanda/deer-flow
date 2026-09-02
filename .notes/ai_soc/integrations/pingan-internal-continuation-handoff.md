@@ -67,10 +67,14 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 - `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、corpus manifest/index、历史 EDR XLSX 及其已编译路径目录；不再携带三个大 PKL 或 Workbench payload SQLite，只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
 - `PINGAN-INTERNAL-MAC-RUNBOOK.md`：由构建器自动生成，固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令；不再手工维护时间戳，也不再携带独立 nginx/LAN hotfix。
-- `INSTALL-PINGAN-MAC.sh`：自包含安装器；从脚本自身位置解析两个 archive，先验 Hash/解压结果，再停止旧 Host DEV、检查五个端口并事务式替换 checkout。必须用 `bash` 执行，禁止 `source`；失败只退出子脚本，不关闭操作员终端。
+- `INSTALL-PINGAN-MAC.sh`：自包含安装器；从脚本自身位置解析两个 archive，先验 Hash/解压结果，再停止旧 Host DEV、检查五个端口并事务式替换 checkout。已有部署会把 `backend/.deer-flow/data`、JWT、用户/Agent/线程状态、受管集成及内网验收证据复制到新 checkout，保留两个 SQLite 及其 sidecar；新 private overlay 的配置与 `pingan-context` 不被旧目录覆盖。必须用 `bash` 执行，禁止 `source`；失败只退出子脚本，不关闭操作员终端。
 - 重部署必须先解压到 staging，再从旧 `$HOME/deer-flow` 执行 Host DEV `stop`；只有
   `3000/8001/2026/4001/8090` 均无监听时才删除旧 checkout。不得先删除或移动运行中的目录，避免旧
   Gateway/Nginx/模型网关/兼容 API 持有 deleted/Trash cwd 并继续占端口。
+- 重部署不得删除或重新创建已有 `deerflow.db` / `soc_agent_dev.db`。若首次 migration 从未完成且
+  确认没有账号、研判、Memory、审核或任务数据，只能把残库和 SQLite sidecar 先移动到带时间戳的
+  隔离目录再重试。SOC 库迁移版本固定查询 `soc_alembic_version`，不是 DeerFlow 的
+  `alembic_version`。
 
 当前目标 Mac 已具备 Python `3.12.7`、uv 和批准的内部包镜像，因此本次交付不再生成
 `deer-flow-pingan-macos-arm64-offline-*`。旧离线工具链脚本只保留为未来无 Python/无内部镜像机器的
@@ -124,7 +128,9 @@ cd "$HOME/deer-flow"
 
 安装器会先验证两个 archive 的本次精确 SHA-256 和 staged checkout 完整性；随后从旧 checkout
 运行 Host DEV `stop`，只有 `3000/8001/2026/4001/8090` 都释放后才替换目录。校验、解压、停服或
-端口检查失败时旧目录不变；替换阶段失败时会尽力恢复旧目录。不得把 Runbook 的代码块通过
+端口检查失败时旧目录不变；替换阶段或持久化状态恢复失败时会尽力恢复旧目录。成功升级会保留
+DeerFlow/SOC 数据库、用户 Memory 与工作区，但不会继承旧 PID、日志、技能投影或旧 `pingan-context`。
+不得把 Runbook 的代码块通过
 `source`/`.` 加载，也不再手工复制长篇解压和 `rm -rf` 命令。
 
 三个 PKL 与 Workbench payload SQLite 已单独保存在内网，不再重复打包。当前开发者的 `$HOME`

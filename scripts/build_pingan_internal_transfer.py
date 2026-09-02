@@ -62,6 +62,20 @@ PRIVATE_OVERLAY_PATHS = (
     "backend/.deer-flow/pingan-context/software-path-catalog.sqlite",
     "backend/.deer-flow/pingan-context/software-path-catalog.build-report.json",
 )
+HOST_DEV_PERSISTENT_PATHS = (
+    "backend/.deer-flow/data",
+    "backend/.deer-flow/.jwt_secret",
+    "backend/.deer-flow/memory.json",
+    "backend/.deer-flow/USER.md",
+    "backend/.deer-flow/users",
+    "backend/.deer-flow/agents",
+    "backend/.deer-flow/threads",
+    "backend/.deer-flow/integrations",
+    "backend/.deer-flow/managed-subagents",
+    "backend/.deer-flow/skills",
+    "backend/.deer-flow/.retrieval",
+    "backend/.deer-flow/soc-internal-validation",
+)
 PRIVATE_ENV_REQUIRED_KEYS = frozenset(
     {
         "PINGAN_MODEL_GATEWAY_BASE_URL",
@@ -896,6 +910,9 @@ def _transfer_installer(*, archives: dict[str, Any]) -> str:
         private_name = Path(str(private["path"])).name
         private_sha = str(private["sha256"])
         private_ready = "true"
+    persistent_path_lines = "\n".join(
+        f'  "{path}"' for path in HOST_DEV_PERSISTENT_PATHS
+    )
     return f"""#!/usr/bin/env bash
 if [[ "${{BASH_SOURCE[0]}}" != "$0" ]]; then
   printf '%s\n' "ERROR: do not source this installer; run: bash ${{BASH_SOURCE[0]}}" >&2
@@ -924,6 +941,42 @@ verify_archive() {{
   [[ "$actual" == "$expected" ]] || fail "SHA-256 mismatch: $archive"
 }}
 
+rollback_checkout() {{
+  rm -rf -- "$TARGET_REPO"
+  if [[ -n "$BACKUP_REPO" && -d "$BACKUP_REPO" ]]; then
+    mv -- "$BACKUP_REPO" "$TARGET_REPO" || return 1
+  fi
+}}
+
+restore_persistent_state() {{
+  local relative_path
+  local source_path
+  local target_path
+  local preserved_count=0
+  [[ -n "$BACKUP_REPO" ]] || return 0
+
+  local persistent_paths=(
+{persistent_path_lines}
+  )
+  for relative_path in "${{persistent_paths[@]}}"; do
+    source_path="$BACKUP_REPO/$relative_path"
+    target_path="$TARGET_REPO/$relative_path"
+    if [[ ! -e "$source_path" && ! -L "$source_path" ]]; then
+      continue
+    fi
+    if [[ -e "$target_path" || -L "$target_path" ]]; then
+      printf 'ERROR: new package unexpectedly owns persistent path: %s\n' \
+        "$relative_path" >&2
+      return 1
+    fi
+    mkdir -p -- "$(dirname -- "$target_path")" || return 1
+    cp -Rp -- "$source_path" "$target_path" || return 1
+    preserved_count=$((preserved_count + 1))
+    printf '  preserved: %s\n' "$relative_path"
+  done
+  printf 'Preserved %s existing runtime-state path(s).\n' "$preserved_count"
+}}
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${{BASH_SOURCE[0]}}")" && pwd -P)"
 TRANSFER_DIR="$SCRIPT_DIR"
 TARGET_REPO="$HOME/deer-flow"
@@ -936,7 +989,7 @@ PRIVATE_OVERLAY_READY="{private_ready}"
 [[ "$PRIVATE_OVERLAY_READY" == "true" ]] || \
   fail "this is a source-only package; build and transfer the private overlay first"
 
-for command_name in tar shasum lsof python3.12 mktemp mv chmod; do
+for command_name in tar shasum lsof python3.12 mktemp mv cp chmod mkdir dirname; do
   require_command "$command_name"
 done
 
@@ -1003,6 +1056,11 @@ if ! mv -- "$STAGED_REPO" "$TARGET_REPO"; then
   fail "could not install the staged checkout; the previous checkout was restored when possible"
 fi
 
+if ! restore_persistent_state; then
+  rollback_checkout || true
+  fail "could not preserve runtime state; the previous checkout was restored when possible"
+fi
+
 if ! (
   chmod 700 "$TARGET_REPO/.secrets"
   chmod 600 \
@@ -1010,10 +1068,7 @@ if ! (
     "$TARGET_REPO/config.pingan-dev.local" \
     "$TARGET_REPO/.secrets/eagw-private-key.der"
 ); then
-  rm -rf -- "$TARGET_REPO"
-  if [[ -n "$BACKUP_REPO" && -d "$BACKUP_REPO" ]]; then
-    mv -- "$BACKUP_REPO" "$TARGET_REPO" || true
-  fi
+  rollback_checkout || true
   fail "could not apply private-file permissions; the previous checkout was restored when possible"
 fi
 if [[ -n "$BACKUP_REPO" ]]; then
@@ -1112,9 +1167,20 @@ cat "{report_name}"
 必须看到 `source_worktree_dirty=false`、`final_handoff_eligible=true` 和
 `required_source_inventory_complete=true`。
 
-## 3. Clean Install / 全新安装
+## 3. Install Or Data-Preserving Redeploy / 安装或保留数据升级
 
-以下命令会替换当前用户的 `$HOME/deer-flow`：
+以下命令会替换当前用户的 `$HOME/deer-flow` 代码；已有部署会自动保留明确列入契约的运行数据：
+
+```text
+backend/.deer-flow/data/                 # deerflow.db、soc_agent_dev.db 及 SQLite sidecars
+backend/.deer-flow/.jwt_secret           # 已有登录会话签名密钥
+backend/.deer-flow/users|agents|threads  # 用户 Memory、自定义 Agent 与工作区
+backend/.deer-flow/integrations          # 已安装的受管 Integration Skills
+backend/.deer-flow/soc-internal-validation
+```
+
+新 private overlay 中的配置、凭证与 `pingan-context` 仍以本次交付为准；旧 PID、日志、技能投影、
+临时缓存和旧安装包不会迁入新 checkout。
 
 ```bash
 bash "$HOME/READY-TO-TRANSFER/{installer_name}"
@@ -1122,9 +1188,13 @@ bash "$HOME/READY-TO-TRANSFER/{installer_name}"
 
 安装器只读取它自身所在目录，不依赖前一节留下的 `TRANSFER_DIR`、`TARGET_REPO` 或其他
 shell 状态。它在子 Bash 中依次校验准确 SHA-256、解压并检查新 checkout、停止旧 Host DEV、
-确认 `3000/8001/2026/4001/8090` 全部释放，再事务式替换目录并设置私有文件权限。任一步失败
+确认 `3000/8001/2026/4001/8090` 全部释放，再事务式替换目录、复制允许的持久化状态并设置私有文件权限。任一步失败
 都只结束安装器，不会关闭当前终端；Hash/解压/停服/端口失败时不会替换旧 checkout，替换阶段
-失败时会尽力恢复旧目录。不要使用 `source` 或 `.` 加载安装器。
+或数据恢复失败时会尽力恢复旧目录。不要使用 `source` 或 `.` 加载安装器。
+
+正常重部署不要删除 `deerflow.db` 或 `soc_agent_dev.db`。只有首次初始化从未成功、且已确认库内没有
+账号、研判、Memory、审核或任务数据时，才可把残库和 `-wal`/`-shm`/`-journal` 一并移动到带时间戳
+的隔离备份目录后重新初始化；仍不要直接 `rm`。
 
 本次私有包同时包含：
 
@@ -1201,9 +1271,28 @@ unset SOC_DATABASE_URL
   .venv/bin/python -m soc_agent.cli db upgrade \\
     --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"
 )
+
+backend/.venv/bin/python - <<'PY'
+import os
+import sqlite3
+from pathlib import Path
+
+path = Path(os.environ["SOC_DEV_SQLITE_PATH"])
+if not path.is_file():
+    raise SystemExit(f"SOC SQLite was not created: {{path}}")
+with sqlite3.connect(path) as connection:
+    row = connection.execute(
+        "SELECT version_num FROM soc_alembic_version"
+    ).fetchone()
+if row is None:
+    raise SystemExit("SOC migration version is missing")
+print({{"soc_database": str(path), "soc_schema_revision": row[0]}})
+PY
 ```
 
 DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合并。
+SOC 的版本表是 `soc_alembic_version`；`alembic_version` 属于 DeerFlow 主库，不能拿它检查
+`soc_agent_dev.db`。必须先成功执行 migration，再做版本查询，避免 SQLite 因一次过早连接创建空文件。
 
 ## 6. Execution Plane Preflight / 执行面预检
 

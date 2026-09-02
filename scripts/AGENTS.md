@@ -74,6 +74,15 @@ Clean redeploy instructions must extract into staging first, invoke the old chec
 Host DEV `stop` command before deleting that checkout, and fail closed while any of
 `3000/8001/2026/4001/8090` is still listening. Never remove or move a running checkout:
 daemon processes can retain a deleted cwd and evade the replacement checkout's PID state.
+An existing checkout is also the owner of persistent Host DEV state. The generated installer
+must copy the explicit allowlist (`backend/.deer-flow/data`, JWT/user/agent/thread Memory and
+workspace state, managed integrations/subagents, retrieval state, and internal validation
+evidence) into the staged release before deleting its rollback checkout. It must preserve the
+whole SQLite data directory so each database travels with its `-wal`/`-shm`/`-journal` sidecars,
+while new private-overlay config and `pingan-context` remain release-owned. PID files, logs,
+generated skill views, caches, old transfer artifacts, and other ignored output must not leak
+across releases. Any restore failure rolls back the old checkout; routine redeploy must never
+delete or recreate an existing database.
 
 Large PingAn corpus artifacts are transferred separately, not embedded in either
 archive. The private overlay carries the matching corpus manifest/index, and
