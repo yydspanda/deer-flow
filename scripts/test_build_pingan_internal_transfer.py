@@ -154,6 +154,10 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "### 3.1 Stateless DEV Reset / 无状态 DEV 清洁重装" in runbook
     assert 'TARGET_REPO="$HOME/deer-flow"' in clean_install
     assert "DELETE-OLD-DEV" in clean_install
+    assert (
+        "Type DELETE-OLD-DEV to permanently remove this stateless DEV deployment: "
+        "' confirmation </dev/tty" in clean_install
+    )
     assert "for port in 3000 8001 2026 4001 8090" in clean_install
     assert '/bin/rm -rf "$TARGET_REPO"' in clean_install
     assert "旧 SQLite、Memory、账号和内网验收结果都会永久删除" in clean_install

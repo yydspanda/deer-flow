@@ -84,6 +84,9 @@ block that sources `.env.soc-dev.local` must first resolve the current checkout
 with `backend/scripts/soc_pingan_local_paths.py --shell` in that same block; do
 not rely on `TARGET_REPO`, `SOC_REPO_ROOT`, or shell exports left by an earlier
 Runbook step.
+Interactive `read` commands inside a `bash <<'MARKER'` block must read from
+`/dev/tty`; otherwise they consume the next line of the heredoc as user input
+and corrupt the remaining shell program.
 Clean installation must be delegated to the generated standalone
 `INSTALL-PINGAN-MAC.sh` and invoked with `bash`, never sourced. The installer
 resolves the transfer directory from its own `BASH_SOURCE`, verifies the exact

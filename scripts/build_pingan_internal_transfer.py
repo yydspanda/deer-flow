@@ -1218,7 +1218,7 @@ for port in 3000 8001 2026 4001 8090; do
   lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
 done
 
-read -r -p 'Type DELETE-OLD-DEV to permanently remove this stateless DEV deployment: ' confirmation
+read -r -p 'Type DELETE-OLD-DEV to permanently remove this stateless DEV deployment: ' confirmation </dev/tty
 if [[ "$confirmation" != "DELETE-OLD-DEV" ]]; then
   echo 'Cancelled; no process or file was changed.'
 else
