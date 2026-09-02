@@ -1105,6 +1105,7 @@ shasum -a 256 \\
 输出必须与第 1 节完全一致。随后检查 report：
 
 ```bash
+cd "$HOME/READY-TO-TRANSFER"
 cat "{report_name}"
 ```
 
@@ -1152,6 +1153,7 @@ $HOME/Downloads/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
 先 dry-run，只校验文件名、大小与 SHA-256，不复制也不解析业务内容：
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_stage_internal_corpus.py
 ```
@@ -1160,6 +1162,8 @@ python3.12 scripts/soc_pingan_stage_internal_corpus.py
 然后原子复制到项目规定路径并设置为 `0600`：
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
 ```
 
@@ -1174,6 +1178,7 @@ python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
 pnpm、nginx `1.23+`，以及已配置的平安 PyPI/pnpm 镜像。
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
@@ -1185,7 +1190,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 初始化 SOC SQLite：
 
 ```bash
-export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
@@ -1210,6 +1215,7 @@ PKL 或内网业务数据；它验证旧 HTTP 协议、SQLite migration、幂等
 结果投影、Outbox 与逐次回调审计，但固定标记 `simulated=true`：
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_fake_acceptance.py
 ```
@@ -1219,6 +1225,8 @@ backend/.venv/bin/python backend/scripts/soc_pingan_legacy_fake_acceptance.py
 确认私有配置和 EAGW key 已随包落位，且初始兼容模式仍为 `fake`：
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
 stat -f '%Lp %N' \\
   .env.soc-dev.local config.pingan-dev.local .secrets/eagw-private-key.der
 grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
@@ -1231,6 +1239,7 @@ grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
 ## 7. Start Web / 启动 Web
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 python3.12 scripts/soc_pingan_macos_host_dev.py status
@@ -1243,7 +1252,7 @@ Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机�
 服务启动后执行无业务数据的真实模型 smoke：
 
 ```bash
-export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
@@ -1260,7 +1269,7 @@ backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \\
 “待审阅”的 ZEUS `alert_id`：
 
 ```bash
-export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 backend/.venv/bin/python \\
   backend/scripts/soc_pingan_prepare_legacy_live_request.py \\
@@ -1278,7 +1287,7 @@ backend/.venv/bin/python \\
 `fake` 切换为 `internal`，无需打开 `.env.soc-dev.local`：
 
 ```bash
-export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 backend/.venv/bin/python \\
   backend/scripts/soc_pingan_set_legacy_provider_mode.py \\
@@ -1286,7 +1295,7 @@ backend/.venv/bin/python \\
 ```
 
 ```bash
-export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
@@ -1309,7 +1318,7 @@ status -> ZEUS callback` 真实闭环。脚本不会输出告警正文、App Key
 单条真实验收结束且暂不继续测试时，用下面命令恢复 fake Provider 并重启，避免后续演练误触真实回调：
 
 ```bash
-export TARGET_REPO="${{TARGET_REPO:-$HOME/deer-flow}}"
+export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 backend/.venv/bin/python \\
   backend/scripts/soc_pingan_set_legacy_provider_mode.py \\
@@ -1325,6 +1334,8 @@ Host DEV 默认允许 3 条不同告警并行研判；同一告警的重复点�
 按内网模型容量调整时，在 `.env.soc-dev.local` 设置 `SOC_LLM_MAX_CONCURRENCY`，不得取消并发上限。
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon
 ```
@@ -1346,6 +1357,8 @@ http://localhost:2026/workspace/soc/corpus-validation
 停止：
 
 ```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ```
 

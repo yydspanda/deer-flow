@@ -171,12 +171,35 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     ]
     assert len(local_env_blocks) == 3
     for block in local_env_blocks:
-        assert 'export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"' in block
+        assert 'export TARGET_REPO="$HOME/deer-flow"' in block
         assert 'cd "$TARGET_REPO"' in block
         assert (
             'eval "$(backend/.venv/bin/python '
             'backend/scripts/soc_pingan_local_paths.py --shell)"' in block
         )
+    repository_blocks = [
+        block
+        for block in re.findall(r"```bash\n(.*?)```", runbook, flags=re.DOTALL)
+        if any(
+            marker in block
+            for marker in (
+                "python3.12 scripts/",
+                "backend/.venv/bin/",
+                "source ./.env.soc-dev.local",
+                ".env.soc-dev.local config.pingan-dev.local",
+            )
+        )
+    ]
+    assert repository_blocks
+    for block in repository_blocks:
+        assert 'export TARGET_REPO="$HOME/deer-flow"' in block
+        assert 'cd "$TARGET_REPO"' in block
+    report_block = next(
+        block
+        for block in re.findall(r"```bash\n(.*?)```", runbook, flags=re.DOTALL)
+        if 'cat "transfer-report-' in block
+    )
+    assert 'cd "$HOME/READY-TO-TRANSFER"' in report_block
     assert "proves_real_internal_connectivity=true" in runbook
     assert "task-request.local.json" in runbook
     assert 'shasum -a 256 \\\n  "deer-flow-pingan-source' in runbook
