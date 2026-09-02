@@ -6,16 +6,22 @@ synchronized environment with `uv run --no-sync`. Production Compose probes
 Gateway `/health`, and `deploy.sh` waits for all services before reporting
 success; failures print Compose status and recent Gateway logs.
 
-PingAn internal Apple Silicon development uses
+PingAn internal Apple Silicon DEV/STG uses
 `scripts/soc_pingan_macos_host_dev.py` as a tenant-specific wrapper around the
 same host launcher. `install` may use only the configured PingAn PyPI/NPM
 registries; `start` must retain `--skip-install`, disable Next.js telemetry, and
-use `LocalSandboxProvider`. The DEV wrapper owns the explicit safety profile for
-the Memory/Corpus workbenches: isolated SQLite, `dev` Memory/automation scope,
-reviewed tenant policy enabled, and external action execution disabled. It must validate
-the canonical Memory corpus plus the merged corpus/index/payload store before
-starting. It must not add Docker as a prerequisite, hard-code a developer home
-path, or create a second Gateway/frontend/nginx implementation.
+use `LocalSandboxProvider`. `SOC_PINGAN_ENV` is the single host Runtime selector:
+`dev` enables the Memory/Corpus workbenches and uses `soc_agent_dev.db`; `stg`
+disables those DEV surfaces, rejects `--demo-no-auth`, and uses
+`soc_agent_stg.db`. DEV launches DeerFlow with `--dev`; STG launches it with
+`--prod` so HMR is not part of the staging process. Memory, tenant-policy, and
+automation scopes must be derived from that selector rather than configured
+independently. Reviewed tenant policy
+remains enabled and real external action execution remains disabled in both
+profiles. DEV must validate the canonical Memory corpus plus the merged
+corpus/index/payload store before starting; STG must not depend on those
+demonstration artifacts. The wrapper must not add Docker as a prerequisite,
+hard-code a developer home path, or create a second Gateway/frontend/nginx implementation.
 Before starting any sidecar, `start` must resolve the absolute local SOC SQLite URL,
 run the SOC migration once, and pass that URL to the API/worker with their own
 auto-migration disabled. `status` reports the persisted `soc_alembic_version` without
@@ -27,6 +33,15 @@ After external corpus staging, `check` must also validate all runtime files,
 mode-`0600` local profiles, the project model-gateway references, isolated SQLite
 configuration, and the non-root nginx config. It must reject retired LiteLLM model
 references before dependency installation or migration.
+
+Host Runtime scope does not imply a ZEUS target. The initial private profile keeps
+the Runtime, SQLite, Memory, automation, and Workbench in `dev`, but pins the shared
+asset/TI/security-tag/lifecycle/callback ZEUS target to reviewed PRD configuration.
+The legacy model-profile preparer statically writes that PRD target and explicit
+confirmation into the mode-`0600` ignored env. Transfer validation must reject any
+other ZEUS target; lifecycle and callback still start in `fake` mode. The governed
+runtime switch may change only `SOC_PINGAN_ENV` between `dev` and `stg`; it must
+preserve ZEUS/model credentials, Provider modes, and action authority byte-for-byte.
 
 That wrapper also owns three sidecars through
 `scripts/soc_pingan_host_sidecars.py`: the loopback project model gateway on `4001`, the
@@ -59,6 +74,11 @@ It is read-only and must prove `provider_code=200`, `provider_status=1`, and
 `mocked=false` before a model-backed task is submitted. All ISEC providers must sign
 the exact serialized bytes later passed to HTTPX with `content=`; `json=` must not
 reserialize a signed body.
+For an unknown lifecycle business code, the separate
+`soc_pingan_zeus_lifecycle_response_probe.py` may print and save the complete response
+only after explicit live confirmation. It must reuse the Worker Provider, require the
+private prepared request, store only under an ignored mode-`0600` `*.local.json`, and
+must not weaken the bounded lifecycle smoke or become a normal telemetry path.
 The live command must receive the checkout-resolved absolute SOC database URL and
 must verify the SOC migration/evidence tables before its first network request. A
 failure after durable submission is recovered only with the same private request and

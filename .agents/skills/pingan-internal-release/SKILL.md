@@ -1,6 +1,6 @@
 ---
 name: pingan-internal-release
-description: Prepare, inspect, or apply DeerFlow SOC releases for the offline PingAn Apple Silicon DEV environment. Use when packaging code for internal transfer, choosing between a full handoff and an incremental update, rebuilding the private overlay, or recovering an internal deployment. Do not use for ordinary Git pushes or public deployments.
+description: Prepare, inspect, or apply DeerFlow SOC releases for the offline PingAn Apple Silicon DEV/STG environment. Use when packaging code for internal transfer, choosing between a full handoff and an incremental update, rebuilding the private overlay, switching the governed Runtime profile, or recovering an internal deployment. Do not use for ordinary Git pushes or public deployments.
 ---
 
 # PingAn Internal Release

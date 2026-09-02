@@ -18,11 +18,14 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 LEGACY_MODEL_SOURCE_PATH = Path("validation/original_works/sec_know_model/llm_service/openai_completion.py")
 LEGACY_ROOT_CONFIG_PATH = Path("validation/original_works/sec_know_model/util/root_config.py")
+LEGACY_ZEUS_CREDENTIAL_SOURCE_PATH = Path("validation/original_works/sec_know_model/my_workflows/zeus/flows/disposition_tools/black_white_tag_client.py")
 LEGACY_MODEL_GATEWAY_ENV_PATH = Path(".env.soc-dev.local")
 LEGACY_MODEL_GATEWAY_KEY_PATH = Path(".secrets/eagw-private-key.der")
 LEGACY_MODEL_GATEWAY_ENVIRONMENT = "stg"
 LEGACY_MODEL_CONFIG_NAME = "DeepSeek_V4_Flash"
-LEGACY_MODEL_GATEWAY_PROFILE_SCHEMA_VERSION = "soc.pingan_legacy_model_gateway_profile.v1"
+LEGACY_ZEUS_ENVIRONMENT = "prd"
+LEGACY_ZEUS_PRD_CONFIRMATION = "CALL_PINGAN_ZEUS_PRD"
+LEGACY_MODEL_GATEWAY_PROFILE_SCHEMA_VERSION = "soc.pingan_legacy_model_gateway_profile.v2"
 
 _BLOCK_BEGIN = "# BEGIN SOC PINGAN LEGACY MODEL GATEWAY PROFILE"
 _BLOCK_END = "# END SOC PINGAN LEGACY MODEL GATEWAY PROFILE"
@@ -89,9 +92,18 @@ _MANAGED_KEYS = (
     "SOC_PINGAN_LEGACY_CALLBACK_RETRY_BACKOFF_SECONDS",
     "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE",
     "SOC_PINGAN_ENV",
+    "SOC_PINGAN_ZEUS_ENV",
+    "SOC_PINGAN_ZEUS_BASE_URL",
+    "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
+    "SOC_PINGAN_ZEUS_APP_ID",
+    "SOC_PINGAN_ZEUS_APP_KEY",
+    "SOC_PINGAN_ZEUS_PRD_CONFIRMATION",
+    "D12B_TIMEOUT_SECONDS",
 )
 _REMOVED_KEYS = frozenset(
     {
+        "D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS",
+        "D12B_TIMEOUT_ZEUS_BASE_URL",
         "PINGAN_LITELLM_BASE_URL",
         "PINGAN_LITELLM_API_KEY",
         "PINGAN_LITELLM_MODEL",
@@ -105,7 +117,7 @@ class PingAnLegacyModelGatewayProfileError(ValueError):
 
 @dataclass(frozen=True)
 class PingAnLegacyModelGatewayProfile:
-    """Minimal EAGW and old-ingress values extracted without importing old code."""
+    """EAGW, old-ingress, and ZEUS PRD values extracted without imports."""
 
     environment: str
     model_config_name: str
@@ -118,12 +130,18 @@ class PingAnLegacyModelGatewayProfile:
     openapi_credential: str = field(repr=False)
     rsa_private_key_der: bytes = field(repr=False)
     compat_app_keys: dict[str, str] = field(repr=False)
+    zeus_environment: str
+    zeus_base_url: str
+    zeus_allowed_host: str
+    zeus_app_id: str
+    zeus_app_key: str = field(repr=False)
 
 
 def load_legacy_model_gateway_profile(
     model_source_path: Path,
     *,
     root_config_path: Path,
+    zeus_credential_source_path: Path,
     environment: str = LEGACY_MODEL_GATEWAY_ENVIRONMENT,
     model_config_name: str = LEGACY_MODEL_CONFIG_NAME,
 ) -> PingAnLegacyModelGatewayProfile:
@@ -158,6 +176,10 @@ def load_legacy_model_gateway_profile(
     compat_app_keys = {str(name).strip(): str(value).strip() for name, value in app_keys.items() if isinstance(name, str) and isinstance(value, str) and name.strip() and value.strip()}
     if len(compat_app_keys) != len(app_keys):
         raise PingAnLegacyModelGatewayProfileError("legacy APP_KEY must contain only non-empty string pairs")
+    zeus_profile = _load_legacy_zeus_prd_profile(
+        root_config_path,
+        credential_source_path=zeus_credential_source_path,
+    )
 
     return PingAnLegacyModelGatewayProfile(
         environment=normalized_environment,
@@ -171,6 +193,11 @@ def load_legacy_model_gateway_profile(
         openapi_credential=_required_string(model_config, "openapi_credential"),
         rsa_private_key_der=key_der,
         compat_app_keys=compat_app_keys,
+        zeus_environment=LEGACY_ZEUS_ENVIRONMENT,
+        zeus_base_url=zeus_profile["base_url"],
+        zeus_allowed_host=zeus_profile["allowed_host"],
+        zeus_app_id=zeus_profile["app_id"],
+        zeus_app_key=zeus_profile["app_key"],
     )
 
 
@@ -179,6 +206,7 @@ def prepare_legacy_model_gateway_env(
     repo_root: Path,
     model_source_path: Path | None = None,
     root_config_path: Path | None = None,
+    zeus_credential_source_path: Path | None = None,
     env_path: Path | None = None,
     key_path: Path | None = None,
     environment: str = LEGACY_MODEL_GATEWAY_ENVIRONMENT,
@@ -190,11 +218,13 @@ def prepare_legacy_model_gateway_env(
     root = repo_root.expanduser().resolve()
     model_source = (model_source_path or (root / LEGACY_MODEL_SOURCE_PATH)).expanduser().resolve()
     root_config = (root_config_path or (root / LEGACY_ROOT_CONFIG_PATH)).expanduser().resolve()
+    zeus_credential_source = (zeus_credential_source_path or (root / LEGACY_ZEUS_CREDENTIAL_SOURCE_PATH)).expanduser().resolve()
     target_env = (env_path or (root / LEGACY_MODEL_GATEWAY_ENV_PATH)).expanduser().resolve()
     target_key = (key_path or (root / LEGACY_MODEL_GATEWAY_KEY_PATH)).expanduser().resolve()
     profile = load_legacy_model_gateway_profile(
         model_source,
         root_config_path=root_config,
+        zeus_credential_source_path=zeus_credential_source,
         environment=environment,
         model_config_name=model_config_name,
     )
@@ -203,10 +233,14 @@ def prepare_legacy_model_gateway_env(
     local_api_key = current_values.get("PINGAN_MODEL_GATEWAY_API_KEY", "").strip() or current_values.get("PINGAN_LITELLM_API_KEY", "").strip()
     if not local_api_key or _looks_like_placeholder(local_api_key):
         raise PingAnLegacyModelGatewayProfileError("existing private env must provide PINGAN_MODEL_GATEWAY_API_KEY or legacy PINGAN_LITELLM_API_KEY")
+    runtime_environment = current_values.get("SOC_PINGAN_ENV", "dev").strip().lower()
+    if runtime_environment not in {"dev", "stg"}:
+        raise PingAnLegacyModelGatewayProfileError("existing SOC_PINGAN_ENV must select dev or stg")
     values = _profile_env_values(
         profile,
         local_api_key=local_api_key,
         key_path=_portable_key_path(target_key, root),
+        runtime_environment=runtime_environment,
     )
     rendered, removed_keys = _rewrite_env(current, values)
     env_changed = rendered != current
@@ -228,6 +262,8 @@ def prepare_legacy_model_gateway_env(
         "model_source_sha256": _sha256(model_source),
         "root_config_path": _display_path(root_config, root),
         "root_config_sha256": _sha256(root_config),
+        "zeus_credential_source_path": _display_path(zeus_credential_source, root),
+        "zeus_credential_source_sha256": _sha256(zeus_credential_source),
         "env_path": _display_path(target_env, root),
         "key_path": _display_path(target_key, root),
         "key_sha256": hashlib.sha256(profile.rsa_private_key_der).hexdigest(),
@@ -237,6 +273,11 @@ def prepare_legacy_model_gateway_env(
         "allowed_host": profile.allowed_host,
         "scene_id": profile.scene_id,
         "openapi_code": profile.openapi_code,
+        "zeus_environment": profile.zeus_environment,
+        "zeus_base_url": profile.zeus_base_url,
+        "zeus_allowed_host": profile.zeus_allowed_host,
+        "zeus_app_id": profile.zeus_app_id,
+        "zeus_credential_present": bool(profile.zeus_app_key),
         "credential_present": bool(profile.app_key and profile.app_secret and profile.openapi_credential and local_api_key),
         "compatibility_key_present": bool(profile.compat_app_keys),
         "updated_keys": list(_MANAGED_KEYS),
@@ -274,6 +315,103 @@ def _safe_assignments(source_path: Path) -> dict[str, Any]:
         except PingAnLegacyModelGatewayProfileError:
             continue
     return assignments
+
+
+def _load_legacy_zeus_prd_profile(
+    root_config_path: Path,
+    *,
+    credential_source_path: Path,
+) -> dict[str, str]:
+    root_tree = _parse_source(root_config_path)
+    credential_tree = _parse_source(credential_source_path)
+
+    system_urls = _assigned_string_values(root_tree, "ZEUS_SYSTEM_URL")
+    production_urls = {value.rstrip("/") for value in system_urls if _looks_like_production_zeus_url(value)}
+    if len(production_urls) != 1:
+        raise PingAnLegacyModelGatewayProfileError("legacy root config must contain exactly one reviewed ZEUS PRD URL")
+    base_url = production_urls.pop()
+    parsed = urlsplit(base_url)
+
+    app_ids = _assigned_string_values(root_tree, "ZEUS_APP_ID")
+    if len(app_ids) != 1:
+        raise PingAnLegacyModelGatewayProfileError("legacy root config must contain one stable ZEUS app ID")
+
+    main_body = _main_guard_body(credential_tree)
+    credential_urls = _assigned_string_values(main_body, "ZEUS_SYSTEM_URL")
+    if credential_urls != {base_url}:
+        raise PingAnLegacyModelGatewayProfileError("reviewed ZEUS credential source does not match the PRD URL")
+    credential_app_ids = _assigned_string_values(main_body, "ZEUS_APP_ID")
+    if credential_app_ids != app_ids:
+        raise PingAnLegacyModelGatewayProfileError("reviewed ZEUS credential source does not match the app ID")
+    app_keys = _assigned_string_values(main_body, "ZEUS_APP_KEY")
+    if len(app_keys) != 1:
+        raise PingAnLegacyModelGatewayProfileError("reviewed ZEUS credential source must contain one PRD app key")
+
+    return {
+        "base_url": base_url,
+        "allowed_host": parsed.hostname.lower(),
+        "app_id": next(iter(app_ids)),
+        "app_key": next(iter(app_keys)),
+    }
+
+
+def _parse_source(source_path: Path) -> ast.Module:
+    try:
+        return ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+    except SyntaxError as exc:
+        raise PingAnLegacyModelGatewayProfileError(f"legacy source is not valid Python: {source_path.name}") from exc
+
+
+def _assigned_string_values(
+    tree_or_nodes: ast.AST | list[ast.stmt],
+    name: str,
+) -> set[str]:
+    roots: list[ast.AST]
+    if isinstance(tree_or_nodes, list):
+        roots = list(tree_or_nodes)
+    else:
+        roots = [tree_or_nodes]
+    values: set[str] = set()
+    for root in roots:
+        for node in ast.walk(root):
+            value: ast.expr | None = None
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            if value is not None and isinstance(value, ast.Constant) and isinstance(value.value, str) and any(isinstance(target, ast.Name) and target.id == name for target in targets) and value.value.strip():
+                values.add(value.value.strip().rstrip("/") if name == "ZEUS_SYSTEM_URL" else value.value.strip())
+    return values
+
+
+def _main_guard_body(tree: ast.Module) -> list[ast.stmt]:
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == "__name__"
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == "__main__"
+        ):
+            return node.body
+    raise PingAnLegacyModelGatewayProfileError("reviewed ZEUS credential source omitted its __main__ profile")
+
+
+def _looks_like_production_zeus_url(value: str) -> bool:
+    parsed = urlsplit(value.strip())
+    return parsed.scheme == "https" and bool(parsed.hostname) and "stg" not in parsed.hostname.lower() and parsed.username is None and parsed.password is None and not parsed.query and not parsed.fragment
 
 
 def _safe_eval(node: ast.expr, assignments: dict[str, Any]) -> Any:
@@ -324,6 +462,7 @@ def _profile_env_values(
     *,
     local_api_key: str,
     key_path: str,
+    runtime_environment: str = "dev",
 ) -> dict[str, str]:
     return {
         "PINGAN_MODEL_GATEWAY_BASE_URL": "http://127.0.0.1:4001/v1",
@@ -391,7 +530,14 @@ def _profile_env_values(
         "SOC_PINGAN_LEGACY_CALLBACK_MAX_ATTEMPTS": "8",
         "SOC_PINGAN_LEGACY_CALLBACK_RETRY_BACKOFF_SECONDS": "5",
         "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
-        "SOC_PINGAN_ENV": "dev",
+        "SOC_PINGAN_ENV": runtime_environment,
+        "SOC_PINGAN_ZEUS_ENV": profile.zeus_environment,
+        "SOC_PINGAN_ZEUS_BASE_URL": profile.zeus_base_url,
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": profile.zeus_allowed_host,
+        "SOC_PINGAN_ZEUS_APP_ID": profile.zeus_app_id,
+        "SOC_PINGAN_ZEUS_APP_KEY": profile.zeus_app_key,
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": LEGACY_ZEUS_PRD_CONFIRMATION,
+        "D12B_TIMEOUT_SECONDS": "0.001",
     }
 
 
@@ -443,7 +589,7 @@ def _rewrite_env(
     retained.extend(
         [
             _BLOCK_BEGIN,
-            "# Statically prepared from reviewed legacy STG EAGW and ZEUS profiles.",
+            "# Statically prepared from reviewed legacy STG EAGW and PRD ZEUS profiles.",
             "# The project owns ports 4001/8090; lifecycle/callback stay fake until live acceptance.",
             *(_render_assignment(name, values[name]) for name in _MANAGED_KEYS),
             _BLOCK_END,
@@ -510,6 +656,9 @@ __all__ = [
     "LEGACY_MODEL_GATEWAY_PROFILE_SCHEMA_VERSION",
     "LEGACY_MODEL_SOURCE_PATH",
     "LEGACY_ROOT_CONFIG_PATH",
+    "LEGACY_ZEUS_CREDENTIAL_SOURCE_PATH",
+    "LEGACY_ZEUS_ENVIRONMENT",
+    "LEGACY_ZEUS_PRD_CONFIRMATION",
     "PingAnLegacyModelGatewayProfile",
     "PingAnLegacyModelGatewayProfileError",
     "load_legacy_model_gateway_profile",

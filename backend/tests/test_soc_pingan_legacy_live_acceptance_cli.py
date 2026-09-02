@@ -35,6 +35,23 @@ def test_live_acceptance_cli_prefers_resolved_host_dev_database_path(
     assert database_url == f"sqlite+pysqlite:///{database_path}"
 
 
+def test_live_acceptance_cli_prefers_environment_neutral_soc_sqlite_path(
+    tmp_path: Path,
+) -> None:
+    module = _load_script_module()
+    database_path = tmp_path / "soc_agent_stg.db"
+
+    database_url = module.resolve_acceptance_database_url(
+        None,
+        environ={
+            "SOC_SQLITE_PATH": str(database_path),
+            "SOC_DEV_SQLITE_PATH": str(tmp_path / "wrong-dev.db"),
+        },
+    )
+
+    assert database_url == f"sqlite+pysqlite:///{database_path}"
+
+
 def test_live_acceptance_cli_database_preflight_requires_soc_migration(
     tmp_path: Path,
 ) -> None:

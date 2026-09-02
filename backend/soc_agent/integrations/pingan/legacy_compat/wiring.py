@@ -20,13 +20,15 @@ from soc_agent.integrations.pingan.legacy_compat.callback import (
 )
 from soc_agent.integrations.pingan.legacy_compat.zeus_lifecycle import (
     HttpPingAnZeusAlertLifecyclePort,
+    PingAnAlertLifecyclePort,
     PingAnAlertLifecycleService,
     StaticPingAnZeusAlertLifecyclePort,
 )
+from soc_agent.integrations.pingan.zeus_target import load_pingan_zeus_target
 
 
 class PingAnLegacyProviderMode(StrEnum):
-    """Whether a provider uses deterministic fake data or PingAn DEV/STG."""
+    """Whether a provider uses deterministic fake data or the configured ZEUS target."""
 
     FAKE = "fake"
     INTERNAL = "internal"
@@ -183,6 +185,23 @@ def build_pingan_lifecycle_service(
     environ: Mapping[str, str] | None = None,
     client: httpx.Client | None = None,
 ) -> PingAnAlertLifecycleService:
+    return PingAnAlertLifecycleService(
+        port=build_pingan_lifecycle_port(
+            settings,
+            environ=environ,
+            client=client,
+        )
+    )
+
+
+def build_pingan_lifecycle_port(
+    settings: PingAnLegacyWorkerSettings,
+    *,
+    environ: Mapping[str, str] | None = None,
+    client: httpx.Client | None = None,
+) -> PingAnAlertLifecyclePort:
+    """Build the exact lifecycle transport used by the compatibility worker."""
+
     values = os.environ if environ is None else environ
     if settings.lifecycle_mode is PingAnLegacyProviderMode.FAKE:
         raw = values.get(
@@ -195,29 +214,28 @@ def build_pingan_lifecycle_service(
             raise ValueError("SOC_PINGAN_LEGACY_FAKE_LIFECYCLE_RESPONSES_JSON must be valid JSON") from exc
         if not isinstance(responses, Mapping):
             raise ValueError("SOC_PINGAN_LEGACY_FAKE_LIFECYCLE_RESPONSES_JSON must be an object")
-        return PingAnAlertLifecycleService(port=StaticPingAnZeusAlertLifecyclePort(responses))
-    return PingAnAlertLifecycleService(
-        port=HttpPingAnZeusAlertLifecyclePort(
-            base_url=_required(values, "SOC_PINGAN_ZEUS_BASE_URL"),
-            app_id=_required(values, "SOC_PINGAN_ZEUS_APP_ID"),
-            app_key=_required(values, "SOC_PINGAN_ZEUS_APP_KEY"),
-            allowed_hosts=_csv(_required(values, "SOC_PINGAN_ZEUS_ALLOWED_HOSTS")),
-            endpoint_path=values.get(
-                "SOC_PINGAN_ZEUS_ALERT_BRIEF_PATH",
-                "/public/getAlertBrief",
-            ),
-            timeout_seconds=_parse_float(
-                values.get("SOC_PINGAN_ZEUS_TIMEOUT_SECONDS", "10"),
-                name="SOC_PINGAN_ZEUS_TIMEOUT_SECONDS",
-                minimum=0.001,
-            ),
-            max_response_bytes=_parse_int(
-                values.get("SOC_PINGAN_ZEUS_MAX_RESPONSE_BYTES", "2000000"),
-                name="SOC_PINGAN_ZEUS_MAX_RESPONSE_BYTES",
-                minimum=1,
-            ),
-            client=client,
-        )
+        return StaticPingAnZeusAlertLifecyclePort(responses)
+    zeus = load_pingan_zeus_target(values)
+    return HttpPingAnZeusAlertLifecyclePort(
+        base_url=zeus.base_url,
+        app_id=zeus.app_id,
+        app_key=zeus.app_key,
+        allowed_hosts=zeus.allowed_hosts,
+        endpoint_path=values.get(
+            "SOC_PINGAN_ZEUS_ALERT_BRIEF_PATH",
+            "/public/getAlertBrief",
+        ),
+        timeout_seconds=_parse_float(
+            values.get("SOC_PINGAN_ZEUS_TIMEOUT_SECONDS", "10"),
+            name="SOC_PINGAN_ZEUS_TIMEOUT_SECONDS",
+            minimum=0.001,
+        ),
+        max_response_bytes=_parse_int(
+            values.get("SOC_PINGAN_ZEUS_MAX_RESPONSE_BYTES", "2000000"),
+            name="SOC_PINGAN_ZEUS_MAX_RESPONSE_BYTES",
+            minimum=1,
+        ),
+        client=client,
     )
 
 
@@ -230,11 +248,12 @@ def build_pingan_callback_port(
     values = os.environ if environ is None else environ
     if settings.callback_mode is PingAnLegacyProviderMode.FAKE:
         return StaticPingAnZeusAlertCallbackPort([{"code": 200}])
+    zeus = load_pingan_zeus_target(values)
     return HttpPingAnZeusAlertCallbackPort(
-        base_url=_required(values, "SOC_PINGAN_ZEUS_BASE_URL"),
-        app_id=_required(values, "SOC_PINGAN_ZEUS_APP_ID"),
-        app_key=_required(values, "SOC_PINGAN_ZEUS_APP_KEY"),
-        allowed_hosts=_csv(_required(values, "SOC_PINGAN_ZEUS_ALLOWED_HOSTS")),
+        base_url=zeus.base_url,
+        app_id=zeus.app_id,
+        app_key=zeus.app_key,
+        allowed_hosts=zeus.allowed_hosts,
         endpoint_path=values.get(
             "SOC_PINGAN_ZEUS_ALERT_CALLBACK_PATH",
             "/public/alertModelCallback",
@@ -279,10 +298,6 @@ def _required(values: Mapping[str, str], name: str) -> str:
     return value
 
 
-def _csv(value: str) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
-
-
 def _parse_bool(value: str, *, name: str) -> bool:
     normalized = value.strip().lower()
     if normalized in {"1", "true", "yes", "on"}:
@@ -323,5 +338,6 @@ __all__ = [
     "PingAnLegacyProviderMode",
     "PingAnLegacyWorkerSettings",
     "build_pingan_callback_port",
+    "build_pingan_lifecycle_port",
     "build_pingan_lifecycle_service",
 ]

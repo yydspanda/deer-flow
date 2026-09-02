@@ -50,8 +50,10 @@ mapping. It is not PA-12 or PI-01 real-provider evidence.
 
 ## D12-B: internal real smoke
 
-Use the tracked `extensions.internal.example.json` directly. Export the ZEUS
-and Agent Platform URLs, exact host allowlists, app credentials, workflow
+Use the tracked `extensions.internal.example.json` directly. Host DEV keeps its
+local runtime scope as `dev`, while the current shared ZEUS target is explicitly
+`prd` and requires `SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD`.
+Export the ZEUS and Agent Platform URLs, exact host allowlists, app credentials, workflow
 operator, Python path and server path in the internal shell. Do not write a
 secret into a tracked file. The implementation is self-contained and does not
 need `SOC_PINGAN_PROVIDER_IMPORT_PATHS` or an importable legacy Agent Platform
@@ -75,9 +77,8 @@ The defaults retained from the reviewed legacy implementation are:
   `SOC_PINGAN_ASSET_OWNERSHIP_OVERRIDES_JSON` rather than generic Runtime code
 
 Before retaining these values, verify them with the internal service owner.
-DEV/STG and PRD are separate explicit profiles. PRD additionally requires
-`SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD`; changing only a URL is
-insufficient.
+Agent Platform is also pinned to its reviewed PRD profile and requires
+`SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD`; changing only a URL is insufficient.
 Then rerun the same `soc mcp smoke` command using the internal extensions
 config, changing `DEER_FLOW_EXTENSIONS_CONFIG_PATH` to
 `extensions.internal.example.json` and the report

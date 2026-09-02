@@ -2,12 +2,12 @@
 
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-09-01
-> Status: `Real Integration Debt / parked`; this is no longer the current product-development pointer
+> Status: `Active internal acceptance / ZEUS PRD evidence pending`
 > Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
-真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。Tracked sample 已准备完毕；当前 ignored `.env.soc-dev.local` 可由 legacy-profile preparer 原位迁移：它删除旧 import/operator 字段，从已审阅源码导入 `YHSYS` PRD profile，并保留其他本地值。剩余 ZEUS/model/fault-case 配置仍须核对。首轮采用直接访问，不预配代理、自定义 CA 或客户端证书。
+真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。Tracked sample 已准备完毕；当前 ignored `.env.soc-dev.local` 可由 legacy-profile preparer 原位迁移：它删除旧 import/operator 字段，从已审阅源码导入 STG EAGW 模型路由、共享 ZEUS PRD target/credential 和 `YHSYS` PRD profile，并保留其他本地值。剩余 fault-case 配置仍须核对。首轮采用直接访问，不预配代理、自定义 CA 或客户端证书。
 
 ## 1. Baseline / 已完成与已删除边界
 
@@ -17,8 +17,8 @@
 - `D12-A`：PingAn `asset.locate` 生产形态代码、fake transport、stdio MCP、fallback 编排和 fail-closed；结果仍为 `mocked=true`。
 - `D12-B 外网准备`：内网模型 profile、项目自有模型网关与固定无业务数据 chat smoke、无旧依赖 ZEUS signer、自包含 Agent Platform HTTP client、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 EAGW pass 或 Provider `mocked=false` 证据。
 - `PI-01H 外网实现`：旧 task/status 协议、持久 Processing Job、租约 Worker、统一 Runtime、legacy result projection、Callback Outbox/attempt audit、项目模型网关、Host DEV sidecar 与 Fake E2E 已实现；不再依赖旧 `sec_know_model`、LiteLLM、Celery、Redis 或 LlamaIndex workflow。真实 ZEUS/EAGW/callback 与负载证据仍待内网关闭。
-- `PI-01A 外网实现`：`/public/indicatorSearch` typed Provider、stdio MCP、action/evidence 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
-- `PI-01B1 外网实现`：`/public/searchTagContent` typed Provider、stdio MCP、validity/scope mapping 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
+- `PI-01A 外网实现`：`/public/indicatorSearch` typed Provider、stdio MCP、action/evidence 和 fake/persistence 回归已完成；尚未产生从 Host DEV 调用 ZEUS PRD 的 `mocked=false` 证据。
+- `PI-01B1 外网实现`：`/public/searchTagContent` typed Provider、stdio MCP、validity/scope mapping 和 fake/persistence 回归已完成；尚未产生从 Host DEV 调用 ZEUS PRD 的 `mocked=false` 证据。
 - `PI-01D1/D2/D3`：versioned `SocEnrichmentPolicy/Plan`、deterministic Planner、strict default-off composition、durable execution/attempt/evidence、逐次 mock/real 校验、bounded retry/recovery/replay 与 Kafka/internal-batch opt-in 已实现；默认仍只跑固定 Runtime。
 - `PingAn EDR 路径目录`：旧 XLSX 已编译为版本化、精确匹配、只读的本地 SQLite 目录；可经 MCP/action 写入调查证据，但不是 allowlist，不能改变 verdict。
 - `PI-04-A`：`soc.operations_snapshot.v1`、CLI/API 和精确持久化计数。
@@ -71,7 +71,7 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 - 重部署必须先解压到 staging，再从旧 `$HOME/deer-flow` 执行 Host DEV `stop`；只有
   `3000/8001/2026/4001/8090` 均无监听时才删除旧 checkout。不得先删除或移动运行中的目录，避免旧
   Gateway/Nginx/模型网关/兼容 API 持有 deleted/Trash cwd 并继续占端口。
-- 重部署不得删除或重新创建已有 `deerflow.db` / `soc_agent_dev.db`。若首次 migration 从未完成且
+- 重部署不得删除或重新创建已有 `deerflow.db` / `soc_agent_dev.db` / `soc_agent_stg.db`。若首次 migration 从未完成且
   确认没有账号、研判、Memory、审核或任务数据，只能把残库和 SQLite sidecar 先移动到带时间戳的
   隔离目录再重试。SOC 库迁移版本固定查询 `soc_alembic_version`，不是 DeerFlow 的
   `alembic_version`。
@@ -196,9 +196,12 @@ stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
   validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
 ```
 
-原生 Host DEV 启动器会显式启用隔离 SQLite 下的 Memory/Corpus DEV Workbench，固定
-`SOC_MEMORY_ENVIRONMENT=dev`、`SOC_AUTOMATION_ENVIRONMENT=dev`，启用已评审的 DEV 租户策略并关闭真实外部动作执行；
-因此内网无需再手工追加这些环境变量，也不会出现 Workbench disabled/environment mismatch。
+原生 Host 启动器以 `SOC_PINGAN_ENV` 为唯一作用域：DEV 使用 `soc_agent_dev.db` 并启用 Memory/Corpus
+Workbench；STG 使用 `soc_agent_stg.db`，关闭 DEV Workbench 和免登录模式。Memory、Tenant Policy、
+Automation 始终与该值一致，两种环境都启用已评审租户策略并关闭真实外部动作。使用
+`backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg` 原子切换；它不改 ZEUS/
+模型凭证、Provider mode 或动作权限。DEV 使用 DeerFlow `--dev` 热更新服务；STG 使用原生 `--prod`
+优化服务并关闭 HMR，首次启动会从当前源码构建前端。
 
 原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源。canonical `backend/uv.lock` 记录的是公网
 PyPI source identity，不能因为镜像 URL 不同就在内网接受重锁。驱动使用 `uv export --frozen` 从原锁生成
@@ -225,7 +228,7 @@ PI-01D1-D4 + PI-01E external simulation（Done）
 当前产品完成轨已经完成 PI-03A/B/C、PI-04A/B/C 与 PI-05A/B，并在 Simulation Completion Gate 收口；这些任务不在
 本内网交接单内，也不等待本节债务完成。PI-05C 只在真实部署输入到位后恢复，不在外网实现假控制器。
 
-D12-B 真实 asset.locate（Parked，可独立恢复）
+D12-B 真实 asset.locate（In Progress，从 Host DEV 验收 ZEUS PRD）
   -> 仍需原 direct/MCP/persistence/Web/TUI gate，不由 PI-01A 替代
 
 PI-01A 真实 threat_intel.ip_reputation.lookup（Code-complete / internal evidence pending）
@@ -240,10 +243,11 @@ PI-01B2 / PI-01C（Data-gated）
 
 项目不新增 `D13` 编号。D12-B 与 PI-01A/B1 的内网证据门槛没有被 D4 通用代码关闭，必须在 PI-01E/Pilot readiness 前恢复并关闭。
 
-当前内网 DEV 只使用：
+当前内网 DEV 使用、后续 STG 切换使用：
 
 ```text
 backend/.deer-flow/data/soc_agent_dev.db
+backend/.deer-flow/data/soc_agent_stg.db
 ```
 
 本轮不收集或配置 Kafka、K8s、PostgreSQL；这些能力保留在 PI-02，不能阻塞 D12-B。
@@ -260,7 +264,7 @@ backend/.deer-flow/data/soc_agent_dev.db
 2. 启动 Host DEV 后运行 `soc_pingan_model_gateway_smoke.py --confirm-live`；基础连通性与当前 Runtime
    默认一致，使用 `thinking=false` 和 128 Token 有界输出预算，必须取得真实 completion；`/health`
    或 `/models` 不能替代。Thinking 能力另行显式验收，不阻塞该基础门禁。
-3. 选一条 ZEUS 中仍为“待审阅”的已批准 DEV 告警，只向请求准备器输入 `alert_id`；脚本从
+3. 选一条 ZEUS PRD 中仍为“待审阅”的已批准告警，只向请求准备器输入 `alert_id`；脚本从
    Workbench payload store 提取完整 `alert_data`、生成新的 `session_id`，并写入 `0600` 的
    `.local.json`。
 4. 用 Provider-mode 命令把 lifecycle/callback 同时改为 `internal`；不存在运行时 fake fallback，
@@ -312,6 +316,25 @@ backend/.venv/bin/python backend/scripts/soc_pingan_zeus_lifecycle_smoke.py \
 `mocked=false` 才继续。`provider_code=40100` 是签名/鉴权失败，必须先修复交付代码或 private overlay；
 不要用完整任务反复消耗模型资源。
 
+若 Smoke 返回未知业务码，使用同一私有请求执行一次完整响应诊断：
+
+```bash
+export TARGET_REPO="${TARGET_REPO:-$HOME/deer-flow}"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_zeus_lifecycle_response_probe.py \
+  --confirm-live \
+  --overwrite \
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+```
+
+该探针复用 Worker 的真实 lifecycle Provider，只查询一次，不创建 Job、不调用模型、不回调。终端和
+`backend/.deer-flow/soc-internal-validation/legacy-compat/lifecycle-response.local.json` 会保留完整
+Provider JSON；文件权限为 `0600`，不得离开内网或替代 bounded smoke 的 `pending` 门禁。
+
 只读检查通过后重启并执行本机组合验收：
 
 ```bash
@@ -324,7 +347,7 @@ source ./.env.soc-dev.local
 
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \
   --confirm-live \
-  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH" \
+  --database-url "$SOC_DATABASE_URL" \
   --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \
   --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
 ```
@@ -433,14 +456,14 @@ SOC Runtime asset candidate
 - [x] 已审阅 `root_config` 和 LOCAL/DEV 环境选择；本地模型 gateway 为 OpenAI-compatible loopback endpoint。
 - [x] 项目模型网关、chat smoke 与不含正文/凭证的 `soc.pingan_model_gateway_smoke.v1` 报告已实现。
 - [ ] Host DEV 启动项目网关后取得 `model-gateway-smoke.json -> outcome=passed`、`thinking_requested=false`、`max_tokens_requested=128`；本地 `/health` 不能替代真实 EAGW completion 验收。
-- [x] preflight 强制 `SOC_PINGAN_ENV=dev`，并要求 ZEUS 与 Agent Platform 都使用显式 HTTPS host allowlist；不读取旧 `env_profile`。
+- [x] preflight 接受显式 `SOC_PINGAN_ENV=dev|stg`，同时要求共享 ZEUS target 为显式确认的 `prd`；ZEUS 与 Agent Platform 都使用 HTTPS host allowlist，不读取旧 `env_profile`。Runtime 切换不改变 Provider target。
 - [x] ZEUS signer 已在本项目内实现，不需要 import 整个旧 `util.util_tools`。
 - [x] Agent Platform wire contract 已提取为本项目自包含 HTTP client，不需要旧 Python 包、`PYTHONPATH`、Redis token manager 或 `run_workflow` import。
-- [x] 通过 legacy-profile preparer 从旧源码静态导入 PRD base URL、allowlist、`YHSYS` app secret；不 import/执行旧项目，也不在输出中暴露 secret。
+- [x] 通过 legacy-profile preparer 从旧源码静态导入共享 ZEUS PRD target/credential，以及 Agent Platform PRD base URL、allowlist、`YHSYS` app secret；不 import/执行旧项目，也不在输出中暴露 secret。
 - [x] `message.by` 按旧源码固定为 `WANGWENBIN520`，不再要求操作人环境变量。
 - [x] PRD 只有在 environment/URL/allowlist/secret 全部显式切换且设置 `SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD` 时才允许构造 client。
 - [x] 已对 Git-ignored `.env.soc-dev.local` 执行 profile preparer，旧 import/operator 字段已删除，权限与无网络 preflight 已通过。
-- [ ] 补齐 `D12B_INVALID_ZEUS_APP_KEY`、`D12B_TIMEOUT_ZEUS_BASE_URL`、`D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS` 三个 approved 负例测试值；它们不能从旧源码推导。
+- [ ] 补齐 `D12B_INVALID_ZEUS_APP_KEY` 和 `D12B_TIMEOUT_SECONDS` 两个 approved 负例测试值；case 不允许覆盖 ZEUS URL/allowlist，避免负例测试绕开统一 PRD target。
 - [x] 首轮不配置代理、自定义 CA 或客户端证书；只有 smoke 的实际连接/TLS 错误才能触发该配置。
 - [ ] 确认来源 IP 白名单和 `companyCode: all` 要求。
 - [ ] 准备已知命中、确定查无、UM fallback、ambiguous、鉴权失败和 timeout 测试值。
@@ -487,7 +510,7 @@ cp backend/samples/pingan_dev/d12b-test-cases.example.yaml \
 chmod 600 backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml
 stat -f '%Lp %N' config.pingan-dev.local .env.soc-dev.local \
   backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml
-# Resolve this checkout instead of hardcoding one developer path, then fill/verify real DEV values:
+# Resolve this checkout instead of hardcoding one developer path, then verify the DEV-runtime/ZEUS-PRD profile:
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 export D12B_REPORT_DIR="$SOC_REPO_ROOT/backend/.deer-flow/soc-internal-validation/d12b/reports"
@@ -512,7 +535,7 @@ backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
   --report-path "$D12B_REPORT_DIR/direct-success.json"
 ```
 
-先只检查七类 coverage，不发网络请求；确认 private matrix 中所有 placeholder 已替换后，再显式执行真实 DEV matrix：
+先只检查七类 coverage，不发网络请求；确认 private matrix 中所有 placeholder 已替换后，再显式执行从 DEV Host 到 ZEUS PRD 的 matrix：
 
 ```bash
 backend/.venv/bin/python backend/scripts/soc_pingan_d12b_matrix.py \
@@ -525,7 +548,7 @@ backend/.venv/bin/python backend/scripts/soc_pingan_d12b_matrix.py \
   --report-path "$D12B_REPORT_DIR/direct-provider-cases.json"
 ```
 
-`--confirm-live` 会发真实内网 DEV 请求。它会拒绝非 `.local` 文件名、group/world-readable 权限、未替换 placeholder、缺失 fault-injection 环境变量或缺失 report path；不能为通过验收而跳过这些门禁。
+`--confirm-live` 会从内网 DEV Host 发真实 ZEUS PRD 请求。它会拒绝非 `.local` 文件名、group/world-readable 权限、未替换 placeholder、缺失 fault-injection 环境变量或缺失 report path；不能为通过验收而跳过这些门禁。
 
 Preflight 不发网络请求。外网只会因为真实内网 URL/credential 仍是占位值而失败；不存在“缺少旧
 `run_workflow` 包”的前置条件。内网必须先让 preflight 完整通过，不能跳过后强行请求。
@@ -636,11 +659,11 @@ AnalysisRun/ReviewQueue 序列化哈希前后一致。报告不保存 raw query�
 
 ## 4. PI-01 - Remaining Real Read-only Providers / 其他真实只读能力
 
-D12-B 已按产品决定暂存，PI-01A/B1 已完成外网可实现代码，PI-01D1-D4 的 planner、composition、durable workflow 与 read-only reporting 也已完成；当前主线进入需要真实内网参数和批准数据的 PI-01E shadow end-to-end。每个真实 Provider 仍复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。D12-B 与 PI-01A/B1 仍须在 PI-01E/Pilot readiness 前恢复并通过各自真实门槛。
+D12-B 已恢复内网验收，PI-01A/B1 已完成外网可实现代码，PI-01D1-D4 的 planner、composition、durable workflow 与 read-only reporting 也已完成。当前先从 Host DEV 关闭 ZEUS PRD lifecycle/asset/TI/tag/callback 真实门禁，再进入 PI-01E shadow end-to-end。每个真实 Provider 仍复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。
 
 | Order | Generic route / boundary | PingAn source | Current state | Completion evidence |
 |---|---|---|---|---|
-| `PI-01A` | `threat_intel.ip_reputation.lookup` | `POST /public/indicatorSearch` | production-shaped Provider/MCP + fake/persistence regression complete; internal evidence pending | real DEV hit/not-found/error smoke + persisted evidence |
+| `PI-01A` | `threat_intel.ip_reputation.lookup` | `POST /public/indicatorSearch` | production-shaped Provider/MCP + fake/persistence regression complete; internal evidence pending | DEV Host -> ZEUS PRD hit/not-found/error smoke + persisted evidence |
 | `PI-01B1` | `security_tag.lookup` | `POST /public/searchTagContent` | production-shaped Provider/MCP + fake/persistence regression complete; internal evidence pending | exact/expired/inactive/unknown/out-of-scope/conflict/not-found/error smoke + persisted evidence |
 | `PI-01B2` | authorized-activity fact source | change/scanner/maintenance/exercise roster | lifecycle/matcher real, source facts are fixture | real source version/scope/freshness sync or explicit data-gated status with disposition automation disabled |
 | `PI-01C` | external disposition canonical ingress | Zeus status/reason feed | canonical service real; source contract data-gated | authenticated real source adapter + idempotency/order/replay evidence |
@@ -649,7 +672,7 @@ D12-B 已按产品决定暂存，PI-01A/B1 已完成外网可实现代码，PI-0
 
 ### 4.1 PI-01A Threat intelligence / 威胁情报
 
-- [x] 复用 ZEUS DEV base URL、App ID/App Key 和 portable `isec_sign`，没有复制认证逻辑到 generic Runtime。
+- [x] 复用共享 ZEUS PRD base URL、App ID/App Key 和 portable `isec_sign`，没有复制认证逻辑到 generic Runtime。
 - [ ] 核对 `ipAnalyseReport`、`ipReputationReport`、时间、来源和过期语义。
 - [x] 实现 PingAn typed provider/MCP adapter，generic Runtime 只认识 `threat_intel.ip_reputation.lookup`。
 - [x] 不迁移旧代码里的硬编码风险评分、地理规则或封禁规则；Provider 返回事实，不直接给 verdict。
@@ -670,7 +693,7 @@ export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$PWD/samples/pingan_dev/extensions.exam
   --pretty
 ```
 
-分别使用 approved hit 和 definite miss；鉴权失败与 timeout 必须使用获批的 DEV negative profile，不能指向生产。`status=success + reputation_found=false` 才是正常查无，MCP/action `status=failed` 是 Provider 失败，两者不得合并。
+分别使用 approved hit 和 definite miss。当前所有 ZEUS 调用固定指向 PRD；鉴权失败与 timeout 不得通过改指 STG 或伪造 PRD host 实施，应使用受控 transport/fault injection 或由接口 owner 批准的方法。`status=success + reputation_found=false` 才是正常查无，MCP/action `status=failed` 是 Provider 失败，两者不得合并。
 
 ### 4.2 PI-01B Security tags and authorized facts / 安全标签与授权事实
 
@@ -698,7 +721,7 @@ export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$PWD/samples/pingan_dev/extensions.exam
   --pretty
 ```
 
-分别使用 approved exact-hit、expired、inactive/no-expiry、definite miss 和 provider-mismatch 值；鉴权失败与 timeout 只能使用获批 DEV negative profile。`status=success + lookup_status=not_found` 才是正常查无；`out_of_scope/unusable/conflicted/unknown` 是可审计的 fail-closed 结果，MCP/action `status=failed` 才是 Provider 调用失败。Provider 兼容旧客户端未校验顶层 `code` 的响应，但当 `code` 存在时只接受 `200`，并且只有明确的 `data: []` 才能表示查无；`data: null`、缺少 `data` 或非成功 `code` 都必须失败。内网 smoke 仍需保存脱敏响应，确认该业务码契约。缺失 `expireTime` 默认不能算 active；只有 ZEUS owner 明确确认其永久有效语义后，才能在 Git-ignored 本地配置启用 `SOC_PINGAN_SECURITY_TAG_ALLOW_OPEN_ENDED_VALIDITY=true`。
+分别使用 approved exact-hit、expired、inactive/no-expiry、definite miss 和 provider-mismatch 值。当前所有 ZEUS 调用固定指向 PRD；鉴权失败与 timeout 不得通过改指 STG 或伪造 PRD host 实施，应使用受控 transport/fault injection 或由接口 owner 批准的方法。`status=success + lookup_status=not_found` 才是正常查无；`out_of_scope/unusable/conflicted/unknown` 是可审计的 fail-closed 结果，MCP/action `status=failed` 才是 Provider 调用失败。Provider 兼容旧客户端未校验顶层 `code` 的响应，但当 `code` 存在时只接受 `200`，并且只有明确的 `data: []` 才能表示查无；`data: null`、缺少 `data` 或非成功 `code` 都必须失败。内网 smoke 仍需保存脱敏响应，确认该业务码契约。缺失 `expireTime` 默认不能算 active；只有 ZEUS owner 明确确认其永久有效语义后，才能在 Git-ignored 本地配置启用 `SOC_PINGAN_SECURITY_TAG_ALLOW_OPEN_ENDED_VALIDITY=true`。
 
 #### PI-01B2 Authoritative fact source / 权威事实来源
 

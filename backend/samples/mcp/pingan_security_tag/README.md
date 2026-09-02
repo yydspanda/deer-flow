@@ -36,7 +36,9 @@ shape. It is not PI-01B1 real-provider evidence.
 ## Internal DEV profile
 
 Use the tracked `extensions.internal.example.json` directly; inject secrets through environment variables. The
-internal provider requires an HTTPS ZEUS URL whose hostname is explicitly in
+Host DEV runtime remains `dev`, but this Provider uses the shared `prd` ZEUS target and
+requires `SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD`. The internal
+provider requires an HTTPS ZEUS URL whose hostname is explicitly in
 `SOC_PINGAN_ZEUS_ALLOWED_HOSTS`, shared App ID/App Key credentials, and the
 portable signer. Missing configuration fails closed and never falls back to
 fake data.

@@ -60,7 +60,10 @@ def test_internal_asset_profiles_forward_self_contained_workflow_http_config() -
         repo_root / "backend/samples/mcp/pingan_shadow/extensions.internal.json",
     )
     required = {
+        "SOC_PINGAN_ENV",
+        "SOC_PINGAN_ZEUS_ENV",
         "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION",
         "SOC_PINGAN_WORKFLOW_ENV",
         "SOC_PINGAN_WORKFLOW_BASE_URL",
         "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS",
@@ -134,6 +137,31 @@ def test_pingan_dev_preflight_validates_profile_without_network_or_secret_output
     assert "zeus.dev.example" not in encoded
 
 
+def test_pingan_preflight_accepts_stg_runtime_with_independent_prd_zeus_target(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.local"
+    config_path.touch()
+    env = _valid_env(config_path)
+    env["SOC_PINGAN_ENV"] = "stg"
+
+    report = run_pingan_dev_preflight(
+        env,
+        config_loader=lambda _: SimpleNamespace(
+            get_model_config=lambda __: SimpleNamespace(
+                api_base="http://localhost:4001/v1/",
+                api_key="key",
+            )
+        ),
+        locator_builder=lambda _: object(),
+    )
+
+    assert report.ready is True
+    assert report.environment == "stg"
+    environment_check = next(item for item in report.checks if item.check_id == "environment.non_production")
+    assert environment_check.status is PingAnDevPreflightStatus.PASSED
+
+
 def test_pingan_dev_preflight_rejects_fake_mode_and_unapproved_host(
     tmp_path: Path,
 ) -> None:
@@ -165,8 +193,31 @@ def test_pingan_dev_preflight_rejects_fake_mode_and_unapproved_host(
     failed_ids = {item.check_id for item in report.checks if item.status is PingAnDevPreflightStatus.FAILED}
     assert failed_ids == {
         "provider.internal_mode",
-        "provider.dev_host_allowlist",
+        "provider.zeus_target_guard",
     }
+
+
+def test_pingan_dev_preflight_rejects_unconfirmed_zeus_prd(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.local"
+    config_path.touch()
+    env = _valid_env(config_path)
+    env.pop("SOC_PINGAN_ZEUS_PRD_CONFIRMATION")
+
+    report = run_pingan_dev_preflight(
+        env,
+        config_loader=lambda _: SimpleNamespace(
+            get_model_config=lambda __: SimpleNamespace(
+                api_base="http://localhost:4001/v1/",
+                api_key="key",
+            )
+        ),
+        locator_builder=lambda _: object(),
+    )
+
+    failed_ids = {item.check_id for item in report.checks if item.status is PingAnDevPreflightStatus.FAILED}
+    assert failed_ids == {"provider.zeus_target_guard"}
 
 
 def test_pingan_dev_preflight_sanitizes_transport_construction_failure(
@@ -281,10 +332,12 @@ def _valid_env(config_path: Path) -> dict[str, str]:
     return {
         "SOC_PINGAN_ENV": "dev",
         "SOC_PINGAN_ASSET_PROVIDER_MODE": "internal",
-        "SOC_PINGAN_ZEUS_BASE_URL": "https://zeus.dev.example",
-        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "zeus.dev.example",
+        "SOC_PINGAN_ZEUS_ENV": "prd",
+        "SOC_PINGAN_ZEUS_BASE_URL": "https://zeus.prd.example",
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "zeus.prd.example",
         "SOC_PINGAN_ZEUS_APP_ID": "app-id",
         "SOC_PINGAN_ZEUS_APP_KEY": "zeus-secret",
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
         "SOC_PINGAN_WORKFLOW_ENV": "stg",
         "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agent-stg.example",
         "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agent-stg.example",

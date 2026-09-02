@@ -36,6 +36,10 @@ redacted there.
   bounded response parsing. It does not import the legacy Agent Platform project.
 - `../../soc_agent/integrations/pingan/model_gateway_smoke.py`: one fixed-prompt,
   credential-free-report smoke for the project-owned loopback OpenAI-compatible endpoint.
+- `../../scripts/soc_pingan_zeus_lifecycle_response_probe.py`: explicit internal-only,
+  read-only troubleshooting for an unknown ZEUS lifecycle business code. It prints and
+  saves the complete response in an ignored mode-`0600` local file; normal acceptance
+  reports remain bounded and secret-safe.
 - `../mcp/pingan_asset/extensions.internal.example.json`: existing MCP server
   registration; credentials stay in the sourced environment.
 
@@ -80,7 +84,7 @@ safe-path-family coverage. One unknown path, `other_paths`-only match, invalid
 path, path-budget overflow, or hash conflict disables the aggregate signal and
 returns the alert to normal triage.
 
-## Native no-Docker Host DEV
+## Native no-Docker Host DEV/STG
 
 Use this path when the internal Apple Silicon Mac already provides:
 
@@ -247,11 +251,14 @@ backend/.venv/bin/python \
 ```
 
 The model preparer statically selects the reviewed STG `DeepSeek_V4_Flash`
-profile (DEV may use the STG gateway), migrates the old local loopback API key,
-creates `.secrets/eagw-private-key.der`, and initializes lifecycle/callback modes
-to `fake`. Its JSON output must show `environment=stg`,
+profile (DEV may use the STG model gateway), migrates the old local loopback API key,
+creates `.secrets/eagw-private-key.der`, and writes the reviewed shared ZEUS PRD target
+for asset, threat-intelligence, security-tag, lifecycle, and callback Providers. It
+initializes lifecycle/callback modes to `fake`, so preparing or starting the profile does
+not call ZEUS. Its JSON output must show `environment=stg`,
 `model_config_name=DeepSeek_V4_Flash`, `credential_present=true`,
-`compatibility_key_present=true`, and `secret_in_output=false`. The workflow
+`compatibility_key_present=true`, `zeus_environment=prd`, and
+`secret_in_output=false`. The workflow
 output must show `environment=prd`, `app_id=YHSYS`, `operator=WANGWENBIN520`,
 `credential_present=true`, and `secret_in_output=false`. Both commands are
 idempotent. The old source is deliberately excluded from the source archive;
@@ -264,8 +271,9 @@ merge only the `pingan_asset`, `pingan_threat_intel`, `pingan_security_tag`, and
 do not overwrite unrelated MCP configuration. The resulting root file is
 Git-ignored.
 
-Resolve the checkout dynamically, fill the remaining ZEUS/model/fault-case
-values in `.env.soc-dev.local`, and then source it. The configuration never
+Resolve the checkout dynamically, fill only any remaining fault-case values in
+`.env.soc-dev.local`, and then source it. The preparer already owns the reviewed model
+profile and ZEUS PRD target. The configuration never
 embeds one developer's `/Users/...` path:
 
 ```bash
@@ -317,7 +325,7 @@ directly. Keep `matrix_id` and every `case_id` as opaque labels such as
 
 ## Preflight
 
-The Host DEV driver starts this repository's model gateway at
+The Host driver starts this repository's model gateway at
 `http://127.0.0.1:4001/v1/`. DeerFlow calls its standard
 `chat.completions` boundary using the stable public alias
 `deepseek-v4-flash`; the PingAn gateway maps that alias to the configured EAGW
@@ -340,7 +348,7 @@ deadline.
 For the internal DEV handoff, the compatibility API deliberately keeps the old
 network shape and listens on `0.0.0.0:8090`, while the model gateway remains
 loopback-only on `127.0.0.1:4001`. Restrict inbound `8090` with the macOS
-firewall to the approved ZEUS DEV/STG callers. The legacy allowed-key-set Bearer/
+firewall to the approved ZEUS PRD callers. The legacy allowed-key-set Bearer/
 `app-key` authentication and bounded request body remain mandatory; `app_code`
 is business routing metadata rather than a credential-map key. Do not
 publish `8090` to an untrusted network.
@@ -511,9 +519,13 @@ not an actual browser or Review TUI render; deployed surface smoke remains a
 separate internal checklist item.
 
 The expected DeerFlow and gateway alias is `deepseek-v4-flash`; the internal
-upstream model and EAGW scene are operator-owned private configuration. Local DEV persistence remains
-the separate SQLite `backend/.deer-flow/data/soc_agent_dev.db` unless an
-explicit SOC database URL overrides it.
+upstream model and EAGW scene are operator-owned private configuration. Host persistence is isolated by
+`SOC_PINGAN_ENV`: DEV uses `backend/.deer-flow/data/soc_agent_dev.db`, while STG uses
+`backend/.deer-flow/data/soc_agent_stg.db`. Switch with
+`backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg`; the command does not
+change the independent ZEUS/model targets, credentials, Provider modes, or action authority.
+DEV starts DeerFlow in hot-reload mode. STG starts the same committed checkout with DeerFlow's
+optimized `--prod` mode, disables HMR, and rebuilds the frontend from the current source.
 
 The model-gateway smoke sends one fixed prompt containing no alert or business data.
 Its mode-`0600` report records endpoint path, model IDs, status, latency, token
@@ -521,9 +533,10 @@ usage, output length and output SHA-256. It deliberately omits the API key,
 response ID and assistant text. A successful `/models` call alone is not enough;
 `outcome=passed` from this chat-completion report is the model connectivity gate.
 
-The preflight performs no network request. It validates both the ZEUS and Agent
-Platform HTTPS host allowlists, required credentials, selected environment,
-explicit PRD guard, local model profile, and construction of the tracked HTTP
+The preflight performs no network request. It treats local Runtime environment (`dev`)
+and remote Provider target (`prd`) as separate values. It validates both the ZEUS and Agent
+Platform HTTPS host allowlists, required credentials, selected targets,
+explicit PRD guards, local model profile, and construction of the tracked HTTP
 clients. It must pass before direct or MCP smoke.
 
 `SOC_PINGAN_WORKFLOW_APP_ID=YHSYS` identifies the reviewed legacy Agent Platform
@@ -535,7 +548,7 @@ override. A PRD target is rejected unless `SOC_PINGAN_WORKFLOW_ENV=prd` and
 `SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD` are both set.
 
 The matrix `--plan-only` path also issues no request. `--confirm-live` can issue
-real internal DEV requests and therefore refuses a non-`.local` filename,
+real ZEUS PRD requests from the internal DEV host and therefore refuses a non-`.local` filename,
 group/world-readable permissions, unresolved case placeholders, a missing
 fault-injection reference, or a missing report path. The mode-`0600` aggregate
 report keeps only query hashes, expected/observed attempt stages, latency and

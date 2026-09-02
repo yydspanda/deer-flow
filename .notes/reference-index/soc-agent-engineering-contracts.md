@@ -15,6 +15,7 @@ SOC Agent 不是“LLM 自主系统”，而是“生产级 Runtime + 受控 LLM
 3. **可审计**：每次 run、step、tool action、permission decision、memory update 都可追踪。
 4. **可恢复**：run 有状态机，失败不能半写入；replay 能比较旧结果和新结果。
 5. **可隔离**：SOC、防御工程、威胁狩猎、攻击模拟共享 core，但 memory scope、权限和工具能力隔离。
+6. **运行环境与 Provider 目标分离**：本地 `dev|stg` 不能隐式推导远端系统环境；每个租户 Integration 显式声明 target environment、URL、host allowlist、凭证和高风险环境确认。当前 PingAn Host DEV/STG 的五类 ZEUS Provider 共享一个 `prd` target，generic Runtime 不读取这些变量。
 
 ## 二、代码风格与质量门禁
 
@@ -1051,6 +1052,7 @@ SOC Agent chat stream 约束：
   - `asset.locate` 是 read-only business ownership / BU location action，用于把已提取资产定位到公司、业务组、处置归属或 mock 远程查询结果；它和 `asset.lookup` 一样不能默认加入 chat router 白名单，只能通过显式 proposal、router allowlist 和注入的 MCP-backed action adapter registry 打开。
   - PingAn `asset.locate` provider 只能位于 `soc_agent.integrations.pingan`；`actions/contracts/core/domain/pipeline` 不得 import 该 vendor package。provider 输入必须是已提取的 `asset_key`、类型、可选角色/UM 和 bounded context refs，不能重新执行资产抽取、攻击/受害角色裁决或处置目标选择。
   - D12 PingAn provider 保留经审阅的 ZEUS `/public/searchAssetInfo` 请求体与 `isec_sign(data, app_id, app_key)` 鉴权边界，以及 `searchAssetInfo -> asset_to_bu -> UM` 降级语义。Portable signer 固定为 PingAn-owned `soc_agent.integrations.pingan.zeus_signing:isec_sign`，不得恢复旧模块的默认 App Key 或 import 整个 `util.util_tools`；endpoint、secret、workflow runner/ID、operator 和 tenant ownership override 只能来自显式环境/配置。ISEC 签名覆盖最终 HTTP body 字节：所有签名 Provider 必须由同一 serializer 一次生成 body，并将该 bytes 同时用于签名和 `content=` 发送，禁止签名后再通过 HTTP client `json=` 二次序列化。真实值可写入已验证 Git-ignored 且权限受限的 `*.local` 文件，不能进入通用 Runtime 或 commit。
+  - 当前 PingAn Host DEV 的 Runtime scope 固定为 `dev`，但所有 ZEUS-backed Provider 的 remote target 固定为 `prd`。资产、TI、安全标签、生命周期和回写只能调用 `load_pingan_zeus_target()` 取得同一 URL/App ID/App Key/allowlist；禁止各模块单独解释环境变量。PRD 构造必须同时满足 `SOC_PINGAN_ZEUS_ENV=prd`、显式 host allowlist 和精确 confirmation。D12-B case 只能覆盖无效测试 key 或 timeout，不能覆盖 ZEUS URL/host 以绕开 PRD target。
   - D12-A `fake` 和 D12-B `internal` 模式必须互斥。fake transport/result 必须声明 `mocked=true`、`provider_mode=fake`、`decision_impact=none`；internal 配置缺失或 import/provider 失败必须 fail closed，禁止静默回退 fake。只有真实 `mocked=false` smoke 才能作为 PA-12/PI-01 real-provider 证据。
   - 多个有效资产归属必须返回 bounded candidates 与 `ambiguous=true`，不能默认选择第一条；原始 provider response、签名 header 和 secret 不得进入 `SocAgentActionResult`、`InvestigationEvidence` 或 smoke 报告。每个 attempt 至少记录 stage、lookup kind、`found|not_found|failed`、candidate count、mock provenance、sanitized error 和 `duration_ms`。只有明确 `not_found` 才可进入下一层；authentication/network/timeout/schema failure 必须立即 fail closed，不能伪装成查无。provider 不得直接修改 verdict、ReviewQueue、memory 或 action authority。
   - PingAn `threat_intel.ip_reputation.lookup` provider 只能位于 `soc_agent.integrations.pingan`；generic contracts/core/domain 只消费 `SocThreatIntelReputationRecord` 和 typed MCP result。内部模式必须复用 portable `isec_sign`、共享 ZEUS credential、HTTPS 和显式 host allowlist，配置/HTTP/timeout/schema failure 必须与正常 not-found 分离且禁止 fake fallback。
@@ -1087,8 +1089,9 @@ SOC Agent chat stream 约束：
   - `backend/scripts/soc_dev_mcp_server.py` 当前提供两个本地 mock read-only tools：`asset_lookup` 返回静态资产记录，`asset_locate` 模拟 Zeus/CMDB/asset_to_bu 远程归属定位并返回 `mocked=true`；这两个工具只能用于开发 smoke 和 proposal bridge 验证。
   - `soc chat tui --lead-agent --mcp-action-config PATH` 是显式 dev/staging 注入入口；不传配置时保持本地 in-memory read-only adapter，不得隐式扫描或自动启用任意 MCP action config。
   - `soc chat tui --lead-agent` 当前使用 SOC repository 写入 read-only action evidence；不传 `--mcp-action-config` 时本地 registry 只包含 `asset.lookup`、`threat_intel.ip_reputation.lookup` 和 `security_tag.lookup` mock adapter；`InMemoryInvestigationEvidenceRepository` 只用于单元测试和无数据库的局部 service wiring。
-  - PingAn 内网 DEV 的 SOC 业务库固定使用独立本地 SQLite。`resolve_database_url()` 在没有显式参数和 `SOC_DATABASE_URL` 时，若 DeerFlow 为 `database.backend: sqlite`，必须自动使用 `{database.sqlite_dir}/soc_agent_dev.db`，不能复用 `deerflow.db`；`soc db upgrade` 必须创建缺失的 SQLite 父目录。当前不收集 PostgreSQL、Kafka 或 K8s DEV 参数，也不能用 SQLite 结果声明准生产/生产基础设施已验收。生产/准生产 PostgreSQL 目标保持不变。
-  - PingAn Host DEV 重部署只替换代码和 release-owned private overlay；安装器必须在全部进程停止后，把 allowlist 内的 `backend/.deer-flow/data`、JWT、用户/Agent/线程状态、受管集成与内网验收证据从 rollback checkout 复制到新 checkout。整个 SQLite data 目录必须连同 `-wal`/`-shm`/`-journal` sidecar 一起保存，任何恢复失败都回滚旧 checkout。`pingan-context`、配置和凭证由新 private overlay 覆盖；PID、日志、技能投影、临时缓存和旧交付包不得继承。常规安装/升级不得删除、清空或隐式重建已有 `deerflow.db` / `soc_agent_dev.db`；首次初始化残库也必须先隔离备份。SOC schema 只能通过 `soc_alembic_version` 验证，不能查询 DeerFlow 的 `alembic_version`。
+  - PingAn 内网 Host 的 SOC 业务库固定使用独立本地 SQLite。`SOC_PINGAN_ENV=dev|stg` 是唯一 Runtime 作用域选择器；Host 启动器必须分别使用 `{database.sqlite_dir}/soc_agent_dev.db` 或 `soc_agent_stg.db`，并把相同环境派生到 Memory、tenant-policy 和 automation，不能复用 `deerflow.db` 或混用 DEV/STG 数据。DEV 可启用语料/Memory Workbench 和显式 demo auth bypass，并使用 DeerFlow `--dev` 热更新服务；STG 必须关闭两者并使用原生 `--prod` 优化服务，不得启用 HMR。两种环境都默认关闭真实外部动作。当前 SQLite STG 只用于内网准生产演练，不能替代最终 PostgreSQL 验收。
+  - Runtime 环境与 Provider target 必须正交。切换 `SOC_PINGAN_ENV` 不得改写 `SOC_PINGAN_ZEUS_ENV`、模型/ZEUS 凭证、lifecycle/callback Provider mode 或 action authority。当前 Host DEV/STG 都可在显式 PRD guard 下访问同一个 ZEUS PRD target。切换只能通过受治理命令原子更新 mode-`0600` 私有 env；状态必须展示选中的 Runtime、数据库和非敏感 target/mode。
+  - PingAn Host DEV/STG 重部署只替换代码和 release-owned private overlay；安装器必须在全部进程停止后，把 allowlist 内的 `backend/.deer-flow/data`、JWT、用户/Agent/线程状态、受管集成与内网验收证据从 rollback checkout 复制到新 checkout。整个 SQLite data 目录必须连同 `-wal`/`-shm`/`-journal` sidecar 一起保存，任何恢复失败都回滚旧 checkout。`pingan-context`、配置和凭证由新 private overlay 覆盖；PID、日志、技能投影、临时缓存和旧交付包不得继承。常规安装/升级不得删除、清空或隐式重建已有 `deerflow.db` / `soc_agent_dev.db` / `soc_agent_stg.db`；首次初始化残库也必须先隔离备份。SOC schema 只能通过 `soc_alembic_version` 验证，不能查询 DeerFlow 的 `alembic_version`。
   - 当前 `PI-01A` 的 PingAn TI Provider/MCP 已完成 production-shaped code 与 fake/persistence 回归；真实 DEV `mocked=false` hit/not-found/error/timeout、实际字段 coverage 和 evidence readback 仍是退出门槛。`D12-B` 按产品决定暂存，但其资产 Provider 门槛没有关闭。
   - `PI-01D4` reporting contract 已完成。`SocInvestigationReportingService` 只能从
     `SocEnrichmentExecutionRepository`、`SocEnrichmentActionAttempt` 和
@@ -2143,6 +2146,11 @@ LessonRule
   lifecycle、dead-letter callback，或执行后发生 signer/provider/worker 代码变更，该 Job 是不可变失败
   证据，不能用 `--resume-existing` 重算；先让只读 smoke 通过，再生成 fresh session/Job。local self-submit
   只证明组件组合，最终兼容门禁仍要求 ZEUS 上游真实发起并完成旧页面 readback。
+- 上述“禁止保存响应正文”允许一个严格受控的故障诊断例外：操作员显式确认后，内网 lifecycle response
+  probe 可复用 Worker 的 exact Provider 对同一私有请求执行一次只读查询，并将完整 JSON 仅打印到当前
+  终端及写入 Git-ignored、mode-`0600`、后缀为 `.local.json` 的本机文件。该探针不得创建 Job、调用 LLM、
+  触发 callback、写业务数据库、进入普通 smoke/report/telemetry/support bundle，且其成功不能替代
+  `code=200/status=1/pending` live gate。
 
 ## 八、事件与通信规范
 

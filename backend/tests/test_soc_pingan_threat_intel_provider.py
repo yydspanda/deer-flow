@@ -217,7 +217,7 @@ def test_service_fails_closed_on_transport_failure() -> None:
 
 
 def test_environment_builder_never_falls_back_from_internal_to_fake() -> None:
-    with pytest.raises(PingAnThreatIntelConfigurationError, match="SOC_PINGAN_ZEUS_ALLOWED_HOSTS"):
+    with pytest.raises(PingAnThreatIntelConfigurationError, match="SOC_PINGAN_ENV"):
         build_pingan_threat_intel_service_from_env({"SOC_PINGAN_THREAT_INTEL_PROVIDER_MODE": "internal"})
 
     fake = build_pingan_threat_intel_service_from_env({"SOC_PINGAN_THREAT_INTEL_PROVIDER_MODE": "fake"}).lookup({"ip": "203.0.113.10"})

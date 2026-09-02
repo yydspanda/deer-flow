@@ -83,7 +83,7 @@ def test_internal_provider_mode_fails_closed_without_zeus_credentials(
     }
     settings = PingAnLegacyWorkerSettings.from_env(values)
 
-    with pytest.raises(ValueError, match="SOC_PINGAN_ZEUS_BASE_URL"):
+    with pytest.raises(ValueError, match="SOC_PINGAN_ENV"):
         build_pingan_lifecycle_service(settings, environ=values)
-    with pytest.raises(ValueError, match="SOC_PINGAN_ZEUS_BASE_URL"):
+    with pytest.raises(ValueError, match="SOC_PINGAN_ENV"):
         build_pingan_callback_port(settings, environ=values)

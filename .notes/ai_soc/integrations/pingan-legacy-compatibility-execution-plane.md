@@ -30,7 +30,7 @@ flowchart LR
 4. `POST /public/alertModelCallback`：完成、跳过或失败后异步回写。
 
 内网 DEV 为减少上游改造，兼容 API 延续旧服务的 `8090` 入口并显式绑定局域网；该端口只允许
-受信 ZEUS DEV/STG 调用方访问，并继续执行旧协议的 Bearer/`app-key` 允许集合鉴权和请求体上限。
+受信 ZEUS PRD 调用方访问，并继续执行旧协议的 Bearer/`app-key` 允许集合鉴权和请求体上限。
 `app_code` 只参与业务路由、持久元数据与幂等键，不作为密钥映射标签；这与旧服务对
 `APP_KEY_DICT.values()` 的校验语义一致。
 模型网关 `4001` 始终仅绑定 loopback，不能暴露给局域网。
@@ -190,7 +190,7 @@ Base Decision
 
 ## 11. Real Internal Gates / 内网仍需关闭的门禁
 
-外网 fake 可以验证控制流，但以下结果只有 PingAn DEV/STG `mocked=false` 才能关闭：
+外网 fake 可以验证控制流，但以下结果只有内网 DEV Host 访问 ZEUS PRD 并取得 `mocked=false` 才能关闭：
 
 - `getAlertBrief` 的真实 envelope 与状态枚举。
 - `alertModelCallback` 成功、重复、超时和业务错误响应。

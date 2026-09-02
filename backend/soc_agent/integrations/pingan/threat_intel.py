@@ -26,6 +26,10 @@ from soc_agent.integrations.pingan.zeus_signing import (
     isec_sign,
     serialize_isec_json_body,
 )
+from soc_agent.integrations.pingan.zeus_target import (
+    PingAnZeusTargetConfigurationError,
+    load_pingan_zeus_target,
+)
 
 _ANALYSIS_REPORT = "ipAnalyseReport"
 _REPUTATION_REPORT = "ipReputationReport"
@@ -381,12 +385,15 @@ def build_pingan_threat_intel_service_from_env(
         )
     if mode != "internal":
         raise PingAnThreatIntelConfigurationError("SOC_PINGAN_THREAT_INTEL_PROVIDER_MODE must be fake or internal")
-    allowed_hosts = [item for item in _require_env(env, "SOC_PINGAN_ZEUS_ALLOWED_HOSTS").split(",")]
+    try:
+        zeus = load_pingan_zeus_target(env)
+    except PingAnZeusTargetConfigurationError as exc:
+        raise PingAnThreatIntelConfigurationError(str(exc)) from exc
     port = HttpPingAnZeusThreatIntelPort(
-        base_url=_require_env(env, "SOC_PINGAN_ZEUS_BASE_URL"),
-        app_id=_require_env(env, "SOC_PINGAN_ZEUS_APP_ID"),
-        app_key=_require_env(env, "SOC_PINGAN_ZEUS_APP_KEY"),
-        allowed_hosts=allowed_hosts,
+        base_url=zeus.base_url,
+        app_id=zeus.app_id,
+        app_key=zeus.app_key,
+        allowed_hosts=zeus.allowed_hosts,
         timeout_seconds=_positive_float(
             env.get("SOC_PINGAN_THREAT_INTEL_TIMEOUT_SECONDS", "10"),
             name="SOC_PINGAN_THREAT_INTEL_TIMEOUT_SECONDS",

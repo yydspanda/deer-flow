@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and run PingAn SOC DEV directly on an Apple Silicon Mac."""
+"""Prepare and run PingAn SOC DEV/STG directly on an Apple Silicon Mac."""
 
 from __future__ import annotations
 
@@ -59,7 +59,10 @@ DEV_CORPUS = (
 )
 DEV_CORPUS_INDEX = DEV_CORPUS.with_suffix(".workbench-index.json")
 DEV_CORPUS_PAYLOAD_STORE = DEV_CORPUS.with_suffix(".workbench-payloads.sqlite")
-SOC_DEV_DATABASE_RELATIVE_PATH = Path("backend/.deer-flow/data/soc_agent_dev.db")
+SOC_DATABASE_RELATIVE_PATHS = {
+    "dev": Path("backend/.deer-flow/data/soc_agent_dev.db"),
+    "stg": Path("backend/.deer-flow/data/soc_agent_stg.db"),
+}
 
 MIN_PYTHON = (3, 12)
 MIN_NODE_MAJOR = 22
@@ -337,17 +340,21 @@ def install_dependencies(*, python_executable: str) -> dict[str, Any]:
     return report
 
 
-def validate_runtime_files() -> None:
+def validate_runtime_files(*, runtime_environment: str = "dev") -> None:
+    selected_environment = normalize_runtime_environment(runtime_environment)
+    corpus_paths = (
+        DEV_MEMORY_CORPUS,
+        DEV_CORPUS,
+        DEV_CORPUS_INDEX,
+        DEV_CORPUS_PAYLOAD_STORE,
+    )
     missing = [
         str(path.relative_to(ROOT))
         for path in (
             LOCAL_ENV,
             LOCAL_CONFIG,
             LOCAL_NGINX_CONFIG,
-            DEV_MEMORY_CORPUS,
-            DEV_CORPUS,
-            DEV_CORPUS_INDEX,
-            DEV_CORPUS_PAYLOAD_STORE,
+            *(corpus_paths if selected_environment == "dev" else ()),
         )
         if not path.is_file()
     ]
@@ -444,13 +451,29 @@ def start_runtime(
     demo_no_auth: bool = False,
 ) -> None:
     inspect_host(python_executable=python_executable)
-    validate_runtime_files()
+    start_environment = build_start_environment(
+        allowed_origins=allowed_origins,
+        force_allowed_origins_override=True,
+    )
+    runtime_environment = constrain_sidecar_bindings(
+        load_local_runtime_environment(start_environment),
+        local_only=local_only,
+    )
+    selected_environment = normalize_runtime_environment(
+        runtime_environment.get("SOC_PINGAN_ENV", "")
+    )
+    validate_runtime_files(runtime_environment=selected_environment)
+    if demo_no_auth and selected_environment != "dev":
+        raise HostDevError("--demo-no-auth is only available in DEV")
     resolved_origins = resolve_start_allowed_origins(
         allowed_origins,
         local_only=local_only,
     )
     if resolved_origins:
-        print("PingAn SOC LAN DEV access enabled:", flush=True)
+        print(
+            f"PingAn SOC LAN {selected_environment.upper()} access enabled:",
+            flush=True,
+        )
         for origin in resolved_origins:
             print(f"  http://{_origin_host(origin)}:2026", flush=True)
     if demo_no_auth:
@@ -467,13 +490,14 @@ def start_runtime(
             "Authentication remains enabled; allow nginx through the macOS firewall.",
             flush=True,
         )
-    start_environment = build_start_environment(
+    runtime_environment = build_start_environment(
+        runtime_environment,
         allowed_origins=resolved_origins,
         force_allowed_origins_override=True,
     )
-    runtime_environment = constrain_sidecar_bindings(
-        load_local_runtime_environment(start_environment),
-        local_only=local_only,
+    runtime_environment = apply_runtime_profile(
+        runtime_environment,
+        runtime_environment=selected_environment,
     )
     runtime_environment = prepare_soc_database(runtime_environment)
     if (
@@ -499,12 +523,16 @@ def start_runtime(
         runtime_dir=SIDECAR_RUNTIME_DIR,
         environment=runtime_environment,
     )
-    command = build_start_command(daemon=daemon, demo_no_auth=demo_no_auth)
+    command = build_start_command(
+        daemon=daemon,
+        demo_no_auth=demo_no_auth,
+        runtime_environment=selected_environment,
+    )
     try:
         subprocess.run(
             command,
             cwd=ROOT,
-            env=start_environment,
+            env=runtime_environment,
             check=True,
         )
     except BaseException:
@@ -514,23 +542,40 @@ def start_runtime(
         stop_sidecars(specs, runtime_dir=SIDECAR_RUNTIME_DIR)
 
 
-def build_start_command(*, daemon: bool, demo_no_auth: bool = False) -> list[str]:
-    auth_setup = "export DEER_FLOW_AUTH_DISABLED=1; " if demo_no_auth else ""
+def build_start_command(
+    *,
+    daemon: bool,
+    demo_no_auth: bool = False,
+    runtime_environment: str = "dev",
+) -> list[str]:
+    selected_environment = normalize_runtime_environment(runtime_environment)
+    if demo_no_auth and selected_environment != "dev":
+        raise HostDevError("--demo-no-auth is only available in DEV")
+    workbench_enabled = "true" if selected_environment == "dev" else "false"
+    service_mode = "--dev" if selected_environment == "dev" else "--prod"
+    auth_setup = (
+        "export DEER_FLOW_AUTH_DISABLED=1; "
+        if demo_no_auth
+        else "unset DEER_FLOW_AUTH_DISABLED; "
+    )
     shell_command = (
         'set -a; source "$SOC_HOST_DEV_ROOT/.env.soc-dev.local"; set +a; '
+        f'if [[ "${{SOC_PINGAN_ENV:-}}" != "{selected_environment}" ]]; then '
+        'echo "PingAn runtime profile changed after startup planning; retry start" >&2; exit 1; fi; '
+        'export SOC_DATABASE_URL="$SOC_HOST_DATABASE_URL"; '
         + auth_setup
-        + "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true; "
-        "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true; "
+        + f"export SOC_DEV_MEMORY_WORKBENCH_ENABLED={workbench_enabled}; "
+        f"export SOC_DEV_CORPUS_WORKBENCH_ENABLED={workbench_enabled}; "
         'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-3}"; '
         'export SOC_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"; '
         'export SOC_DEV_MEMORY_CORPUS_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"; '
         'export SOC_DEV_CORPUS_WORKBENCH_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"; '
-        "export SOC_MEMORY_ENVIRONMENT=dev; "
-        "export SOC_AUTOMATION_ENVIRONMENT=dev; "
-        "export SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY=true; "
+        f"export SOC_MEMORY_ENVIRONMENT={selected_environment}; "
+        f"export SOC_AUTOMATION_ENVIRONMENT={selected_environment}; "
+        f"export SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY={workbench_enabled}; "
         "export SOC_TENANT_POLICY_ENABLED=true; "
         'export SOC_TENANT_DISPOSITION_POLICY_PATH="$SOC_HOST_DEV_ROOT/backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"; '
-        "export SOC_TENANT_POLICY_ENVIRONMENT=dev; "
+        f"export SOC_TENANT_POLICY_ENVIRONMENT={selected_environment}; "
         "export SOC_TENANT_POLICY_EVENT_TIMEZONE=Asia/Shanghai; "
         "export SOC_TENANT_POLICY_ADVISOR_MODE=llm; "
         'export SOC_TENANT_POLICY_SKILL_PATH="$SOC_HOST_DEV_ROOT/backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"; '
@@ -540,7 +585,7 @@ def build_start_command(*, daemon: bool, demo_no_auth: bool = False) -> list[str
         'if [[ "${SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE+x}" == x ]]; then '
         'export DEER_FLOW_DEV_ALLOWED_ORIGINS="$SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"; '
         "fi; "
-        'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" --dev --skip-install "$@"'
+        f'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" {service_mode} --skip-install "$@"'
     )
     command = [
         "/bin/bash",
@@ -559,15 +604,19 @@ def prepare_soc_database(
     root: Path = ROOT,
     run: Callable[..., Any] = subprocess.run,
 ) -> dict[str, str]:
-    """Upgrade the Host DEV SOC database once before any sidecar starts."""
+    """Upgrade the selected Host SOC database once before any sidecar starts."""
 
     backend = root / "backend"
-    database_path = (root / SOC_DEV_DATABASE_RELATIVE_PATH).resolve()
+    runtime_environment = normalize_runtime_environment(
+        environment.get("SOC_PINGAN_ENV", "")
+    )
+    database_path = (root / SOC_DATABASE_RELATIVE_PATHS[runtime_environment]).resolve()
     database_url = f"sqlite+pysqlite:///{database_path}"
     resolved = dict(environment)
     resolved.update(
         {
             "SOC_DATABASE_URL": database_url,
+            "SOC_HOST_DATABASE_URL": database_url,
             "SOC_PINGAN_COMPAT_AUTO_MIGRATE": "false",
             "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
         }
@@ -593,6 +642,32 @@ def prepare_soc_database(
             "SOC database preparation failed before sidecar startup; no Host DEV "
             "service was started"
         ) from exc
+    return resolved
+
+
+def apply_runtime_profile(
+    environment: dict[str, str],
+    *,
+    runtime_environment: str,
+) -> dict[str, str]:
+    """Derive all SOC scopes from one DEV/STG selector for every process."""
+
+    selected = normalize_runtime_environment(runtime_environment)
+    workbench_enabled = "true" if selected == "dev" else "false"
+    resolved = dict(environment)
+    resolved.update(
+        {
+            "SOC_PINGAN_ENV": selected,
+            "SOC_MEMORY_ENVIRONMENT": selected,
+            "SOC_AUTOMATION_ENVIRONMENT": selected,
+            "SOC_TENANT_POLICY_ENVIRONMENT": selected,
+            "SOC_DEV_MEMORY_WORKBENCH_ENABLED": workbench_enabled,
+            "SOC_DEV_CORPUS_WORKBENCH_ENABLED": workbench_enabled,
+            "SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY": workbench_enabled,
+            "SOC_TENANT_POLICY_ENABLED": "true",
+            "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS": "false",
+        }
+    )
     return resolved
 
 
@@ -752,6 +827,34 @@ def stop_runtime() -> None:
 
 def runtime_status() -> dict[str, Any]:
     environment = _best_effort_runtime_environment()
+    try:
+        runtime_environment = normalize_runtime_environment(
+            environment.get("SOC_PINGAN_ENV", "")
+        )
+    except HostDevError:
+        runtime_environment = "unknown"
+    runtime_profile = {
+        "workbenches_enabled": runtime_environment == "dev",
+        "demo_no_auth_allowed": runtime_environment == "dev",
+        "service_mode": (
+            "development_hot_reload"
+            if runtime_environment == "dev"
+            else "production_optimized"
+        ),
+        "external_action_execution": "disabled",
+        "zeus_target_environment": environment.get(
+            "SOC_PINGAN_ZEUS_ENV",
+            "unknown",
+        ),
+        "legacy_lifecycle_mode": environment.get(
+            "SOC_PINGAN_LEGACY_LIFECYCLE_MODE",
+            "unknown",
+        ),
+        "legacy_callback_mode": environment.get(
+            "SOC_PINGAN_LEGACY_CALLBACK_MODE",
+            "unknown",
+        ),
+    }
     specs = build_pingan_sidecar_specs(
         root=ROOT,
         environment=environment,
@@ -759,20 +862,31 @@ def runtime_status() -> dict[str, Any]:
     )
     return {
         "schema_version": "soc.pingan_macos_host_dev_status.v1",
+        "runtime_environment": runtime_environment,
+        "runtime_profile": runtime_profile,
         "core": {
             "gateway_8001": _tcp_port_open(8001),
             "frontend_3000": _tcp_port_open(3000),
             "nginx_2026": _tcp_port_open(2026),
         },
-        "soc_database": soc_database_status(),
+        "soc_database": soc_database_status(
+            runtime_environment=(
+                runtime_environment if runtime_environment != "unknown" else "dev"
+            )
+        ),
         "sidecars": sidecar_status(specs, runtime_dir=SIDECAR_RUNTIME_DIR),
     }
 
 
-def soc_database_status(*, root: Path = ROOT) -> dict[str, Any]:
+def soc_database_status(
+    *,
+    root: Path = ROOT,
+    runtime_environment: str = "dev",
+) -> dict[str, Any]:
     """Read the SOC schema revision without creating a missing SQLite file."""
 
-    database_path = (root / SOC_DEV_DATABASE_RELATIVE_PATH).resolve()
+    selected_environment = normalize_runtime_environment(runtime_environment)
+    database_path = (root / SOC_DATABASE_RELATIVE_PATHS[selected_environment]).resolve()
     base = {"path": str(database_path)}
     if not database_path.is_file():
         return {"status": "missing", **base}
@@ -793,6 +907,13 @@ def soc_database_status(*, root: Path = ROOT) -> dict[str, Any]:
         **base,
         "schema_revision": str(row[0]),
     }
+
+
+def normalize_runtime_environment(value: str) -> str:
+    selected = value.strip().lower()
+    if selected not in SOC_DATABASE_RELATIVE_PATHS:
+        raise HostDevError("PingAn host runtime environment must be dev or stg")
+    return selected
 
 
 def load_local_runtime_environment(
@@ -928,12 +1049,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Python 3.12+ executable used for the project environment",
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
-    subparsers.add_parser("check", help="validate native macOS DEV prerequisites")
+    subparsers.add_parser("check", help="validate native macOS DEV/STG prerequisites")
     subparsers.add_parser(
         "install", help="install locked backend/frontend dependencies"
     )
     start = subparsers.add_parser(
-        "start", help="start native DEV without dependency sync"
+        "start",
+        help="start the selected native DEV/STG profile without dependency sync",
     )
     start.add_argument("--daemon", action="store_true")
     start.add_argument(
@@ -969,8 +1091,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.action == "check":
             result = inspect_host(python_executable=args.python)
-            validate_runtime_files()
+            environment = load_local_runtime_environment()
+            runtime_environment = normalize_runtime_environment(
+                environment.get("SOC_PINGAN_ENV", "")
+            )
+            validate_runtime_files(runtime_environment=runtime_environment)
             result["runtime_files_valid"] = True
+            result["runtime_environment"] = runtime_environment
         elif args.action == "install":
             result = install_dependencies(python_executable=args.python)
         elif args.action == "start":

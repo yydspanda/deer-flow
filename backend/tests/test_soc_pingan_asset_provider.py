@@ -298,7 +298,7 @@ def test_locator_does_not_treat_workflow_failure_as_a_normal_miss() -> None:
 
 
 def test_environment_builder_never_silently_falls_back_from_internal_to_fake() -> None:
-    with pytest.raises(PingAnAssetProviderConfigurationError, match="SOC_PINGAN_ZEUS_BASE_URL"):
+    with pytest.raises(PingAnAssetProviderConfigurationError, match="SOC_PINGAN_ENV"):
         build_pingan_asset_locator_from_env({"SOC_PINGAN_ASSET_PROVIDER_MODE": "internal"})
 
     result = build_pingan_asset_locator_from_env({"SOC_PINGAN_ASSET_PROVIDER_MODE": "fake"}).locate({"query": "10.10.1.5", "asset_type": "IP"})

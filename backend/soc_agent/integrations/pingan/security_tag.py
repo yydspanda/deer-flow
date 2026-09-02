@@ -26,6 +26,10 @@ from soc_agent.integrations.pingan.zeus_signing import (
     isec_sign,
     serialize_isec_json_body,
 )
+from soc_agent.integrations.pingan.zeus_target import (
+    PingAnZeusTargetConfigurationError,
+    load_pingan_zeus_target,
+)
 
 _SOURCE_NAME = "pingan_zeus_search_tag_content"
 _MAX_RECORDS = 100
@@ -382,11 +386,15 @@ def build_pingan_security_tag_service_from_env(
         )
     if mode != "internal":
         raise PingAnSecurityTagConfigurationError("SOC_PINGAN_SECURITY_TAG_PROVIDER_MODE must be fake or internal")
+    try:
+        zeus = load_pingan_zeus_target(env)
+    except PingAnZeusTargetConfigurationError as exc:
+        raise PingAnSecurityTagConfigurationError(str(exc)) from exc
     port = HttpPingAnZeusSecurityTagPort(
-        base_url=_require_env(env, "SOC_PINGAN_ZEUS_BASE_URL"),
-        app_id=_require_env(env, "SOC_PINGAN_ZEUS_APP_ID"),
-        app_key=_require_env(env, "SOC_PINGAN_ZEUS_APP_KEY"),
-        allowed_hosts=_require_env(env, "SOC_PINGAN_ZEUS_ALLOWED_HOSTS").split(","),
+        base_url=zeus.base_url,
+        app_id=zeus.app_id,
+        app_key=zeus.app_key,
+        allowed_hosts=zeus.allowed_hosts,
         timeout_seconds=_positive_float(
             env.get("SOC_PINGAN_SECURITY_TAG_TIMEOUT_SECONDS", "10"),
             name="SOC_PINGAN_SECURITY_TAG_TIMEOUT_SECONDS",

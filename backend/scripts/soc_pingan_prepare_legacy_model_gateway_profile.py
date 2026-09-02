@@ -31,6 +31,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Override the reviewed legacy root_config.py source",
     )
     parser.add_argument(
+        "--zeus-credential-source",
+        type=Path,
+        help="Override the reviewed legacy source containing the ZEUS PRD credential",
+    )
+    parser.add_argument(
         "--env-file",
         type=Path,
         help="Override the target private environment file",
@@ -60,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=REPO_ROOT,
         model_source_path=args.model_source,
         root_config_path=args.root_config,
+        zeus_credential_source_path=args.zeus_credential_source,
         env_path=args.env_file,
         key_path=args.key_file,
         environment=args.environment,

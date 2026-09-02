@@ -53,11 +53,11 @@ def resolve_acceptance_database_url(
     configured_url = values.get("SOC_DATABASE_URL", "").strip()
     if configured_url:
         return configured_url
-    local_path = values.get("SOC_DEV_SQLITE_PATH", "").strip()
+    local_path = values.get("SOC_SQLITE_PATH", "").strip() or values.get("SOC_DEV_SQLITE_PATH", "").strip()
     if local_path:
         database_path = Path(local_path).expanduser()
         if not database_path.is_absolute():
-            raise ValueError("SOC_DEV_SQLITE_PATH must be an absolute path")
+            raise ValueError("SOC_SQLITE_PATH must be an absolute path")
         return "sqlite+pysqlite:///" + str(database_path)
     return resolve_database_url()
 
@@ -73,7 +73,7 @@ def assert_acceptance_database_ready(engine: Engine) -> str:
         if not database_path.is_absolute():
             raise RuntimeError("live acceptance requires an absolute SOC SQLite path")
         if not database_path.is_file():
-            raise RuntimeError("SOC database does not exist; run 'soc db upgrade' against SOC_DEV_SQLITE_PATH before live acceptance")
+            raise RuntimeError("SOC database does not exist; start the selected PingAn host profile before live acceptance")
     try:
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one_or_none()

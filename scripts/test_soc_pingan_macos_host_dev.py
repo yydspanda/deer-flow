@@ -23,6 +23,7 @@ from scripts.soc_pingan_macos_host_dev import (
     is_public_npm_registry,
     normalize_allowed_origins,
     normalize_internal_npm_registry,
+    normalize_runtime_environment,
     parse_args,
     parse_version,
     prepare_soc_database,
@@ -205,10 +206,11 @@ def test_locked_requirements_rejects_non_mirror_inputs(
 def test_start_plan_skips_install_and_enables_governed_policy_without_network_side_effects() -> (
     None
 ):
-    command = build_start_command(daemon=True)
+    command = build_start_command(daemon=True, runtime_environment="dev")
     environment = build_start_environment({"PATH": "/usr/bin"})
 
     assert "--skip-install" in command[2]
+    assert 'scripts/serve.sh" --dev' in command[2]
     assert command[-1] == "--daemon"
     assert all("docker" not in part.lower() for part in command)
     assert environment["NEXT_TELEMETRY_DISABLED"] == "1"
@@ -236,16 +238,49 @@ def test_start_plan_skips_install_and_enables_governed_policy_without_network_si
     assert "export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true" in command[2]
     assert "SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH" in command[2]
     assert "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false" in command[2]
+    assert 'export SOC_DATABASE_URL="$SOC_HOST_DATABASE_URL"' in command[2]
     assert "export DEER_FLOW_AUTH_DISABLED=1" not in command[2]
 
 
 def test_demo_no_auth_start_is_explicit_and_does_not_change_secure_default() -> None:
-    command = build_start_command(daemon=True, demo_no_auth=True)
+    command = build_start_command(
+        daemon=True,
+        demo_no_auth=True,
+        runtime_environment="dev",
+    )
 
     assert "export DEER_FLOW_AUTH_DISABLED=1" in command[2]
 
-    secure_command = build_start_command(daemon=True)
+    secure_command = build_start_command(daemon=True, runtime_environment="dev")
     assert "export DEER_FLOW_AUTH_DISABLED=1" not in secure_command[2]
+
+
+def test_stg_start_is_isolated_and_rejects_dev_only_auth_bypass() -> None:
+    command = build_start_command(daemon=True, runtime_environment="stg")
+
+    assert 'scripts/serve.sh" --prod' in command[2]
+    assert 'scripts/serve.sh" --dev' not in command[2]
+    assert "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=false" in command[2]
+    assert "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=false" in command[2]
+    assert "export SOC_MEMORY_ENVIRONMENT=stg" in command[2]
+    assert "export SOC_AUTOMATION_ENVIRONMENT=stg" in command[2]
+    assert "export SOC_TENANT_POLICY_ENVIRONMENT=stg" in command[2]
+    assert "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false" in command[2]
+    assert "export DEER_FLOW_AUTH_DISABLED=1" not in command[2]
+
+    with pytest.raises(HostDevError, match="only available in DEV"):
+        build_start_command(
+            daemon=True,
+            demo_no_auth=True,
+            runtime_environment="stg",
+        )
+
+
+def test_runtime_environment_accepts_only_dev_and_stg() -> None:
+    assert normalize_runtime_environment(" DEV ") == "dev"
+    assert normalize_runtime_environment("stg") == "stg"
+    with pytest.raises(HostDevError, match="dev or stg"):
+        normalize_runtime_environment("prd")
 
 
 def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations(
@@ -258,7 +293,7 @@ def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations
         return subprocess.CompletedProcess(command, 0)
 
     resolved = prepare_soc_database(
-        {"EXISTING": "value"},
+        {"EXISTING": "value", "SOC_PINGAN_ENV": "dev"},
         root=tmp_path,
         run=fake_run,
     )
@@ -266,6 +301,7 @@ def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations
     database_url = f"sqlite+pysqlite:///{database_path}"
 
     assert resolved["SOC_DATABASE_URL"] == database_url
+    assert resolved["SOC_HOST_DATABASE_URL"] == database_url
     assert resolved["SOC_PINGAN_COMPAT_AUTO_MIGRATE"] == "false"
     assert resolved["SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE"] == "false"
     assert calls == [
@@ -288,10 +324,28 @@ def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations
     ]
 
 
+def test_prepare_soc_database_uses_isolated_stg_path(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):  # noqa: ANN001
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    resolved = prepare_soc_database(
+        {"SOC_PINGAN_ENV": "stg"},
+        root=tmp_path,
+        run=fake_run,
+    )
+
+    assert resolved["SOC_DATABASE_URL"].endswith("/soc_agent_stg.db")
+    assert resolved["SOC_HOST_DATABASE_URL"] == resolved["SOC_DATABASE_URL"]
+    assert calls[0][-1].endswith("/soc_agent_stg.db")
+
+
 def test_soc_database_status_reads_schema_without_creating_database(
     tmp_path: Path,
 ) -> None:
-    missing = soc_database_status(root=tmp_path)
+    missing = soc_database_status(root=tmp_path, runtime_environment="dev")
 
     assert missing["status"] == "missing"
     database_path = tmp_path / "backend/.deer-flow/data/soc_agent_dev.db"
@@ -307,7 +361,7 @@ def test_soc_database_status_reads_schema_without_creating_database(
             ("0027_processing_jobs",),
         )
 
-    ready = soc_database_status(root=tmp_path)
+    ready = soc_database_status(root=tmp_path, runtime_environment="dev")
 
     assert ready == {
         "status": "ready",
@@ -321,17 +375,21 @@ def test_start_runtime_prepares_database_before_sidecars(
 ) -> None:
     events: list[str] = []
     monkeypatch.setattr(host_dev, "inspect_host", lambda **kwargs: {})
-    monkeypatch.setattr(host_dev, "validate_runtime_files", lambda: None)
+    monkeypatch.setattr(host_dev, "validate_runtime_files", lambda **kwargs: None)
     monkeypatch.setattr(
         host_dev,
         "resolve_start_allowed_origins",
         lambda *args, **kwargs: (),
     )
-    monkeypatch.setattr(host_dev, "build_start_environment", lambda **kwargs: {})
+    monkeypatch.setattr(
+        host_dev,
+        "build_start_environment",
+        lambda *args, **kwargs: dict(args[0]) if args else {},
+    )
     monkeypatch.setattr(
         host_dev,
         "load_local_runtime_environment",
-        lambda environment: {"LOCAL": "value"},
+        lambda environment: {"LOCAL": "value", "SOC_PINGAN_ENV": "dev"},
     )
     monkeypatch.setattr(
         host_dev,

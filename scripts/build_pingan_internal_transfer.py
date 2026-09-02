@@ -128,13 +128,14 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
         "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE",
         "SOC_PINGAN_ENV",
         "SOC_PINGAN_ASSET_PROVIDER_MODE",
+        "SOC_PINGAN_ZEUS_ENV",
         "SOC_PINGAN_ZEUS_BASE_URL",
         "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
         "SOC_PINGAN_ZEUS_APP_ID",
         "SOC_PINGAN_ZEUS_APP_KEY",
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION",
         "D12B_INVALID_ZEUS_APP_KEY",
-        "D12B_TIMEOUT_ZEUS_BASE_URL",
-        "D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS",
+        "D12B_TIMEOUT_SECONDS",
         "SOC_PINGAN_WORKFLOW_ENV",
         "SOC_PINGAN_WORKFLOW_BASE_URL",
         "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS",
@@ -195,9 +196,11 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/scripts/soc_pingan_legacy_worker.py",
     "backend/scripts/soc_pingan_legacy_fake_acceptance.py",
     "backend/scripts/soc_pingan_zeus_lifecycle_smoke.py",
+    "backend/scripts/soc_pingan_zeus_lifecycle_response_probe.py",
     "backend/scripts/soc_pingan_legacy_live_acceptance.py",
     "backend/scripts/soc_pingan_prepare_legacy_live_request.py",
     "backend/scripts/soc_pingan_set_legacy_provider_mode.py",
+    "backend/scripts/soc_pingan_set_runtime_environment.py",
     "backend/scripts/soc_pingan_security_tag_mcp_server.py",
     "backend/scripts/soc_pingan_threat_intel_mcp_server.py",
     "backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py",
@@ -215,6 +218,8 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/integrations/pingan/legacy_workflow_profile.py",
     "backend/soc_agent/integrations/pingan/model_gateway.py",
     "backend/soc_agent/integrations/pingan/model_gateway_smoke.py",
+    "backend/soc_agent/integrations/pingan/runtime_environment.py",
+    "backend/soc_agent/integrations/pingan/zeus_target.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/acceptance.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/callback.py",
     "backend/soc_agent/integrations/pingan/legacy_compat/contracts.py",
@@ -775,6 +780,11 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         "SOC_PINGAN_LEGACY_CALLBACK_MODE": "fake",
         "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
         "SOC_PINGAN_ENV": "dev",
+        "SOC_PINGAN_ZEUS_ENV": "prd",
+        "SOC_PINGAN_ZEUS_BASE_URL": "https://isec-gw.paic.com.cn",
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "isec-gw.paic.com.cn",
+        "SOC_PINGAN_ZEUS_APP_ID": "SEC-MODEL",
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
     }
     mismatched = sorted(
         name for name, expected in expected_values.items() if values[name] != expected
@@ -1112,7 +1122,7 @@ def _transfer_runbook(
             "three PKL files and Workbench payload SQLite are supplied separately and are "
             "verified before use. Keep every artifact inside the approved environment."
         )
-    return f"""# PingAn Internal Mac DEV Runbook / 平安内网 Mac DEV 操作手册
+    return f"""# PingAn Internal Mac DEV/STG Runbook / 平安内网 Mac DEV/STG 操作手册
 
 > Built: `{timestamp}`
 > Source commit: `{git_info["commit"]}` (`{git_info["branch"]}`)
@@ -1124,6 +1134,8 @@ SHA-256 与本次交付一致，不需要额外 nginx/LAN hotfix。
 外网冻结前已依次运行 `soc_pingan_prepare_legacy_model_gateway_profile.py --apply` 和
 `soc_pingan_prepare_legacy_workflow_profile.py --apply`。旧源码不进入 source archive；解析出的
 凭证和 RSA key 只进入受保护 private overlay，内网不需要再依赖旧项目。
+本机进程、SQLite、Workbench 和 Tenant Policy 仍属于 DEV；所有共享 ZEUS Provider 明确指向
+PRD `isec-gw.paic.com.cn`，并受独立 target、host allowlist 和 production confirmation 三重门禁。
 
 ## 1. Package Identity / 包身份
 
@@ -1174,7 +1186,7 @@ cat "{report_name}"
 以下命令会替换当前用户的 `$HOME/deer-flow` 代码；已有部署会自动保留明确列入契约的运行数据：
 
 ```text
-backend/.deer-flow/data/                 # deerflow.db、soc_agent_dev.db 及 SQLite sidecars
+backend/.deer-flow/data/                 # deerflow.db、soc_agent_dev.db、soc_agent_stg.db 及 SQLite sidecars
 backend/.deer-flow/.jwt_secret           # 已有登录会话签名密钥
 backend/.deer-flow/users|agents|threads  # 用户 Memory、自定义 Agent 与工作区
 backend/.deer-flow/integrations          # 已安装的受管 Integration Skills
@@ -1194,7 +1206,7 @@ shell 状态。它在子 Bash 中依次校验准确 SHA-256、解压并检查新
 都只结束安装器，不会关闭当前终端；Hash/解压/停服/端口失败时不会替换旧 checkout，替换阶段
 或数据恢复失败时会尽力恢复旧目录。不要使用 `source` 或 `.` 加载安装器。
 
-正常重部署不要删除 `deerflow.db` 或 `soc_agent_dev.db`。只有首次初始化从未成功、且已确认库内没有
+正常重部署不要删除 `deerflow.db`、`soc_agent_dev.db` 或 `soc_agent_stg.db`。只有首次初始化从未成功、且已确认库内没有
 账号、研判、Memory、审核或任务数据时，才可把残库和 `-wal`/`-shm`/`-journal` 一并移动到带时间戳
 的隔离备份目录后重新初始化；仍不要直接 `rm`。
 
@@ -1326,11 +1338,11 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 也不要让 pnpm/Python 访问公网。
 
 不再手工初始化 SOC SQLite。Host DEV `start` 统一负责 SOC SQLite migration：它先从当前 checkout
-解析绝对 `soc_agent_dev.db` 路径，在任何 Sidecar 和 Web 服务启动前升级 Schema，并把 Sidecar 的
+根据 `SOC_PINGAN_ENV` 解析绝对 `soc_agent_dev.db` 或 `soc_agent_stg.db` 路径，在任何 Sidecar 和 Web 服务启动前升级 Schema，并把 Sidecar 的
 重复自动迁移关闭。新空库发生一次瞬时 `disk I/O error` 时，启动器只清理本次失败产生的半库并安全
 重试一次；调用前已经存在的数据库永远不会被自动删除或重建。
 
-DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合并。SOC 的版本表是
+DeerFlow 与 SOC 分别使用 `deerflow.db` 和当前环境独立的 `soc_agent_dev.db` / `soc_agent_stg.db`，不得合并。SOC 的版本表是
 `soc_alembic_version`；`alembic_version` 属于 DeerFlow 主库。迁移失败会发生在 Sidecar 启动之前，
 命令直接返回失败，不会再表现为 `legacy-api exited during startup`。不要额外执行 `source`、
 `unset SOC_DATABASE_URL` 或手工重复 migration。
@@ -1372,7 +1384,8 @@ grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
   .env.soc-dev.local
 ```
 
-三个权限必须都是 `600`，两个 mode 必须都是 `fake`。RSA key 只存在于 private overlay，
+三个权限必须都是 `600`，两个 mode 必须都是 `fake`。此时 ZEUS target 已是 PRD，但 fake mode
+不会发出生命周期查询或回调；切换 internal 后才允许真实调用。RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
 ## 7. Start Host DEV / 启动服务
@@ -1467,6 +1480,26 @@ backend/.venv/bin/python backend/scripts/soc_pingan_zeus_lifecycle_smoke.py \\
 此时立即停止，不消耗模型资源，并检查交付版本与内网 private overlay。报告只保留状态、业务码和响应
 SHA-256，不保存 ZEUS 响应正文。
 
+如果 Smoke 返回未知业务码，需要查看服务端完整 JSON，只运行下面的只读诊断。该文件可能包含内网
+业务数据，仅保存在当前 Mac 的忽略目录，不得加入 Git、邮件或公开支持包：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_zeus_lifecycle_response_probe.py \
+  --confirm-live \
+  --overwrite \
+  --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json
+```
+
+脚本在终端打印完整 Provider 响应，并以 `0600` 保存到
+`backend/.deer-flow/soc-internal-validation/legacy-compat/lifecycle-response.local.json`。
+业务码非 `200` 仍代表诊断请求成功，脚本退出码为 `0`；修复业务问题后必须重新运行前面的 Smoke，
+不能用该完整响应代替 `pending` 门禁。
+
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
@@ -1485,7 +1518,7 @@ eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --she
 source ./.env.soc-dev.local
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
   --confirm-live \\
-  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH" \\
+  --database-url "$SOC_DATABASE_URL" \\
   --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \\
   --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
 ```
@@ -1504,7 +1537,7 @@ source ./.env.soc-dev.local
 backend/.venv/bin/python backend/scripts/soc_pingan_legacy_live_acceptance.py \\
   --confirm-live \\
   --resume-existing \\
-  --database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH" \\
+  --database-url "$SOC_DATABASE_URL" \\
   --request-file backend/.deer-flow/soc-internal-validation/legacy-compat/task-request.local.json \\
   --report-path backend/.deer-flow/soc-internal-validation/legacy-compat/live-acceptance.json
 ```
@@ -1577,7 +1610,42 @@ cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ```
 
-## 8. Real Integration Follow-up / 真实验收顺序
+## 8. Promote Runtime To STG / 切换到 STG
+
+DEV 页面、模型和真实 Provider 验收通过后，可以在同一份代码上切到隔离 STG Runtime。该命令只改
+Runtime 环境选择：Memory、Tenant Policy、Automation 和 SOC SQLite 会一起切到 `stg`，数据库使用
+`backend/.deer-flow/data/soc_agent_stg.db`；DEV 语料/Memory Workbench 和免登录演示会关闭。
+STG 同时改用 DeerFlow 原生 `--prod` 优化服务模式，不启用 Next.js HMR；第一次启动会构建前端，
+后续每次切换仍以当前代码重新构建，避免复用旧版本页面。
+
+ZEUS target 不会随 Runtime profile 改变：当前仍保持私有配置中的 PRD ZEUS target。模型 EAGW、
+ZEUS 凭证、lifecycle/callback Provider mode 和真实外部动作权限也不会被该命令改写。为避免把 DEV
+联调时遗留的真实回写模式带入 STG，下面先显式恢复两个旧兼容 Provider 为 `fake`：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+backend/.venv/bin/python \\
+  backend/scripts/soc_pingan_set_legacy_provider_mode.py \\
+  --mode fake
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+backend/.venv/bin/python \\
+  backend/scripts/soc_pingan_set_runtime_environment.py \\
+  --environment stg
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon
+python3.12 scripts/soc_pingan_macos_host_dev.py status
+```
+
+切换报告必须显示 `environment=stg`、`database_filename=soc_agent_stg.db`、
+`workbenches_enabled=false`、`demo_no_auth_allowed=false` 和 `zeus_target_unchanged=true`。状态报告必须
+显示 `runtime_environment=stg`、`service_mode=production_optimized`、STG 数据库 `status=ready`，并且 Core/Sidecars 正常。STG 启动禁止
+添加 `--demo-no-auth`；外部动作仍固定关闭，之后如需真实 lifecycle/callback，只能再走独立的 Provider
+mode 验收步骤。
+
+如需回到演练 DEV，先停服务，再执行相同命令的 `--environment dev`，随后可用
+`start --daemon --demo-no-auth` 启动；DEV 和 STG 的 SOC 数据不会混库。
+
+## 9. Real Integration Follow-up / 真实验收顺序
 
 ```text
 D12-B preflight

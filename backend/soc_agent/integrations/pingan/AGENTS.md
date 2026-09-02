@@ -124,6 +124,19 @@ generic `soc_agent` code.
 
 ## Internal DEV And Handoff
 
+- Keep the local runtime environment and the remote ZEUS target as separate settings.
+  The initial Host profile uses `SOC_PINGAN_ENV=dev` while every ZEUS-backed
+  Provider (asset, threat intelligence, security tag, lifecycle read, and callback)
+  resolves one shared `SOC_PINGAN_ZEUS_ENV=prd` target through `zeus_target.py`.
+  PRD requires the exact host allowlist and
+  `SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD`. Fake lifecycle/callback
+  modes return before loading that target and therefore perform no ZEUS I/O.
+- `soc_pingan_set_runtime_environment.py` is the only supported host DEV/STG switch.
+  It updates only `SOC_PINGAN_ENV`: startup derives Memory, tenant-policy and automation
+  scope from it, selects `soc_agent_dev.db` or `soc_agent_stg.db`, and keeps real action
+  execution disabled. STG disables DEV Workbenches and rejects `--demo-no-auth`.
+  ZEUS/model targets, credentials and lifecycle/callback modes remain independent and
+  unchanged. Profile refresh must preserve an already selected DEV/STG Runtime.
 - The internal model is accepted through the loopback OpenAI-compatible smoke in
   `backend/scripts/soc_pingan_model_gateway_smoke.py`. The loopback service is owned by
   this repository and maps the stable `deepseek-v4-flash` alias to an operator-owned
@@ -152,8 +165,14 @@ generic `soc_agent` code.
 - Before a model-backed live task, run the read-only ZEUS lifecycle smoke against the
   prepared request. Only a non-mocked pending result may continue. Persist/report only
   bounded provider code/status, response hash, and failure category; never response text.
+- Unknown lifecycle business codes may be inspected only with the explicit internal
+  response-probe script. It reuses the Worker lifecycle Provider, performs no Job/model/
+  callback work, and writes the complete response only to a mode-`0600` ignored
+  `*.local.json` file. Complete provider responses never enter normal reports, Runtime,
+  persistence, Git, email, or support bundles.
 - Resolve the live-acceptance evidence store from the checkout-owned absolute
-  `SOC_DATABASE_URL`/`SOC_DEV_SQLITE_PATH`, never from the caller's working directory.
+  `SOC_DATABASE_URL`/`SOC_SQLITE_PATH` (with `SOC_DEV_SQLITE_PATH` accepted only as a
+  DEV compatibility alias), never from the caller's working directory.
   Before any `8090` submission, require a readable `soc_alembic_version` and the durable
   Processing Job/Callback tables. If a client fails after submission, preserve the exact
   private request and use explicit resume mode: the same idempotency identity must return

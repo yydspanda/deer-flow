@@ -40,7 +40,7 @@ composition/extensions，真实值只通过环境变量注入，不再现场增�
 
 D12-B 之后再收集：TI 和安全标签的脱敏成功/查无/错误响应，以及可用时的 Zeus 状态理由回流协议。
 
-当前**不需要**收集 Kafka、K8s、PostgreSQL DEV 或真实响应动作信息。DEV 数据库不需要账号密码，项目会从 DeerFlow `database.backend: sqlite` 自动使用独立的 `soc_agent_dev.db`。
+当前**不需要**收集 Kafka、K8s、PostgreSQL 或真实响应动作信息。内网 DEV/STG 演练数据库不需要账号密码，项目会从 DeerFlow `database.backend: sqlite` 按 Runtime profile 自动使用独立的 `soc_agent_dev.db` / `soc_agent_stg.db`。
 
 ## 2. Already Known / 不需要重复收集
 
@@ -75,9 +75,9 @@ SOC Runtime 不实现 `endpoint.process_tree.lookup` 或 `host.event_context.loo
 
 该项已完成源码审计：
 
-- 旧模块通过 `env_profile` 选择 profile；新项目不读取该全局变量。D12-B 部署环境使用 `SOC_PINGAN_ENV=dev`，Agent Platform 上游目标另由 `SOC_PINGAN_WORKFLOW_ENV=dev|stg|prd` 显式选择。
+- 旧模块通过 `env_profile` 选择 profile；新项目不读取该全局变量。D12-B 首轮使用 `SOC_PINGAN_ENV=dev`，验证后可通过受治理命令切到 `stg`；Agent Platform 与 ZEUS 上游目标始终由各自变量独立显式选择。
 - DeerFlow 的模型 endpoint、ZEUS endpoint 和 workflow runner 分别显式配置，不依赖旧 `root_config` 的隐式全局读取。
-- `soc_pingan_dev_preflight.py` 会在发请求前拒绝未知环境、非 internal provider、未 allowlist 的 ZEUS/Agent Platform host、非 loopback model endpoint，以及未二次确认的 PRD workflow target。
+- `soc_pingan_dev_preflight.py` 会在发请求前拒绝未知环境、非 internal provider、未 allowlist 的 ZEUS/Agent Platform host、非 loopback model endpoint，以及未显式确认的 ZEUS/Workflow PRD target。
 - 实际 DEV URL/App ID/App Key 可以直接写入 Git-ignored `.env.soc-dev.local`。
 
 已提供：
@@ -136,9 +136,12 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 
 ```text
 SOC_PINGAN_ENV=dev
-SOC_PINGAN_ZEUS_BASE_URL=<internal-only>
-SOC_PINGAN_ZEUS_APP_ID=<internal-only>
-SOC_PINGAN_ZEUS_APP_KEY=<internal-only>
+SOC_PINGAN_ZEUS_ENV=prd
+SOC_PINGAN_ZEUS_BASE_URL=https://isec-gw.paic.com.cn
+SOC_PINGAN_ZEUS_ALLOWED_HOSTS=isec-gw.paic.com.cn
+SOC_PINGAN_ZEUS_APP_ID=SEC-MODEL
+SOC_PINGAN_ZEUS_APP_KEY=<written by the legacy-profile preparer>
+SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD
 SOC_PINGAN_WORKFLOW_ENV=prd
 SOC_PINGAN_WORKFLOW_BASE_URL=https://agents-api-sze.paic.com.cn
 SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS=agents-api-sze.paic.com.cn
@@ -157,9 +160,10 @@ backend/.venv/bin/python \
 ```
 
 两个脚本只用 AST 静态读取已审阅旧源码，不 import/执行旧项目。第一个选择 STG
-`DeepSeek_V4_Flash`、迁移 loopback key/旧 ingress app-key、生成
-`.secrets/eagw-private-key.der`，并将真实生命周期和回调保持在 `fake`；第二个迁移 `YHSYS` PRD
-Workflow profile。输出只包含 profile 元数据、源/key hash 和凭证存在标记，始终为
+`DeepSeek_V4_Flash` 模型路由、迁移 loopback key/旧 ingress app-key、生成
+`.secrets/eagw-private-key.der`，同时写入共享 ZEUS PRD 目标及凭证，并将生命周期和回调保持在
+`fake`；第二个迁移 `YHSYS` PRD Workflow profile。这里“DEV”只描述本机 Runtime、SQLite、Memory
+和 Workbench，不表示访问 ZEUS STG。输出只包含 profile 元数据、源/key hash 和凭证存在标记，始终为
 `secret_in_output=false`。旧源码本身不进入 source bundle，写好的 env/key 只进入受保护 private overlay。
 
 还需确认：
@@ -248,17 +252,18 @@ roster 或其他系统能否提供带 source/version/scope/validity 的事实；
 `POST /v1/chat/completions`。该脚本只接受 loopback endpoint，使用固定无业务提示词，并保存不含响应正文的
 `soc.pingan_model_gateway_smoke.v1` 报告。
 
-### 5.2 SQLite-only DEV database
+### 5.2 SQLite-only DEV/STG rehearsal databases
 
-本阶段不收集 PostgreSQL 信息。内网 DEV 使用独立本地 SQLite：
+本阶段不收集 PostgreSQL 信息。内网 DEV/STG 演练使用相互隔离的本地 SQLite：
 
 ```text
 backend/.deer-flow/data/soc_agent_dev.db
+backend/.deer-flow/data/soc_agent_stg.db
 ```
 
 要求：
 
-- DeerFlow `config.yaml` 保持 `database.backend: sqlite`；SOC 在没有显式 URL 时自动解析为上述独立文件，不需要收集或配置数据库凭证。
+- DeerFlow `config.yaml` 保持 `database.backend: sqlite`；SOC 根据 `SOC_PINGAN_ENV=dev|stg` 解析为对应独立文件，不需要收集或配置数据库凭证。
 - `--database-url` 和 `SOC_DATABASE_URL` 只作为测试隔离或显式覆盖，并继续保持最高优先级。
 - 通过 `soc db upgrade` 建表，不与 DeerFlow 通用数据库混用。
 - smoke 可使用独立临时 DB，正式 DEV 验收使用上面的固定文件。
@@ -290,6 +295,7 @@ backend/.deer-flow/data/soc_agent_dev.db
 | `model-gateway-smoke.json` | Yes after review | 固定无业务 prompt 的连通性报告；只含模型、状态、latency、token、文本长度/hash，不含 key 或模型原文 |
 | `legacy-compat/task-request.local.json` | No | 请求准备器根据一个获批 pending `alert_id` 从 Workbench payload store 自动生成完整旧 task 请求和唯一 session；权限 `0600`，不手工编辑，不进源码包 |
 | `legacy-compat/lifecycle-smoke.json` | Yes after review | `soc.pingan_zeus_lifecycle_smoke.v1`；模型调用前只读验证真实签名、业务码和 pending 状态，不含告警 ID/正文或凭证 |
+| `legacy-compat/lifecycle-response.local.json` | No | 未知生命周期业务码的显式诊断产物；包含完整 Provider JSON，仅限内网本机、权限 `0600`，不得进 Git/邮件/支持包，也不能替代 bounded smoke 门禁 |
 | `legacy-compat/live-acceptance.json` | Yes after review | `soc.pingan_legacy_live_acceptance.v3`；只含请求/结果 hash、任务状态、Runtime/precheck/callback 证明、bounded provider code 和耗时，不含正文或凭证 |
 
 ## 8. Implementation Order After Collection / 收集后的实现顺序
@@ -303,9 +309,9 @@ DEV profile + no-network preflight (implemented)
     -> ZEUS-originated submit + old-page readback
     -> old ZEUS page result/status readback
     -> PI-01A threat_intel.ip_reputation.lookup Provider/MCP (implemented externally)
-    -> PI-01A real DEV hit/not-found/error/timeout + actual field coverage + evidence readback
+    -> PI-01A DEV Host -> ZEUS PRD hit/not-found/error/timeout + actual field coverage + evidence readback
     -> PI-01B1 security_tag.lookup Provider/MCP (implemented externally)
-    -> PI-01B1 real DEV entity/validity/scope/error coverage + evidence readback
+    -> PI-01B1 DEV Host -> ZEUS PRD entity/validity/scope/error coverage + evidence readback
     -> PI-01B2 authoritative-fact source availability (currently data-gated)
     -> external disposition source contract, if DEV transport/event schema exists (currently data-gated)
     -> PI-01D1 governed planner/service (implemented externally)

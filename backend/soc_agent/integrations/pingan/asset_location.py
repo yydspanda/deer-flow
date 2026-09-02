@@ -31,6 +31,10 @@ from soc_agent.integrations.pingan.zeus_signing import (
     isec_sign,
     serialize_isec_json_body,
 )
+from soc_agent.integrations.pingan.zeus_target import (
+    PingAnZeusTargetConfigurationError,
+    load_pingan_zeus_target,
+)
 
 PINGAN_LEGACY_WORKFLOW_APP_ID = "YHSYS"
 PINGAN_LEGACY_WORKFLOW_OPERATOR = "WANGWENBIN520"
@@ -572,11 +576,16 @@ def build_pingan_asset_locator_from_env(
     if mode != "internal":
         raise PingAnAssetProviderConfigurationError("SOC_PINGAN_ASSET_PROVIDER_MODE must be fake or internal")
 
+    try:
+        zeus = load_pingan_zeus_target(env)
+    except PingAnZeusTargetConfigurationError as exc:
+        raise PingAnAssetProviderConfigurationError(str(exc)) from exc
+
     search = HttpPingAnZeusAssetSearchPort(
-        base_url=_require_env(env, "SOC_PINGAN_ZEUS_BASE_URL"),
-        allowed_hosts=_require_env(env, "SOC_PINGAN_ZEUS_ALLOWED_HOSTS").split(","),
-        app_id=_require_env(env, "SOC_PINGAN_ZEUS_APP_ID"),
-        app_key=_require_env(env, "SOC_PINGAN_ZEUS_APP_KEY"),
+        base_url=zeus.base_url,
+        allowed_hosts=zeus.allowed_hosts,
+        app_id=zeus.app_id,
+        app_key=zeus.app_key,
         signer=isec_sign,
         timeout_seconds=_float_env(env, "SOC_PINGAN_ZEUS_TIMEOUT_SECONDS", 10.0),
         endpoint_path=env.get("SOC_PINGAN_ZEUS_ASSET_PATH", "/public/searchAssetInfo"),

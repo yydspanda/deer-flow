@@ -270,7 +270,7 @@ def test_service_fails_closed_on_transport_failure() -> None:
 
 
 def test_environment_builder_never_falls_back_from_internal_to_fake() -> None:
-    with pytest.raises(PingAnSecurityTagConfigurationError, match="SOC_PINGAN_ZEUS_BASE_URL"):
+    with pytest.raises(PingAnSecurityTagConfigurationError, match="SOC_PINGAN_ENV"):
         build_pingan_security_tag_service_from_env({"SOC_PINGAN_SECURITY_TAG_PROVIDER_MODE": "internal"})
 
     with pytest.raises(PingAnSecurityTagConfigurationError, match="must be a boolean"):

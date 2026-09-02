@@ -1817,10 +1817,11 @@ Contract rules:
 
 ## 9. Persistence and Runtime Data / 存储与运行数据
 
-Production and staging should use PostgreSQL as the SOC business store. Local development and the
-current PingAn internal DEV validation follow DeerFlow `database.backend: sqlite` and automatically
-use the separate `{database.sqlite_dir}/soc_agent_dev.db`; explicit CLI/env database URLs remain
-overrides. SQLite evidence cannot satisfy PostgreSQL/staging acceptance.
+Production and final staging acceptance should use PostgreSQL as the SOC business store. Local development
+and the current PingAn internal DEV/STG integration rehearsal follow DeerFlow `database.backend: sqlite`
+and use separate `{database.sqlite_dir}/soc_agent_dev.db` / `soc_agent_stg.db` files; explicit CLI/env
+database URLs remain overrides. This SQLite STG profile validates configuration, authentication and
+integration behavior, but its evidence cannot satisfy the final PostgreSQL staging gate.
 
 Main persistence categories:
 
@@ -2293,7 +2294,7 @@ The PA track is a capability onboarding method, not a separate product architect
 | PA-09 | Memory candidate entry |
 | PA-10 | Domain triage MVP |
 | PA-11 | Main orchestrator demo |
-| PA-12 | Replace mock with real PingAn dev/staging MCP/API, credential-gated |
+| PA-12 | Replace mock with real PingAn internal MCP/API, credential-gated; current ZEUS target is PRD |
 
 PA-12 must not be marked complete by adding more mock behavior. It requires real endpoint,
 credentials, smoke report, and payload/latency/error evaluation.
@@ -2305,7 +2306,7 @@ credentials, smoke report, and payload/latency/error evaluation.
 | Deliverable / 交付物 | Status / 状态 | Meaning / 含义 |
 | --- | --- | --- |
 | D12-A provider implementation | Done / `fake-only` | PingAn-owned ZEUS HTTP/signing port, asset-to-BU/UM workflow port, fallback service, stdio MCP server, explicit action/MCP config and regression tests; every smoke result is `mocked=true` |
-| D12-B internal real smoke | Parked / execution-ready | Local DEV model profile, portable ZEUS signer, no-network preflight, direct seven-class runner and MCP evidence/readback acceptance runner are implemented. Product owner parked internal execution on 2026-08-04; the private matrix, `mocked=false`, persistence/readback and deployed Web/TUI gates remain unchanged and must pass when resumed |
+| D12-B internal real smoke | In progress / PRD evidence pending | Local DEV model profile, portable ZEUS signer, no-network preflight, direct seven-class runner and MCP evidence/readback acceptance runner are implemented. Internal execution has resumed against the shared ZEUS PRD target; private matrix, `mocked=false`, persistence/readback and deployed Web/TUI gates remain open |
 
 The provider receives an already-extracted `asset_key`, type and optional role. It does not extract
 assets, infer attacker/victim roles, select a response target, alter the Runtime verdict, close a
@@ -2319,6 +2320,17 @@ and no import-time dependency on the old application. ZEUS lifecycle status/reas
 the historical EDR safe-path candidate dataset also stay PingAn-owned: status events enter the
 canonical external-disposition service, while safe-path matches may only become governed,
 investigation-only evidence. Neither may add a PingAn branch to generic Runtime control flow.
+The current internal profile intentionally separates local execution from the remote target:
+`SOC_PINGAN_ENV=dev|stg` owns the environment-specific SOC SQLite, Memory, Workbench and automation
+scope (`dev` enables the validation Workbenches; `stg` disables them and requires authentication), while asset,
+threat-intelligence, security-tag, lifecycle-read and callback Providers all load one reviewed
+`SOC_PINGAN_ZEUS_ENV=prd` contract. The PRD host allowlist and exact confirmation are mandatory;
+lifecycle/callback remain `fake` until the explicit internal live gate enables both together. A governed
+runtime switch updates only the Runtime selector and preserves every Provider target, credential, mode and
+action-authority setting; DEV and STG use separate `soc_agent_dev.db` / `soc_agent_stg.db` files.
+Unknown ZEUS lifecycle business codes may be inspected by an explicit internal-only response probe
+that reuses the same Provider transport. Complete responses remain in an ignored mode-`0600` local
+file and never enter Runtime, persistence, normal acceptance reports, telemetry, or LLM context.
 
 ### 11.3.1 PI-01A Threat-intelligence Provider / 威胁情报能力源
 
@@ -2639,11 +2651,11 @@ The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
 [`progress.md`](progress.md). As of 2026-08-05, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. Checkpoint D0-D11.1 and D12-A
-provider code/fake smoke are complete. D12-B has complete execution tooling but is explicitly
-`Parked / internal evidence pending`; its `mocked=false` asset-provider gate remains open. PI-01A
+provider code/fake smoke are complete. D12-B has complete execution tooling and is now
+`In progress / ZEUS PRD evidence pending`; its `mocked=false` asset-provider gate remains open. PI-01A
 threat intelligence has production-shaped PingAn Provider/MCP, bounded mapping and external regression,
-while real DEV smoke and actual response-field review remain. PI-01B1 security-tag lookup also has
-production-shaped Provider/MCP and external validity/scope regression, while real DEV object-type/expiry
+while DEV Host → ZEUS PRD smoke and actual response-field review remain. PI-01B1 security-tag lookup also has
+production-shaped Provider/MCP and external validity/scope regression, while ZEUS PRD object-type/expiry
 semantics and `mocked=false` evidence remain. PI-01B2 and PI-01C are explicitly data-gated because the
 available material does not define authoritative activity-source or stable status/reason event contracts.
 PI-01D1/D2/D3/D4 are complete: versioned planner contracts, optional Main Orchestrator bridge, strict

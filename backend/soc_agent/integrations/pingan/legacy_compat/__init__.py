@@ -53,6 +53,7 @@ from soc_agent.integrations.pingan.legacy_compat.wiring import (
     PingAnLegacyProviderMode,
     PingAnLegacyWorkerSettings,
     build_pingan_callback_port,
+    build_pingan_lifecycle_port,
     build_pingan_lifecycle_service,
 )
 from soc_agent.integrations.pingan.legacy_compat.worker import (
@@ -107,5 +108,6 @@ __all__ = [
     "set_pingan_legacy_provider_mode",
     "prepare_pingan_legacy_live_request",
     "build_pingan_callback_port",
+    "build_pingan_lifecycle_port",
     "build_pingan_lifecycle_service",
 ]

@@ -26,6 +26,10 @@ from soc_agent.integrations.pingan.asset_location import (
     PingAnAssetProviderUnavailableError,
     build_pingan_asset_locator_from_env,
 )
+from soc_agent.integrations.pingan.zeus_target import (
+    PingAnZeusTargetConfigurationError,
+    load_pingan_zeus_target,
+)
 
 
 class PingAnDevPreflightStatus(StrEnum):
@@ -101,10 +105,10 @@ def run_pingan_dev_preflight(
 
     _append_boolean_check(
         checks,
-        check_id="environment.dev_explicit",
-        passed=environment == "dev",
-        passed_detail="SOC_PINGAN_ENV explicitly selects DEV.",
-        failed_detail="SOC_PINGAN_ENV must explicitly equal dev for D12-B.",
+        check_id="environment.non_production",
+        passed=environment in {"dev", "stg"},
+        passed_detail=(f"SOC_PINGAN_ENV explicitly selects {environment.upper()}." if environment in {"dev", "stg"} else "SOC_PINGAN_ENV selects a supported non-production profile."),
+        failed_detail="SOC_PINGAN_ENV must explicitly equal dev or stg for D12-B.",
     )
     _append_boolean_check(
         checks,
@@ -115,7 +119,9 @@ def run_pingan_dev_preflight(
     )
 
     required_names = (
+        "SOC_PINGAN_ZEUS_ENV",
         "SOC_PINGAN_ZEUS_BASE_URL",
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
         "SOC_PINGAN_ZEUS_APP_ID",
         "SOC_PINGAN_ZEUS_APP_KEY",
     )
@@ -140,7 +146,7 @@ def run_pingan_dev_preflight(
         failed_detail=("Missing required environment keys: " + ", ".join(missing)) if missing else "Required Provider configuration is invalid.",
     )
 
-    _validate_zeus_host(env, checks)
+    _validate_zeus_target(env, checks)
     if workflow_enabled:
         _validate_workflow_host(env, checks)
     _validate_deerflow_model_profile(
@@ -294,19 +300,22 @@ def write_validation_report(report: BaseModel, path: str | Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _validate_zeus_host(
+def _validate_zeus_target(
     env: Mapping[str, str],
     checks: list[PingAnDevPreflightCheck],
 ) -> None:
-    parsed = urlparse(env.get("SOC_PINGAN_ZEUS_BASE_URL", ""))
-    allowed_hosts = {value.strip().lower() for value in env.get("SOC_PINGAN_ZEUS_ALLOWED_HOSTS", "").split(",") if value.strip()}
-    passed = parsed.scheme == "https" and bool(parsed.hostname) and parsed.hostname.lower() in allowed_hosts
+    try:
+        target = load_pingan_zeus_target(env)
+    except PingAnZeusTargetConfigurationError:
+        target = None
     _append_boolean_check(
         checks,
-        check_id="provider.dev_host_allowlist",
-        passed=passed,
-        passed_detail="ZEUS uses HTTPS and its host is explicitly allowlisted for this DEV profile.",
-        failed_detail="ZEUS DEV URL must use HTTPS and match SOC_PINGAN_ZEUS_ALLOWED_HOSTS.",
+        check_id="provider.zeus_target_guard",
+        passed=target is not None,
+        passed_detail=(
+            f"Local {target.runtime_environment.upper()} targets ZEUS {target.target_environment.upper()} through HTTPS, an explicit host allowlist, and the required environment guard." if target is not None else "ZEUS target is valid."
+        ),
+        failed_detail=("ZEUS target must declare dev/stg/prd, use an allowlisted HTTPS host, and PRD additionally requires SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD."),
     )
 
 

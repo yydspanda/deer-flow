@@ -97,15 +97,19 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "backend/scripts/soc_pingan_legacy_worker.py" in required
     assert "backend/scripts/soc_pingan_legacy_fake_acceptance.py" in required
     assert "backend/scripts/soc_pingan_zeus_lifecycle_smoke.py" in required
+    assert "backend/scripts/soc_pingan_zeus_lifecycle_response_probe.py" in required
     assert (
         "backend/soc_agent/integrations/pingan/legacy_compat/lifecycle_smoke.py"
         in required
     )
     assert "backend/scripts/soc_pingan_prepare_legacy_live_request.py" in required
     assert "backend/scripts/soc_pingan_set_legacy_provider_mode.py" in required
+    assert "backend/scripts/soc_pingan_set_runtime_environment.py" in required
     assert (
         "backend/scripts/soc_pingan_prepare_legacy_model_gateway_profile.py" in required
     )
+    assert "backend/soc_agent/integrations/pingan/zeus_target.py" in required
+    assert "backend/soc_agent/integrations/pingan/runtime_environment.py" in required
     assert "scripts/soc_pingan_host_sidecars.py" in required
     assert "scripts/soc_pingan_stage_internal_corpus.py" in required
     assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
@@ -172,6 +176,8 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "不读取历史小 JSON" in runbook
     assert "soc_pingan_legacy_live_acceptance.py" in runbook
     assert "soc_pingan_zeus_lifecycle_smoke.py" in runbook
+    assert "soc_pingan_zeus_lifecycle_response_probe.py" in runbook
+    assert "lifecycle-response.local.json" in runbook
     assert runbook.index("soc_pingan_zeus_lifecycle_smoke.py") < runbook.index(
         "soc_pingan_legacy_live_acceptance.py"
     )
@@ -181,7 +187,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     live_acceptance = runbook.split("只有要验证真实旧 ZEUS", maxsplit=1)[1].split(
         "单条真实验收结束", maxsplit=1
     )[0]
-    assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in live_acceptance
+    assert '--database-url "$SOC_DATABASE_URL"' in live_acceptance
     assert "--resume-existing" in live_acceptance
     assert "resumed_existing_confirmed=true" in live_acceptance
     assert "soc_pingan_prepare_legacy_live_request.py" in runbook
@@ -192,13 +198,15 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
         "cp backend/samples/pingan_dev/legacy-task-request.example.json" not in runbook
     )
     assert "soc_pingan_prepare_legacy_model_gateway_profile.py" in runbook
+    assert "所有共享 ZEUS Provider 明确指向" in runbook
+    assert "isec-gw.paic.com.cn" in runbook
     assert ".secrets/eagw-private-key.der" in runbook
     local_env_blocks = [
         block
         for block in re.findall(r"```bash\n(.*?)```", runbook, flags=re.DOTALL)
         if "source ./.env.soc-dev.local" in block
     ]
-    assert len(local_env_blocks) == 4
+    assert len(local_env_blocks) == 5
     for block in local_env_blocks:
         assert 'export TARGET_REPO="$HOME/deer-flow"' in block
         assert 'cd "$TARGET_REPO"' in block
@@ -233,7 +241,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "task-request.local.json" in runbook
     assert 'shasum -a 256 \\\n  "deer-flow-pingan-source' in runbook
     assert "soc_pingan_model_gateway_smoke.py \\\n  --confirm-live" in runbook
-    assert '--database-url "sqlite+pysqlite:///$SOC_DEV_SQLITE_PATH"' in runbook
+    assert '--database-url "$SOC_DATABASE_URL"' in runbook
     host_install = runbook.split("## 5. Host Check And Install", maxsplit=1)[1].split(
         "## 6. Execution Plane Preflight", maxsplit=1
     )[0]
@@ -256,7 +264,23 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "`soc_database.status=ready`" in runbook
     assert "`soc_database.schema_revision=0027_processing_jobs`" in runbook
     assert all("unset SOC_DATABASE_URL" not in block for block in local_env_blocks)
-    assert "正常重部署不要删除 `deerflow.db` 或 `soc_agent_dev.db`" in runbook
+    assert (
+        "正常重部署不要删除 `deerflow.db`、`soc_agent_dev.db` 或 "
+        "`soc_agent_stg.db`" in runbook
+    )
+    assert "## 8. Promote Runtime To STG / 切换到 STG" in runbook
+    assert "soc_pingan_set_runtime_environment.py" in runbook
+    assert "--environment stg" in runbook
+    assert "soc_agent_stg.db" in runbook
+    assert "ZEUS target 不会随 Runtime profile 改变" in runbook
+    assert "service_mode=production_optimized" in runbook
+    assert "原生 `--prod`" in runbook
+    stg_section = runbook.split(
+        "## 8. Promote Runtime To STG / 切换到 STG", maxsplit=1
+    )[1].split("## 9. Real Integration Follow-up", maxsplit=1)[0]
+    stg_command = re.findall(r"```bash\n(.*?)```", stg_section, flags=re.DOTALL)[0]
+    assert "--demo-no-auth" not in stg_command
+    assert "--mode fake" in stg_section
 
 
 def test_transfer_installer_is_self_contained_and_orders_destructive_steps() -> None:
@@ -538,6 +562,21 @@ def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) 
     _assert_private_overlay_config_ready(tmp_path)
 
 
+def test_private_overlay_config_rejects_non_prd_zeus_target(tmp_path: Path) -> None:
+    _write_private_profiles(
+        tmp_path,
+        overrides={
+            "SOC_PINGAN_ZEUS_ENV": "stg",
+            "SOC_PINGAN_ZEUS_BASE_URL": "https://isec-gw-stg.paic.com.cn",
+            "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "isec-gw-stg.paic.com.cn",
+            "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_STG",
+        },
+    )
+
+    with pytest.raises(ValueError, match="safe transfer profile"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
 def test_private_overlay_config_rejects_obsolete_import_contract(
     tmp_path: Path,
 ) -> None:
@@ -746,6 +785,11 @@ database:
             "SOC_PINGAN_LEGACY_CALLBACK_MODE": "fake",
             "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
             "SOC_PINGAN_ENV": "dev",
+            "SOC_PINGAN_ZEUS_ENV": "prd",
+            "SOC_PINGAN_ZEUS_BASE_URL": "https://isec-gw.paic.com.cn",
+            "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "isec-gw.paic.com.cn",
+            "SOC_PINGAN_ZEUS_APP_ID": "SEC-MODEL",
+            "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
         }
     )
     values.update(overrides or {})

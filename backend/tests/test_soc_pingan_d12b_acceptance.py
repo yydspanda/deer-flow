@@ -116,8 +116,6 @@ def test_matrix_runs_all_cases_and_keeps_private_values_out_of_report() -> None:
     matrix = PingAnAssetCaseMatrix.model_validate(_matrix_payload())
     private_env = {
         "D12B_INVALID_ZEUS_APP_KEY": "invalid-secret-value",
-        "D12B_TIMEOUT_ZEUS_BASE_URL": "https://timeout.dev.internal",
-        "D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS": "timeout.dev.internal",
         "D12B_TIMEOUT_SECONDS": "1",
     }
     by_query = {case.query: case for case in matrix.cases}
@@ -127,7 +125,8 @@ def test_matrix_runs_all_cases_and_keeps_private_values_out_of_report() -> None:
         if case.kind.value == "authentication_failure":
             assert environ["SOC_PINGAN_ZEUS_APP_KEY"] == "invalid-secret-value"
         if case.kind.value == "timeout":
-            assert environ["SOC_PINGAN_ZEUS_BASE_URL"] == "https://timeout.dev.internal"
+            assert environ["SOC_PINGAN_ZEUS_TIMEOUT_SECONDS"] == "1"
+            assert "SOC_PINGAN_ZEUS_BASE_URL" not in environ
         return _smoke_for(case)
 
     report = run_pingan_asset_case_matrix(
@@ -293,8 +292,6 @@ def _matrix_payload() -> dict:
                 "expected_attempts": [{"stage": "search_asset_info", "status": "failed"}],
                 "forbidden_stages": ["asset_to_bu", "um"],
                 "environment_overrides": {
-                    "SOC_PINGAN_ZEUS_BASE_URL": "D12B_TIMEOUT_ZEUS_BASE_URL",
-                    "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS",
                     "SOC_PINGAN_ZEUS_TIMEOUT_SECONDS": "D12B_TIMEOUT_SECONDS",
                 },
             },
