@@ -63,6 +63,16 @@ SOC_DATABASE_RELATIVE_PATHS = {
     "dev": Path("backend/.deer-flow/data/soc_agent_dev.db"),
     "stg": Path("backend/.deer-flow/data/soc_agent_stg.db"),
 }
+PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS = {
+    "dev": "prd",
+    "stg": "stg",
+}
+PINGAN_ZEUS_PROFILE_SUFFIXES = (
+    "BASE_URL",
+    "ALLOWED_HOSTS",
+    "APP_ID",
+    "APP_KEY",
+)
 
 MIN_PYTHON = (3, 12)
 MIN_NODE_MAJOR = 22
@@ -549,6 +559,9 @@ def build_start_command(
     runtime_environment: str = "dev",
 ) -> list[str]:
     selected_environment = normalize_runtime_environment(runtime_environment)
+    expected_zeus_environment = PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS[
+        selected_environment
+    ]
     if demo_no_auth and selected_environment != "dev":
         raise HostDevError("--demo-no-auth is only available in DEV")
     workbench_enabled = "true" if selected_environment == "dev" else "false"
@@ -562,6 +575,8 @@ def build_start_command(
         'set -a; source "$SOC_HOST_DEV_ROOT/.env.soc-dev.local"; set +a; '
         f'if [[ "${{SOC_PINGAN_ENV:-}}" != "{selected_environment}" ]]; then '
         'echo "PingAn runtime profile changed after startup planning; retry start" >&2; exit 1; fi; '
+        f'if [[ "${{SOC_PINGAN_ZEUS_ENV:-}}" != "{expected_zeus_environment}" ]]; then '
+        'echo "PingAn ZEUS target no longer matches the governed Runtime profile; rerun the profile switch" >&2; exit 1; fi; '
         'export SOC_DATABASE_URL="$SOC_HOST_DATABASE_URL"; '
         + auth_setup
         + f"export SOC_DEV_MEMORY_WORKBENCH_ENABLED={workbench_enabled}; "
@@ -650,9 +665,32 @@ def apply_runtime_profile(
     *,
     runtime_environment: str,
 ) -> dict[str, str]:
-    """Derive all SOC scopes from one DEV/STG selector for every process."""
+    """Derive SOC scopes after validating the governed ZEUS target mapping."""
 
     selected = normalize_runtime_environment(runtime_environment)
+    expected_zeus_environment = PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS[selected]
+    actual_zeus_environment = environment.get("SOC_PINGAN_ZEUS_ENV", "").strip().lower()
+    if actual_zeus_environment != expected_zeus_environment:
+        raise HostDevError(
+            f"PingAn Runtime {selected.upper()} must target ZEUS "
+            f"{expected_zeus_environment.upper()}; run "
+            "backend/scripts/soc_pingan_set_runtime_environment.py before start"
+        )
+    target_prefix = f"SOC_PINGAN_ZEUS_{expected_zeus_environment.upper()}_"
+    drifted_keys = [
+        f"SOC_PINGAN_ZEUS_{suffix}"
+        for suffix in PINGAN_ZEUS_PROFILE_SUFFIXES
+        if not environment.get(target_prefix + suffix, "").strip()
+        or environment.get(f"SOC_PINGAN_ZEUS_{suffix}", "").strip()
+        != environment.get(target_prefix + suffix, "").strip()
+    ]
+    if drifted_keys:
+        raise HostDevError(
+            "PingAn active ZEUS profile does not match the governed "
+            f"{selected.upper()} -> ZEUS {expected_zeus_environment.upper()} "
+            "profile; rerun backend/scripts/soc_pingan_set_runtime_environment.py "
+            f"({', '.join(drifted_keys)})"
+        )
     workbench_enabled = "true" if selected == "dev" else "false"
     resolved = dict(environment)
     resolved.update(
@@ -845,6 +883,13 @@ def runtime_status() -> dict[str, Any]:
         "zeus_target_environment": environment.get(
             "SOC_PINGAN_ZEUS_ENV",
             "unknown",
+        ),
+        "expected_zeus_target_environment": (
+            PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS.get(runtime_environment)
+        ),
+        "zeus_target_matches_runtime": (
+            environment.get("SOC_PINGAN_ZEUS_ENV", "").strip().lower()
+            == PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS.get(runtime_environment)
         ),
         "legacy_lifecycle_mode": environment.get(
             "SOC_PINGAN_LEGACY_LIFECYCLE_MODE",

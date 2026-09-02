@@ -272,7 +272,9 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "soc_pingan_set_runtime_environment.py" in runbook
     assert "--environment stg" in runbook
     assert "soc_agent_stg.db" in runbook
-    assert "ZEUS target 不会随 Runtime profile 改变" in runbook
+    assert "项目 STG -> ZEUS STG" in runbook
+    assert "zeus_target_environment=stg" in runbook
+    assert "zeus_target_matches_runtime=true" in runbook
     assert "service_mode=production_optimized" in runbook
     assert "原生 `--prod`" in runbook
     stg_section = runbook.split(
@@ -562,7 +564,9 @@ def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) 
     _assert_private_overlay_config_ready(tmp_path)
 
 
-def test_private_overlay_config_rejects_non_prd_zeus_target(tmp_path: Path) -> None:
+def test_private_overlay_config_rejects_non_dev_prd_active_zeus_target(
+    tmp_path: Path,
+) -> None:
     _write_private_profiles(
         tmp_path,
         overrides={
@@ -574,6 +578,37 @@ def test_private_overlay_config_rejects_non_prd_zeus_target(tmp_path: Path) -> N
     )
 
     with pytest.raises(ValueError, match="safe transfer profile"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_requires_both_governed_zeus_profiles(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(tmp_path)
+    env_path = tmp_path / ".env.soc-dev.local"
+    env_path.write_text(
+        "\n".join(
+            line
+            for line in env_path.read_text(encoding="utf-8").splitlines()
+            if not line.startswith("export SOC_PINGAN_ZEUS_STG_APP_KEY=")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="SOC_PINGAN_ZEUS_STG_APP_KEY"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_requires_active_dev_target_to_match_prd_profile(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        overrides={"SOC_PINGAN_ZEUS_APP_KEY": "different-active-key"},
+    )
+
+    with pytest.raises(ValueError, match="active ZEUS target"):
         _assert_private_overlay_config_ready(tmp_path)
 
 
@@ -785,10 +820,19 @@ database:
             "SOC_PINGAN_LEGACY_CALLBACK_MODE": "fake",
             "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
             "SOC_PINGAN_ENV": "dev",
+            "SOC_PINGAN_ZEUS_PRD_BASE_URL": "https://isec-gw.paic.com.cn",
+            "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS": "isec-gw.paic.com.cn",
+            "SOC_PINGAN_ZEUS_PRD_APP_ID": "SEC-MODEL",
+            "SOC_PINGAN_ZEUS_PRD_APP_KEY": "zeus-prd-key",
+            "SOC_PINGAN_ZEUS_STG_BASE_URL": "https://isec-gw-stg.paic.com.cn",
+            "SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS": "isec-gw-stg.paic.com.cn",
+            "SOC_PINGAN_ZEUS_STG_APP_ID": "SEC-MODEL",
+            "SOC_PINGAN_ZEUS_STG_APP_KEY": "zeus-stg-key",
             "SOC_PINGAN_ZEUS_ENV": "prd",
             "SOC_PINGAN_ZEUS_BASE_URL": "https://isec-gw.paic.com.cn",
             "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "isec-gw.paic.com.cn",
             "SOC_PINGAN_ZEUS_APP_ID": "SEC-MODEL",
+            "SOC_PINGAN_ZEUS_APP_KEY": "zeus-prd-key",
             "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
         }
     )

@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Literal, cast
 from urllib.parse import urlparse
 
 PINGAN_ZEUS_PRD_CONFIRMATION = "CALL_PINGAN_ZEUS_PRD"
+PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS: Mapping[str, str] = MappingProxyType(
+    {
+        "dev": "prd",
+        "stg": "stg",
+    }
+)
 
 
 class PingAnZeusTargetConfigurationError(ValueError):
@@ -70,6 +77,19 @@ def load_pingan_zeus_target(
     )
 
 
+def enforce_pingan_runtime_zeus_mapping(
+    target: PingAnZeusTargetConfig,
+) -> PingAnZeusTargetConfig:
+    """Enforce the operator-approved Host deployment-to-ZEUS target mapping."""
+
+    expected = PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS.get(target.runtime_environment)
+    if expected is None:
+        raise PingAnZeusTargetConfigurationError("governed PingAn Host Runtime must be DEV or STG")
+    if target.target_environment != expected:
+        raise PingAnZeusTargetConfigurationError(f"PingAn Runtime {target.runtime_environment.upper()} must target ZEUS {expected.upper()}, not ZEUS {target.target_environment.upper()}")
+    return target
+
+
 def _required(environ: Mapping[str, str], name: str) -> str:
     value = environ.get(name, "").strip()
     if not value:
@@ -78,8 +98,10 @@ def _required(environ: Mapping[str, str], name: str) -> str:
 
 
 __all__ = [
+    "PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS",
     "PINGAN_ZEUS_PRD_CONFIRMATION",
     "PingAnZeusTargetConfig",
     "PingAnZeusTargetConfigurationError",
+    "enforce_pingan_runtime_zeus_mapping",
     "load_pingan_zeus_target",
 ]

@@ -36,6 +36,9 @@ def test_load_legacy_model_gateway_profile_resolves_named_literals(tmp_path: Pat
     assert profile.zeus_base_url == "https://isec-gw.example.internal"
     assert profile.zeus_allowed_host == "isec-gw.example.internal"
     assert profile.zeus_app_id == "SEC-MODEL"
+    assert profile.zeus_stg_base_url == "https://isec-gw-stg.example.internal"
+    assert profile.zeus_stg_allowed_host == "isec-gw-stg.example.internal"
+    assert profile.zeus_stg_app_id == "SEC-MODEL"
 
 
 def test_prepare_legacy_model_gateway_env_writes_private_files_without_secret_report(
@@ -90,6 +93,14 @@ def test_prepare_legacy_model_gateway_env_writes_private_files_without_secret_re
     assert "SOC_PINGAN_ZEUS_APP_ID=SEC-MODEL" in rendered
     assert "SOC_PINGAN_ZEUS_APP_KEY=zeus-prd-secret" in rendered
     assert "SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD" in rendered
+    assert "SOC_PINGAN_ZEUS_PRD_BASE_URL=https://isec-gw.example.internal" in rendered
+    assert "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS=isec-gw.example.internal" in rendered
+    assert "SOC_PINGAN_ZEUS_PRD_APP_ID=SEC-MODEL" in rendered
+    assert "SOC_PINGAN_ZEUS_PRD_APP_KEY=zeus-prd-secret" in rendered
+    assert "SOC_PINGAN_ZEUS_STG_BASE_URL=https://isec-gw-stg.example.internal" in rendered
+    assert "SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS=isec-gw-stg.example.internal" in rendered
+    assert "SOC_PINGAN_ZEUS_STG_APP_ID=SEC-MODEL" in rendered
+    assert "SOC_PINGAN_ZEUS_STG_APP_KEY=zeus-stg-secret" in rendered
     assert "SOC_PINGAN_COMPAT_APP_KEYS_JSON=" in rendered
     assert "${SOC_REPO_ROOT}/.secrets/eagw-private-key.der" in rendered
     assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
@@ -102,9 +113,13 @@ def test_prepare_legacy_model_gateway_env_writes_private_files_without_secret_re
     assert "compat-secret" not in serialized
     assert "local-gateway-secret" not in serialized
     assert "zeus-prd-secret" not in serialized
+    assert "zeus-stg-secret" not in serialized
     assert key_hex not in serialized
     assert report["credential_present"] is True
     assert report["compatibility_key_present"] is True
+    assert report["runtime_environment"] == "dev"
+    assert report["active_zeus_environment"] == "prd"
+    assert report["runtime_target_mapping"] == {"dev": "prd", "stg": "stg"}
     assert report["secret_in_output"] is False
     assert report["applied"] is True
 
@@ -152,7 +167,7 @@ def test_prepare_legacy_model_gateway_env_preserves_selected_stg_runtime(
     )
     env_path.chmod(0o600)
 
-    prepare_legacy_model_gateway_env(
+    report = prepare_legacy_model_gateway_env(
         repo_root=tmp_path,
         model_source_path=model_source,
         root_config_path=root_source,
@@ -162,7 +177,14 @@ def test_prepare_legacy_model_gateway_env_preserves_selected_stg_runtime(
         apply=True,
     )
 
-    assert "export SOC_PINGAN_ENV=stg" in env_path.read_text(encoding="utf-8")
+    rendered = env_path.read_text(encoding="utf-8")
+    assert "export SOC_PINGAN_ENV=stg" in rendered
+    assert "export SOC_PINGAN_ZEUS_ENV=stg" in rendered
+    assert "export SOC_PINGAN_ZEUS_BASE_URL=https://isec-gw-stg.example.internal" in rendered
+    assert "export SOC_PINGAN_ZEUS_APP_KEY=zeus-stg-secret" in rendered
+    assert "export SOC_PINGAN_ZEUS_PRD_CONFIRMATION=''" in rendered
+    assert report["runtime_environment"] == "stg"
+    assert report["active_zeus_environment"] == "stg"
 
 
 def _legacy_sources(tmp_path: Path) -> tuple[Path, Path, Path, str]:
@@ -205,6 +227,7 @@ def _legacy_sources(tmp_path: Path) -> tuple[Path, Path, Path, str]:
                 'if ENV == "LOCAL":',
                 '    ZEUS_SYSTEM_URL = "https://isec-gw-stg.example.internal"',
                 '    ZEUS_APP_ID = "SEC-MODEL"',
+                '    ZEUS_APP_KEY = "zeus-stg-secret"',
                 'elif ENV == "STG":',
                 '    ZEUS_SYSTEM_URL = "https://isec-gw-stg.example.internal"',
                 '    ZEUS_APP_ID = "SEC-MODEL"',

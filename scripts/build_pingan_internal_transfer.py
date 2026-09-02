@@ -128,6 +128,14 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
         "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE",
         "SOC_PINGAN_ENV",
         "SOC_PINGAN_ASSET_PROVIDER_MODE",
+        "SOC_PINGAN_ZEUS_PRD_BASE_URL",
+        "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS",
+        "SOC_PINGAN_ZEUS_PRD_APP_ID",
+        "SOC_PINGAN_ZEUS_PRD_APP_KEY",
+        "SOC_PINGAN_ZEUS_STG_BASE_URL",
+        "SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS",
+        "SOC_PINGAN_ZEUS_STG_APP_ID",
+        "SOC_PINGAN_ZEUS_STG_APP_KEY",
         "SOC_PINGAN_ZEUS_ENV",
         "SOC_PINGAN_ZEUS_BASE_URL",
         "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
@@ -780,6 +788,12 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         "SOC_PINGAN_LEGACY_CALLBACK_MODE": "fake",
         "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
         "SOC_PINGAN_ENV": "dev",
+        "SOC_PINGAN_ZEUS_PRD_BASE_URL": "https://isec-gw.paic.com.cn",
+        "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS": "isec-gw.paic.com.cn",
+        "SOC_PINGAN_ZEUS_PRD_APP_ID": "SEC-MODEL",
+        "SOC_PINGAN_ZEUS_STG_BASE_URL": "https://isec-gw-stg.paic.com.cn",
+        "SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS": "isec-gw-stg.paic.com.cn",
+        "SOC_PINGAN_ZEUS_STG_APP_ID": "SEC-MODEL",
         "SOC_PINGAN_ZEUS_ENV": "prd",
         "SOC_PINGAN_ZEUS_BASE_URL": "https://isec-gw.paic.com.cn",
         "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "isec-gw.paic.com.cn",
@@ -793,6 +807,22 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         raise ValueError(
             "private environment is not in the safe transfer profile: "
             + ", ".join(mismatched)
+        )
+    active_target_pairs = (
+        ("SOC_PINGAN_ZEUS_BASE_URL", "SOC_PINGAN_ZEUS_PRD_BASE_URL"),
+        ("SOC_PINGAN_ZEUS_ALLOWED_HOSTS", "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS"),
+        ("SOC_PINGAN_ZEUS_APP_ID", "SOC_PINGAN_ZEUS_PRD_APP_ID"),
+        ("SOC_PINGAN_ZEUS_APP_KEY", "SOC_PINGAN_ZEUS_PRD_APP_KEY"),
+    )
+    drifted_active_values = [
+        active
+        for active, stored in active_target_pairs
+        if values[active] != values[stored]
+    ]
+    if drifted_active_values:
+        raise ValueError(
+            "private environment active ZEUS target does not match the project "
+            "DEV -> ZEUS PRD profile: " + ", ".join(drifted_active_values)
         )
     service_api_keys = {
         value.strip()
@@ -1384,8 +1414,9 @@ grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
   .env.soc-dev.local
 ```
 
-三个权限必须都是 `600`，两个 mode 必须都是 `fake`。此时 ZEUS target 已是 PRD，但 fake mode
-不会发出生命周期查询或回调；切换 internal 后才允许真实调用。RSA key 只存在于 private overlay，
+三个权限必须都是 `600`，两个 mode 必须都是 `fake`。初始项目 DEV 已激活 ZEUS PRD，同时私有 env
+保存 ZEUS PRD/STG 两套受保护 profile；fake mode 不会发出生命周期查询或回调，切换 internal 后才允许
+真实调用。RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
 ## 7. Start Host DEV / 启动服务
@@ -1612,14 +1643,15 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 
 ## 8. Promote Runtime To STG / 切换到 STG
 
-DEV 页面、模型和真实 Provider 验收通过后，可以在同一份代码上切到隔离 STG Runtime。该命令只改
-Runtime 环境选择：Memory、Tenant Policy、Automation 和 SOC SQLite 会一起切到 `stg`，数据库使用
+DEV 页面、模型和真实 Provider 验收通过后，可以在同一份代码上切到隔离 STG 部署 profile。该命令原子
+应用项目 STG -> ZEUS STG 映射：Memory、Tenant Policy、Automation 和 SOC SQLite 会一起切到 `stg`，数据库使用
 `backend/.deer-flow/data/soc_agent_stg.db`；DEV 语料/Memory Workbench 和免登录演示会关闭。
 STG 同时改用 DeerFlow 原生 `--prod` 优化服务模式，不启用 Next.js HMR；第一次启动会构建前端，
 后续每次切换仍以当前代码重新构建，避免复用旧版本页面。
 
-ZEUS target 不会随 Runtime profile 改变：当前仍保持私有配置中的 PRD ZEUS target。模型 EAGW、
-ZEUS 凭证、lifecycle/callback Provider mode 和真实外部动作权限也不会被该命令改写。为避免把 DEV
+切换命令会从 mode-`0600` 私有 env 读取 ZEUS STG profile，并激活 STG endpoint、allowlist 和凭证；不会
+要求手工改 URL/Key。模型 EAGW、Agent Platform、lifecycle/callback Provider mode 和真实外部动作权限
+仍保持独立且不会被该命令改写。为避免把 DEV
 联调时遗留的真实回写模式带入 STG，下面先显式恢复两个旧兼容 Provider 为 `fake`：
 
 ```bash
@@ -1637,13 +1669,14 @@ python3.12 scripts/soc_pingan_macos_host_dev.py status
 ```
 
 切换报告必须显示 `environment=stg`、`database_filename=soc_agent_stg.db`、
-`workbenches_enabled=false`、`demo_no_auth_allowed=false` 和 `zeus_target_unchanged=true`。状态报告必须
-显示 `runtime_environment=stg`、`service_mode=production_optimized`、STG 数据库 `status=ready`，并且 Core/Sidecars 正常。STG 启动禁止
+`workbenches_enabled=false`、`demo_no_auth_allowed=false`、`zeus_target_environment=stg` 和
+`runtime_target_mapping_applied=true`。状态报告必须显示 `runtime_environment=stg`、
+`zeus_target_matches_runtime=true`、`service_mode=production_optimized`、STG 数据库 `status=ready`，并且 Core/Sidecars 正常。STG 启动禁止
 添加 `--demo-no-auth`；外部动作仍固定关闭，之后如需真实 lifecycle/callback，只能再走独立的 Provider
 mode 验收步骤。
 
-如需回到演练 DEV，先停服务，再执行相同命令的 `--environment dev`，随后可用
-`start --daemon --demo-no-auth` 启动；DEV 和 STG 的 SOC 数据不会混库。
+如需回到演练 DEV，先停服务，再执行相同命令的 `--environment dev`；它会同时恢复项目 DEV -> ZEUS
+PRD 映射，随后可用 `start --daemon --demo-no-auth` 启动。DEV 和 STG 的 SOC 数据不会混库。
 
 ## 9. Real Integration Follow-up / 真实验收顺序
 

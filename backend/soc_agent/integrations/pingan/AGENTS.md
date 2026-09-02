@@ -124,19 +124,21 @@ generic `soc_agent` code.
 
 ## Internal DEV And Handoff
 
-- Keep the local runtime environment and the remote ZEUS target as separate settings.
-  The initial Host profile uses `SOC_PINGAN_ENV=dev` while every ZEUS-backed
-  Provider (asset, threat intelligence, security tag, lifecycle read, and callback)
-  resolves one shared `SOC_PINGAN_ZEUS_ENV=prd` target through `zeus_target.py`.
-  PRD requires the exact host allowlist and
+- Keep the local runtime environment and the remote ZEUS target as separate low-level
+  settings. The governed Host deployment profile atomically applies the approved mapping
+  `SOC_PINGAN_ENV=dev -> SOC_PINGAN_ZEUS_ENV=prd` and
+  `SOC_PINGAN_ENV=stg -> SOC_PINGAN_ZEUS_ENV=stg`. Every ZEUS-backed Provider (asset,
+  threat intelligence, security tag, lifecycle read, and callback) resolves the active
+  shared target through `zeus_target.py`. PRD requires the exact host allowlist and
   `SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD`. Fake lifecycle/callback
   modes return before loading that target and therefore perform no ZEUS I/O.
 - `soc_pingan_set_runtime_environment.py` is the only supported host DEV/STG switch.
-  It updates only `SOC_PINGAN_ENV`: startup derives Memory, tenant-policy and automation
-  scope from it, selects `soc_agent_dev.db` or `soc_agent_stg.db`, and keeps real action
-  execution disabled. STG disables DEV Workbenches and rejects `--demo-no-auth`.
-  ZEUS/model targets, credentials and lifecycle/callback modes remain independent and
-  unchanged. Profile refresh must preserve an already selected DEV/STG Runtime.
+  It derives Memory, tenant-policy and automation scope, selects `soc_agent_dev.db` or
+  `soc_agent_stg.db`, and activates the matching protected ZEUS PRD/STG endpoint,
+  allowlist and credential as one atomic file update. STG disables DEV Workbenches and
+  rejects `--demo-no-auth`. Model/Agent Platform targets, lifecycle/callback modes and
+  action authority remain independent and unchanged. Profile refresh must preserve and
+  reapply an already selected DEV/STG deployment mapping.
 - The internal model is accepted through the loopback OpenAI-compatible smoke in
   `backend/scripts/soc_pingan_model_gateway_smoke.py`. The loopback service is owned by
   this repository and maps the stable `deepseek-v4-flash` alias to an operator-owned

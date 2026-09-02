@@ -252,12 +252,15 @@ backend/.venv/bin/python \
 
 The model preparer statically selects the reviewed STG `DeepSeek_V4_Flash`
 profile (DEV may use the STG model gateway), migrates the old local loopback API key,
-creates `.secrets/eagw-private-key.der`, and writes the reviewed shared ZEUS PRD target
+creates `.secrets/eagw-private-key.der`, and writes reviewed ZEUS PRD/STG target profiles
 for asset, threat-intelligence, security-tag, lifecycle, and callback Providers. It
+initially activates `project DEV -> ZEUS PRD`; the governed switch activates
+`project STG -> ZEUS STG` without hand-editing endpoint or credentials. It
 initializes lifecycle/callback modes to `fake`, so preparing or starting the profile does
 not call ZEUS. Its JSON output must show `environment=stg`,
 `model_config_name=DeepSeek_V4_Flash`, `credential_present=true`,
-`compatibility_key_present=true`, `zeus_environment=prd`, and
+`compatibility_key_present=true`, `zeus_environment=prd`,
+`zeus_stg_credential_present=true`, and
 `secret_in_output=false`. The workflow
 output must show `environment=prd`, `app_id=YHSYS`, `operator=WANGWENBIN520`,
 `credential_present=true`, and `secret_in_output=false`. Both commands are
@@ -273,7 +276,7 @@ Git-ignored.
 
 Resolve the checkout dynamically, fill only any remaining fault-case values in
 `.env.soc-dev.local`, and then source it. The preparer already owns the reviewed model
-profile and ZEUS PRD target. The configuration never
+profile and both ZEUS targets. The configuration never
 embeds one developer's `/Users/...` path:
 
 ```bash
@@ -348,7 +351,7 @@ deadline.
 For the internal DEV handoff, the compatibility API deliberately keeps the old
 network shape and listens on `0.0.0.0:8090`, while the model gateway remains
 loopback-only on `127.0.0.1:4001`. Restrict inbound `8090` with the macOS
-firewall to the approved ZEUS PRD callers. The legacy allowed-key-set Bearer/
+firewall to the approved callers for the active ZEUS target. The legacy allowed-key-set Bearer/
 `app-key` authentication and bounded request body remain mandatory; `app_code`
 is business routing metadata rather than a credential-map key. Do not
 publish `8090` to an untrusted network.
@@ -522,8 +525,9 @@ The expected DeerFlow and gateway alias is `deepseek-v4-flash`; the internal
 upstream model and EAGW scene are operator-owned private configuration. Host persistence is isolated by
 `SOC_PINGAN_ENV`: DEV uses `backend/.deer-flow/data/soc_agent_dev.db`, while STG uses
 `backend/.deer-flow/data/soc_agent_stg.db`. Switch with
-`backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg`; the command does not
-change the independent ZEUS/model targets, credentials, Provider modes, or action authority.
+`backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg`; the command atomically
+applies `DEV -> ZEUS PRD` or `STG -> ZEUS STG`. It does not change the independent model/Agent
+Platform targets, lifecycle/callback Provider modes, or action authority.
 DEV starts DeerFlow in hot-reload mode. STG starts the same committed checkout with DeerFlow's
 optimized `--prod` mode, disables HMR, and rebuilds the frontend from the current source.
 

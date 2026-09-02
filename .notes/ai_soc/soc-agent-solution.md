@@ -2306,7 +2306,7 @@ credentials, smoke report, and payload/latency/error evaluation.
 | Deliverable / 交付物 | Status / 状态 | Meaning / 含义 |
 | --- | --- | --- |
 | D12-A provider implementation | Done / `fake-only` | PingAn-owned ZEUS HTTP/signing port, asset-to-BU/UM workflow port, fallback service, stdio MCP server, explicit action/MCP config and regression tests; every smoke result is `mocked=true` |
-| D12-B internal real smoke | In progress / PRD evidence pending | Local DEV model profile, portable ZEUS signer, no-network preflight, direct seven-class runner and MCP evidence/readback acceptance runner are implemented. Internal execution has resumed against the shared ZEUS PRD target; private matrix, `mocked=false`, persistence/readback and deployed Web/TUI gates remain open |
+| D12-B internal real smoke | In progress / mapped-environment evidence pending | Local DEV model profile, portable ZEUS signer, no-network preflight, direct seven-class runner and MCP evidence/readback acceptance runner are implemented. Internal DEV execution has resumed against mapped ZEUS PRD; a later project STG deployment must use ZEUS STG. Private matrix, `mocked=false`, persistence/readback and deployed Web/TUI gates remain open |
 
 The provider receives an already-extracted `asset_key`, type and optional role. It does not extract
 assets, infer attacker/victim roles, select a response target, alter the Runtime verdict, close a
@@ -2320,14 +2320,16 @@ and no import-time dependency on the old application. ZEUS lifecycle status/reas
 the historical EDR safe-path candidate dataset also stay PingAn-owned: status events enter the
 canonical external-disposition service, while safe-path matches may only become governed,
 investigation-only evidence. Neither may add a PingAn branch to generic Runtime control flow.
-The current internal profile intentionally separates local execution from the remote target:
-`SOC_PINGAN_ENV=dev|stg` owns the environment-specific SOC SQLite, Memory, Workbench and automation
-scope (`dev` enables the validation Workbenches; `stg` disables them and requires authentication), while asset,
-threat-intelligence, security-tag, lifecycle-read and callback Providers all load one reviewed
-`SOC_PINGAN_ZEUS_ENV=prd` contract. The PRD host allowlist and exact confirmation are mandatory;
-lifecycle/callback remain `fake` until the explicit internal live gate enables both together. A governed
-runtime switch updates only the Runtime selector and preserves every Provider target, credential, mode and
-action-authority setting; DEV and STG use separate `soc_agent_dev.db` / `soc_agent_stg.db` files.
+The current internal profile separates local execution and remote Provider contracts at code level, while the
+PingAn deployment profile governs their approved combination. `SOC_PINGAN_ENV=dev|stg` owns the
+environment-specific SOC SQLite, Memory, Workbench and automation scope (`dev` enables validation
+Workbenches; `stg` disables them and requires authentication). The protected private env stores ZEUS PRD and
+STG profiles, and the governed switch atomically applies `project DEV -> ZEUS PRD` or
+`project STG -> ZEUS STG` for asset, threat-intelligence, security-tag, lifecycle-read and callback Providers.
+The PRD host allowlist and exact confirmation remain mandatory; lifecycle/callback remain `fake` until the
+explicit internal live gate enables both together. Host startup and preflight reject a mismatched Runtime/ZEUS
+pair. Model and Agent Platform targets, Provider modes and action-authority settings remain independent;
+DEV and STG use separate `soc_agent_dev.db` / `soc_agent_stg.db` files.
 Unknown ZEUS lifecycle business codes may be inspected by an explicit internal-only response probe
 that reuses the same Provider transport. Complete responses remain in an ignored mode-`0600` local
 file and never enter Runtime, persistence, normal acceptance reports, telemetry, or LLM context.

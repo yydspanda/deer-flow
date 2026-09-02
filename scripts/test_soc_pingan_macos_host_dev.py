@@ -13,6 +13,7 @@ import scripts.soc_pingan_macos_host_dev as host_dev
 from scripts.soc_pingan_macos_host_dev import (
     HostDevError,
     _validate_locked_requirements,
+    apply_runtime_profile,
     build_install_commands,
     build_nginx_test_command,
     build_start_command,
@@ -283,6 +284,63 @@ def test_runtime_environment_accepts_only_dev_and_stg() -> None:
         normalize_runtime_environment("prd")
 
 
+@pytest.mark.parametrize(
+    ("runtime_environment", "zeus_environment"),
+    (("dev", "prd"), ("stg", "stg")),
+)
+def test_apply_runtime_profile_accepts_governed_zeus_mapping(
+    runtime_environment: str,
+    zeus_environment: str,
+) -> None:
+    target_prefix = f"SOC_PINGAN_ZEUS_{zeus_environment.upper()}_"
+    profile = {
+        target_prefix + "BASE_URL": f"https://zeus-{zeus_environment}.example",
+        target_prefix + "ALLOWED_HOSTS": f"zeus-{zeus_environment}.example",
+        target_prefix + "APP_ID": f"{zeus_environment}-app",
+        target_prefix + "APP_KEY": f"{zeus_environment}-secret",
+    }
+    resolved = apply_runtime_profile(
+        {
+            **profile,
+            "SOC_PINGAN_ZEUS_ENV": zeus_environment,
+            "SOC_PINGAN_ZEUS_BASE_URL": profile[target_prefix + "BASE_URL"],
+            "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": profile[target_prefix + "ALLOWED_HOSTS"],
+            "SOC_PINGAN_ZEUS_APP_ID": profile[target_prefix + "APP_ID"],
+            "SOC_PINGAN_ZEUS_APP_KEY": profile[target_prefix + "APP_KEY"],
+        },
+        runtime_environment=runtime_environment,
+    )
+
+    assert resolved["SOC_PINGAN_ENV"] == runtime_environment
+    assert resolved["SOC_PINGAN_ZEUS_ENV"] == zeus_environment
+
+
+def test_apply_runtime_profile_rejects_stg_to_prd_target_drift() -> None:
+    with pytest.raises(HostDevError, match="STG must target ZEUS STG"):
+        apply_runtime_profile(
+            {"SOC_PINGAN_ZEUS_ENV": "prd"},
+            runtime_environment="stg",
+        )
+
+
+def test_apply_runtime_profile_rejects_active_target_profile_drift() -> None:
+    with pytest.raises(HostDevError, match="active ZEUS profile does not match"):
+        apply_runtime_profile(
+            {
+                "SOC_PINGAN_ZEUS_ENV": "stg",
+                "SOC_PINGAN_ZEUS_BASE_URL": "https://wrong.example",
+                "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "zeus-stg.example",
+                "SOC_PINGAN_ZEUS_APP_ID": "stg-app",
+                "SOC_PINGAN_ZEUS_APP_KEY": "stg-secret",
+                "SOC_PINGAN_ZEUS_STG_BASE_URL": "https://zeus-stg.example",
+                "SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS": "zeus-stg.example",
+                "SOC_PINGAN_ZEUS_STG_APP_ID": "stg-app",
+                "SOC_PINGAN_ZEUS_STG_APP_KEY": "stg-secret",
+            },
+            runtime_environment="stg",
+        )
+
+
 def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations(
     tmp_path: Path,
 ) -> None:
@@ -389,7 +447,19 @@ def test_start_runtime_prepares_database_before_sidecars(
     monkeypatch.setattr(
         host_dev,
         "load_local_runtime_environment",
-        lambda environment: {"LOCAL": "value", "SOC_PINGAN_ENV": "dev"},
+        lambda environment: {
+            "LOCAL": "value",
+            "SOC_PINGAN_ENV": "dev",
+            "SOC_PINGAN_ZEUS_ENV": "prd",
+            "SOC_PINGAN_ZEUS_BASE_URL": "https://zeus-prd.example",
+            "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "zeus-prd.example",
+            "SOC_PINGAN_ZEUS_APP_ID": "prd-app",
+            "SOC_PINGAN_ZEUS_APP_KEY": "prd-secret",
+            "SOC_PINGAN_ZEUS_PRD_BASE_URL": "https://zeus-prd.example",
+            "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS": "zeus-prd.example",
+            "SOC_PINGAN_ZEUS_PRD_APP_ID": "prd-app",
+            "SOC_PINGAN_ZEUS_PRD_APP_KEY": "prd-secret",
+        },
     )
     monkeypatch.setattr(
         host_dev,

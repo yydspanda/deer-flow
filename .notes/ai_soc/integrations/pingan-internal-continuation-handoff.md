@@ -7,7 +7,7 @@
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
-真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。Tracked sample 已准备完毕；当前 ignored `.env.soc-dev.local` 可由 legacy-profile preparer 原位迁移：它删除旧 import/operator 字段，从已审阅源码导入 STG EAGW 模型路由、共享 ZEUS PRD target/credential 和 `YHSYS` PRD profile，并保留其他本地值。剩余 fault-case 配置仍须核对。首轮采用直接访问，不预配代理、自定义 CA 或客户端证书。
+真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。Tracked sample 已准备完毕；当前 ignored `.env.soc-dev.local` 可由 legacy-profile preparer 原位迁移：它删除旧 import/operator 字段，从已审阅源码导入 STG EAGW 模型路由、ZEUS PRD/STG 两套 target/credential 和 `YHSYS` PRD profile，并保留其他本地值。部署映射固定为项目 DEV -> ZEUS PRD、项目 STG -> ZEUS STG。剩余 fault-case 配置仍须核对。首轮采用直接访问，不预配代理、自定义 CA 或客户端证书。
 
 ## 1. Baseline / 已完成与已删除边界
 
@@ -199,9 +199,10 @@ stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
 原生 Host 启动器以 `SOC_PINGAN_ENV` 为唯一作用域：DEV 使用 `soc_agent_dev.db` 并启用 Memory/Corpus
 Workbench；STG 使用 `soc_agent_stg.db`，关闭 DEV Workbench 和免登录模式。Memory、Tenant Policy、
 Automation 始终与该值一致，两种环境都启用已评审租户策略并关闭真实外部动作。使用
-`backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg` 原子切换；它不改 ZEUS/
-模型凭证、Provider mode 或动作权限。DEV 使用 DeerFlow `--dev` 热更新服务；STG 使用原生 `--prod`
-优化服务并关闭 HMR，首次启动会从当前源码构建前端。
+`backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg` 原子切换；部署映射固定为
+`项目 DEV -> ZEUS PRD`、`项目 STG -> ZEUS STG`，active ZEUS endpoint/allowlist/credential 随 profile
+一起切换。模型与 Agent Platform target、Provider mode 和动作权限不变。DEV 使用 DeerFlow `--dev`
+热更新服务；STG 使用原生 `--prod` 优化服务并关闭 HMR，首次启动会从当前源码构建前端。
 
 原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源。canonical `backend/uv.lock` 记录的是公网
 PyPI source identity，不能因为镜像 URL 不同就在内网接受重锁。驱动使用 `uv export --frozen` 从原锁生成
@@ -456,10 +457,10 @@ SOC Runtime asset candidate
 - [x] 已审阅 `root_config` 和 LOCAL/DEV 环境选择；本地模型 gateway 为 OpenAI-compatible loopback endpoint。
 - [x] 项目模型网关、chat smoke 与不含正文/凭证的 `soc.pingan_model_gateway_smoke.v1` 报告已实现。
 - [ ] Host DEV 启动项目网关后取得 `model-gateway-smoke.json -> outcome=passed`、`thinking_requested=false`、`max_tokens_requested=128`；本地 `/health` 不能替代真实 EAGW completion 验收。
-- [x] preflight 接受显式 `SOC_PINGAN_ENV=dev|stg`，同时要求共享 ZEUS target 为显式确认的 `prd`；ZEUS 与 Agent Platform 都使用 HTTPS host allowlist，不读取旧 `env_profile`。Runtime 切换不改变 Provider target。
+- [x] preflight 接受显式 `SOC_PINGAN_ENV=dev|stg`，并强制 `DEV -> ZEUS PRD`、`STG -> ZEUS STG`；ZEUS 与 Agent Platform 都使用 HTTPS host allowlist，不读取旧 `env_profile`。模型/Agent Platform target 仍独立。
 - [x] ZEUS signer 已在本项目内实现，不需要 import 整个旧 `util.util_tools`。
 - [x] Agent Platform wire contract 已提取为本项目自包含 HTTP client，不需要旧 Python 包、`PYTHONPATH`、Redis token manager 或 `run_workflow` import。
-- [x] 通过 legacy-profile preparer 从旧源码静态导入共享 ZEUS PRD target/credential，以及 Agent Platform PRD base URL、allowlist、`YHSYS` app secret；不 import/执行旧项目，也不在输出中暴露 secret。
+- [x] 通过 legacy-profile preparer 从旧源码静态导入 ZEUS PRD/STG 两套 target/credential，以及 Agent Platform PRD base URL、allowlist、`YHSYS` app secret；不 import/执行旧项目，也不在输出中暴露 secret。
 - [x] `message.by` 按旧源码固定为 `WANGWENBIN520`，不再要求操作人环境变量。
 - [x] PRD 只有在 environment/URL/allowlist/secret 全部显式切换且设置 `SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD` 时才允许构造 client。
 - [x] 已对 Git-ignored `.env.soc-dev.local` 执行 profile preparer，旧 import/operator 字段已删除，权限与无网络 preflight 已通过。
@@ -672,7 +673,7 @@ D12-B 已恢复内网验收，PI-01A/B1 已完成外网可实现代码，PI-01D1
 
 ### 4.1 PI-01A Threat intelligence / 威胁情报
 
-- [x] 复用共享 ZEUS PRD base URL、App ID/App Key 和 portable `isec_sign`，没有复制认证逻辑到 generic Runtime。
+- [x] 复用部署 profile 激活的共享 ZEUS base URL、App ID/App Key 和 portable `isec_sign`；当前 DEV 验收为 PRD，后续 STG 验收为 STG，没有复制认证逻辑到 generic Runtime。
 - [ ] 核对 `ipAnalyseReport`、`ipReputationReport`、时间、来源和过期语义。
 - [x] 实现 PingAn typed provider/MCP adapter，generic Runtime 只认识 `threat_intel.ip_reputation.lookup`。
 - [x] 不迁移旧代码里的硬编码风险评分、地理规则或封禁规则；Provider 返回事实，不直接给 verdict。

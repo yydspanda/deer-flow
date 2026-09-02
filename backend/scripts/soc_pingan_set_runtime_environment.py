@@ -1,4 +1,4 @@
-"""Switch the PingAn host Runtime between isolated DEV and STG profiles."""
+"""Switch the governed PingAn Host deployment between DEV and STG profiles."""
 
 from __future__ import annotations
 

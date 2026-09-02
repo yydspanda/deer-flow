@@ -137,7 +137,36 @@ def test_pingan_dev_preflight_validates_profile_without_network_or_secret_output
     assert "zeus.dev.example" not in encoded
 
 
-def test_pingan_preflight_accepts_stg_runtime_with_independent_prd_zeus_target(
+def test_pingan_preflight_accepts_stg_runtime_with_mapped_stg_zeus_target(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.local"
+    config_path.touch()
+    env = _valid_env(config_path)
+    env["SOC_PINGAN_ENV"] = "stg"
+    env["SOC_PINGAN_ZEUS_ENV"] = "stg"
+    env["SOC_PINGAN_ZEUS_BASE_URL"] = "https://zeus.stg.example"
+    env["SOC_PINGAN_ZEUS_ALLOWED_HOSTS"] = "zeus.stg.example"
+    env.pop("SOC_PINGAN_ZEUS_PRD_CONFIRMATION")
+
+    report = run_pingan_dev_preflight(
+        env,
+        config_loader=lambda _: SimpleNamespace(
+            get_model_config=lambda __: SimpleNamespace(
+                api_base="http://localhost:4001/v1/",
+                api_key="key",
+            )
+        ),
+        locator_builder=lambda _: object(),
+    )
+
+    assert report.ready is True
+    assert report.environment == "stg"
+    environment_check = next(item for item in report.checks if item.check_id == "environment.non_production")
+    assert environment_check.status is PingAnDevPreflightStatus.PASSED
+
+
+def test_pingan_preflight_rejects_stg_runtime_with_prd_zeus_target(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.local"
@@ -156,10 +185,8 @@ def test_pingan_preflight_accepts_stg_runtime_with_independent_prd_zeus_target(
         locator_builder=lambda _: object(),
     )
 
-    assert report.ready is True
-    assert report.environment == "stg"
-    environment_check = next(item for item in report.checks if item.check_id == "environment.non_production")
-    assert environment_check.status is PingAnDevPreflightStatus.PASSED
+    failed_ids = {item.check_id for item in report.checks if item.status is PingAnDevPreflightStatus.FAILED}
+    assert failed_ids == {"provider.zeus_target_guard"}
 
 
 def test_pingan_dev_preflight_rejects_fake_mode_and_unapproved_host(

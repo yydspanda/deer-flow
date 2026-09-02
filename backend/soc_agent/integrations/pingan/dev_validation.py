@@ -28,6 +28,7 @@ from soc_agent.integrations.pingan.asset_location import (
 )
 from soc_agent.integrations.pingan.zeus_target import (
     PingAnZeusTargetConfigurationError,
+    enforce_pingan_runtime_zeus_mapping,
     load_pingan_zeus_target,
 )
 
@@ -305,7 +306,7 @@ def _validate_zeus_target(
     checks: list[PingAnDevPreflightCheck],
 ) -> None:
     try:
-        target = load_pingan_zeus_target(env)
+        target = enforce_pingan_runtime_zeus_mapping(load_pingan_zeus_target(env))
     except PingAnZeusTargetConfigurationError:
         target = None
     _append_boolean_check(
@@ -315,7 +316,7 @@ def _validate_zeus_target(
         passed_detail=(
             f"Local {target.runtime_environment.upper()} targets ZEUS {target.target_environment.upper()} through HTTPS, an explicit host allowlist, and the required environment guard." if target is not None else "ZEUS target is valid."
         ),
-        failed_detail=("ZEUS target must declare dev/stg/prd, use an allowlisted HTTPS host, and PRD additionally requires SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD."),
+        failed_detail=("ZEUS target must follow DEV->PRD or STG->STG, use an allowlisted HTTPS host, and PRD additionally requires SOC_PINGAN_ZEUS_PRD_CONFIRMATION=CALL_PINGAN_ZEUS_PRD."),
     )
 
 

@@ -136,6 +136,14 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 
 ```text
 SOC_PINGAN_ENV=dev
+SOC_PINGAN_ZEUS_PRD_BASE_URL=https://isec-gw.paic.com.cn
+SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS=isec-gw.paic.com.cn
+SOC_PINGAN_ZEUS_PRD_APP_ID=SEC-MODEL
+SOC_PINGAN_ZEUS_PRD_APP_KEY=<written by the legacy-profile preparer>
+SOC_PINGAN_ZEUS_STG_BASE_URL=https://isec-gw-stg.paic.com.cn
+SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS=isec-gw-stg.paic.com.cn
+SOC_PINGAN_ZEUS_STG_APP_ID=SEC-MODEL
+SOC_PINGAN_ZEUS_STG_APP_KEY=<written by the legacy-profile preparer>
 SOC_PINGAN_ZEUS_ENV=prd
 SOC_PINGAN_ZEUS_BASE_URL=https://isec-gw.paic.com.cn
 SOC_PINGAN_ZEUS_ALLOWED_HOSTS=isec-gw.paic.com.cn
@@ -161,9 +169,10 @@ backend/.venv/bin/python \
 
 两个脚本只用 AST 静态读取已审阅旧源码，不 import/执行旧项目。第一个选择 STG
 `DeepSeek_V4_Flash` 模型路由、迁移 loopback key/旧 ingress app-key、生成
-`.secrets/eagw-private-key.der`，同时写入共享 ZEUS PRD 目标及凭证，并将生命周期和回调保持在
-`fake`；第二个迁移 `YHSYS` PRD Workflow profile。这里“DEV”只描述本机 Runtime、SQLite、Memory
-和 Workbench，不表示访问 ZEUS STG。输出只包含 profile 元数据、源/key hash 和凭证存在标记，始终为
+`.secrets/eagw-private-key.der`，同时写入 ZEUS PRD/STG 两套目标及凭证，初始激活
+`项目 DEV -> ZEUS PRD`，并将生命周期和回调保持在 `fake`；第二个迁移 `YHSYS` PRD Workflow
+profile。切换到项目 STG 时，受治理命令激活 ZEUS STG；它不会改变模型或 Workflow target。输出只包含
+profile 元数据、源/key hash 和凭证存在标记，始终为
 `secret_in_output=false`。旧源码本身不进入 source bundle，写好的 env/key 只进入受保护 private overlay。
 
 还需确认：

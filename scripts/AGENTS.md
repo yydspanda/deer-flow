@@ -34,14 +34,14 @@ mode-`0600` local profiles, the project model-gateway references, isolated SQLit
 configuration, and the non-root nginx config. It must reject retired LiteLLM model
 references before dependency installation or migration.
 
-Host Runtime scope does not imply a ZEUS target. The initial private profile keeps
-the Runtime, SQLite, Memory, automation, and Workbench in `dev`, but pins the shared
-asset/TI/security-tag/lifecycle/callback ZEUS target to reviewed PRD configuration.
-The legacy model-profile preparer statically writes that PRD target and explicit
-confirmation into the mode-`0600` ignored env. Transfer validation must reject any
-other ZEUS target; lifecycle and callback still start in `fake` mode. The governed
-runtime switch may change only `SOC_PINGAN_ENV` between `dev` and `stg`; it must
-preserve ZEUS/model credentials, Provider modes, and action authority byte-for-byte.
+Host Runtime scope and a ZEUS target remain separate low-level settings, but the Host
+deployment profile governs them together. The legacy model-profile preparer statically
+writes protected ZEUS PRD and STG profiles into the mode-`0600` ignored env and initially
+activates `Runtime DEV -> ZEUS PRD`. The governed switch atomically applies
+`Runtime DEV -> ZEUS PRD` or `Runtime STG -> ZEUS STG`; startup and preflight reject
+drift. It must preserve model/Agent Platform configuration, lifecycle/callback Provider
+modes, and action authority byte-for-byte. Lifecycle and callback still start in `fake`
+mode.
 
 That wrapper also owns three sidecars through
 `scripts/soc_pingan_host_sidecars.py`: the loopback project model gateway on `4001`, the

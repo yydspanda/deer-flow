@@ -25,7 +25,7 @@ LEGACY_MODEL_GATEWAY_ENVIRONMENT = "stg"
 LEGACY_MODEL_CONFIG_NAME = "DeepSeek_V4_Flash"
 LEGACY_ZEUS_ENVIRONMENT = "prd"
 LEGACY_ZEUS_PRD_CONFIRMATION = "CALL_PINGAN_ZEUS_PRD"
-LEGACY_MODEL_GATEWAY_PROFILE_SCHEMA_VERSION = "soc.pingan_legacy_model_gateway_profile.v2"
+LEGACY_MODEL_GATEWAY_PROFILE_SCHEMA_VERSION = "soc.pingan_legacy_model_gateway_profile.v3"
 
 _BLOCK_BEGIN = "# BEGIN SOC PINGAN LEGACY MODEL GATEWAY PROFILE"
 _BLOCK_END = "# END SOC PINGAN LEGACY MODEL GATEWAY PROFILE"
@@ -92,6 +92,14 @@ _MANAGED_KEYS = (
     "SOC_PINGAN_LEGACY_CALLBACK_RETRY_BACKOFF_SECONDS",
     "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE",
     "SOC_PINGAN_ENV",
+    "SOC_PINGAN_ZEUS_PRD_BASE_URL",
+    "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS",
+    "SOC_PINGAN_ZEUS_PRD_APP_ID",
+    "SOC_PINGAN_ZEUS_PRD_APP_KEY",
+    "SOC_PINGAN_ZEUS_STG_BASE_URL",
+    "SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS",
+    "SOC_PINGAN_ZEUS_STG_APP_ID",
+    "SOC_PINGAN_ZEUS_STG_APP_KEY",
     "SOC_PINGAN_ZEUS_ENV",
     "SOC_PINGAN_ZEUS_BASE_URL",
     "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
@@ -117,7 +125,7 @@ class PingAnLegacyModelGatewayProfileError(ValueError):
 
 @dataclass(frozen=True)
 class PingAnLegacyModelGatewayProfile:
-    """EAGW, old-ingress, and ZEUS PRD values extracted without imports."""
+    """EAGW, old-ingress, and ZEUS target values extracted without imports."""
 
     environment: str
     model_config_name: str
@@ -135,6 +143,10 @@ class PingAnLegacyModelGatewayProfile:
     zeus_allowed_host: str
     zeus_app_id: str
     zeus_app_key: str = field(repr=False)
+    zeus_stg_base_url: str
+    zeus_stg_allowed_host: str
+    zeus_stg_app_id: str
+    zeus_stg_app_key: str = field(repr=False)
 
 
 def load_legacy_model_gateway_profile(
@@ -180,6 +192,7 @@ def load_legacy_model_gateway_profile(
         root_config_path,
         credential_source_path=zeus_credential_source_path,
     )
+    zeus_stg_profile = _load_legacy_zeus_stg_profile(root_config_path)
 
     return PingAnLegacyModelGatewayProfile(
         environment=normalized_environment,
@@ -198,6 +211,10 @@ def load_legacy_model_gateway_profile(
         zeus_allowed_host=zeus_profile["allowed_host"],
         zeus_app_id=zeus_profile["app_id"],
         zeus_app_key=zeus_profile["app_key"],
+        zeus_stg_base_url=zeus_stg_profile["base_url"],
+        zeus_stg_allowed_host=zeus_stg_profile["allowed_host"],
+        zeus_stg_app_id=zeus_stg_profile["app_id"],
+        zeus_stg_app_key=zeus_stg_profile["app_key"],
     )
 
 
@@ -268,6 +285,9 @@ def prepare_legacy_model_gateway_env(
         "key_path": _display_path(target_key, root),
         "key_sha256": hashlib.sha256(profile.rsa_private_key_der).hexdigest(),
         "environment": profile.environment,
+        "runtime_environment": runtime_environment,
+        "active_zeus_environment": ("prd" if runtime_environment == "dev" else "stg"),
+        "runtime_target_mapping": {"dev": "prd", "stg": "stg"},
         "model_config_name": profile.model_config_name,
         "base_url": profile.base_url,
         "allowed_host": profile.allowed_host,
@@ -278,6 +298,10 @@ def prepare_legacy_model_gateway_env(
         "zeus_allowed_host": profile.zeus_allowed_host,
         "zeus_app_id": profile.zeus_app_id,
         "zeus_credential_present": bool(profile.zeus_app_key),
+        "zeus_stg_base_url": profile.zeus_stg_base_url,
+        "zeus_stg_allowed_host": profile.zeus_stg_allowed_host,
+        "zeus_stg_app_id": profile.zeus_stg_app_id,
+        "zeus_stg_credential_present": bool(profile.zeus_stg_app_key),
         "credential_present": bool(profile.app_key and profile.app_secret and profile.openapi_credential and local_api_key),
         "compatibility_key_present": bool(profile.compat_app_keys),
         "updated_keys": list(_MANAGED_KEYS),
@@ -353,6 +377,68 @@ def _load_legacy_zeus_prd_profile(
         "app_id": next(iter(app_ids)),
         "app_key": next(iter(app_keys)),
     }
+
+
+def _load_legacy_zeus_stg_profile(
+    root_config_path: Path,
+) -> dict[str, str]:
+    """Read the reviewed literal ZEUS STG profile from the old LOCAL branch."""
+
+    tree = _parse_source(root_config_path)
+    local_body = _environment_branch_body(tree, "LOCAL")
+    values = {name: _direct_string_assignment(local_body, name) for name in ("ZEUS_SYSTEM_URL", "ZEUS_APP_ID", "ZEUS_APP_KEY")}
+    base_url = values["ZEUS_SYSTEM_URL"].rstrip("/")
+    parsed = urlsplit(base_url)
+    if parsed.scheme != "https" or not parsed.hostname or "stg" not in parsed.hostname.lower() or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise PingAnLegacyModelGatewayProfileError("legacy LOCAL branch must contain one reviewed ZEUS STG HTTPS URL")
+    return {
+        "base_url": base_url,
+        "allowed_host": parsed.hostname.lower(),
+        "app_id": values["ZEUS_APP_ID"],
+        "app_key": values["ZEUS_APP_KEY"],
+    }
+
+
+def _environment_branch_body(
+    tree: ast.Module,
+    environment: str,
+) -> list[ast.stmt]:
+    for statement in tree.body:
+        current = statement
+        while isinstance(current, ast.If):
+            if _matches_environment_test(current.test, environment):
+                return current.body
+            if len(current.orelse) != 1 or not isinstance(current.orelse[0], ast.If):
+                break
+            current = current.orelse[0]
+    raise PingAnLegacyModelGatewayProfileError(f"legacy root config omitted the {environment} environment branch")
+
+
+def _matches_environment_test(test: ast.expr, environment: str) -> bool:
+    return bool(
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "ENV"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == environment
+    )
+
+
+def _direct_string_assignment(body: list[ast.stmt], name: str) -> str:
+    values: list[str] = []
+    for statement in body:
+        if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+            continue
+        target = statement.targets[0]
+        value = statement.value
+        if isinstance(target, ast.Name) and target.id == name and isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value.strip():
+            values.append(value.value.strip())
+    if len(values) != 1:
+        raise PingAnLegacyModelGatewayProfileError(f"legacy LOCAL branch must contain one literal {name}")
+    return values[0]
 
 
 def _parse_source(source_path: Path) -> ast.Module:
@@ -464,6 +550,20 @@ def _profile_env_values(
     key_path: str,
     runtime_environment: str = "dev",
 ) -> dict[str, str]:
+    if runtime_environment == "dev":
+        active_zeus_environment = "prd"
+        active_zeus_base_url = profile.zeus_base_url
+        active_zeus_allowed_host = profile.zeus_allowed_host
+        active_zeus_app_id = profile.zeus_app_id
+        active_zeus_app_key = profile.zeus_app_key
+        active_zeus_confirmation = LEGACY_ZEUS_PRD_CONFIRMATION
+    else:
+        active_zeus_environment = "stg"
+        active_zeus_base_url = profile.zeus_stg_base_url
+        active_zeus_allowed_host = profile.zeus_stg_allowed_host
+        active_zeus_app_id = profile.zeus_stg_app_id
+        active_zeus_app_key = profile.zeus_stg_app_key
+        active_zeus_confirmation = ""
     return {
         "PINGAN_MODEL_GATEWAY_BASE_URL": "http://127.0.0.1:4001/v1",
         "PINGAN_MODEL_GATEWAY_API_KEY": local_api_key,
@@ -531,12 +631,20 @@ def _profile_env_values(
         "SOC_PINGAN_LEGACY_CALLBACK_RETRY_BACKOFF_SECONDS": "5",
         "SOC_PINGAN_LEGACY_WORKER_AUTO_MIGRATE": "false",
         "SOC_PINGAN_ENV": runtime_environment,
-        "SOC_PINGAN_ZEUS_ENV": profile.zeus_environment,
-        "SOC_PINGAN_ZEUS_BASE_URL": profile.zeus_base_url,
-        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": profile.zeus_allowed_host,
-        "SOC_PINGAN_ZEUS_APP_ID": profile.zeus_app_id,
-        "SOC_PINGAN_ZEUS_APP_KEY": profile.zeus_app_key,
-        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": LEGACY_ZEUS_PRD_CONFIRMATION,
+        "SOC_PINGAN_ZEUS_PRD_BASE_URL": profile.zeus_base_url,
+        "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS": profile.zeus_allowed_host,
+        "SOC_PINGAN_ZEUS_PRD_APP_ID": profile.zeus_app_id,
+        "SOC_PINGAN_ZEUS_PRD_APP_KEY": profile.zeus_app_key,
+        "SOC_PINGAN_ZEUS_STG_BASE_URL": profile.zeus_stg_base_url,
+        "SOC_PINGAN_ZEUS_STG_ALLOWED_HOSTS": profile.zeus_stg_allowed_host,
+        "SOC_PINGAN_ZEUS_STG_APP_ID": profile.zeus_stg_app_id,
+        "SOC_PINGAN_ZEUS_STG_APP_KEY": profile.zeus_stg_app_key,
+        "SOC_PINGAN_ZEUS_ENV": active_zeus_environment,
+        "SOC_PINGAN_ZEUS_BASE_URL": active_zeus_base_url,
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": active_zeus_allowed_host,
+        "SOC_PINGAN_ZEUS_APP_ID": active_zeus_app_id,
+        "SOC_PINGAN_ZEUS_APP_KEY": active_zeus_app_key,
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": active_zeus_confirmation,
         "D12B_TIMEOUT_SECONDS": "0.001",
     }
 
@@ -589,7 +697,8 @@ def _rewrite_env(
     retained.extend(
         [
             _BLOCK_BEGIN,
-            "# Statically prepared from reviewed legacy STG EAGW and PRD ZEUS profiles.",
+            "# Statically prepared from reviewed legacy STG EAGW plus ZEUS PRD/STG profiles.",
+            "# Governed mapping: project DEV -> ZEUS PRD; project STG -> ZEUS STG.",
             "# The project owns ports 4001/8090; lifecycle/callback stay fake until live acceptance.",
             *(_render_assignment(name, values[name]) for name in _MANAGED_KEYS),
             _BLOCK_END,
