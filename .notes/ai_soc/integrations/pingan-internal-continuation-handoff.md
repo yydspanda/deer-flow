@@ -2,8 +2,8 @@
 
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-09-03
-> Status: `Active internal acceptance / ZEUS and Agent Platform PRD evidence pending`
-> Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
+> Status: `Active internal acceptance / ZEUS lifecycle proven; Worker fix awaiting redeploy`
+> Resume action: deploy the shared Runtime environment and Worker readiness fix, require all three Sidecars running, then create a fresh compatibility Job; do not resume the pre-fix PENDING Job
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 

@@ -346,6 +346,20 @@ def test_apply_runtime_profile_accepts_governed_remote_mappings(
     assert resolved["SOC_PINGAN_ENV"] == runtime_environment
     assert resolved["SOC_PINGAN_ZEUS_ENV"] == zeus_environment
     assert resolved["SOC_PINGAN_WORKFLOW_ENV"] == workflow_environment
+    assert resolved["SOC_TENANT_POLICY_ENABLED"] == "true"
+    assert resolved["SOC_TENANT_DISPOSITION_POLICY_PATH"] == str(
+        host_dev.ROOT
+        / "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"
+    )
+    assert resolved["SOC_TENANT_POLICY_ADVISOR_MODE"] == "llm"
+    assert resolved["SOC_TENANT_POLICY_SKILL_PATH"] == str(
+        host_dev.ROOT
+        / "backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"
+    )
+    assert resolved["SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED"] == "true"
+    assert resolved["SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH"] == str(
+        host_dev.ROOT / "backend/.deer-flow/pingan-context/software-path-catalog.sqlite"
+    )
 
 
 def test_apply_runtime_profile_rejects_stg_to_prd_target_drift() -> None:
@@ -487,6 +501,7 @@ def test_start_runtime_prepares_database_before_sidecars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    sidecar_environment: dict[str, str] = {}
     monkeypatch.setattr(host_dev, "inspect_host", lambda **kwargs: {})
     monkeypatch.setattr(host_dev, "validate_runtime_files", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -547,11 +562,12 @@ def test_start_runtime_prepares_database_before_sidecars(
         "build_pingan_sidecar_specs",
         lambda **kwargs: (),
     )
-    monkeypatch.setattr(
-        host_dev,
-        "start_sidecars",
-        lambda *args, **kwargs: events.append("sidecars"),
-    )
+
+    def fake_start_sidecars(*_args, **kwargs):  # noqa: ANN001
+        events.append("sidecars")
+        sidecar_environment.update(kwargs["environment"])
+
+    monkeypatch.setattr(host_dev, "start_sidecars", fake_start_sidecars)
     monkeypatch.setattr(host_dev, "build_start_command", lambda **kwargs: ["true"])
     monkeypatch.setattr(
         host_dev.subprocess,
@@ -566,6 +582,14 @@ def test_start_runtime_prepares_database_before_sidecars(
     )
 
     assert events == ["database", "sidecars", "core"]
+    assert sidecar_environment["SOC_TENANT_POLICY_ENABLED"] == "true"
+    assert sidecar_environment["SOC_TENANT_DISPOSITION_POLICY_PATH"].endswith(
+        "/backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"
+    )
+    assert sidecar_environment["SOC_TENANT_POLICY_ADVISOR_MODE"] == "llm"
+    assert sidecar_environment["SOC_TENANT_POLICY_SKILL_PATH"].endswith(
+        "/backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"
+    )
 
 
 def test_start_plan_applies_explicit_lan_origin_after_private_env() -> None:

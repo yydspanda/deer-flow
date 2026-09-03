@@ -641,6 +641,8 @@ def prepare_soc_database(
     database_path = (root / SOC_DATABASE_RELATIVE_PATHS[runtime_environment]).resolve()
     database_url = f"sqlite+pysqlite:///{database_path}"
     resolved = dict(environment)
+    resolved.setdefault("SOC_LLM_MAX_CONCURRENCY", "3")
+    resolved.setdefault("SOC_LLM_ADMISSION_TIMEOUT_SECONDS", "180")
     resolved.update(
         {
             "SOC_DATABASE_URL": database_url,
@@ -751,6 +753,20 @@ def apply_runtime_profile(
             "SOC_DEV_CORPUS_WORKBENCH_ENABLED": workbench_enabled,
             "SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY": workbench_enabled,
             "SOC_TENANT_POLICY_ENABLED": "true",
+            "SOC_TENANT_DISPOSITION_POLICY_PATH": str(
+                ROOT
+                / "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"
+            ),
+            "SOC_TENANT_POLICY_EVENT_TIMEZONE": "Asia/Shanghai",
+            "SOC_TENANT_POLICY_ADVISOR_MODE": "llm",
+            "SOC_TENANT_POLICY_SKILL_PATH": str(
+                ROOT
+                / "backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"
+            ),
+            "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED": "true",
+            "SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH": str(
+                ROOT / "backend/.deer-flow/pingan-context/software-path-catalog.sqlite"
+            ),
             "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS": "false",
         }
     )

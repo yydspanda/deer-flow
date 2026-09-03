@@ -6,8 +6,8 @@
 
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 已恢复真实内网验收。`40100/签名验证失败` 已由 signed-wire 修复关闭，`65505` 的完整响应已确认只是所选告警在目标 ZEUS 中不存在。受治理部署映射现固定为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`；切换同时隔离 SQLite/Memory/Policy/Automation 并激活两类私有 Provider profile，不改通用 Runtime 契约。旧源码未提供 STG `YHSYS` 身份与三个 workflow ID，因此项目 STG 在五项私有值补齐前 fail closed。
-- **Next Gate:** 在内网项目 DEV 使用真实存在且仍待审的 PRD 告警完成只读 lifecycle smoke，必须得到 `code=200/status=1/mocked=false`；并使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts。随后完成 MCP、`InvestigationEvidence` 回读、fresh Job/local live acceptance、真实 callback、ZEUS 上游发起与旧页面回读；再验证 TI/标签 PRD `mocked=false` 证据，进入 `1 -> 5 -> 50 -> 200/5000+` shadow 和模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
+- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 对真实 PRD 待审告警的只读 lifecycle smoke 已得到 `code=200/status=1/mocked=false`。首个完整兼容任务暴露 Host 启动器只给 Gateway、未给独立 Worker 注入 Tenant Policy 路径，导致 Worker 退出而 Job 长期 `PENDING`；当前修复统一两者 Runtime 配置，并要求 Worker 完成数据库、Runtime、Policy、ZEUS/Callback 初始化后发布 ready 信号。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
+- **Next Gate:** 将 Worker 环境/ready 修复部署到内网，确认三个 Sidecar 均为 `running`；保留旧 `PENDING` Job 作失败审计，使用新 session/fresh Job 完成 local live acceptance 和真实 callback。随后使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，再完成 MCP、`InvestigationEvidence` 回读、ZEUS 上游发起与旧页面回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-03`
 
@@ -29,6 +29,7 @@
 - **Status:** `Done`
 - **Outcome:** PingAn Integration 新增独立 Agent Platform target contract，环境切换现在原子应用 `DEV -> ZEUS PRD + Agent Platform PRD` / `STG -> ZEUS STG + Agent Platform STG`，Host status、preflight、资产降级链和 transfer profile 共同拒绝错配。旧 `agent_config.py` 只读 AST 迁移确认 PRD `YHSYS` 与三个归属 workflow、提取 STG endpoint，并明确拒绝用其他应用身份替代缺失的 STG `YHSYS` 配置；五项 STG 私有值不完整时在 env 写入前 fail closed。通用 Runtime 继续只认识 `asset.locate`，未引入 PingAn 环境或凭证概念。
 - **Verification:** DEV -> PRD 与完整 STG -> STG 配置回归、错配/缺确认/部分 STG profile 的 fail-closed 回归、Host/transfer 私有 overlay 检查通过；Runbook 增加只读 IP/Host/UM 发现 smoke。外网结果只证明配置和无网络边界，真实 Agent Platform/ZEUS `mocked=false` 调用仍属于 D12-B 内网 gate。
+  内网随后已证明真实待审告警 lifecycle `code=200/status=1/mocked=false`；完整任务因 Worker 缺少共享 Policy 配置停留 `PENDING`。修复新增 PID-bound Worker readiness，并通过 Host/compat/Processing Job/架构聚焦回归；需随下一交付在内网用 fresh Job 复验。
 
 ### 2026-09-02 — Legacy live-acceptance recovery and signed-wire hardening
 

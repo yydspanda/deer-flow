@@ -25,6 +25,7 @@ class HostDevSidecarSpec:
     command: tuple[str, ...]
     process_marker: str
     health_url: str | None = None
+    readiness_env_var: str | None = None
     startup_timeout_seconds: float = 30.0
 
 
@@ -81,6 +82,7 @@ def build_pingan_sidecar_specs(
                         ),
                     ),
                     process_marker="soc_pingan_legacy_worker.py",
+                    readiness_env_var="SOC_PINGAN_LEGACY_WORKER_READY_FILE",
                     startup_timeout_seconds=5.0,
                 ),
             )
@@ -105,17 +107,22 @@ def start_sidecars(
         ):
             raise HostDevSidecarError(f"{spec.name} is already running")
         _state_path(runtime_dir, spec.name).unlink(missing_ok=True)
+        _readiness_path(runtime_dir, spec).unlink(missing_ok=True)
 
     started: list[HostDevSidecarSpec] = []
     reports: list[dict[str, Any]] = []
     try:
         for spec in specs:
             log_path = runtime_dir / f"{spec.name}.log"
+            readiness_path = _readiness_path(runtime_dir, spec)
+            process_environment = dict(environment)
+            if spec.readiness_env_var is not None:
+                process_environment[spec.readiness_env_var] = str(readiness_path)
             with log_path.open("ab") as log:
                 process = popen(
                     list(spec.command),
                     cwd=str(Path(spec.command[1]).resolve().parents[1]),
-                    env=dict(environment),
+                    env=process_environment,
                     stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=subprocess.STDOUT,
@@ -131,7 +138,13 @@ def start_sidecars(
             }
             _write_state(runtime_dir, spec.name, state)
             started.append(spec)
-            _wait_until_ready(spec, process=process)
+            _wait_until_ready(
+                spec,
+                process=process,
+                readiness_path=(
+                    readiness_path if spec.readiness_env_var is not None else None
+                ),
+            )
             reports.append({**state, "status": "running"})
         return reports
     except Exception:
@@ -152,13 +165,16 @@ def stop_sidecars(
     reports: list[dict[str, Any]] = []
     for spec in reversed(tuple(specs)):
         state_path = _state_path(runtime_dir, spec.name)
+        readiness_path = _readiness_path(runtime_dir, spec)
         state = _read_state(runtime_dir, spec.name)
         if state is None:
+            readiness_path.unlink(missing_ok=True)
             reports.append({"name": spec.name, "status": "not_running"})
             continue
         pid = int(state["pid"])
         if not _process_matches(pid, spec.process_marker):
             state_path.unlink(missing_ok=True)
+            readiness_path.unlink(missing_ok=True)
             reports.append({"name": spec.name, "status": "stale_state_removed"})
             continue
         os.kill(pid, signal.SIGTERM)
@@ -171,6 +187,7 @@ def stop_sidecars(
         if _process_matches(pid, spec.process_marker):
             os.kill(pid, signal.SIGKILL)
         state_path.unlink(missing_ok=True)
+        readiness_path.unlink(missing_ok=True)
         reports.append({"name": spec.name, "status": "stopped", "pid": pid})
     return reports
 
@@ -204,8 +221,25 @@ def _wait_until_ready(
     spec: HostDevSidecarSpec,
     *,
     process: subprocess.Popen[bytes],
+    readiness_path: Path | None = None,
 ) -> None:
     deadline = time.monotonic() + spec.startup_timeout_seconds
+    if readiness_path is not None:
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise HostDevSidecarError(
+                    f"{spec.name} exited during startup; inspect its log"
+                )
+            try:
+                ready_pid = readiness_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                ready_pid = ""
+            if ready_pid == str(process.pid):
+                return
+            time.sleep(0.05)
+        raise HostDevSidecarError(
+            f"{spec.name} did not become ready before timeout; inspect its log"
+        )
     if spec.health_url is None:
         stable_until = min(deadline, time.monotonic() + 0.5)
         while time.monotonic() < stable_until:
@@ -247,6 +281,10 @@ def _process_matches(pid: int, marker: str) -> bool:
 
 def _state_path(runtime_dir: Path, name: str) -> Path:
     return runtime_dir / f"{name}.json"
+
+
+def _readiness_path(runtime_dir: Path, spec: HostDevSidecarSpec) -> Path:
+    return runtime_dir / f"{spec.name}.ready"
 
 
 def _read_state(runtime_dir: Path, name: str) -> dict[str, Any] | None:

@@ -156,6 +156,9 @@ generic `soc_agent` code.
   stable Runtime idempotency key after recovery, and commit terminal result plus Callback
   Outbox atomically. Callback attempts are append-only and callback retries must never
   rerun analysis. Do not restore Celery, Redis, old LlamaIndex flows, or old model routing.
+  The Worker and Gateway consume one governed Runtime environment. In particular, enabling
+  tenant policy without passing its profile/Skill paths to the Worker is a startup error;
+  the Host sidecar readiness handshake must catch it before the stack is reported healthy.
 - Preserve the old `8090` ingress only in the PingAn Host DEV/private deployment profile;
   authenticate Bearer/`app-key` values against the configured legacy allowed-key set,
   keep `app_code` as business/idempotency metadata rather than a credential-map selector,

@@ -1476,6 +1476,7 @@ DeerFlow 与 SOC 分别使用 `deerflow.db` 和当前环境独立的 `soc_agent_
 | `status` 中 Core/Sidecars 全部运行，且 `soc_database.status=ready` | 不再建库或重启，直接执行模型 Smoke/后续验收 |
 | `SOC database preparation failed before sidecar startup` | 服务尚未启动；保留已有数据库排查。仅确认是无业务数据的新建残库时，才使用第 3.1 节清洁重装 |
 | `legacy-api exited during startup` | 只可能来自旧交付包或非数据库启动错误；先查 Sidecar 日志，不要盲目删库 |
+| `legacy-worker exited during startup` / `did not become ready` | Worker 的数据库、Runtime、Policy、ZEUS 或 Callback 初始化失败；查看 `backend/.deer-flow/internal-host-dev/sidecars/legacy-worker.log`，不得继续提交 30 分钟验收任务 |
 
 ## 6. Execution Plane Preflight / 执行面预检
 
@@ -1529,8 +1530,10 @@ python3.12 scripts/soc_pingan_macos_host_dev.py status
 Host DEV 驱动会先准备 SOC 数据库，再启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，最后启动
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
 Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机使用时加 `--local-only`。
-`status` 必须同时显示 `soc_database.status=ready` 和
-`soc_database.schema_revision=0027_processing_jobs`；缺失或较旧版本都不能继续真实验收。
+`status` 必须同时显示 `soc_database.status=ready`、
+`soc_database.schema_revision=0027_processing_jobs`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
+Runtime、Tenant Policy、ZEUS lifecycle 和 Callback 初始化完成并发布 PID-bound ready 信号后才会显示
+`running`；`stale`、`not_running` 或启动时报 `did not become ready` 都不能继续真实验收。
 
 服务启动后执行无业务数据的真实模型 smoke：
 

@@ -6,6 +6,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -112,7 +113,12 @@ def main() -> None:
 
         signal.signal(signal.SIGINT, request_stop)
         signal.signal(signal.SIGTERM, request_stop)
-        supervisor.run_forever(stop_event=stop_event)
+        readiness_path = _publish_readiness()
+        try:
+            supervisor.run_forever(stop_event=stop_event)
+        finally:
+            if readiness_path is not None:
+                readiness_path.unlink(missing_ok=True)
     finally:
         http_client.close()
         engine.dispose()
@@ -128,6 +134,32 @@ def _env_bool(name: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be a boolean value")
+
+
+def _publish_readiness() -> Path | None:
+    raw_path = os.environ.get("SOC_PINGAN_LEGACY_WORKER_READY_FILE", "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.is_absolute():
+        raise ValueError("SOC_PINGAN_LEGACY_WORKER_READY_FILE must be absolute")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+        text=True,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(str(os.getpid()))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary_path.chmod(0o600)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return path
 
 
 if __name__ == "__main__":

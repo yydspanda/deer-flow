@@ -56,6 +56,13 @@ directory, and `stop` includes disabled services so stale processes cannot survi
 configuration change. Keep the model gateway single-process because its admission
 semaphore is process-local. The old `sec_know_model`, LiteLLM, Celery, and Redis startup
 scripts are reference material, not Host DEV dependencies.
+The Gateway and compatibility Worker must receive the same governed SOC Runtime settings,
+including tenant-policy profile, policy Skill, software-path catalog, environment scope,
+and model-admission limits. Keep those values in the shared start environment rather than
+only in the Gateway shell command. The Worker publishes a PID-bound readiness file only
+after constructing its database, Runtime, lifecycle, and callback dependencies; Host
+startup must fail if that signal is absent instead of reporting a short-lived Worker as
+running.
 
 `backend/scripts/soc_pingan_legacy_fake_acceptance.py` is the no-network
 composition check and must always report `simulated=true`. It constructs its own
