@@ -194,14 +194,18 @@ generic `soc_agent` code.
   Workbench index/payload-store identity, preserves the complete `alert_data`, creates a
   fresh session, and writes a mode-`0600` local file. Do not require manual JSON editing.
   Lifecycle/callback provider modes must be switched together by the governed mode command.
-- The model gateway currently uses one process-local capacity semaphore; launch exactly
-  one gateway process. Scale processing workers only after the internal model service has
-  a reviewed shared admission mechanism or measured capacity increase.
-- The gateway's structured SOC completion boundary is non-streaming. Every
-  `DeerFlowLLMChatClient` model must be constructed with caller-scoped
-  `disable_streaming=True`; relying on `.invoke()` alone is insufficient because
-  LangChain callbacks may select an implicit streaming path. This override belongs only
-  to structured SOC calls and must not disable ordinary DeerFlow chat streaming.
+- The model gateway uses one process-local capacity semaphore; launch exactly one gateway
+  process. The PingAn Host profile keeps the gateway and SOC Runtime limits aligned at
+  three concurrent model calls. The SQLite-backed legacy compatibility Worker remains
+  single-worker and is a separate queue boundary.
+- The EAGW route returns complete, non-streaming completions. The PingAn DeerFlow model
+  profile therefore requires `disable_streaming=True`, so ordinary chat, tool calling and
+  structured SOC analysis all use LangChain's supported buffered fallback instead of
+  sending `stream=true` to the loopback gateway. DeerFlow Run/SSE events remain available,
+  but one model answer appears as a complete message chunk. Structured
+  `DeerFlowLLMChatClient` calls also retain the caller-scoped override as defense in depth;
+  relying on `.invoke()` alone is insufficient because callbacks may select an implicit
+  streaming path.
 - Internal Apple Silicon handoff uses
   `scripts/build_pingan_macos_offline_bundle.py`. Resolve checkout paths at runtime; do
   not commit fixed `/Users/...` paths. Private overlay builders reject placeholders,

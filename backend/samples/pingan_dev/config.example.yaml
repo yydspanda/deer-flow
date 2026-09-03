@@ -11,6 +11,9 @@ models:
     model: deepseek-v4-flash
     api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
     api_key: $PINGAN_MODEL_GATEWAY_API_KEY
+    # EAGW returns one complete completion; LangChain preserves DeerFlow's run
+    # stream while emitting the model answer as one buffered message chunk.
+    disable_streaming: true
     request_timeout: 600.0
     max_retries: 1
     supports_thinking: true

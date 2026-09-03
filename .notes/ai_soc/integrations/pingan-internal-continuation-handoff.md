@@ -2,8 +2,8 @@
 
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-09-03
-> Status: `Active internal acceptance / ZEUS lifecycle proven; Worker fix awaiting redeploy`
-> Resume action: deploy the shared Runtime environment and Worker readiness fix, require all three Sidecars running, then create a fresh compatibility Job; do not resume the pre-fix PENDING Job
+> Status: `Active internal acceptance / model, lifecycle and Worker proven; ZEUS-originated callback pending`
+> Resume action: deploy the buffered chat and bounded-concurrency profile, verify chat plus three-alert concurrency, then have ZEUS originate a fresh compatibility Job so callback and old-page readback can be accepted
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -15,8 +15,8 @@
 
 - `D0-D11.1`：通用 SOC Runtime、LLM、Grounding、Decision Policy 和 212 条 corpus 稳定性验证。
 - `D12-A`：PingAn `asset.locate` 生产形态代码、fake transport、stdio MCP、fallback 编排和 fail-closed；结果仍为 `mocked=true`。
-- `D12-B 外网准备`：内网模型 profile、项目自有模型网关与固定无业务数据 chat smoke、无旧依赖 ZEUS signer、自包含 Agent Platform HTTP client、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 EAGW pass 或 Provider `mocked=false` 证据。
-- `PI-01H 外网实现`：旧 task/status 协议、持久 Processing Job、租约 Worker、统一 Runtime、legacy result projection、Callback Outbox/attempt audit、项目模型网关、Host DEV sidecar 与 Fake E2E 已实现；不再依赖旧 `sec_know_model`、LiteLLM、Celery、Redis 或 LlamaIndex workflow。真实 ZEUS/EAGW/callback 与负载证据仍待内网关闭。
+- `D12-B 外网准备`：内网模型 profile、项目自有模型网关与固定无业务数据 chat smoke、无旧依赖 ZEUS signer、自包含 Agent Platform HTTP client、DEV-only preflight 和 direct-provider smoke 脚本已实现；内网 EAGW completion 已通过，资产/TI/标签 Provider 的 `mocked=false` 证据仍待关闭。
+- `PI-01H 外网实现`：旧 task/status 协议、持久 Processing Job、租约 Worker、统一 Runtime、legacy result projection、Callback Outbox/attempt audit、项目模型网关、Host DEV sidecar 与 Fake E2E 已实现；不再依赖旧 `sec_know_model`、LiteLLM、Celery、Redis 或 LlamaIndex workflow。内网已证明 lifecycle 与 Worker Runtime；本机自提交 callback 因 ZEUS 未登记对应 `taskId` 返回 `40020`，仍须由 ZEUS 上游真实发起关闭 callback/旧页面回读门禁。
 - `PI-01A 外网实现`：`/public/indicatorSearch` typed Provider、stdio MCP、action/evidence 和 fake/persistence 回归已完成；尚未产生从 Host DEV 调用 ZEUS PRD 的 `mocked=false` 证据。
 - `PI-01B1 外网实现`：`/public/searchTagContent` typed Provider、stdio MCP、validity/scope mapping 和 fake/persistence 回归已完成；尚未产生从 Host DEV 调用 ZEUS PRD 的 `mocked=false` 证据。
 - `PI-01D1/D2/D3`：versioned `SocEnrichmentPolicy/Plan`、deterministic Planner、strict default-off composition、durable execution/attempt/evidence、逐次 mock/real 校验、bounded retry/recovery/replay 与 Kafka/internal-batch opt-in 已实现；默认仍只跑固定 Runtime。

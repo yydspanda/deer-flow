@@ -341,11 +341,18 @@ The Host driver starts this repository's model gateway at
 scene and upstream model. Do not start the old `sec_know_model`, LiteLLM,
 Celery, or Redis processes.
 
-The structured SOC Runtime uses non-streaming completions. Its DeerFlow model
-client explicitly sets `disable_streaming=True`, including when tracing callbacks
-are attached; a `stream=true` response from this gateway remains an intentional
-contract error. This setting is scoped to SOC JSON analysis and does not change
-the normal DeerFlow chat streaming surface.
+The EAGW route returns complete, non-streaming completions, and the loopback gateway
+continues to reject `stream=true`. The PingAn model profile therefore sets
+`disable_streaming: true`: LangChain invokes the model without streaming and emits the
+complete answer as one buffered message chunk. DeerFlow's Run/SSE event stream, chat tool
+calling and SOC analysis remain available; only token-by-token model output is unavailable.
+The structured SOC client retains the same caller-scoped override as defense in depth when
+tracing callbacks are attached.
+
+The Host profile configures three concurrent model calls in both the loopback gateway and
+the SOC Runtime. This permits three distinct Workbench alerts to be analyzed concurrently.
+The SQLite-backed legacy ZEUS compatibility Worker intentionally remains single-worker;
+that durable queue is separate from interactive chat and Workbench concurrency.
 
 The baseline model smoke matches the current SOC Runtime default: thinking is
 disabled and the bounded completion budget is 128 tokens. Its report must retain

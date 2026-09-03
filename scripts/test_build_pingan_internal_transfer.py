@@ -169,6 +169,9 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "不需要额外 nginx/LAN hotfix" in runbook
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
     assert "soc_pingan_model_gateway_smoke.py" in runbook
+    assert "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY|SOC_LLM_MAX_CONCURRENCY" in runbook
+    assert "两个并发值必须都是 `3`" in runbook
+    assert "disable_streaming: true" in runbook
     assert "`thinking_requested=false`" in runbook
     assert "`max_tokens_requested=128`" in runbook
     assert "soc_pingan_legacy_fake_acceptance.py" in runbook
@@ -713,6 +716,26 @@ def test_private_overlay_config_requires_model_gateway_and_sqlite(
         _assert_private_overlay_config_ready(tmp_path)
 
 
+def test_private_overlay_config_requires_buffered_model_calls(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        config_text="""config_version: 38
+models:
+  - model: deepseek-v4-flash
+    api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
+    api_key: $PINGAN_MODEL_GATEWAY_API_KEY
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+""",
+    )
+
+    with pytest.raises(ValueError, match="disable_streaming"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
 def test_private_overlay_config_rejects_permissive_or_missing_gateway_key(
     tmp_path: Path,
 ) -> None:
@@ -819,6 +842,7 @@ models:
   - model: deepseek-v4-flash
     api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
     api_key: $PINGAN_MODEL_GATEWAY_API_KEY
+    disable_streaming: true
 database:
   backend: sqlite
   sqlite_dir: .deer-flow/data
@@ -843,8 +867,10 @@ database:
             "SOC_PINGAN_MODEL_GATEWAY_API_KEYS": "loopback-test-key",
             "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
             "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
+            "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "3",
             "SOC_ANALYZER_MODE": "llm",
             "SOC_LLM_MODEL": "deepseek-v4-flash",
+            "SOC_LLM_MAX_CONCURRENCY": "3",
             "SOC_PINGAN_COMPAT_ENABLED": "true",
             "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
             "SOC_PINGAN_COMPAT_PORT": "8090",

@@ -1776,6 +1776,11 @@ normalizers/hids.py
   都不得形成开放式 self-reflection loop。
 - LLM admission 必须独立于 Kafka worker concurrency，使用进程内 bounded semaphore 和可选 RPM
   预算。准入饱和是 retryable `analyzer_capacity`，不得调用 provider 后再伪装成本地限流。
+- PingAn Host 的 EAGW 只返回完整 completion；其专用 DeerFlow model profile 必须设置
+  `disable_streaming: true`，由 LangChain 将完整响应作为一个 buffered message chunk 交给
+  DeerFlow Run/SSE。禁止直接向 loopback model gateway 发送 `stream=true`，也禁止自行拼装会破坏
+  tool-call/usage 语义的伪 SSE。Host 私有 profile 必须将 gateway 与 SOC Runtime 的并发上限同时设为
+  `3`；SQLite legacy Worker 保持单 Worker，三者不得混为同一个并发配置。
 - admission timeout 只限制等待本地并发名额；call timeout 独立限制一次 provider invocation。后者
   超时必须形成 retryable `analyzer_timeout`，Kafka 不得提交 offset；后台调用可能无法强制中断时，
   executor worker 数仍必须有界，防止超时请求无限创建线程。

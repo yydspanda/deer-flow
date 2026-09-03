@@ -66,6 +66,7 @@ def test_local_config_profile_requires_project_gateway_and_sqlite(
   - model: deepseek-v4-flash
     api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
     api_key: $PINGAN_MODEL_GATEWAY_API_KEY
+    disable_streaming: true
 database:
   backend: sqlite
   sqlite_dir: .deer-flow/data
@@ -74,6 +75,26 @@ database:
     )
 
     validate_local_config_profile(config)
+
+
+def test_local_config_profile_requires_buffered_model_calls(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.pingan-dev.local"
+    config.write_text(
+        """models:
+  - model: deepseek-v4-flash
+    api_base: $PINGAN_MODEL_GATEWAY_BASE_URL
+    api_key: $PINGAN_MODEL_GATEWAY_API_KEY
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HostDevError, match="disable_streaming"):
+        validate_local_config_profile(config)
 
 
 def test_local_config_profile_rejects_obsolete_litellm_reference(

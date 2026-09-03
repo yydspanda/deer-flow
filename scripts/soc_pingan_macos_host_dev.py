@@ -410,10 +410,12 @@ def validate_local_config_profile(path: Path) -> None:
         "model: deepseek-v4-flash",
         "api_base: $PINGAN_MODEL_GATEWAY_BASE_URL",
         "api_key: $PINGAN_MODEL_GATEWAY_API_KEY",
+        "disable_streaming: true",
     )
     if any(line not in content for line in required_model_lines):
         raise HostDevError(
-            "private config is missing the project model-gateway references"
+            "private config is missing the project model-gateway references "
+            "or disable_streaming: true"
         )
     database_block = _top_level_yaml_block(content, "database")
     if (

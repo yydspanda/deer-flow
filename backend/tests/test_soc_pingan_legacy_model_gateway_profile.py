@@ -85,6 +85,8 @@ def test_prepare_legacy_model_gateway_env_writes_private_files_without_secret_re
     assert "SOC_LLM_THINKING_ENABLED=false" in rendered
     assert "SOC_PINGAN_MODEL_GATEWAY_PROVIDER=eagw" in rendered
     assert "SOC_PINGAN_MODEL_GATEWAY_SCENE_ID=1737" in rendered
+    assert "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY=3" in rendered
+    assert "SOC_LLM_MAX_CONCURRENCY=3" in rendered
     assert "SOC_PINGAN_LEGACY_LIFECYCLE_MODE=fake" in rendered
     assert "SOC_PINGAN_LEGACY_CALLBACK_MODE=fake" in rendered
     assert "SOC_PINGAN_ZEUS_ENV=prd" in rendered

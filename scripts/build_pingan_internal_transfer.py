@@ -823,8 +823,10 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         "SOC_PINGAN_MODEL_GATEWAY_PORT": "4001",
         "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
         "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
+        "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "3",
         "SOC_ANALYZER_MODE": "llm",
         "SOC_LLM_MODEL": "deepseek-v4-flash",
+        "SOC_LLM_MAX_CONCURRENCY": "3",
         "SOC_PINGAN_COMPAT_ENABLED": "true",
         "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
         "SOC_PINGAN_COMPAT_PORT": "8090",
@@ -962,10 +964,12 @@ def _assert_private_config_contract(content: str) -> None:
         "model: deepseek-v4-flash",
         "api_base: $PINGAN_MODEL_GATEWAY_BASE_URL",
         "api_key: $PINGAN_MODEL_GATEWAY_API_KEY",
+        "disable_streaming: true",
     )
     if any(line not in content for line in required_model_lines):
         raise ValueError(
-            "private config is missing the project model-gateway references"
+            "private config is missing the project model-gateway references "
+            "or disable_streaming: true"
         )
     database_block = _top_level_yaml_block(content, "database")
     if (
@@ -1504,9 +1508,14 @@ stat -f '%Lp %N' \\
   .env.soc-dev.local config.pingan-dev.local .secrets/eagw-private-key.der
 grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
   .env.soc-dev.local
+grep -E '^export (SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY|SOC_LLM_MAX_CONCURRENCY)=' \\
+  .env.soc-dev.local
+grep -n 'disable_streaming: true' config.pingan-dev.local
 ```
 
-三个权限必须都是 `600`，两个 mode 必须都是 `fake`。初始项目 DEV 已同时激活 ZEUS PRD 和
+三个权限必须都是 `600`，两个 mode 必须都是 `fake`，两个并发值必须都是 `3`，并且模型配置必须
+包含 `disable_streaming: true`。该设置让 EAGW 完整响应通过 LangChain 作为一个 buffered chat message
+返回，避免聊天向 loopback gateway 发送不支持的 `stream=true`。初始项目 DEV 已同时激活 ZEUS PRD 和
 Agent Platform PRD；私有 env 保存 ZEUS PRD/STG 两套受保护 profile，以及 Agent Platform PRD profile
 和已确认的 STG endpoint。fake mode 不会发出生命周期查询或回调，切换 internal 后才允许真实调用。
 RSA key 只存在于 private overlay，
@@ -1705,7 +1714,9 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 因此不能区分个人审计 actor。需要验收账号与权限时，先停止服务，再去掉该参数启动；无需改代码或数据库：
 
 Host DEV 默认允许 3 条不同告警并行研判；同一告警的重复点击不会再次进入 Runtime/LLM。
-按内网模型容量调整时，在 `.env.soc-dev.local` 设置 `SOC_LLM_MAX_CONCURRENCY`，不得取消并发上限。
+`SOC_LLM_MAX_CONCURRENCY` 和 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` 必须同步调整，后者是所有
+聊天与研判共享的最终容量门。SQLite 下的 `SOC_PINGAN_LEGACY_WORKER_CONCURRENCY` 仍固定为 `1`，它只
+控制 ZEUS 持久任务取件速度，不限制前端告警演练并发。
 
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
@@ -1889,8 +1900,10 @@ manifest/index before copying them into the checkout. Large PKL and Workbench
 payload SQLite files are not part of either transfer archive.
 
 `--demo-no-auth` 仅用于可信 DEV 演示；全部访问者共享一个合成管理员身份。正式身份与权限验收时去掉该参数。
-告警演练默认支持 3 条不同告警并行，同一告警由服务端防重；可通过
-`.env.soc-dev.local` 的 `SOC_LLM_MAX_CONCURRENCY` 调整有界容量。
+告警演练默认支持 3 条不同告警并行，同一告警由服务端防重；调整容量时必须同步修改
+`.env.soc-dev.local` 的 `SOC_LLM_MAX_CONCURRENCY` 与
+`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY`。PingAn model profile 使用
+`disable_streaming: true` 适配 EAGW 的完整响应，聊天可用但不提供 token-by-token 输出。
 
 The separately transferred Apple Silicon offline toolchain remains a fallback
 for a Mac without a usable Python/uv or internal Python package registry:

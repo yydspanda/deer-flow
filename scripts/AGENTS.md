@@ -54,8 +54,12 @@ DEV may bind authenticated `8090` to the trusted LAN to preserve the old upstrea
 files are marker-checked before signaling, logs remain under the ignored Host DEV state
 directory, and `stop` includes disabled services so stale processes cannot survive a
 configuration change. Keep the model gateway single-process because its admission
-semaphore is process-local. The old `sec_know_model`, LiteLLM, Celery, and Redis startup
-scripts are reference material, not Host DEV dependencies.
+semaphore is process-local. The Host profile aligns the gateway and SOC Runtime at three
+concurrent model calls; the SQLite compatibility Worker remains single-worker. The PingAn
+model profile must set `disable_streaming: true`: EAGW returns a complete response, while
+LangChain converts that response into one buffered chat chunk without disabling DeerFlow's
+Run/SSE event stream. The old `sec_know_model`, LiteLLM, Celery, and Redis startup scripts
+are reference material, not Host DEV dependencies.
 The Gateway and compatibility Worker must receive the same governed SOC Runtime settings,
 including tenant-policy profile, policy Skill, software-path catalog, environment scope,
 and model-admission limits. Keep those values in the shared start environment rather than

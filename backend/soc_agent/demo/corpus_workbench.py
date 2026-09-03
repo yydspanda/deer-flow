@@ -1165,7 +1165,10 @@ class SocCorpusWorkbenchService:
             execution_mode=execution_mode,
             pattern_observation_reused=pattern_observation_reused,
             idempotent=idempotent,
-            alert=self._get_alert_view(alert_id),
+            alert=self._get_alert_view(
+                alert_id,
+                exclude_active_alert_id=alert_id,
+            ),
         )
 
     def get_execution(self, alert_id: str) -> SocCorpusWorkbenchExecution:
