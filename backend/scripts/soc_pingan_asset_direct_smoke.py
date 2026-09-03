@@ -27,8 +27,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--role", default="")
     parser.add_argument("--um")
+    parser.add_argument(
+        "--confirm-live",
+        action="store_true",
+        help="Explicitly allow a request to the governed internal Provider target.",
+    )
     parser.add_argument("--report-path", type=Path)
     args = parser.parse_args(argv)
+    if not args.confirm_live:
+        parser.error("--confirm-live is required for direct Provider smoke")
 
     report = run_pingan_asset_direct_smoke(
         PingAnAssetLocationQuery(

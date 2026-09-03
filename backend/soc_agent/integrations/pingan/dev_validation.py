@@ -17,6 +17,11 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field
 
 from deerflow.config.app_config import AppConfig
+from soc_agent.integrations.pingan.agent_platform_target import (
+    PingAnAgentPlatformTargetConfigurationError,
+    enforce_pingan_runtime_agent_platform_mapping,
+    load_pingan_agent_platform_target,
+)
 from soc_agent.integrations.pingan.asset_location import (
     PingAnAssetLocationAttempt,
     PingAnAssetLocationQuery,
@@ -324,18 +329,22 @@ def _validate_workflow_host(
     env: Mapping[str, str],
     checks: list[PingAnDevPreflightCheck],
 ) -> None:
-    parsed = urlparse(env.get("SOC_PINGAN_WORKFLOW_BASE_URL", ""))
-    allowed_hosts = {value.strip().lower() for value in env.get("SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS", "").split(",") if value.strip()}
-    target = env.get("SOC_PINGAN_WORKFLOW_ENV", "").strip().lower()
-    host_allowed = parsed.scheme == "https" and bool(parsed.hostname) and parsed.hostname.lower() in allowed_hosts
-    production_confirmed = target != "prd" or env.get("SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION", "").strip() == "CALL_PINGAN_PRD"
-    passed = target in {"dev", "stg", "prd"} and host_allowed and production_confirmed
+    try:
+        target = enforce_pingan_runtime_agent_platform_mapping(load_pingan_agent_platform_target(env))
+    except PingAnAgentPlatformTargetConfigurationError:
+        target = None
     _append_boolean_check(
         checks,
-        check_id="provider.workflow_host_allowlist",
-        passed=passed,
-        passed_detail=f"Agent Platform {target.upper()} target uses HTTPS, an explicit host allowlist, and the required environment guard.",
-        failed_detail=("Agent Platform target must be dev/stg/prd, use an allowlisted HTTPS host, and PRD additionally requires SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD."),
+        check_id="provider.agent_platform_target_guard",
+        passed=target is not None,
+        passed_detail=(
+            f"Local {target.runtime_environment.upper()} targets Agent Platform {target.target_environment.upper()} through HTTPS, an explicit host allowlist, and the required environment guard."
+            if target is not None
+            else "Agent Platform target is valid."
+        ),
+        failed_detail=(
+            "Agent Platform target must follow DEV->PRD or STG->STG, use an allowlisted HTTPS host, provide the three environment-owned workflow IDs, and PRD additionally requires SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD."
+        ),
     )
 
 

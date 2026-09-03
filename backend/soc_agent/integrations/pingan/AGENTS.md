@@ -57,7 +57,10 @@ generic `soc_agent` code.
   advances the chain; auth, timeout, malformed response, or provider failure stops it.
 - Agent Platform workflows use `agent_workflow.py`, not legacy import roots. For the
   reviewed ownership workflows, `message.by` remains the adapter-owned protocol value
-  `WANGWENBIN520`. Credentials stay in private overlay/environment.
+  `WANGWENBIN520`. Credentials stay in private overlay/environment. Host deployment
+  mapping is `DEV -> Agent Platform PRD` and `STG -> Agent Platform STG`; every
+  internal Provider construction must pass `agent_platform_target.py`. Never use an
+  unrelated STG app identity as a substitute for a missing STG `YHSYS` profile.
 - Threat Intel exposes only the generic `threat_intel.ip_reputation.lookup` action and a
   reviewed subset of source fields. Do not migrate legacy hardcoded risk/geo/whitelist or
   blocking logic without a reviewed contract.
@@ -134,11 +137,12 @@ generic `soc_agent` code.
   modes return before loading that target and therefore perform no ZEUS I/O.
 - `soc_pingan_set_runtime_environment.py` is the only supported host DEV/STG switch.
   It derives Memory, tenant-policy and automation scope, selects `soc_agent_dev.db` or
-  `soc_agent_stg.db`, and activates the matching protected ZEUS PRD/STG endpoint,
-  allowlist and credential as one atomic file update. STG disables DEV Workbenches and
-  rejects `--demo-no-auth`. Model/Agent Platform targets, lifecycle/callback modes and
-  action authority remain independent and unchanged. Profile refresh must preserve and
-  reapply an already selected DEV/STG deployment mapping.
+  `soc_agent_stg.db`, and activates the matching protected ZEUS and Agent Platform
+  endpoint, allowlist, credential and workflow IDs as one atomic file update. STG
+  disables DEV Workbenches and rejects `--demo-no-auth`. The model target,
+  lifecycle/callback modes and action authority remain independent and unchanged.
+  Profile refresh must preserve and reapply an already selected DEV/STG deployment
+  mapping; an incomplete STG workflow profile fails before the private env is changed.
 - The internal model is accepted through the loopback OpenAI-compatible smoke in
   `backend/scripts/soc_pingan_model_gateway_smoke.py`. The loopback service is owned by
   this repository and maps the stable `deepseek-v4-flash` alias to an operator-owned

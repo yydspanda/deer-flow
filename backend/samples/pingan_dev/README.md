@@ -238,7 +238,7 @@ cp backend/samples/pingan_dev/env.example .env.soc-dev.local
 chmod 600 .env.soc-dev.local config.pingan-dev.local
 ```
 
-In the preparation checkout, import the reviewed legacy `YHSYS` PRD profile
+In the preparation checkout, import the reviewed legacy Agent Platform profiles
 into that ignored env file before building the private overlay. The command
 parses the source with `ast`; it never imports or executes the old package and
 never prints the secret:
@@ -253,17 +253,23 @@ backend/.venv/bin/python \
 The model preparer statically selects the reviewed STG `DeepSeek_V4_Flash`
 profile (DEV may use the STG model gateway), migrates the old local loopback API key,
 creates `.secrets/eagw-private-key.der`, and writes reviewed ZEUS PRD/STG target profiles
-for asset, threat-intelligence, security-tag, lifecycle, and callback Providers. It
-initially activates `project DEV -> ZEUS PRD`; the governed switch activates
-`project STG -> ZEUS STG` without hand-editing endpoint or credentials. It
+for asset, threat-intelligence, security-tag, lifecycle, and callback Providers. Together
+with the Workflow preparer, it initially activates
+`project DEV -> ZEUS PRD + Agent Platform PRD`; the governed switch activates
+`project STG -> ZEUS STG + Agent Platform STG` without hand-editing endpoint or credentials.
+The Workflow preparer records the reviewed STG origin and leaves project STG fail-closed
+until its complete `YHSYS` profile exists. It
 initializes lifecycle/callback modes to `fake`, so preparing or starting the profile does
 not call ZEUS. Its JSON output must show `environment=stg`,
 `model_config_name=DeepSeek_V4_Flash`, `credential_present=true`,
 `compatibility_key_present=true`, `zeus_environment=prd`,
 `zeus_stg_credential_present=true`, and
-`secret_in_output=false`. The workflow
-output must show `environment=prd`, `app_id=YHSYS`, `operator=WANGWENBIN520`,
-`credential_present=true`, and `secret_in_output=false`. Both commands are
+`secret_in_output=false`. The workflow output must show
+`active_target_environment=prd`, `prd_app_id=YHSYS`,
+`operator=WANGWENBIN520`, `prd_credential_present=true`, and
+`secret_in_output=false`. It also reports `stg_profile_ready=false` until the
+Agent Platform owner supplies the STG workflow app identity and three STG
+workflow IDs. Both commands are
 idempotent. The old source is deliberately excluded from the source archive;
 the resulting env and DER key travel only in the protected private overlay.
 
@@ -426,10 +432,36 @@ backend/.venv/bin/python backend/scripts/soc_pingan_dev_preflight.py \
   --report-path backend/.deer-flow/soc-internal-validation/d12b/preflight.json
 
 backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
   --query "$D12B_ASSET_KEY" \
   --asset-type IP \
   --role victim \
   --report-path backend/.deer-flow/soc-internal-validation/d12b/direct-success.json
+
+# Optional discovery seeds from the reviewed legacy ownership examples. These
+# are not acceptance truth; inspect attempts before adding any value to the
+# private seven-case matrix.
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
+  --query "10.12.31.24" \
+  --asset-type IP \
+  --role victim \
+  --report-path backend/.deer-flow/soc-internal-validation/d12b/discovery-ip.json
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
+  --query "SZC-L0649671" \
+  --asset-type HOST \
+  --role victim \
+  --report-path backend/.deer-flow/soc-internal-validation/d12b/discovery-host.json
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
+  --query "zhangjianming627" \
+  --asset-type USER \
+  --um "zhangjianming627" \
+  --role owner \
+  --report-path backend/.deer-flow/soc-internal-validation/d12b/discovery-um.json
 
 backend/.venv/bin/python backend/scripts/soc_pingan_d12b_matrix.py \
   --cases backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml \
@@ -526,8 +558,9 @@ upstream model and EAGW scene are operator-owned private configuration. Host per
 `SOC_PINGAN_ENV`: DEV uses `backend/.deer-flow/data/soc_agent_dev.db`, while STG uses
 `backend/.deer-flow/data/soc_agent_stg.db`. Switch with
 `backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg`; the command atomically
-applies `DEV -> ZEUS PRD` or `STG -> ZEUS STG`. It does not change the independent model/Agent
-Platform targets, lifecycle/callback Provider modes, or action authority.
+applies `DEV -> ZEUS PRD + Agent Platform PRD` or
+`STG -> ZEUS STG + Agent Platform STG`. It does not change the independent model
+target, lifecycle/callback Provider modes, or action authority.
 DEV starts DeerFlow in hot-reload mode. STG starts the same committed checkout with DeerFlow's
 optimized `--prod` mode, disables HMR, and rebuilds the frontend from the current source.
 
@@ -538,15 +571,20 @@ response ID and assistant text. A successful `/models` call alone is not enough;
 `outcome=passed` from this chat-completion report is the model connectivity gate.
 
 The preflight performs no network request. It treats local Runtime environment (`dev`)
-and remote Provider target (`prd`) as separate values. It validates both the ZEUS and Agent
-Platform HTTPS host allowlists, required credentials, selected targets,
+and remote Provider targets (`prd`) as separate values. It enforces project
+`DEV -> ZEUS PRD + Agent Platform PRD` and project
+`STG -> ZEUS STG + Agent Platform STG`, then validates both HTTPS host
+allowlists, required credentials, selected targets,
 explicit PRD guards, local model profile, and construction of the tracked HTTP
 clients. It must pass before direct or MCP smoke.
 
 `SOC_PINGAN_WORKFLOW_APP_ID=YHSYS` identifies the reviewed legacy Agent Platform
 application/tenant used by the three ownership workflows. The reviewed source
 contains that credential only in its PRD profile, so the profile preparer writes
-it to the ignored env file and configures the reviewed PRD endpoint. The PingAn
+it to the ignored env file and configures the reviewed PRD endpoint for project
+DEV. It extracts the STG endpoint but deliberately does not substitute the
+unrelated legacy `jtxxaq` credential for `YHSYS`; project STG remains fail-closed
+until its app identity and workflow IDs are reviewed. The PingAn
 adapter fixes legacy `message.by` to `WANGWENBIN520`; there is no operator env
 override. A PRD target is rejected unless `SOC_PINGAN_WORKFLOW_ENV=prd` and
 `SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD` are both set.

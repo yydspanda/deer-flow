@@ -2323,12 +2323,17 @@ investigation-only evidence. Neither may add a PingAn branch to generic Runtime 
 The current internal profile separates local execution and remote Provider contracts at code level, while the
 PingAn deployment profile governs their approved combination. `SOC_PINGAN_ENV=dev|stg` owns the
 environment-specific SOC SQLite, Memory, Workbench and automation scope (`dev` enables validation
-Workbenches; `stg` disables them and requires authentication). The protected private env stores ZEUS PRD and
-STG profiles, and the governed switch atomically applies `project DEV -> ZEUS PRD` or
-`project STG -> ZEUS STG` for asset, threat-intelligence, security-tag, lifecycle-read and callback Providers.
+Workbenches; `stg` disables them and requires authentication). The protected private env stores remote target
+profiles, and the governed switch atomically applies
+`project DEV -> ZEUS PRD + Agent Platform PRD` or
+`project STG -> ZEUS STG + Agent Platform STG`. ZEUS serves asset,
+threat-intelligence, security-tag, lifecycle-read and callback Providers; Agent Platform serves the asset-to-BU/UM
+fallback workflows.
 The PRD host allowlist and exact confirmation remain mandatory; lifecycle/callback remain `fake` until the
-explicit internal live gate enables both together. Host startup and preflight reject a mismatched Runtime/ZEUS
-pair. Model and Agent Platform targets, Provider modes and action-authority settings remain independent;
+explicit internal live gate enables both together. Host startup, preflight and internal Asset Provider construction
+reject a mismatched Runtime/remote-target pair. The reviewed legacy source proves the Agent Platform STG endpoint
+but does not provide a STG `YHSYS` identity or ownership-workflow IDs, so STG remains fail-closed until that private
+profile is complete. The model target, Provider modes and action-authority settings remain independent;
 DEV and STG use separate `soc_agent_dev.db` / `soc_agent_stg.db` files.
 Unknown ZEUS lifecycle business codes may be inspected by an explicit internal-only response probe
 that reuses the same Provider transport. Complete responses remain in an ignored mode-`0600` local

@@ -34,14 +34,17 @@ mode-`0600` local profiles, the project model-gateway references, isolated SQLit
 configuration, and the non-root nginx config. It must reject retired LiteLLM model
 references before dependency installation or migration.
 
-Host Runtime scope and a ZEUS target remain separate low-level settings, but the Host
-deployment profile governs them together. The legacy model-profile preparer statically
-writes protected ZEUS PRD and STG profiles into the mode-`0600` ignored env and initially
-activates `Runtime DEV -> ZEUS PRD`. The governed switch atomically applies
-`Runtime DEV -> ZEUS PRD` or `Runtime STG -> ZEUS STG`; startup and preflight reject
-drift. It must preserve model/Agent Platform configuration, lifecycle/callback Provider
-modes, and action authority byte-for-byte. Lifecycle and callback still start in `fake`
-mode.
+Host Runtime scope and remote Provider targets remain separate low-level settings, but
+the PingAn Host deployment profile governs the approved pairings together. The legacy
+profile preparers statically write protected ZEUS and Agent Platform profiles into the
+mode-`0600` ignored env and initially activate
+`Runtime DEV -> ZEUS PRD + Agent Platform PRD`. The governed switch atomically applies
+that mapping or `Runtime STG -> ZEUS STG + Agent Platform STG`; startup and preflight
+reject drift. The reviewed legacy source proves only the Agent Platform STG origin, not
+the STG `YHSYS` credential or ownership-workflow IDs, so STG must fail before mutation
+until that complete private profile exists. The switch must preserve model configuration,
+lifecycle/callback Provider modes, and action authority byte-for-byte. Lifecycle and
+callback still start in `fake` mode.
 
 That wrapper also owns three sidecars through
 `scripts/soc_pingan_host_sidecars.py`: the loopback project model gateway on `4001`, the

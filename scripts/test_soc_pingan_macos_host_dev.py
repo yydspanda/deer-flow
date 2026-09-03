@@ -285,12 +285,13 @@ def test_runtime_environment_accepts_only_dev_and_stg() -> None:
 
 
 @pytest.mark.parametrize(
-    ("runtime_environment", "zeus_environment"),
-    (("dev", "prd"), ("stg", "stg")),
+    ("runtime_environment", "zeus_environment", "workflow_environment"),
+    (("dev", "prd", "prd"), ("stg", "stg", "stg")),
 )
-def test_apply_runtime_profile_accepts_governed_zeus_mapping(
+def test_apply_runtime_profile_accepts_governed_remote_mappings(
     runtime_environment: str,
     zeus_environment: str,
+    workflow_environment: str,
 ) -> None:
     target_prefix = f"SOC_PINGAN_ZEUS_{zeus_environment.upper()}_"
     profile = {
@@ -299,20 +300,52 @@ def test_apply_runtime_profile_accepts_governed_zeus_mapping(
         target_prefix + "APP_ID": f"{zeus_environment}-app",
         target_prefix + "APP_KEY": f"{zeus_environment}-secret",
     }
+    workflow_prefix = f"SOC_PINGAN_WORKFLOW_{workflow_environment.upper()}_"
+    workflow_profile = {
+        workflow_prefix + "BASE_URL": (f"https://agent-{workflow_environment}.example"),
+        workflow_prefix + "ALLOWED_HOSTS": (f"agent-{workflow_environment}.example"),
+        workflow_prefix + "APP_ID": f"{workflow_environment}-workflow-app",
+        workflow_prefix + "APP_SECRET": f"{workflow_environment}-workflow-secret",
+        workflow_prefix + "TERMINAL_ID": "1087710",
+        workflow_prefix + "DATACENTER_ID": "1087787",
+        workflow_prefix + "USER_ID": "1092332",
+    }
     resolved = apply_runtime_profile(
         {
             **profile,
+            **workflow_profile,
             "SOC_PINGAN_ZEUS_ENV": zeus_environment,
             "SOC_PINGAN_ZEUS_BASE_URL": profile[target_prefix + "BASE_URL"],
             "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": profile[target_prefix + "ALLOWED_HOSTS"],
             "SOC_PINGAN_ZEUS_APP_ID": profile[target_prefix + "APP_ID"],
             "SOC_PINGAN_ZEUS_APP_KEY": profile[target_prefix + "APP_KEY"],
+            "SOC_PINGAN_WORKFLOW_ENV": workflow_environment,
+            "SOC_PINGAN_WORKFLOW_BASE_URL": workflow_profile[
+                workflow_prefix + "BASE_URL"
+            ],
+            "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": workflow_profile[
+                workflow_prefix + "ALLOWED_HOSTS"
+            ],
+            "SOC_PINGAN_WORKFLOW_APP_ID": workflow_profile[workflow_prefix + "APP_ID"],
+            "SOC_PINGAN_WORKFLOW_APP_SECRET": workflow_profile[
+                workflow_prefix + "APP_SECRET"
+            ],
+            "SOC_PINGAN_WORKFLOW_TERMINAL_ID": workflow_profile[
+                workflow_prefix + "TERMINAL_ID"
+            ],
+            "SOC_PINGAN_WORKFLOW_DATACENTER_ID": workflow_profile[
+                workflow_prefix + "DATACENTER_ID"
+            ],
+            "SOC_PINGAN_WORKFLOW_USER_ID": workflow_profile[
+                workflow_prefix + "USER_ID"
+            ],
         },
         runtime_environment=runtime_environment,
     )
 
     assert resolved["SOC_PINGAN_ENV"] == runtime_environment
     assert resolved["SOC_PINGAN_ZEUS_ENV"] == zeus_environment
+    assert resolved["SOC_PINGAN_WORKFLOW_ENV"] == workflow_environment
 
 
 def test_apply_runtime_profile_rejects_stg_to_prd_target_drift() -> None:
@@ -338,6 +371,28 @@ def test_apply_runtime_profile_rejects_active_target_profile_drift() -> None:
                 "SOC_PINGAN_ZEUS_STG_APP_KEY": "stg-secret",
             },
             runtime_environment="stg",
+        )
+
+
+def test_apply_runtime_profile_rejects_agent_platform_target_drift() -> None:
+    with pytest.raises(
+        HostDevError,
+        match="DEV must target Agent Platform PRD",
+    ):
+        apply_runtime_profile(
+            {
+                "SOC_PINGAN_ZEUS_ENV": "prd",
+                "SOC_PINGAN_ZEUS_BASE_URL": "https://zeus-prd.example",
+                "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "zeus-prd.example",
+                "SOC_PINGAN_ZEUS_APP_ID": "prd-app",
+                "SOC_PINGAN_ZEUS_APP_KEY": "prd-secret",
+                "SOC_PINGAN_ZEUS_PRD_BASE_URL": "https://zeus-prd.example",
+                "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS": "zeus-prd.example",
+                "SOC_PINGAN_ZEUS_PRD_APP_ID": "prd-app",
+                "SOC_PINGAN_ZEUS_PRD_APP_KEY": "prd-secret",
+                "SOC_PINGAN_WORKFLOW_ENV": "stg",
+            },
+            runtime_environment="dev",
         )
 
 
@@ -459,6 +514,21 @@ def test_start_runtime_prepares_database_before_sidecars(
             "SOC_PINGAN_ZEUS_PRD_ALLOWED_HOSTS": "zeus-prd.example",
             "SOC_PINGAN_ZEUS_PRD_APP_ID": "prd-app",
             "SOC_PINGAN_ZEUS_PRD_APP_KEY": "prd-secret",
+            "SOC_PINGAN_WORKFLOW_ENV": "prd",
+            "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agent-prd.example",
+            "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agent-prd.example",
+            "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS",
+            "SOC_PINGAN_WORKFLOW_APP_SECRET": "workflow-prd-secret",
+            "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "1087710",
+            "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
+            "SOC_PINGAN_WORKFLOW_USER_ID": "1092332",
+            "SOC_PINGAN_WORKFLOW_PRD_BASE_URL": "https://agent-prd.example",
+            "SOC_PINGAN_WORKFLOW_PRD_ALLOWED_HOSTS": "agent-prd.example",
+            "SOC_PINGAN_WORKFLOW_PRD_APP_ID": "YHSYS",
+            "SOC_PINGAN_WORKFLOW_PRD_APP_SECRET": "workflow-prd-secret",
+            "SOC_PINGAN_WORKFLOW_PRD_TERMINAL_ID": "1087710",
+            "SOC_PINGAN_WORKFLOW_PRD_DATACENTER_ID": "1087787",
+            "SOC_PINGAN_WORKFLOW_PRD_USER_ID": "1092332",
         },
     )
     monkeypatch.setattr(

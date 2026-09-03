@@ -5,6 +5,14 @@ this package. Generic SOC Runtime and action services consume their typed
 results through vendor-neutral routes such as ``asset.locate``.
 """
 
+from soc_agent.integrations.pingan.agent_platform_target import (
+    PINGAN_AGENT_PLATFORM_PRD_CONFIRMATION,
+    PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS,
+    PingAnAgentPlatformTargetConfig,
+    PingAnAgentPlatformTargetConfigurationError,
+    enforce_pingan_runtime_agent_platform_mapping,
+    load_pingan_agent_platform_target,
+)
 from soc_agent.integrations.pingan.agent_workflow import (
     HttpPingAnAgentWorkflowPort,
     PingAnAgentWorkflowConfigurationError,
@@ -62,7 +70,9 @@ from soc_agent.integrations.pingan.legacy_workflow_profile import (
     LEGACY_WORKFLOW_ENV_PATH,
     PingAnLegacyWorkflowProfile,
     PingAnLegacyWorkflowProfileError,
+    PingAnLegacyWorkflowProfiles,
     load_legacy_workflow_profile,
+    load_legacy_workflow_profiles,
     prepare_legacy_workflow_env,
 )
 from soc_agent.integrations.pingan.model_gateway import (
@@ -134,6 +144,8 @@ __all__ = [
     "LEGACY_WORKFLOW_ENV_PATH",
     "PINGAN_LEGACY_WORKFLOW_APP_ID",
     "PINGAN_LEGACY_WORKFLOW_OPERATOR",
+    "PINGAN_AGENT_PLATFORM_PRD_CONFIRMATION",
+    "PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS",
     "PINGAN_TENANT_DISPOSITION_POLICY_PATH",
     "HttpPingAnAgentWorkflowPort",
     "HttpPingAnZeusAssetSearchPort",
@@ -162,6 +174,7 @@ __all__ = [
     "PingAnD12BEvidenceCheckStatus",
     "PingAnD12BEvidenceRepositoryPort",
     "PingAnLegacyWorkflowProfile",
+    "PingAnLegacyWorkflowProfiles",
     "PingAnLegacyWorkflowProfileError",
     "PingAnModelGateway",
     "PingAnModelGatewayBusyError",
@@ -200,6 +213,8 @@ __all__ = [
     "PingAnAgentWorkflowHttpConfig",
     "PingAnAgentWorkflowResponseError",
     "PingAnAgentWorkflowTimeoutError",
+    "PingAnAgentPlatformTargetConfig",
+    "PingAnAgentPlatformTargetConfigurationError",
     "PINGAN_SOFTWARE_PATH_LOOKUP_ACTION",
     "PingAnSoftwarePathCatalog",
     "PingAnSoftwarePathCatalogBuildReport",
@@ -222,11 +237,14 @@ __all__ = [
     "load_pingan_asset_case_matrix",
     "load_pingan_tenant_disposition_policy",
     "load_legacy_workflow_profile",
+    "load_legacy_workflow_profiles",
+    "load_pingan_agent_platform_target",
     "normalize_windows_path",
     "PINGAN_SOFTWARE_PATH_ALL_SAFE_VALUE",
     "PINGAN_SOFTWARE_PATH_FAST_DISPOSITION_SIGNAL",
     "PINGAN_SOFTWARE_PATH_MATCH_SIGNAL",
     "prepare_legacy_workflow_env",
+    "enforce_pingan_runtime_agent_platform_mapping",
     "run_pingan_asset_case_matrix",
     "run_pingan_d12b_evidence_acceptance",
 ]

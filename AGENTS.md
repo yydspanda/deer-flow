@@ -264,10 +264,13 @@ and `LocalSandboxProvider` without Docker, exposes detected private LAN addresse
 default, and supports `--local-only`. `SOC_PINGAN_ENV=dev|stg` is changed only through
 the governed switch command: DEV uses its own SQLite plus hot reload and Workbenches;
 STG uses a separate SQLite, production-optimized services, authentication, and no DEV
-Workbench. That command also atomically applies the approved ZEUS mapping
-`DEV -> PRD` / `STG -> STG` from two protected private profiles; startup rejects a
-mismatch. Model and Agent Platform targets, Provider modes, and action authority remain
-independent and unchanged.
+Workbench. That command also atomically applies the approved remote mappings
+`DEV -> ZEUS PRD + Agent Platform PRD` and
+`STG -> ZEUS STG + Agent Platform STG` from protected private profiles; startup
+rejects a mismatch. The model target, Provider modes, and action authority remain
+independent and unchanged. The reviewed legacy source does not contain the STG
+`YHSYS` identity or ownership-workflow IDs, so project STG must remain fail-closed
+until operators provide that complete private profile.
 Trusted DEV demonstrations may explicitly add
 `--demo-no-auth`; that mode maps every visitor to one synthetic administrator and must
 never be used for identity/RBAC acceptance or production. Docker SOC DEV exposes the

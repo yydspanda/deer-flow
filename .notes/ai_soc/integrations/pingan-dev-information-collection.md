@@ -75,7 +75,7 @@ SOC Runtime 不实现 `endpoint.process_tree.lookup` 或 `host.event_context.loo
 
 该项已完成源码审计：
 
-- 旧模块通过 `env_profile` 选择 profile；新项目不读取该全局变量。D12-B 首轮使用 `SOC_PINGAN_ENV=dev`，验证后可通过受治理命令切到 `stg`；Agent Platform 与 ZEUS 上游目标始终由各自变量独立显式选择。
+- 旧模块通过 `env_profile` 选择 profile；新项目不读取该全局变量。底层仍分别声明 Runtime、ZEUS 和 Agent Platform target，但 PingAn Host profile 只允许两组已批准组合：`项目 DEV -> ZEUS PRD + Agent Platform PRD`、`项目 STG -> ZEUS STG + Agent Platform STG`。受治理切换命令原子更新 active endpoint、allowlist、凭证和 workflow IDs，避免手工拼出错配环境。
 - DeerFlow 的模型 endpoint、ZEUS endpoint 和 workflow runner 分别显式配置，不依赖旧 `root_config` 的隐式全局读取。
 - `soc_pingan_dev_preflight.py` 会在发请求前拒绝未知环境、非 internal provider、未 allowlist 的 ZEUS/Agent Platform host、非 loopback model endpoint，以及未显式确认的 ZEUS/Workflow PRD target。
 - 实际 DEV URL/App ID/App Key 可以直接写入 Git-ignored `.env.soc-dev.local`。
@@ -155,7 +155,25 @@ SOC_PINGAN_WORKFLOW_BASE_URL=https://agents-api-sze.paic.com.cn
 SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS=agents-api-sze.paic.com.cn
 SOC_PINGAN_WORKFLOW_APP_ID=YHSYS
 SOC_PINGAN_WORKFLOW_APP_SECRET=<written by the legacy-profile preparer>
+SOC_PINGAN_WORKFLOW_TERMINAL_ID=1087710
+SOC_PINGAN_WORKFLOW_DATACENTER_ID=1087787
+SOC_PINGAN_WORKFLOW_USER_ID=1092332
 SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD
+
+SOC_PINGAN_WORKFLOW_PRD_BASE_URL=https://agents-api-sze.paic.com.cn
+SOC_PINGAN_WORKFLOW_PRD_ALLOWED_HOSTS=agents-api-sze.paic.com.cn
+SOC_PINGAN_WORKFLOW_PRD_APP_ID=YHSYS
+SOC_PINGAN_WORKFLOW_PRD_APP_SECRET=<written by the legacy-profile preparer>
+SOC_PINGAN_WORKFLOW_PRD_TERMINAL_ID=1087710
+SOC_PINGAN_WORKFLOW_PRD_DATACENTER_ID=1087787
+SOC_PINGAN_WORKFLOW_PRD_USER_ID=1092332
+SOC_PINGAN_WORKFLOW_STG_BASE_URL=https://agents-api-stg-new.paic.com.cn
+SOC_PINGAN_WORKFLOW_STG_ALLOWED_HOSTS=agents-api-stg-new.paic.com.cn
+SOC_PINGAN_WORKFLOW_STG_APP_ID=<operator-reviewed value required before project STG>
+SOC_PINGAN_WORKFLOW_STG_APP_SECRET=<operator-reviewed value required before project STG>
+SOC_PINGAN_WORKFLOW_STG_TERMINAL_ID=<operator-reviewed value required before project STG>
+SOC_PINGAN_WORKFLOW_STG_DATACENTER_ID=<operator-reviewed value required before project STG>
+SOC_PINGAN_WORKFLOW_STG_USER_ID=<operator-reviewed value required before project STG>
 ```
 
 在外网准备 checkout、构建 private overlay 之前运行：
@@ -171,7 +189,9 @@ backend/.venv/bin/python \
 `DeepSeek_V4_Flash` 模型路由、迁移 loopback key/旧 ingress app-key、生成
 `.secrets/eagw-private-key.der`，同时写入 ZEUS PRD/STG 两套目标及凭证，初始激活
 `项目 DEV -> ZEUS PRD`，并将生命周期和回调保持在 `fake`；第二个迁移 `YHSYS` PRD Workflow
-profile。切换到项目 STG 时，受治理命令激活 ZEUS STG；它不会改变模型或 Workflow target。输出只包含
+profile 和已审阅的 Agent Platform STG origin。切换到项目 STG 时，受治理命令同时激活 ZEUS STG 与
+Agent Platform STG；若 STG `YHSYS` identity/secret 或任一归属 workflow ID 尚未由平台 owner 提供，
+命令会在写文件前失败。模型 target、Provider mode 和动作权限不会随之改变。输出只包含
 profile 元数据、源/key hash 和凭证存在标记，始终为
 `secret_in_output=false`。旧源码本身不进入 source bundle，写好的 env/key 只进入受保护 private overlay。
 
@@ -182,7 +202,7 @@ profile 元数据、源/key hash 和凭证存在标记，始终为
 - `companyCode: all` 是否仍允许。
 - 请求超时、限流和典型 HTTP/业务错误码。
 - 旧源码把三条 workflow 的 `message.by` 固定为 `WANGWENBIN520`，本次兼容实现保持一致；若未来平台 owner 要求调用人透传，应作为新的已评审协议版本实现，而不是临时环境覆盖。
-- 旧源码没有 `YHSYS` STG credential，因此不再要求或猜测 STG secret；当前 workflow profile 明确指向 reviewed PRD endpoint。
+- 旧源码没有 `YHSYS` STG credential 和三条归属 workflow 的 STG ID；不得拿 `jtxxaq` 等无关 app 替代。项目 DEV 可继续使用 reviewed PRD profile，项目 STG 在补齐完整私有 profile 前保持 fail closed。
 - PRD profile 同时锁定 environment/base URL/allowlist/secret，并需要显式 confirmation；真正发请求还必须由 live runner 的 `--confirm-live` 二次确认。
 - 旧资产归属修正规则是否仍有效；如存在新的 BU/company code override，提供脱敏规则表。
 

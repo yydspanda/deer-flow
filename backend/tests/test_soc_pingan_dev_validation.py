@@ -148,6 +148,7 @@ def test_pingan_preflight_accepts_stg_runtime_with_mapped_stg_zeus_target(
     env["SOC_PINGAN_ZEUS_BASE_URL"] = "https://zeus.stg.example"
     env["SOC_PINGAN_ZEUS_ALLOWED_HOSTS"] = "zeus.stg.example"
     env.pop("SOC_PINGAN_ZEUS_PRD_CONFIRMATION")
+    _use_stg_agent_platform(env)
 
     report = run_pingan_dev_preflight(
         env,
@@ -173,6 +174,7 @@ def test_pingan_preflight_rejects_stg_runtime_with_prd_zeus_target(
     config_path.touch()
     env = _valid_env(config_path)
     env["SOC_PINGAN_ENV"] = "stg"
+    _use_stg_agent_platform(env)
 
     report = run_pingan_dev_preflight(
         env,
@@ -365,17 +367,34 @@ def _valid_env(config_path: Path) -> dict[str, str]:
         "SOC_PINGAN_ZEUS_APP_ID": "app-id",
         "SOC_PINGAN_ZEUS_APP_KEY": "zeus-secret",
         "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
-        "SOC_PINGAN_WORKFLOW_ENV": "stg",
-        "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agent-stg.example",
-        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agent-stg.example",
+        "SOC_PINGAN_WORKFLOW_ENV": "prd",
+        "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agent-prd.example",
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agent-prd.example",
         "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS",
         "SOC_PINGAN_WORKFLOW_APP_SECRET": "workflow-secret",
         "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "1087710",
         "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
         "SOC_PINGAN_WORKFLOW_USER_ID": "1092332",
+        "SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION": "CALL_PINGAN_PRD",
         "DEER_FLOW_CONFIG_PATH": str(config_path),
         "SOC_LLM_MODEL": "deepseek-v4-flash",
     }
+
+
+def _use_stg_agent_platform(env: dict[str, str]) -> None:
+    env.update(
+        {
+            "SOC_PINGAN_WORKFLOW_ENV": "stg",
+            "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agent-stg.example",
+            "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agent-stg.example",
+            "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS-STG",
+            "SOC_PINGAN_WORKFLOW_APP_SECRET": "workflow-stg-secret",
+            "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "2087710",
+            "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "2087787",
+            "SOC_PINGAN_WORKFLOW_USER_ID": "2092332",
+            "SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION": "",
+        }
+    )
 
 
 def _ready_preflight() -> PingAnDevPreflightReport:

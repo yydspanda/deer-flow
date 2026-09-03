@@ -1,4 +1,4 @@
-"""Prepare a private YHSYS workflow profile from reviewed legacy source."""
+"""Prepare governed Agent Platform profiles from reviewed legacy source."""
 
 from __future__ import annotations
 

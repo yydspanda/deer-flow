@@ -306,6 +306,20 @@ def test_environment_builder_never_silently_falls_back_from_internal_to_fake() -
     assert result.provider_mode == "fake"
 
 
+def test_environment_builder_rejects_agent_platform_target_drift() -> None:
+    env = _internal_provider_env()
+    env["SOC_PINGAN_WORKFLOW_ENV"] = "stg"
+    env["SOC_PINGAN_WORKFLOW_BASE_URL"] = "https://agent-stg.example"
+    env["SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS"] = "agent-stg.example"
+    env["SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION"] = ""
+
+    with pytest.raises(
+        PingAnAssetProviderConfigurationError,
+        match="Agent Platform workflow configuration is invalid",
+    ):
+        build_pingan_asset_locator_from_env(env)
+
+
 def test_cli_mcp_smoke_keeps_d12_fake_provenance_visible(
     monkeypatch: pytest.MonkeyPatch,
     capfd: pytest.CaptureFixture[str],
@@ -355,6 +369,28 @@ def test_cli_mcp_smoke_keeps_d12_fake_provenance_visible(
     assert result["provider_mode"] == "fake"
     assert result["evidence_boundary"] == "investigation_only"
     assert result["decision_impact"] == "none"
+
+
+def _internal_provider_env() -> dict[str, str]:
+    return {
+        "SOC_PINGAN_ASSET_PROVIDER_MODE": "internal",
+        "SOC_PINGAN_ENV": "dev",
+        "SOC_PINGAN_ZEUS_ENV": "prd",
+        "SOC_PINGAN_ZEUS_BASE_URL": "https://zeus-prd.example",
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "zeus-prd.example",
+        "SOC_PINGAN_ZEUS_APP_ID": "ZEUS-APP",
+        "SOC_PINGAN_ZEUS_APP_KEY": "zeus-secret",
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
+        "SOC_PINGAN_WORKFLOW_ENV": "prd",
+        "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agent-prd.example",
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agent-prd.example",
+        "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS",
+        "SOC_PINGAN_WORKFLOW_APP_SECRET": "workflow-secret",
+        "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "1087710",
+        "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
+        "SOC_PINGAN_WORKFLOW_USER_ID": "1092332",
+        "SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION": "CALL_PINGAN_PRD",
+    }
 
 
 def _locator(

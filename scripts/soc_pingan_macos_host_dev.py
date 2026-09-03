@@ -67,11 +67,24 @@ PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS = {
     "dev": "prd",
     "stg": "stg",
 }
+PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS = {
+    "dev": "prd",
+    "stg": "stg",
+}
 PINGAN_ZEUS_PROFILE_SUFFIXES = (
     "BASE_URL",
     "ALLOWED_HOSTS",
     "APP_ID",
     "APP_KEY",
+)
+PINGAN_AGENT_PLATFORM_PROFILE_SUFFIXES = (
+    "BASE_URL",
+    "ALLOWED_HOSTS",
+    "APP_ID",
+    "APP_SECRET",
+    "TERMINAL_ID",
+    "DATACENTER_ID",
+    "USER_ID",
 )
 
 MIN_PYTHON = (3, 12)
@@ -665,7 +678,7 @@ def apply_runtime_profile(
     *,
     runtime_environment: str,
 ) -> dict[str, str]:
-    """Derive SOC scopes after validating the governed ZEUS target mapping."""
+    """Derive SOC scopes after validating both governed remote targets."""
 
     selected = normalize_runtime_environment(runtime_environment)
     expected_zeus_environment = PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS[selected]
@@ -690,6 +703,41 @@ def apply_runtime_profile(
             f"{selected.upper()} -> ZEUS {expected_zeus_environment.upper()} "
             "profile; rerun backend/scripts/soc_pingan_set_runtime_environment.py "
             f"({', '.join(drifted_keys)})"
+        )
+    expected_agent_platform_environment = (
+        PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS[selected]
+    )
+    actual_agent_platform_environment = (
+        environment.get(
+            "SOC_PINGAN_WORKFLOW_ENV",
+            "",
+        )
+        .strip()
+        .lower()
+    )
+    if actual_agent_platform_environment != expected_agent_platform_environment:
+        raise HostDevError(
+            f"PingAn Runtime {selected.upper()} must target Agent Platform "
+            f"{expected_agent_platform_environment.upper()}; run "
+            "backend/scripts/soc_pingan_set_runtime_environment.py before start"
+        )
+    agent_platform_prefix = (
+        f"SOC_PINGAN_WORKFLOW_{expected_agent_platform_environment.upper()}_"
+    )
+    drifted_agent_platform_keys = [
+        f"SOC_PINGAN_WORKFLOW_{suffix}"
+        for suffix in PINGAN_AGENT_PLATFORM_PROFILE_SUFFIXES
+        if not environment.get(agent_platform_prefix + suffix, "").strip()
+        or environment.get(f"SOC_PINGAN_WORKFLOW_{suffix}", "").strip()
+        != environment.get(agent_platform_prefix + suffix, "").strip()
+    ]
+    if drifted_agent_platform_keys:
+        raise HostDevError(
+            "PingAn active Agent Platform profile does not match the governed "
+            f"{selected.upper()} -> Agent Platform "
+            f"{expected_agent_platform_environment.upper()} profile; rerun "
+            "backend/scripts/soc_pingan_set_runtime_environment.py "
+            f"({', '.join(drifted_agent_platform_keys)})"
         )
     workbench_enabled = "true" if selected == "dev" else "false"
     resolved = dict(environment)
@@ -891,6 +939,19 @@ def runtime_status() -> dict[str, Any]:
             environment.get("SOC_PINGAN_ZEUS_ENV", "").strip().lower()
             == PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS.get(runtime_environment)
         ),
+        "agent_platform_target_environment": environment.get(
+            "SOC_PINGAN_WORKFLOW_ENV",
+            "unknown",
+        ),
+        "expected_agent_platform_target_environment": (
+            PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS.get(runtime_environment)
+        ),
+        "agent_platform_target_matches_runtime": (
+            environment.get("SOC_PINGAN_WORKFLOW_ENV", "").strip().lower()
+            == PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS.get(
+                runtime_environment
+            )
+        ),
         "legacy_lifecycle_mode": environment.get(
             "SOC_PINGAN_LEGACY_LIFECYCLE_MODE",
             "unknown",
@@ -906,7 +967,7 @@ def runtime_status() -> dict[str, Any]:
         include_disabled=True,
     )
     return {
-        "schema_version": "soc.pingan_macos_host_dev_status.v1",
+        "schema_version": "soc.pingan_macos_host_dev_status.v2",
         "runtime_environment": runtime_environment,
         "runtime_profile": runtime_profile,
         "core": {

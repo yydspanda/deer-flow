@@ -12,6 +12,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
+from .agent_platform_target import (
+    PINGAN_AGENT_PLATFORM_PRD_CONFIRMATION,
+    PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS,
+    PingAnAgentPlatformTargetConfigurationError,
+    enforce_pingan_runtime_agent_platform_mapping,
+    load_pingan_agent_platform_target,
+)
 from .zeus_target import (
     PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS,
     PINGAN_ZEUS_PRD_CONFIRMATION,
@@ -23,7 +30,7 @@ from .zeus_target import (
 PingAnRuntimeEnvironmentValue = Literal["dev", "stg"]
 
 _RUNTIME_KEY = "SOC_PINGAN_ENV"
-_ACTIVE_TARGET_KEYS = (
+_ACTIVE_ZEUS_TARGET_KEYS = (
     "SOC_PINGAN_ZEUS_ENV",
     "SOC_PINGAN_ZEUS_BASE_URL",
     "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
@@ -31,11 +38,31 @@ _ACTIVE_TARGET_KEYS = (
     "SOC_PINGAN_ZEUS_APP_KEY",
     "SOC_PINGAN_ZEUS_PRD_CONFIRMATION",
 )
-_TARGET_PROFILE_SUFFIXES = (
+_ACTIVE_AGENT_PLATFORM_TARGET_KEYS = (
+    "SOC_PINGAN_WORKFLOW_ENV",
+    "SOC_PINGAN_WORKFLOW_BASE_URL",
+    "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS",
+    "SOC_PINGAN_WORKFLOW_APP_ID",
+    "SOC_PINGAN_WORKFLOW_APP_SECRET",
+    "SOC_PINGAN_WORKFLOW_TERMINAL_ID",
+    "SOC_PINGAN_WORKFLOW_DATACENTER_ID",
+    "SOC_PINGAN_WORKFLOW_USER_ID",
+    "SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION",
+)
+_ZEUS_TARGET_PROFILE_SUFFIXES = (
     "BASE_URL",
     "ALLOWED_HOSTS",
     "APP_ID",
     "APP_KEY",
+)
+_AGENT_PLATFORM_TARGET_PROFILE_SUFFIXES = (
+    "BASE_URL",
+    "ALLOWED_HOSTS",
+    "APP_ID",
+    "APP_SECRET",
+    "TERMINAL_ID",
+    "DATACENTER_ID",
+    "USER_ID",
 )
 _ASSIGNMENT = re.compile(
     r"^(?P<prefix>\s*export\s+)"
@@ -53,7 +80,7 @@ class PingAnRuntimeEnvironmentReport(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.pingan_runtime_environment.v2"] = "soc.pingan_runtime_environment.v2"
+    schema_version: Literal["soc.pingan_runtime_environment.v3"] = "soc.pingan_runtime_environment.v3"
     env_path: str
     previous_environment: PingAnRuntimeEnvironmentValue
     environment: PingAnRuntimeEnvironmentValue
@@ -62,6 +89,8 @@ class PingAnRuntimeEnvironmentReport(BaseModel):
     demo_no_auth_allowed: bool
     previous_zeus_target_environment: str
     zeus_target_environment: str
+    previous_agent_platform_target_environment: str
+    agent_platform_target_environment: str
     runtime_target_mapping_applied: bool = True
     provider_modes_unchanged: bool = True
     external_action_setting_unchanged: bool = True
@@ -73,7 +102,7 @@ def set_pingan_runtime_environment(
     *,
     environment: str,
 ) -> PingAnRuntimeEnvironmentReport:
-    """Atomically apply DEV->ZEUS PRD or STG->ZEUS STG to a private env."""
+    """Atomically apply the approved ZEUS and Agent Platform target mappings."""
 
     selected = _parse_runtime_environment(environment)
     candidate = env_path.expanduser()
@@ -92,22 +121,50 @@ def set_pingan_runtime_environment(
     lines = content.splitlines()
     assignments = _collect_assignments(lines)
     previous = _parse_runtime_environment(_exact_value(assignments, _RUNTIME_KEY))
-    previous_target = _parse_target_environment(_exact_value(assignments, "SOC_PINGAN_ZEUS_ENV"))
-    for name in _ACTIVE_TARGET_KEYS:
+    previous_zeus_target = _parse_target_environment(
+        _exact_value(assignments, "SOC_PINGAN_ZEUS_ENV"),
+        name="SOC_PINGAN_ZEUS_ENV",
+    )
+    previous_agent_platform_target = _parse_target_environment(
+        _exact_value(assignments, "SOC_PINGAN_WORKFLOW_ENV"),
+        name="SOC_PINGAN_WORKFLOW_ENV",
+    )
+    for name in (*_ACTIVE_ZEUS_TARGET_KEYS, *_ACTIVE_AGENT_PLATFORM_TARGET_KEYS):
         _require_exact_assignment(assignments, name, allow_empty=True)
 
-    selected_target = PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS[selected]
-    profile = _load_target_profile(assignments, selected_target)
+    selected_zeus_target = PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS[selected]
+    zeus_profile = _load_target_profile(
+        assignments,
+        namespace="ZEUS",
+        target_environment=selected_zeus_target,
+        suffixes=_ZEUS_TARGET_PROFILE_SUFFIXES,
+    )
+    selected_agent_platform_target = PINGAN_RUNTIME_AGENT_PLATFORM_TARGET_ENVIRONMENTS[selected]
+    agent_platform_profile = _load_target_profile(
+        assignments,
+        namespace="WORKFLOW",
+        target_environment=selected_agent_platform_target,
+        suffixes=_AGENT_PLATFORM_TARGET_PROFILE_SUFFIXES,
+    )
     replacements = {
         _RUNTIME_KEY: selected,
-        "SOC_PINGAN_ZEUS_ENV": selected_target,
-        "SOC_PINGAN_ZEUS_BASE_URL": profile["BASE_URL"],
-        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": profile["ALLOWED_HOSTS"],
-        "SOC_PINGAN_ZEUS_APP_ID": profile["APP_ID"],
-        "SOC_PINGAN_ZEUS_APP_KEY": profile["APP_KEY"],
-        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": (PINGAN_ZEUS_PRD_CONFIRMATION if selected_target == "prd" else ""),
+        "SOC_PINGAN_ZEUS_ENV": selected_zeus_target,
+        "SOC_PINGAN_ZEUS_BASE_URL": zeus_profile["BASE_URL"],
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": zeus_profile["ALLOWED_HOSTS"],
+        "SOC_PINGAN_ZEUS_APP_ID": zeus_profile["APP_ID"],
+        "SOC_PINGAN_ZEUS_APP_KEY": zeus_profile["APP_KEY"],
+        "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": (PINGAN_ZEUS_PRD_CONFIRMATION if selected_zeus_target == "prd" else ""),
+        "SOC_PINGAN_WORKFLOW_ENV": selected_agent_platform_target,
+        "SOC_PINGAN_WORKFLOW_BASE_URL": agent_platform_profile["BASE_URL"],
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": agent_platform_profile["ALLOWED_HOSTS"],
+        "SOC_PINGAN_WORKFLOW_APP_ID": agent_platform_profile["APP_ID"],
+        "SOC_PINGAN_WORKFLOW_APP_SECRET": agent_platform_profile["APP_SECRET"],
+        "SOC_PINGAN_WORKFLOW_TERMINAL_ID": agent_platform_profile["TERMINAL_ID"],
+        "SOC_PINGAN_WORKFLOW_DATACENTER_ID": agent_platform_profile["DATACENTER_ID"],
+        "SOC_PINGAN_WORKFLOW_USER_ID": agent_platform_profile["USER_ID"],
+        "SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION": (PINGAN_AGENT_PLATFORM_PRD_CONFIRMATION if selected_agent_platform_target == "prd" else ""),
     }
-    _validate_selected_target(replacements)
+    _validate_selected_targets(replacements)
 
     rendered_lines: list[str] = []
     for line in lines:
@@ -119,7 +176,11 @@ def set_pingan_runtime_environment(
         current_value = _parse_scalar(
             match.group("value"),
             name=name,
-            allow_empty=name == "SOC_PINGAN_ZEUS_PRD_CONFIRMATION",
+            allow_empty=name
+            in {
+                "SOC_PINGAN_ZEUS_PRD_CONFIRMATION",
+                "SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION",
+            },
         )
         rendered_lines.append(line if current_value == replacements[name] else _render_assignment(name, replacements[name]))
 
@@ -135,8 +196,10 @@ def set_pingan_runtime_environment(
         database_filename=f"soc_agent_{selected}.db",
         workbenches_enabled=selected == "dev",
         demo_no_auth_allowed=selected == "dev",
-        previous_zeus_target_environment=previous_target,
-        zeus_target_environment=selected_target,
+        previous_zeus_target_environment=previous_zeus_target,
+        zeus_target_environment=selected_zeus_target,
+        previous_agent_platform_target_environment=(previous_agent_platform_target),
+        agent_platform_target_environment=selected_agent_platform_target,
         restart_required=changed,
     )
 
@@ -152,11 +215,14 @@ def _collect_assignments(lines: list[str]) -> dict[str, list[str]]:
 
 def _load_target_profile(
     assignments: dict[str, list[str]],
+    *,
+    namespace: str,
     target_environment: str,
+    suffixes: tuple[str, ...],
 ) -> dict[str, str]:
-    prefix = f"SOC_PINGAN_ZEUS_{target_environment.upper()}_"
+    prefix = f"SOC_PINGAN_{namespace}_{target_environment.upper()}_"
     values: dict[str, str] = {}
-    for suffix in _TARGET_PROFILE_SUFFIXES:
+    for suffix in suffixes:
         name = prefix + suffix
         value = _exact_value(assignments, name)
         if _looks_like_placeholder(value):
@@ -165,11 +231,16 @@ def _load_target_profile(
     return values
 
 
-def _validate_selected_target(replacements: dict[str, str]) -> None:
+def _validate_selected_targets(replacements: dict[str, str]) -> None:
     try:
-        target = load_pingan_zeus_target(replacements)
-        enforce_pingan_runtime_zeus_mapping(target)
-    except PingAnZeusTargetConfigurationError as exc:
+        zeus_target = load_pingan_zeus_target(replacements)
+        enforce_pingan_runtime_zeus_mapping(zeus_target)
+        agent_platform_target = load_pingan_agent_platform_target(replacements)
+        enforce_pingan_runtime_agent_platform_mapping(agent_platform_target)
+    except (
+        PingAnAgentPlatformTargetConfigurationError,
+        PingAnZeusTargetConfigurationError,
+    ) as exc:
         raise PingAnRuntimeEnvironmentConfigurationError(str(exc)) from exc
 
 
@@ -198,10 +269,10 @@ def _parse_runtime_environment(value: str) -> PingAnRuntimeEnvironmentValue:
     return cast(PingAnRuntimeEnvironmentValue, parsed)
 
 
-def _parse_target_environment(value: str) -> str:
-    parsed = _parse_scalar(value, name="SOC_PINGAN_ZEUS_ENV").lower()
+def _parse_target_environment(value: str, *, name: str) -> str:
+    parsed = _parse_scalar(value, name=name).lower()
     if parsed not in {"dev", "stg", "prd"}:
-        raise PingAnRuntimeEnvironmentConfigurationError("SOC_PINGAN_ZEUS_ENV must select dev, stg, or prd")
+        raise PingAnRuntimeEnvironmentConfigurationError(f"{name} must select dev, stg, or prd")
     return parsed
 
 

@@ -152,6 +152,24 @@ PRIVATE_ENV_REQUIRED_KEYS = frozenset(
         "SOC_PINGAN_WORKFLOW_TERMINAL_ID",
         "SOC_PINGAN_WORKFLOW_DATACENTER_ID",
         "SOC_PINGAN_WORKFLOW_USER_ID",
+        "SOC_PINGAN_WORKFLOW_PRD_BASE_URL",
+        "SOC_PINGAN_WORKFLOW_PRD_ALLOWED_HOSTS",
+        "SOC_PINGAN_WORKFLOW_PRD_APP_ID",
+        "SOC_PINGAN_WORKFLOW_PRD_APP_SECRET",
+        "SOC_PINGAN_WORKFLOW_PRD_TERMINAL_ID",
+        "SOC_PINGAN_WORKFLOW_PRD_DATACENTER_ID",
+        "SOC_PINGAN_WORKFLOW_PRD_USER_ID",
+        "SOC_PINGAN_WORKFLOW_STG_BASE_URL",
+        "SOC_PINGAN_WORKFLOW_STG_ALLOWED_HOSTS",
+    }
+)
+PRIVATE_ENV_OPTIONAL_AGENT_PLATFORM_STG_KEYS = frozenset(
+    {
+        "SOC_PINGAN_WORKFLOW_STG_APP_ID",
+        "SOC_PINGAN_WORKFLOW_STG_APP_SECRET",
+        "SOC_PINGAN_WORKFLOW_STG_TERMINAL_ID",
+        "SOC_PINGAN_WORKFLOW_STG_DATACENTER_ID",
+        "SOC_PINGAN_WORKFLOW_STG_USER_ID",
     }
 )
 PRIVATE_ENV_OBSOLETE_KEYS = frozenset(
@@ -220,6 +238,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/application/analysis.py",
     "backend/soc_agent/protocols.py",
     "backend/soc_agent/db/models.py",
+    "backend/soc_agent/integrations/pingan/agent_platform_target.py",
     "backend/soc_agent/integrations/pingan/agent_workflow.py",
     "backend/soc_agent/integrations/pingan/asset_location.py",
     "backend/soc_agent/integrations/pingan/legacy_model_gateway_profile.py",
@@ -765,6 +784,31 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         raise ValueError(
             "private environment contains unresolved values: " + ", ".join(unresolved)
         )
+    configured_stg_workflow_keys = {
+        name
+        for name in PRIVATE_ENV_OPTIONAL_AGENT_PLATFORM_STG_KEYS
+        if values.get(name, "").strip()
+    }
+    if configured_stg_workflow_keys and configured_stg_workflow_keys != (
+        PRIVATE_ENV_OPTIONAL_AGENT_PLATFORM_STG_KEYS
+    ):
+        missing_stg_workflow_keys = sorted(
+            PRIVATE_ENV_OPTIONAL_AGENT_PLATFORM_STG_KEYS - configured_stg_workflow_keys
+        )
+        raise ValueError(
+            "private environment contains a partial Agent Platform STG profile: "
+            + ", ".join(missing_stg_workflow_keys)
+        )
+    unresolved_stg_workflow_keys = sorted(
+        name
+        for name in configured_stg_workflow_keys
+        if _is_unresolved_private_value(values[name])
+    )
+    if unresolved_stg_workflow_keys:
+        raise ValueError(
+            "private environment contains unresolved Agent Platform STG values: "
+            + ", ".join(unresolved_stg_workflow_keys)
+        )
     if values["SOC_PINGAN_MODEL_GATEWAY_RSA_PRIVATE_KEY_FILE"] != (
         "${SOC_REPO_ROOT}/.secrets/eagw-private-key.der"
     ):
@@ -799,6 +843,21 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "isec-gw.paic.com.cn",
         "SOC_PINGAN_ZEUS_APP_ID": "SEC-MODEL",
         "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
+        "SOC_PINGAN_WORKFLOW_ENV": "prd",
+        "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agents-api-sze.paic.com.cn",
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agents-api-sze.paic.com.cn",
+        "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS",
+        "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "1087710",
+        "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
+        "SOC_PINGAN_WORKFLOW_USER_ID": "1092332",
+        "SOC_PINGAN_WORKFLOW_PRD_BASE_URL": "https://agents-api-sze.paic.com.cn",
+        "SOC_PINGAN_WORKFLOW_PRD_ALLOWED_HOSTS": "agents-api-sze.paic.com.cn",
+        "SOC_PINGAN_WORKFLOW_PRD_APP_ID": "YHSYS",
+        "SOC_PINGAN_WORKFLOW_PRD_TERMINAL_ID": "1087710",
+        "SOC_PINGAN_WORKFLOW_PRD_DATACENTER_ID": "1087787",
+        "SOC_PINGAN_WORKFLOW_PRD_USER_ID": "1092332",
+        "SOC_PINGAN_WORKFLOW_STG_BASE_URL": "https://agents-api-stg-new.paic.com.cn",
+        "SOC_PINGAN_WORKFLOW_STG_ALLOWED_HOSTS": "agents-api-stg-new.paic.com.cn",
     }
     mismatched = sorted(
         name for name, expected in expected_values.items() if values[name] != expected
@@ -823,6 +882,38 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         raise ValueError(
             "private environment active ZEUS target does not match the project "
             "DEV -> ZEUS PRD profile: " + ", ".join(drifted_active_values)
+        )
+    active_workflow_pairs = (
+        ("SOC_PINGAN_WORKFLOW_BASE_URL", "SOC_PINGAN_WORKFLOW_PRD_BASE_URL"),
+        (
+            "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS",
+            "SOC_PINGAN_WORKFLOW_PRD_ALLOWED_HOSTS",
+        ),
+        ("SOC_PINGAN_WORKFLOW_APP_ID", "SOC_PINGAN_WORKFLOW_PRD_APP_ID"),
+        (
+            "SOC_PINGAN_WORKFLOW_APP_SECRET",
+            "SOC_PINGAN_WORKFLOW_PRD_APP_SECRET",
+        ),
+        (
+            "SOC_PINGAN_WORKFLOW_TERMINAL_ID",
+            "SOC_PINGAN_WORKFLOW_PRD_TERMINAL_ID",
+        ),
+        (
+            "SOC_PINGAN_WORKFLOW_DATACENTER_ID",
+            "SOC_PINGAN_WORKFLOW_PRD_DATACENTER_ID",
+        ),
+        ("SOC_PINGAN_WORKFLOW_USER_ID", "SOC_PINGAN_WORKFLOW_PRD_USER_ID"),
+    )
+    drifted_active_workflow_values = [
+        active
+        for active, stored in active_workflow_pairs
+        if values[active] != values[stored]
+    ]
+    if drifted_active_workflow_values:
+        raise ValueError(
+            "private environment active Agent Platform target does not match the "
+            "project DEV -> Agent Platform PRD profile: "
+            + ", ".join(drifted_active_workflow_values)
         )
     service_api_keys = {
         value.strip()
@@ -1414,9 +1505,10 @@ grep -E '^export SOC_PINGAN_LEGACY_(LIFECYCLE|CALLBACK)_MODE=' \\
   .env.soc-dev.local
 ```
 
-三个权限必须都是 `600`，两个 mode 必须都是 `fake`。初始项目 DEV 已激活 ZEUS PRD，同时私有 env
-保存 ZEUS PRD/STG 两套受保护 profile；fake mode 不会发出生命周期查询或回调，切换 internal 后才允许
-真实调用。RSA key 只存在于 private overlay，
+三个权限必须都是 `600`，两个 mode 必须都是 `fake`。初始项目 DEV 已同时激活 ZEUS PRD 和
+Agent Platform PRD；私有 env 保存 ZEUS PRD/STG 两套受保护 profile，以及 Agent Platform PRD profile
+和已确认的 STG endpoint。fake mode 不会发出生命周期查询或回调，切换 internal 后才允许真实调用。
+RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
 ## 7. Start Host DEV / 启动服务
@@ -1644,14 +1736,26 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ## 8. Promote Runtime To STG / 切换到 STG
 
 DEV 页面、模型和真实 Provider 验收通过后，可以在同一份代码上切到隔离 STG 部署 profile。该命令原子
-应用项目 STG -> ZEUS STG 映射：Memory、Tenant Policy、Automation 和 SOC SQLite 会一起切到 `stg`，数据库使用
+应用项目 STG -> ZEUS STG + Agent Platform STG 映射：Memory、Tenant Policy、Automation 和 SOC SQLite 会一起切到 `stg`，数据库使用
 `backend/.deer-flow/data/soc_agent_stg.db`；DEV 语料/Memory Workbench 和免登录演示会关闭。
 STG 同时改用 DeerFlow 原生 `--prod` 优化服务模式，不启用 Next.js HMR；第一次启动会构建前端，
 后续每次切换仍以当前代码重新构建，避免复用旧版本页面。
 
-切换命令会从 mode-`0600` 私有 env 读取 ZEUS STG profile，并激活 STG endpoint、allowlist 和凭证；不会
-要求手工改 URL/Key。模型 EAGW、Agent Platform、lifecycle/callback Provider mode 和真实外部动作权限
-仍保持独立且不会被该命令改写。为避免把 DEV
+切换命令会从 mode-`0600` 私有 env 读取 ZEUS 和 Agent Platform 的 STG profile，并激活各自的
+endpoint、allowlist、应用凭证和 workflow ID，不要求手工改 URL/Key。旧源码只证明 Agent Platform STG
+endpoint，并未提供 STG 的 `YHSYS` 身份和三个 workflow ID；如果以下五项尚未由内网负责人补齐，切换会
+在修改 env 前 fail closed：
+
+```text
+SOC_PINGAN_WORKFLOW_STG_APP_ID
+SOC_PINGAN_WORKFLOW_STG_APP_SECRET
+SOC_PINGAN_WORKFLOW_STG_DATACENTER_ID
+SOC_PINGAN_WORKFLOW_STG_TERMINAL_ID
+SOC_PINGAN_WORKFLOW_STG_USER_ID
+```
+
+不得使用旧源码中的其他应用身份替代 `YHSYS`。模型 EAGW、lifecycle/callback Provider mode 和真实外部
+动作权限仍保持独立，不会被环境切换命令改写。为避免把 DEV
 联调时遗留的真实回写模式带入 STG，下面先显式恢复两个旧兼容 Provider 为 `fake`：
 
 ```bash
@@ -1669,16 +1773,50 @@ python3.12 scripts/soc_pingan_macos_host_dev.py status
 ```
 
 切换报告必须显示 `environment=stg`、`database_filename=soc_agent_stg.db`、
-`workbenches_enabled=false`、`demo_no_auth_allowed=false`、`zeus_target_environment=stg` 和
-`runtime_target_mapping_applied=true`。状态报告必须显示 `runtime_environment=stg`、
-`zeus_target_matches_runtime=true`、`service_mode=production_optimized`、STG 数据库 `status=ready`，并且 Core/Sidecars 正常。STG 启动禁止
+`workbenches_enabled=false`、`demo_no_auth_allowed=false`、`zeus_target_environment=stg`、
+`agent_platform_target_environment=stg` 和 `runtime_target_mapping_applied=true`。状态报告必须显示
+`runtime_environment=stg`、`zeus_target_matches_runtime=true`、
+`agent_platform_target_matches_runtime=true`、`service_mode=production_optimized`、STG 数据库
+`status=ready`，并且 Core/Sidecars 正常。STG 启动禁止
 添加 `--demo-no-auth`；外部动作仍固定关闭，之后如需真实 lifecycle/callback，只能再走独立的 Provider
 mode 验收步骤。
 
 如需回到演练 DEV，先停服务，再执行相同命令的 `--environment dev`；它会同时恢复项目 DEV -> ZEUS
-PRD 映射，随后可用 `start --daemon --demo-no-auth` 启动。DEV 和 STG 的 SOC 数据不会混库。
+PRD + Agent Platform PRD 映射，随后可用 `start --daemon --demo-no-auth` 启动。DEV 和 STG 的 SOC 数据不会混库。
 
 ## 9. Real Integration Follow-up / 真实验收顺序
+
+完成模型与生命周期连通性后，先用旧实现中的三个示例值做只读发现。它们只是查找候选，不是当前资产
+归属真值；只有核对 Provider attempts 和内网返回后，才能写入 mode-`0600` 的 D12-B 七用例矩阵：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \\
+  --confirm-live \\
+  --query "10.12.31.24" \\
+  --asset-type IP \\
+  --role victim \\
+  --report-path backend/.deer-flow/soc-internal-validation/d12b/discovery-ip.json
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \\
+  --confirm-live \\
+  --query "SZC-L0649671" \\
+  --asset-type HOST \\
+  --role victim \\
+  --report-path backend/.deer-flow/soc-internal-validation/d12b/discovery-host.json
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \\
+  --confirm-live \\
+  --query "zhangjianming627" \\
+  --asset-type USER \\
+  --um "zhangjianming627" \\
+  --role owner \\
+  --report-path backend/.deer-flow/soc-internal-validation/d12b/discovery-um.json
+```
 
 ```text
 D12-B preflight

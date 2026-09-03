@@ -23,6 +23,11 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from soc_agent.integrations.pingan.agent_platform_target import (
+    PingAnAgentPlatformTargetConfigurationError,
+    enforce_pingan_runtime_agent_platform_mapping,
+    load_pingan_agent_platform_target,
+)
 from soc_agent.integrations.pingan.agent_workflow import (
     HttpPingAnAgentWorkflowPort,
     PingAnAgentWorkflowHttpConfig,
@@ -33,6 +38,7 @@ from soc_agent.integrations.pingan.zeus_signing import (
 )
 from soc_agent.integrations.pingan.zeus_target import (
     PingAnZeusTargetConfigurationError,
+    enforce_pingan_runtime_zeus_mapping,
     load_pingan_zeus_target,
 )
 
@@ -577,7 +583,7 @@ def build_pingan_asset_locator_from_env(
         raise PingAnAssetProviderConfigurationError("SOC_PINGAN_ASSET_PROVIDER_MODE must be fake or internal")
 
     try:
-        zeus = load_pingan_zeus_target(env)
+        zeus = enforce_pingan_runtime_zeus_mapping(load_pingan_zeus_target(env))
     except PingAnZeusTargetConfigurationError as exc:
         raise PingAnAssetProviderConfigurationError(str(exc)) from exc
 
@@ -597,16 +603,16 @@ def build_pingan_asset_locator_from_env(
     workflow: PingAnAssetWorkflowPort | None = None
     workflow_config: PingAnAssetWorkflowConfig | None = None
     if _bool_env(env, "SOC_PINGAN_ASSET_WORKFLOW_ENABLED", True):
-        app_id = _require_env(env, "SOC_PINGAN_WORKFLOW_APP_ID")
         try:
+            agent_platform = enforce_pingan_runtime_agent_platform_mapping(load_pingan_agent_platform_target(env))
             workflow = HttpPingAnAgentWorkflowPort(
                 PingAnAgentWorkflowHttpConfig(
-                    environment=_workflow_environment(env),
-                    base_url=_require_env(env, "SOC_PINGAN_WORKFLOW_BASE_URL"),
-                    allowed_hosts=_require_env(env, "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS"),
-                    app_id=app_id,
-                    app_secret=_require_env(env, "SOC_PINGAN_WORKFLOW_APP_SECRET"),
-                    allow_prd=env.get("SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION", "").strip() == "CALL_PINGAN_PRD",
+                    environment=agent_platform.target_environment,
+                    base_url=agent_platform.base_url,
+                    allowed_hosts=agent_platform.allowed_hosts,
+                    app_id=agent_platform.app_id,
+                    app_secret=agent_platform.app_secret,
+                    allow_prd=agent_platform.target_environment == "prd",
                     auth_path=env.get("SOC_PINGAN_WORKFLOW_AUTH_PATH", "/appid/auth/login"),
                     request_timeout_seconds=_float_env(env, "SOC_PINGAN_WORKFLOW_REQUEST_TIMEOUT_SECONDS", 15.0),
                     workflow_timeout_seconds=_float_env(env, "SOC_PINGAN_WORKFLOW_TIMEOUT_SECONDS", 600.0),
@@ -616,13 +622,16 @@ def build_pingan_asset_locator_from_env(
                     max_response_bytes=_int_env(env, "SOC_PINGAN_WORKFLOW_MAX_RESPONSE_BYTES", 2_000_000),
                 )
             )
-        except ValueError as exc:
+        except (
+            PingAnAgentPlatformTargetConfigurationError,
+            ValueError,
+        ) as exc:
             raise PingAnAssetProviderConfigurationError("PingAn Agent Platform workflow configuration is invalid") from exc
         workflow_config = PingAnAssetWorkflowConfig(
-            app_id=app_id,
-            terminal_workflow_id=_int_env_required(env, "SOC_PINGAN_WORKFLOW_TERMINAL_ID"),
-            datacenter_workflow_id=_int_env_required(env, "SOC_PINGAN_WORKFLOW_DATACENTER_ID"),
-            user_workflow_id=_int_env_required(env, "SOC_PINGAN_WORKFLOW_USER_ID"),
+            app_id=agent_platform.app_id,
+            terminal_workflow_id=agent_platform.terminal_workflow_id,
+            datacenter_workflow_id=agent_platform.datacenter_workflow_id,
+            user_workflow_id=agent_platform.user_workflow_id,
         )
     return PingAnAssetLocatorService(
         search_port=search,
@@ -901,10 +910,6 @@ def _require_env(env: Mapping[str, str], name: str) -> str:
     return value
 
 
-def _int_env_required(env: Mapping[str, str], name: str) -> int:
-    return _int_env(env, name, None)
-
-
 def _int_env(env: Mapping[str, str], name: str, default: int | None) -> int:
     raw = env.get(name)
     if raw is None or not raw.strip():
@@ -937,13 +942,6 @@ def _bool_env(env: Mapping[str, str], name: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise PingAnAssetProviderConfigurationError(f"environment variable {name} must be a boolean")
-
-
-def _workflow_environment(env: Mapping[str, str]) -> Literal["dev", "stg", "prd"]:
-    value = _require_env(env, "SOC_PINGAN_WORKFLOW_ENV").lower()
-    if value not in {"dev", "stg", "prd"}:
-        raise PingAnAssetProviderConfigurationError("SOC_PINGAN_WORKFLOW_ENV must be dev, stg, or prd")
-    return value  # type: ignore[return-value]
 
 
 __all__ = [

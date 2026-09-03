@@ -1,13 +1,13 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-09-01
-> Status: `Active internal acceptance / ZEUS PRD evidence pending`
+> Reconciled: 2026-09-03
+> Status: `Active internal acceptance / ZEUS and Agent Platform PRD evidence pending`
 > Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
-真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。Tracked sample 已准备完毕；当前 ignored `.env.soc-dev.local` 可由 legacy-profile preparer 原位迁移：它删除旧 import/operator 字段，从已审阅源码导入 STG EAGW 模型路由、ZEUS PRD/STG 两套 target/credential 和 `YHSYS` PRD profile，并保留其他本地值。部署映射固定为项目 DEV -> ZEUS PRD、项目 STG -> ZEUS STG。剩余 fault-case 配置仍须核对。首轮采用直接访问，不预配代理、自定义 CA 或客户端证书。
+真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。Tracked sample 已准备完毕；当前 ignored `.env.soc-dev.local` 可由 legacy-profile preparer 原位迁移：它删除旧 import/operator 字段，从已审阅源码导入 STG EAGW 模型路由、ZEUS PRD/STG 两套 target/credential、Agent Platform PRD `YHSYS` profile 和 STG origin，并保留其他本地值。部署映射固定为项目 DEV -> ZEUS PRD + Agent Platform PRD、项目 STG -> ZEUS STG + Agent Platform STG。旧源码未提供 STG `YHSYS` identity/secret 与三条归属 workflow ID，补齐前 STG 切换 fail closed。剩余 fault-case 配置仍须核对。首轮采用直接访问，不预配代理、自定义 CA 或客户端证书。
 
 ## 1. Baseline / 已完成与已删除边界
 
@@ -46,7 +46,8 @@ python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
 前两条命令都只静态解析旧源码，不 import/执行旧项目。模型 preparer 选择已审阅 STG
 `DeepSeek_V4_Flash`，迁移本地 loopback key，生成 `0600` 的
 `.secrets/eagw-private-key.der`，并把 lifecycle/callback 初始化为 `fake`；Workflow preparer 导入
-`YHSYS` PRD profile。两份输出都必须是 `credential_present=true`、
+`YHSYS` PRD profile 与 STG origin。模型报告必须是 `credential_present=true`，Workflow 报告必须是
+`prd_credential_present=true` 并明确 `stg_profile_ready`；两者都必须为
 `secret_in_output=false`，模型报告还必须有 `compatibility_key_present=true`，不得出现 secret。
 旧源码本身被 source bundle 排除，实际 env/key 只随 private overlay 进入内网。
 
@@ -200,8 +201,9 @@ stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
 Workbench；STG 使用 `soc_agent_stg.db`，关闭 DEV Workbench 和免登录模式。Memory、Tenant Policy、
 Automation 始终与该值一致，两种环境都启用已评审租户策略并关闭真实外部动作。使用
 `backend/scripts/soc_pingan_set_runtime_environment.py --environment dev|stg` 原子切换；部署映射固定为
-`项目 DEV -> ZEUS PRD`、`项目 STG -> ZEUS STG`，active ZEUS endpoint/allowlist/credential 随 profile
-一起切换。模型与 Agent Platform target、Provider mode 和动作权限不变。DEV 使用 DeerFlow `--dev`
+`项目 DEV -> ZEUS PRD + Agent Platform PRD`、`项目 STG -> ZEUS STG + Agent Platform STG`。两类 active
+endpoint/allowlist/credential 与 Agent Platform workflow IDs 随对应 profile 一起切换。模型 target、
+Provider mode 和动作权限不变。DEV 使用 DeerFlow `--dev`
 热更新服务；STG 使用原生 `--prod` 优化服务并关闭 HMR，首次启动会从当前源码构建前端。
 
 原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源。canonical `backend/uv.lock` 记录的是公网
@@ -430,12 +432,13 @@ SOC Runtime asset candidate
 | Workflow operator | 旧三条归属 workflow 固定 `message.by=WANGWENBIN520`；Adapter 不接受 env 覆盖 |
 | Reviewed STG endpoint | `https://agents-api-stg-new.paic.com.cn` |
 | Reviewed PRD endpoint | `https://agents-api-sze.paic.com.cn`；必须显式 production confirmation |
-| YHSYS source coverage | 旧配置只在 PRD branch 包含该 app；当前验证使用该 reviewed PRD profile，不虚构 STG secret |
+| YHSYS source coverage | 旧配置只在 PRD branch 包含该 app；项目 DEV 使用 reviewed PRD profile。项目 STG 必须另行提供完整 STG identity/secret/IDs，不虚构也不拿其他 app 替代 |
 | Generic action route | `asset.locate` |
 
 现有实现位置：
 
 - `backend/soc_agent/integrations/pingan/asset_location.py`
+- `backend/soc_agent/integrations/pingan/agent_platform_target.py`
 - `backend/soc_agent/integrations/pingan/agent_workflow.py`
 - `backend/soc_agent/integrations/pingan/legacy_workflow_profile.py`
 - `backend/soc_agent/integrations/pingan/zeus_signing.py`
@@ -456,11 +459,12 @@ SOC Runtime asset candidate
 
 - [x] 已审阅 `root_config` 和 LOCAL/DEV 环境选择；本地模型 gateway 为 OpenAI-compatible loopback endpoint。
 - [x] 项目模型网关、chat smoke 与不含正文/凭证的 `soc.pingan_model_gateway_smoke.v1` 报告已实现。
-- [ ] Host DEV 启动项目网关后取得 `model-gateway-smoke.json -> outcome=passed`、`thinking_requested=false`、`max_tokens_requested=128`；本地 `/health` 不能替代真实 EAGW completion 验收。
-- [x] preflight 接受显式 `SOC_PINGAN_ENV=dev|stg`，并强制 `DEV -> ZEUS PRD`、`STG -> ZEUS STG`；ZEUS 与 Agent Platform 都使用 HTTPS host allowlist，不读取旧 `env_profile`。模型/Agent Platform target 仍独立。
+- [x] 内网 Host DEV 已取得 `model-gateway-smoke.json -> outcome=passed`、`thinking_requested=false`、`max_tokens_requested=128`；本地 `/health` 仍不能替代该真实 EAGW completion 证据。
+- [x] preflight 接受显式 `SOC_PINGAN_ENV=dev|stg`，并强制 `DEV -> ZEUS PRD + Agent Platform PRD`、`STG -> ZEUS STG + Agent Platform STG`；两者都使用 HTTPS host allowlist，不读取旧 `env_profile`。模型 target 仍独立。
 - [x] ZEUS signer 已在本项目内实现，不需要 import 整个旧 `util.util_tools`。
 - [x] Agent Platform wire contract 已提取为本项目自包含 HTTP client，不需要旧 Python 包、`PYTHONPATH`、Redis token manager 或 `run_workflow` import。
-- [x] 通过 legacy-profile preparer 从旧源码静态导入 ZEUS PRD/STG 两套 target/credential，以及 Agent Platform PRD base URL、allowlist、`YHSYS` app secret；不 import/执行旧项目，也不在输出中暴露 secret。
+- [x] 通过 legacy-profile preparer 从旧源码静态导入 ZEUS PRD/STG 两套 target/credential，以及 Agent Platform PRD base URL、allowlist、`YHSYS` app secret 和 STG endpoint；不 import/执行旧项目，也不在输出中暴露 secret。
+- [ ] Agent Platform STG 的 `YHSYS` app identity/secret 与 terminal/datacenter/user 三个 workflow ID 尚未出现在已审阅旧源码中；不得拿 `jtxxaq` 等其他 app 冒充。补齐前 project STG 切换在写私有 env 前 fail closed，DEV -> Agent Platform PRD 不受影响。
 - [x] `message.by` 按旧源码固定为 `WANGWENBIN520`，不再要求操作人环境变量。
 - [x] PRD 只有在 environment/URL/allowlist/secret 全部显式切换且设置 `SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD` 时才允许构造 client。
 - [x] 已对 Git-ignored `.env.soc-dev.local` 执行 profile preparer，旧 import/operator 字段已删除，权限与无网络 preflight 已通过。
@@ -530,11 +534,50 @@ backend/.venv/bin/python backend/scripts/soc_pingan_dev_preflight.py \
   --report-path "$D12B_REPORT_DIR/preflight.json"
 
 backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
   --query "$D12B_ASSET_KEY" \
   --asset-type IP \
   --role victim \
   --report-path "$D12B_REPORT_DIR/direct-success.json"
 ```
+
+在尚未掌握稳定 case 前，可先使用已审阅旧资产定位代码中的三项值做**只读发现**。它们可能已经过期，
+因此只能用来观察当前走到 `search_asset_info`、`asset_to_bu` 还是 `user`，不能直接写成七类验收预期：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+export D12B_REPORT_DIR="$SOC_REPO_ROOT/backend/.deer-flow/soc-internal-validation/d12b/reports"
+mkdir -p "$D12B_REPORT_DIR"
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
+  --query "10.12.31.24" \
+  --asset-type IP \
+  --role victim \
+  --report-path "$D12B_REPORT_DIR/discovery-ip.json"
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
+  --query "SZC-L0649671" \
+  --asset-type HOST \
+  --role victim \
+  --report-path "$D12B_REPORT_DIR/discovery-host.json"
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --confirm-live \
+  --query "zhangjianming627" \
+  --asset-type USER \
+  --um "zhangjianming627" \
+  --role owner \
+  --report-path "$D12B_REPORT_DIR/discovery-um.json"
+```
+
+也可以从真实告警的 canonical entities/role result 选择 IP、host 或 UM，以同一命令单次查询。先审阅
+报告中的 `outcome` 与 `attempts[].stage/status`，再把已确认仍稳定的值放进 mode-`0600` 私有矩阵；
+不要把一次偶然命中、旧示例或 `provider failure` 当成长期 `not_found` 真值。
 
 先只检查七类 coverage，不发网络请求；确认 private matrix 中所有 placeholder 已替换后，再显式执行从 DEV Host 到 ZEUS PRD 的 matrix：
 

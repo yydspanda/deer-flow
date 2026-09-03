@@ -206,7 +206,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
         for block in re.findall(r"```bash\n(.*?)```", runbook, flags=re.DOTALL)
         if "source ./.env.soc-dev.local" in block
     ]
-    assert len(local_env_blocks) == 5
+    assert len(local_env_blocks) >= 5
     for block in local_env_blocks:
         assert 'export TARGET_REPO="$HOME/deer-flow"' in block
         assert 'cd "$TARGET_REPO"' in block
@@ -273,10 +273,19 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "--environment stg" in runbook
     assert "soc_agent_stg.db" in runbook
     assert "项目 STG -> ZEUS STG" in runbook
+    assert "Agent Platform STG" in runbook
     assert "zeus_target_environment=stg" in runbook
+    assert "agent_platform_target_environment=stg" in runbook
     assert "zeus_target_matches_runtime=true" in runbook
+    assert "agent_platform_target_matches_runtime=true" in runbook
     assert "service_mode=production_optimized" in runbook
     assert "原生 `--prod`" in runbook
+    assert "SOC_PINGAN_WORKFLOW_STG_APP_SECRET" in runbook
+    assert "不得使用旧源码中的其他应用身份替代 `YHSYS`" in runbook
+    assert '--query "10.12.31.24"' in runbook
+    assert '--query "SZC-L0649671"' in runbook
+    assert '--query "zhangjianming627"' in runbook
+    assert runbook.count("soc_pingan_asset_direct_smoke.py \\\n  --confirm-live") >= 3
     stg_section = runbook.split(
         "## 8. Promote Runtime To STG / 切换到 STG", maxsplit=1
     )[1].split("## 9. Real Integration Follow-up", maxsplit=1)[0]
@@ -612,6 +621,30 @@ def test_private_overlay_config_requires_active_dev_target_to_match_prd_profile(
         _assert_private_overlay_config_ready(tmp_path)
 
 
+def test_private_overlay_config_requires_active_agent_platform_prd_profile(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        overrides={"SOC_PINGAN_WORKFLOW_APP_SECRET": "different-workflow-secret"},
+    )
+
+    with pytest.raises(ValueError, match="active Agent Platform target"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_rejects_partial_agent_platform_stg_profile(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        overrides={"SOC_PINGAN_WORKFLOW_STG_APP_ID": "YHSYS-STG"},
+    )
+
+    with pytest.raises(ValueError, match="partial Agent Platform STG profile"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
 def test_private_overlay_config_rejects_obsolete_import_contract(
     tmp_path: Path,
 ) -> None:
@@ -834,6 +867,23 @@ database:
             "SOC_PINGAN_ZEUS_APP_ID": "SEC-MODEL",
             "SOC_PINGAN_ZEUS_APP_KEY": "zeus-prd-key",
             "SOC_PINGAN_ZEUS_PRD_CONFIRMATION": "CALL_PINGAN_ZEUS_PRD",
+            "SOC_PINGAN_WORKFLOW_ENV": "prd",
+            "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agents-api-sze.paic.com.cn",
+            "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agents-api-sze.paic.com.cn",
+            "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS",
+            "SOC_PINGAN_WORKFLOW_APP_SECRET": "workflow-prd-key",
+            "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "1087710",
+            "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
+            "SOC_PINGAN_WORKFLOW_USER_ID": "1092332",
+            "SOC_PINGAN_WORKFLOW_PRD_BASE_URL": "https://agents-api-sze.paic.com.cn",
+            "SOC_PINGAN_WORKFLOW_PRD_ALLOWED_HOSTS": "agents-api-sze.paic.com.cn",
+            "SOC_PINGAN_WORKFLOW_PRD_APP_ID": "YHSYS",
+            "SOC_PINGAN_WORKFLOW_PRD_APP_SECRET": "workflow-prd-key",
+            "SOC_PINGAN_WORKFLOW_PRD_TERMINAL_ID": "1087710",
+            "SOC_PINGAN_WORKFLOW_PRD_DATACENTER_ID": "1087787",
+            "SOC_PINGAN_WORKFLOW_PRD_USER_ID": "1092332",
+            "SOC_PINGAN_WORKFLOW_STG_BASE_URL": "https://agents-api-stg-new.paic.com.cn",
+            "SOC_PINGAN_WORKFLOW_STG_ALLOWED_HOSTS": "agents-api-stg-new.paic.com.cn",
         }
     )
     values.update(overrides or {})

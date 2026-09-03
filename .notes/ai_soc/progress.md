@@ -6,10 +6,10 @@
 
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 已恢复真实内网验收。`40100/签名验证失败` 已由 signed-wire 修复关闭，`65505` 的完整响应已确认只是所选告警在目标 ZEUS 中不存在。受治理部署映射已明确为项目 `DEV -> ZEUS PRD`、项目 `STG -> ZEUS STG`；切换同时隔离 SQLite/Memory/Policy/Automation 并激活对应 ZEUS 私有 profile，不改通用 Runtime 契约。当前仍在项目 DEV，下一步使用真实存在且仍待审的 PRD 告警继续。
-- **Next Gate:** 在内网重新生成 fresh private request，先运行只读 lifecycle smoke，必须得到 `code=200/status=1/mocked=false`；再创建 fresh Job，完成 local live acceptance、真实 callback、ZEUS 上游发起与旧页面回读。旧失败 Job 保留为不可变证据，不使用 `--resume-existing`。随后验证资产/TI/标签 PRD `mocked=false` 证据，再进入 `1 -> 5 -> 50 -> 200/5000+` shadow 和模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
+- **Current Objective:** `PI-01H / D12-B` 已恢复真实内网验收。`40100/签名验证失败` 已由 signed-wire 修复关闭，`65505` 的完整响应已确认只是所选告警在目标 ZEUS 中不存在。受治理部署映射现固定为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`；切换同时隔离 SQLite/Memory/Policy/Automation 并激活两类私有 Provider profile，不改通用 Runtime 契约。旧源码未提供 STG `YHSYS` 身份与三个 workflow ID，因此项目 STG 在五项私有值补齐前 fail closed。
+- **Next Gate:** 在内网项目 DEV 使用真实存在且仍待审的 PRD 告警完成只读 lifecycle smoke，必须得到 `code=200/status=1/mocked=false`；并使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts。随后完成 MCP、`InvestigationEvidence` 回读、fresh Job/local live acceptance、真实 callback、ZEUS 上游发起与旧页面回读；再验证 TI/标签 PRD `mocked=false` 证据，进入 `1 -> 5 -> 50 -> 200/5000+` shadow 和模型并发 `1 -> 2 -> 4 -> 6` 容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-02`
+- **Last Updated:** `2026-09-03`
 
 ## Current Constraints / 当前约束
 
@@ -23,11 +23,18 @@
 
 ## Recent Completion Records / 近期完成记录
 
+### 2026-09-03 — Governed Agent Platform target mapping
+
+- **Task:** `PI-01`
+- **Status:** `Done`
+- **Outcome:** PingAn Integration 新增独立 Agent Platform target contract，环境切换现在原子应用 `DEV -> ZEUS PRD + Agent Platform PRD` / `STG -> ZEUS STG + Agent Platform STG`，Host status、preflight、资产降级链和 transfer profile 共同拒绝错配。旧 `agent_config.py` 只读 AST 迁移确认 PRD `YHSYS` 与三个归属 workflow、提取 STG endpoint，并明确拒绝用其他应用身份替代缺失的 STG `YHSYS` 配置；五项 STG 私有值不完整时在 env 写入前 fail closed。通用 Runtime 继续只认识 `asset.locate`，未引入 PingAn 环境或凭证概念。
+- **Verification:** DEV -> PRD 与完整 STG -> STG 配置回归、错配/缺确认/部分 STG profile 的 fail-closed 回归、Host/transfer 私有 overlay 检查通过；Runbook 增加只读 IP/Host/UM 发现 smoke。外网结果只证明配置和无网络边界，真实 Agent Platform/ZEUS `mocked=false` 调用仍属于 D12-B 内网 gate。
+
 ### 2026-09-02 — Legacy live-acceptance recovery and signed-wire hardening
 
 - **Task:** `PI-01`
 - **Status:** `Done`
-- **Outcome:** Host 路径解析器统一导出 checkout-owned 绝对 `SOC_DATABASE_URL`；启动器在任何 Sidecar/Web 进程前集中完成 SOC migration，并关闭 API/Worker 的重复自动迁移。新建 SQLite 首次发生瞬时 `disk I/O error` 时，只清理本次失败产生的半库并重试一次；调用前已存在的数据库绝不自动删除。`status` 增加数据库路径、状态和 revision，生成式 Runbook 删除手工建库分支；无状态重装确认从 `/dev/tty` 读取，避免 heredoc 吞掉后续 Shell。live acceptance 在任何 `8090` 请求前验证 SQLite 文件、`soc_alembic_version` 和 Processing Job/Callback 表，并提供显式恢复模式。内网首轮真实证据进一步定位 `code=40100/签名验证失败`：旧实现签名 `json.dumps`，却让 HTTPX `json=` 重新压缩 wire body。现已让 lifecycle/callback/asset/TI/security-tag 五个 ISEC Provider 一次序列化并以相同 bytes 签名和发送；报告契约升级为 v3，失败 callback 的 HTTP/provider code 与 response hash 可安全持久化。新增模型调用前的只读 lifecycle/signature smoke，并把 local self-submit 与 ZEUS-originated 最终验收分开。内网复验已从 `40100` 推进到业务码 `65505`；新增显式完整响应探针，复用 Worker 的真实 Provider，只在忽略目录以 `0600` 保存完整响应，且不创建 Job、调用模型、触发回调或放宽 bounded smoke 门禁。根据内网联调约束，新增受治理部署 profile：DEV/STG 分别绑定独立 SOC SQLite、Memory/Policy/Automation scope，STG 禁用 DEV Workbench/免登录，两者均关闭真实动作；私有 env 保存 ZEUS PRD/STG 两套 profile，切换原子应用 `项目 DEV -> ZEUS PRD`、`项目 STG -> ZEUS STG`，Host/preflight 对错配 fail closed。模型/Agent Platform、Provider mode 和权限保持独立，生命周期和回写仍默认 `fake`。
+- **Outcome:** Host 路径解析器统一导出 checkout-owned 绝对 `SOC_DATABASE_URL`；启动器在任何 Sidecar/Web 进程前集中完成 SOC migration，并关闭 API/Worker 的重复自动迁移。新建 SQLite 首次发生瞬时 `disk I/O error` 时，只清理本次失败产生的半库并重试一次；调用前已存在的数据库绝不自动删除。`status` 增加数据库路径、状态和 revision，生成式 Runbook 删除手工建库分支；无状态重装确认从 `/dev/tty` 读取，避免 heredoc 吞掉后续 Shell。live acceptance 在任何 `8090` 请求前验证 SQLite 文件、`soc_alembic_version` 和 Processing Job/Callback 表，并提供显式恢复模式。内网首轮真实证据进一步定位 `code=40100/签名验证失败`：旧实现签名 `json.dumps`，却让 HTTPX `json=` 重新压缩 wire body。现已让 lifecycle/callback/asset/TI/security-tag 五个 ISEC Provider 一次序列化并以相同 bytes 签名和发送；报告契约升级为 v3，失败 callback 的 HTTP/provider code 与 response hash 可安全持久化。新增模型调用前的只读 lifecycle/signature smoke，并把 local self-submit 与 ZEUS-originated 最终验收分开。内网复验已从 `40100` 推进到业务码 `65505`；新增显式完整响应探针，复用 Worker 的真实 Provider，只在忽略目录以 `0600` 保存完整响应，且不创建 Job、调用模型、触发回调或放宽 bounded smoke 门禁。根据内网联调约束，新增受治理部署 profile：DEV/STG 分别绑定独立 SOC SQLite、Memory/Policy/Automation scope，STG 禁用 DEV Workbench/免登录，两者均关闭真实动作；私有 env 保存 ZEUS PRD/STG 两套 profile，切换原子应用 `项目 DEV -> ZEUS PRD`、`项目 STG -> ZEUS STG`，Host/preflight 对错配 fail closed。模型目标、Provider mode 和权限保持独立；Agent Platform target 后续与 ZEUS 一样纳入 Runtime 环境映射治理，生命周期和回写仍默认 `fake`。
 - **Verification:** 外网 350 项 PingAn 集成/Host/签名/Provider/transfer 回归及 12 项 SOC 架构边界回归通过；真实形状私有 env 副本完成 DEV -> STG -> DEV 往返，除 Runtime selector 外其余内容哈希不变，STG 解析到独立数据库并使用 `--prod`。migration/legacy/Processing Job 回归继续覆盖瞬时新库失败、已有库非破坏性失败、数据库先于 Sidecar 启动及只读状态检查。真实内网已人工证明 SQLite 可升级到 `0027_processing_jobs`、六个进程全部启动、模型网关 completion 通过；新签名代码和 lifecycle smoke 仍需随下一交付在内网复验。
 
 ### 2026-09-01 — PingAn private-profile migration and transfer freeze
@@ -85,13 +92,6 @@
 - **Status:** `Done`
 - **Outcome:** 将 8,008 行混合台账收敛为单一当前指针；289 条历史完成记录按 `2026-06/07/08` 归档，重复的能力表和早期计划转为只读 legacy register。
 - **Verification:** `scripts/check_soc_progress.py`、聚焦单元测试和 GitHub Actions 同时约束唯一 Stage/task、Roadmap 引用、实验 manifest、活动文件预算及归档月份。
-
-### 2026-08-26 — Upstream synchronization
-
-- **Task:** `UP-SYNC`
-- **Status:** `Done`
-- **Outcome:** 合并 `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`，保留上游 Subagent/MCP/Gateway/Frontend 能力与 SOC 增量边界。
-- **Verification:** 后端重点回归 959 项、前端 1,089 项单测及 lint/type-check 通过；宿主 DNS 导致的 5 个浏览器 SSRF 环境失败未通过放宽安全策略规避。
 
 ## Update Contract / 更新约定
 
