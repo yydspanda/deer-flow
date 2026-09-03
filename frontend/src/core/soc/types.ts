@@ -1542,16 +1542,11 @@ export interface SocCorpusWorkbenchQuery {
   offset?: number;
 }
 
-export interface SocCorpusWorkbenchProcessResult {
-  schema_version: "soc.corpus_dev_workbench_process.v4";
+export interface SocCorpusWorkbenchStartResult {
+  schema_version: "soc.corpus_dev_workbench_start.v1";
   alert_id: string;
-  run_id?: string | null;
-  replay_of_run_id?: string | null;
-  observation_id?: string | null;
-  execution_mode: "initial" | "rerun" | "pattern_resume";
-  pattern_observation_reused: boolean;
-  idempotent: boolean;
-  alert: SocCorpusWorkbenchAlert;
+  accepted: true;
+  active_execution: SocCorpusWorkbenchActiveExecution;
 }
 
 export interface SocMemoryRunPromotionRequest {

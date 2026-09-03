@@ -341,6 +341,12 @@ The Host driver starts this repository's model gateway at
 scene and upstream model. Do not start the old `sec_know_model`, LiteLLM,
 Celery, or Redis processes.
 
+The structured SOC Runtime uses non-streaming completions. Its DeerFlow model
+client explicitly sets `disable_streaming=True`, including when tracing callbacks
+are attached; a `stream=true` response from this gateway remains an intentional
+contract error. This setting is scoped to SOC JSON analysis and does not change
+the normal DeerFlow chat streaming surface.
+
 The baseline model smoke matches the current SOC Runtime default: thinking is
 disabled and the bounded completion budget is 128 tokens. Its report must retain
 those requested settings even on failure. Enable thinking only for a separate

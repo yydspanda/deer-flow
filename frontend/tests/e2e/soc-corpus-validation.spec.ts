@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
 
-function corpusState(processed = false) {
+function corpusState(processed = false, replayed = false) {
   const candidateAlert = {
     alert_id: "1984426",
     source_index: 0,
@@ -36,7 +36,8 @@ function corpusState(processed = false) {
     workflow_state: processed ? "completed" : "ready",
     can_process: true,
     blocked_by_alert_id: null,
-    run_id: processed ? "RUN-CORPUS-1" : null,
+    run_id: processed ? (replayed ? "RUN-CORPUS-2" : "RUN-CORPUS-1") : null,
+    replay_of_run_id: processed && replayed ? "RUN-CORPUS-1" : null,
     analysis_status: processed ? "success" : null,
     model_name: processed ? "fixture-model" : null,
     prompt_version: processed ? "soc-analysis-v35" : null,
@@ -742,6 +743,15 @@ function corpusActivity(alertIds: string[] = [], actorId = "fixture-analyst") {
   };
 }
 
+function corpusStart(alertId: string) {
+  return {
+    schema_version: "soc.corpus_dev_workbench_start.v1",
+    alert_id: alertId,
+    accepted: true,
+    active_execution: corpusActivity([alertId]).executions[0],
+  };
+}
+
 test("runs distinct alerts concurrently without enabling a duplicate click", async ({
   page,
 }) => {
@@ -770,20 +780,10 @@ test("runs distinct alerts concurrently without enabling a duplicate click", asy
         /\/alerts\/([^/]+)\/process$/.exec(url)?.[1] ?? "",
       );
       activeAlertIds.add(alertId);
-      await releaseGate;
-      activeAlertIds.delete(alertId);
+      void releaseGate.then(() => activeAlertIds.delete(alertId));
       await route.fulfill({
-        json: {
-          schema_version: "soc.corpus_dev_workbench_process.v4",
-          alert_id: alertId,
-          run_id: `RUN-${alertId}`,
-          observation_id: `MPO-${alertId}`,
-          idempotent: false,
-          execution_mode: "initial",
-          replay_of_run_id: null,
-          pattern_observation_reused: false,
-          alert: current.alerts.find((item) => item.alert_id === alertId),
-        },
+        status: 202,
+        json: corpusStart(alertId),
       });
       return;
     }
@@ -873,19 +873,10 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
     }
     if (route.request().method() === "POST") {
       processCalls += 1;
-      current = corpusState(true);
+      current = corpusState(true, processCalls > 1);
       await route.fulfill({
-        json: {
-          schema_version: "soc.corpus_dev_workbench_process.v4",
-          alert_id: "1984426",
-          run_id: `RUN-CORPUS-${processCalls}`,
-          observation_id: "MPO-CORPUS-1",
-          idempotent: processCalls > 1,
-          execution_mode: processCalls > 1 ? "rerun" : "initial",
-          replay_of_run_id: processCalls > 1 ? "RUN-CORPUS-1" : null,
-          pattern_observation_reused: processCalls > 1,
-          alert: current.alerts[0],
-        },
+        status: 202,
+        json: corpusStart("1984426"),
       });
       return;
     }
@@ -1085,17 +1076,8 @@ test("announces a newly generated Pattern Candidate in the current alert", async
     if (route.request().method() === "POST") {
       current = corpusStateWithPatternCandidate();
       await route.fulfill({
-        json: {
-          schema_version: "soc.corpus_dev_workbench_process.v4",
-          alert_id: "1984426",
-          run_id: "RUN-CORPUS-1",
-          observation_id: "MPO-CORPUS-1",
-          idempotent: false,
-          execution_mode: "initial",
-          replay_of_run_id: null,
-          pattern_observation_reused: false,
-          alert: current.alerts[0],
-        },
+        status: 202,
+        json: corpusStart("1984426"),
       });
       return;
     }

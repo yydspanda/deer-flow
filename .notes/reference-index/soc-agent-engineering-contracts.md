@@ -2034,10 +2034,12 @@ Observation 写入状态构造只读投影。前端只轮询当前选中且正�
 Evidence/Context 内容、Prompt、模型原文、Provider response 或 secret。
 
 DEV 告警演练的提交并发采用 `alert_id` 粒度的服务端原子占用：不同告警可并行，同一告警的第二个请求
-必须立即 `409` 且不得再次进入 Runtime/LLM。跨浏览器状态只轮询轻量 `/activity` 投影；完整 corpus state
-只在活动集合变化或运行完成后重新读取。并发完成的 POST 响应内嵌快照不具备覆盖其他 Run 的权威性，
-前端不得用它直接替换全局缓存。该占用仅服务单进程 DEV 演练；生产 API/Kafka 和多副本部署必须继续使用
-持久化 source identity、idempotency 与 lease/worker 契约，不能把进程内占用冒充为生产防重。
+必须立即 `409` 且不得再次进入 Runtime/LLM。提交接口完成原子占用后立即返回 `202 Accepted` 和 active
+claim，不得让 HTTP 请求等待模型完成；现有同步分析服务由 Workbench 自有的有界后台 executor 调用。
+跨浏览器状态只轮询轻量 `/activity` 与 alert-scoped `/execution` 投影；完整 corpus state 只在活动集合变化
+或运行完成后重新读取，最终结果必须来自持久化 Run，不能从提交响应推测。该占用与 executor 仅服务单进程
+DEV 演练；进程退出时不承诺任务恢复。生产 API/Kafka 和多副本部署必须继续使用持久化 source identity、
+idempotency 与 lease/worker 契约，不能把进程内占用冒充为生产防重或任务队列。
 
 完整 DEV 审计不得扩大上述轮询契约，而使用独立、显式加载、认证 `soc_admin` 且受
 `SOC_DEV_CORPUS_WORKBENCH_ENABLED` 与隔离 SQLite 约束的 audit endpoint。其只读 bundle 按固定顺序投影

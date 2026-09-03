@@ -153,9 +153,54 @@ interface RunFeedback {
   alertId: string;
   status: "running" | "completed" | "failed";
   message: string;
+  baselineRunId?: string | null;
+  baselineWorkflowState?: SocCorpusWorkbenchAlert["workflow_state"];
   action?: {
     href: string;
     label: string;
+  };
+}
+
+function completedRunFeedback(alert: SocCorpusWorkbenchAlert): RunFeedback {
+  const replayPrefix = alert.replay_of_run_id
+    ? "本次已创建新的 Runtime Run；"
+    : "";
+  if (
+    alert.candidate_id &&
+    alert.candidate_status === "pending_review" &&
+    !alert.memory_id
+  ) {
+    return {
+      alertId: alert.alert_id,
+      status: "completed",
+      message: `${replayPrefix}“${alert.rule_name ?? "当前告警模式"}”已达到经验沉淀质量门，等待审核。`,
+      action: {
+        href: `/workspace/soc/review/memory-candidates/${encodeURIComponent(alert.candidate_id)}`,
+        label: "审核这条经验",
+      },
+    };
+  }
+  if (alert.memory_id) {
+    const memoryUse = memoryRunUsageCopy(
+      alert.memory_contexts.length,
+      alert.memory_directive_applied,
+    );
+    return {
+      alertId: alert.alert_id,
+      status: "completed",
+      message: `${replayPrefix}本次已采用“${alert.rule_name ?? "当前告警模式"}”的审核经验：${memoryUse.label}。`,
+      action: {
+        href: `/workspace/soc/memory/records/${encodeURIComponent(alert.memory_id)}`,
+        label: "查看采用的经验",
+      },
+    };
+  }
+  return {
+    alertId: alert.alert_id,
+    status: "completed",
+    message: replayPrefix
+      ? `${replayPrefix}未重复累计同一告警的模式样本。`
+      : "完整研判链路已完成，可按需查看详细结果。",
   };
 }
 
@@ -1227,6 +1272,7 @@ export function SocCorpusValidationWorkbench() {
   const [filtersHydrated, setFiltersHydrated] = useState(false);
   const [page, setPage] = useState(0);
   const detailRef = useRef<HTMLDivElement>(null);
+  const completionNoticeRunIds = useRef(new Set<string>());
   const deferredSearch = useDeferredValue(search.trim());
   const query = useSocCorpusWorkbench({
     search: deferredSearch || null,
@@ -1242,6 +1288,15 @@ export function SocCorpusValidationWorkbench() {
   const activityQuery = useSocCorpusWorkbenchActivity();
   const processMutation = useProcessSocCorpusWorkbenchAlert();
   const state = query.state;
+  const locallyRunningAlertIds = useMemo(
+    () =>
+      new Set(
+        Object.values(runFeedbackByAlert)
+          .filter((item) => item.status === "running")
+          .map((item) => item.alertId),
+      ),
+    [runFeedbackByAlert],
+  );
   const activeExecutionByAlert = useMemo(
     () =>
       new Map(
@@ -1256,8 +1311,9 @@ export function SocCorpusValidationWorkbench() {
     activityQuery.activity?.max_concurrent_executions ?? 1;
   const visibleActiveAlertCount = useMemo(
     () =>
-      new Set([...activeExecutionByAlert.keys(), ...processingAlertIds]).size,
-    [activeExecutionByAlert, processingAlertIds],
+      new Set([...activeExecutionByAlert.keys(), ...locallyRunningAlertIds])
+        .size,
+    [activeExecutionByAlert, locallyRunningAlertIds],
   );
   const availableExecutionSlots = Math.max(
     0,
@@ -1270,7 +1326,7 @@ export function SocCorpusValidationWorkbench() {
     : null;
   const selectedAlertIsActive =
     !!selectedAlertId &&
-    (processingAlertIds.has(selectedAlertId) ||
+    (locallyRunningAlertIds.has(selectedAlertId) ||
       activeExecutionByAlert.has(selectedAlertId));
   const executionQuery = useSocCorpusWorkbenchExecution(selectedAlertId, {
     live: selectedAlertIsActive,
@@ -1289,37 +1345,63 @@ export function SocCorpusValidationWorkbench() {
 
   useEffect(() => {
     if (!state) return;
-    setRunFeedbackByAlert((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const [alertId, feedback] of Object.entries(current)) {
-        if (
-          feedback.status !== "running" ||
-          processingAlertIds.has(alertId) ||
-          activeExecutionByAlert.has(alertId)
-        ) {
-          continue;
+    const updates: Record<string, RunFeedback> = {};
+    for (const [alertId, feedback] of Object.entries(runFeedbackByAlert)) {
+      if (
+        feedback.status !== "running" ||
+        processingAlertIds.has(alertId) ||
+        activeExecutionByAlert.has(alertId)
+      ) {
+        continue;
+      }
+      const alert = state.alerts.find((item) => item.alert_id === alertId);
+      const hasNewRun = alert?.run_id !== feedback.baselineRunId;
+      const resumedPattern =
+        feedback.baselineWorkflowState === "analysis_only" &&
+        alert?.workflow_state === "completed";
+      const hasCurrentOutcome = hasNewRun || resumedPattern;
+      if (alert?.workflow_state === "completed" && hasCurrentOutcome) {
+        updates[alertId] = completedRunFeedback(alert);
+        if (alert.run_id && !completionNoticeRunIds.current.has(alert.run_id)) {
+          completionNoticeRunIds.current.add(alert.run_id);
+          if (
+            alert.candidate_id &&
+            alert.candidate_status === "pending_review" &&
+            !alert.memory_id
+          ) {
+            toast.success("同类经验待审核", {
+              description: `已累计 ${alert.pattern_support_count ?? alert.window_alert_count} 条有效观察。`,
+              duration: 12_000,
+            });
+          } else if (alert.memory_id) {
+            const memoryUse = memoryRunUsageCopy(
+              alert.memory_contexts.length,
+              alert.memory_directive_applied,
+            );
+            toast.success("已采用审核经验", {
+              description: `${memoryUse.label}：${memoryUse.detail}`,
+              duration: 10_000,
+            });
+          } else {
+            toast.success(`Alert ${alertId} 研判完成`);
+          }
         }
-        const alert = state.alerts.find((item) => item.alert_id === alertId);
-        if (alert?.workflow_state === "completed") {
-          next[alertId] = {
-            alertId,
-            status: "completed",
-            message: "完整研判链路已完成，可按需查看详细结果。",
-          };
-          changed = true;
-        } else if (alert?.workflow_state === "failed") {
-          next[alertId] = {
-            alertId,
-            status: "failed",
-            message: alert.failure_message ?? "告警处理失败",
-          };
-          changed = true;
+      } else if (alert?.workflow_state === "failed" && hasCurrentOutcome) {
+        updates[alertId] = {
+          alertId,
+          status: "failed",
+          message: alert.failure_message ?? "告警处理失败",
+        };
+        if (alert.run_id && !completionNoticeRunIds.current.has(alert.run_id)) {
+          completionNoticeRunIds.current.add(alert.run_id);
+          toast.error(alert.failure_message ?? `Alert ${alertId} 处理失败`);
         }
       }
-      return changed ? next : current;
-    });
-  }, [activeExecutionByAlert, processingAlertIds, state]);
+    }
+    if (Object.keys(updates).length > 0) {
+      setRunFeedbackByAlert((current) => ({ ...current, ...updates }));
+    }
+  }, [activeExecutionByAlert, processingAlertIds, runFeedbackByAlert, state]);
 
   useEffect(() => {
     const stored = readStoredFilters();
@@ -1464,7 +1546,7 @@ export function SocCorpusValidationWorkbench() {
 
   const handleProcess = async (alertId: string) => {
     if (
-      processingAlertIds.has(alertId) ||
+      locallyRunningAlertIds.has(alertId) ||
       activeExecutionByAlert.has(alertId)
     ) {
       toast.info(`Alert ${alertId} 已在运行，不会重复执行`);
@@ -1482,66 +1564,27 @@ export function SocCorpusValidationWorkbench() {
         alertId,
         status: "running",
         message: "正在执行归一化、模型研判、决策与经验匹配。",
+        baselineRunId:
+          state?.alerts.find((item) => item.alert_id === alertId)?.run_id ??
+          null,
+        baselineWorkflowState:
+          state?.alerts.find((item) => item.alert_id === alertId)
+            ?.workflow_state ?? "ready",
       },
     }));
     try {
-      const result = await processMutation.mutateAsync(alertId);
-      const updatedAlert = result.alert;
+      await processMutation.mutateAsync(alertId);
       setFocusAlertId(alertId);
-      let feedbackMessage = "完整研判链路已完成，可按需查看详细结果。";
-      let feedbackAction: RunFeedback["action"];
-      if (result.execution_mode === "rerun") {
-        feedbackMessage =
-          "重新运行已完成；本次生成了新 Run，但不会重复累计同一告警的模式样本。";
-        toast.success("重新运行完成", {
-          description:
-            "本次已创建新的 Runtime Run；同一原始告警不会重复增加 Pattern 支持数。",
-          duration: 10_000,
-        });
-      } else if (
-        updatedAlert?.candidate_id &&
-        updatedAlert.candidate_status === "pending_review" &&
-        !updatedAlert.memory_id
-      ) {
-        feedbackMessage = `“${updatedAlert.rule_name ?? "当前告警模式"}”已达到经验沉淀质量门，等待审核。`;
-        feedbackAction = {
-          href: `/workspace/soc/review/memory-candidates/${encodeURIComponent(updatedAlert.candidate_id)}`,
-          label: "审核这条经验",
-        };
-        toast.success("同类经验待审核", {
-          description: `已累计 ${updatedAlert.pattern_support_count ?? updatedAlert.window_alert_count} 条有效观察；可通过运行完成提示中的“审核这条经验”进入。`,
-          duration: 12_000,
-        });
-      } else if (updatedAlert?.memory_id) {
-        const memoryUse = memoryRunUsageCopy(
-          updatedAlert.memory_contexts.length,
-          updatedAlert.memory_directive_applied,
-        );
-        feedbackMessage = `本次已采用“${updatedAlert.rule_name ?? "当前告警模式"}”的审核经验：${memoryUse.label}。`;
-        feedbackAction = {
-          href: `/workspace/soc/memory/records/${encodeURIComponent(updatedAlert.memory_id)}`,
-          label: "查看采用的经验",
-        };
-        toast.success("已采用审核经验", {
-          description: `${memoryUse.label}：${memoryUse.detail}`,
-          duration: 10_000,
-        });
-      } else {
-        toast.success(
-          result.idempotent
-            ? `Alert ${alertId} 已存在，返回原结果`
-            : `Alert ${alertId} 已完成 Runtime 与 Pattern 写入`,
-        );
-      }
       setRunFeedbackByAlert((current) => ({
         ...current,
         [alertId]: {
+          ...current[alertId],
           alertId,
-          status: "completed",
-          message: feedbackMessage,
-          action: feedbackAction,
+          status: "running",
+          message: "后台已受理，运行轨迹将持续更新；离开页面不会中断本次研判。",
         },
       }));
+      toast.success(`Alert ${alertId} 已开始研判`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "告警处理失败";
       if (error instanceof SocApiError && error.status === 409) {
@@ -1912,9 +1955,9 @@ export function SocCorpusValidationWorkbench() {
               <tbody>
                 {pageAlerts.map((alert) => {
                   const readinessItem = READINESS[alert.readiness];
-                  const localProcessing = processingAlertIds.has(
-                    alert.alert_id,
-                  );
+                  const localProcessing =
+                    processingAlertIds.has(alert.alert_id) ||
+                    locallyRunningAlertIds.has(alert.alert_id);
                   const activeExecution =
                     activeExecutionByAlert.get(alert.alert_id) ??
                     alert.active_execution ??

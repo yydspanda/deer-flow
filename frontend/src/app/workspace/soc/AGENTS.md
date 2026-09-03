@@ -163,9 +163,10 @@ Runtime decisions, construct Memory, or infer action authority.
   pending state by alert ID and poll the server's lightweight `/activity` projection so
   different alerts can run concurrently while duplicate clicks across browser sessions
   remain disabled. Poll quickly only while executions are active and back off while the
-  workbench is idle. A process response contains only the affected alert projection;
-  invalidate and refetch the authoritative page rather than overwriting the query cache
-  with a corpus snapshot.
+  workbench is idle. A process response is only a `202 Accepted` claim acknowledgement;
+  it does not contain the final analysis. Keep the alert visibly running, use
+  `/activity` and `/execution` for progress, and refetch the authoritative page after the
+  claim disappears rather than treating the mutation response as completion.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
   The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,
   canonical normalization, bounded model context/output, validation, Decision, and

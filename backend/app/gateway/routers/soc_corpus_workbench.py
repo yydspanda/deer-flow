@@ -25,8 +25,8 @@ from soc_agent.demo.corpus_workbench import (
     SocCorpusWorkbenchCapacityError,
     SocCorpusWorkbenchError,
     SocCorpusWorkbenchExecution,
-    SocCorpusWorkbenchProcessResult,
     SocCorpusWorkbenchService,
+    SocCorpusWorkbenchStartResult,
     SocCorpusWorkbenchState,
 )
 
@@ -176,14 +176,15 @@ def get_corpus_workbench_audit(
 
 @router.post(
     "/alerts/{alert_id}/process",
-    response_model=SocCorpusWorkbenchProcessResult,
+    response_model=SocCorpusWorkbenchStartResult,
     response_model_exclude_none=True,
+    status_code=202,
 )
 def process_corpus_workbench_alert(
     alert_id: str,
     request: Request,
     service: CorpusWorkbenchServiceDep,
-) -> SocCorpusWorkbenchProcessResult:
+) -> SocCorpusWorkbenchStartResult:
     context = soc_service_context_from_request(request, include_soc_roles=True)
     if "soc_admin" not in context.actor.roles:
         raise HTTPException(
@@ -191,7 +192,7 @@ def process_corpus_workbench_alert(
             detail="SOC DEV corpus workbench requires an administrator account",
         )
     try:
-        return service.process_alert(alert_id, context=context)
+        return service.start_alert(alert_id, context=context)
     except (SocCorpusWorkbenchBusyError, SocCorpusWorkbenchCapacityError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocServiceConflictError as exc:

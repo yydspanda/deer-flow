@@ -15,8 +15,8 @@ import type {
   SocCorpusWorkbenchActivity,
   SocCorpusWorkbenchAuditBundle,
   SocCorpusWorkbenchExecution,
-  SocCorpusWorkbenchProcessResult,
   SocCorpusWorkbenchQuery,
+  SocCorpusWorkbenchStartResult,
   SocCorpusWorkbenchState,
   SocDispositionOutcomeApplyResult,
   SocDispositionOutcomeRecordRequest,
@@ -299,7 +299,7 @@ export async function getSocCorpusWorkbenchActivity(
 export async function processSocCorpusWorkbenchAlert(
   alertId: string,
   context?: SocRequestContext,
-): Promise<SocCorpusWorkbenchProcessResult> {
+): Promise<SocCorpusWorkbenchStartResult> {
   const response = await fetch(
     `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/alerts/${encodeURIComponent(alertId)}/process`,
     {
@@ -307,7 +307,7 @@ export async function processSocCorpusWorkbenchAlert(
       headers: buildSocHeaders(context, { stateChanging: true }),
     },
   );
-  return readJson<SocCorpusWorkbenchProcessResult>(
+  return readJson<SocCorpusWorkbenchStartResult>(
     response,
     "Failed to process SOC Corpus DEV alert",
   );

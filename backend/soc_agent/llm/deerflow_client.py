@@ -185,6 +185,7 @@ class DeerFlowLLMChatClient:
                     thinking_enabled=self._thinking_enabled,
                     app_config=self._app_config,
                     attach_tracing=self._attach_tracing,
+                    model_overrides={"disable_streaming": True},
                 )
                 self._models[model_name] = model
             return model

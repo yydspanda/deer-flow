@@ -124,6 +124,7 @@ def test_deerflow_client_reuses_model_and_bounds_metadata() -> None:
     assert len(factory_calls) == 1
     assert factory_calls[0]["name"] == "deepseek-v4-pro"
     assert factory_calls[0]["thinking_enabled"] is False
+    assert factory_calls[0]["model_overrides"] == {"disable_streaming": True}
     assert len(model.calls) == 2
     assert model.calls[0][1]["run_name"] == "soc_runtime_analysis"
     assert first.model_name == "provider-model-id"

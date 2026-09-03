@@ -197,6 +197,11 @@ generic `soc_agent` code.
 - The model gateway currently uses one process-local capacity semaphore; launch exactly
   one gateway process. Scale processing workers only after the internal model service has
   a reviewed shared admission mechanism or measured capacity increase.
+- The gateway's structured SOC completion boundary is non-streaming. Every
+  `DeerFlowLLMChatClient` model must be constructed with caller-scoped
+  `disable_streaming=True`; relying on `.invoke()` alone is insufficient because
+  LangChain callbacks may select an implicit streaming path. This override belongs only
+  to structured SOC calls and must not disable ordinary DeerFlow chat streaming.
 - Internal Apple Silicon handoff uses
   `scripts/build_pingan_macos_offline_bundle.py`. Resolve checkout paths at runtime; do
   not commit fixed `/Users/...` paths. Private overlay builders reject placeholders,

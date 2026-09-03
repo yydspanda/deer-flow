@@ -82,15 +82,19 @@ file for SOC code. The authoritative product and engineering documents are:
 - Corpus DEV execution uses a process-local, bounded claim registry owned by the
   workbench service. Different alert IDs may run concurrently up to the configured LLM
   admission capacity; one alert ID may have only one active claim, and a duplicate
-  request fails immediately without invoking Runtime. `/activity` is the lightweight
-  cross-session polling contract. This DEV claim is not a production multi-instance
-  lease; Kafka/API production ingress continues to require durable source idempotency.
+  request fails immediately without invoking Runtime. The process mutation atomically
+  reserves the claim, returns `202 Accepted`, and runs the existing synchronous service
+  workflow in the service-owned bounded executor; it must not hold an HTTP request open
+  for model completion. `/activity` and `/execution` are the authoritative lightweight
+  polling contracts. This DEV claim/executor is not a production multi-instance lease or
+  durable queue; Kafka/API production ingress continues to require durable source
+  idempotency and workers.
 - The corpus workbench list contract is server-filtered and paginated. Its state response
   carries only the requested alert page, recurrent group summaries, and the bounded
   rehearsal manifest; it must not project every source alert for each navigation or
-  filter change. A process mutation returns only the affected alert projection, after
-  which clients invalidate and refetch the authoritative page instead of embedding a
-  multi-megabyte corpus snapshot in the mutation response.
+  filter change. A process mutation returns only the accepted active claim, after which
+  clients poll activity/execution and refetch the authoritative page instead of embedding
+  a completed alert or multi-megabyte corpus snapshot in the mutation response.
 - The bounded-input audit artifact must distinguish model-visible projection from the
   frozen Runtime request. Only a matching prompt/builder version may be labeled exact;
   old runs use an explicit partial reconstruction status instead of silently applying a

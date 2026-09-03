@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import copy
 import hashlib
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -52,6 +54,8 @@ from soc_agent.prompts.analysis import (
     build_analysis_prompt,
 )
 from soc_agent.utils.hashing import stable_hash
+
+logger = logging.getLogger(__name__)
 
 CORPUS_WORKBENCH_VERSION = "soc.corpus_dev_workbench.v4"
 CORPUS_WORKBENCH_INDEX_VERSION = "soc.corpus_workbench_index.v3"
@@ -598,6 +602,17 @@ class SocCorpusWorkbenchProcessResult(BaseModel):
     alert: SocCorpusWorkbenchAlert
 
 
+class SocCorpusWorkbenchStartResult(BaseModel):
+    """Immediate acknowledgement for one background DEV execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.corpus_dev_workbench_start.v1"] = "soc.corpus_dev_workbench_start.v1"
+    alert_id: str
+    accepted: Literal[True] = True
+    active_execution: SocCorpusWorkbenchActiveExecution
+
+
 class SocCorpusWorkbenchService:
     """Run arbitrary server-owned corpus alerts through official SOC services."""
 
@@ -640,6 +655,10 @@ class SocCorpusWorkbenchService:
         self._execution_lock = Lock()
         self._active_executions: dict[str, _ActiveExecutionClaim] = {}
         self._max_concurrent_executions = settings.max_concurrency
+        self._execution_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self._max_concurrent_executions,
+            thread_name_prefix="soc-corpus-workbench",
+        )
 
     def get_state(
         self,
@@ -919,6 +938,18 @@ class SocCorpusWorkbenchService:
         *,
         context: ServiceRequestContext,
     ) -> Iterator[_ActiveExecutionClaim]:
+        claim = self._reserve_execution(alert_id, context=context)
+        try:
+            yield claim
+        finally:
+            self._release_execution(claim)
+
+    def _reserve_execution(
+        self,
+        alert_id: str,
+        *,
+        context: ServiceRequestContext,
+    ) -> _ActiveExecutionClaim:
         claim = _ActiveExecutionClaim(
             execution_id=f"CWE-{uuid4().hex[:12].upper()}",
             alert_id=alert_id,
@@ -939,13 +970,13 @@ class SocCorpusWorkbenchService:
             if len(self._active_executions) >= self._max_concurrent_executions:
                 raise SocCorpusWorkbenchCapacityError("SOC DEV corpus execution capacity is full; wait for an active alert to finish")
             self._active_executions[alert_id] = claim
-        try:
-            yield claim
-        finally:
-            with self._execution_lock:
-                current = self._active_executions.get(alert_id)
-                if current is not None and current.execution_id == claim.execution_id:
-                    self._active_executions.pop(alert_id, None)
+        return claim
+
+    def _release_execution(self, claim: _ActiveExecutionClaim) -> None:
+        with self._execution_lock:
+            current = self._active_executions.get(claim.alert_id)
+            if current is not None and current.execution_id == claim.execution_id:
+                self._active_executions.pop(claim.alert_id, None)
 
     @staticmethod
     def _active_execution_view(
@@ -994,71 +1025,137 @@ class SocCorpusWorkbenchService:
         *,
         context: ServiceRequestContext,
     ) -> SocCorpusWorkbenchProcessResult:
+        self._validate_process_request(alert_id, context=context)
+        with self._claim_execution(alert_id, context=context):
+            return self._process_claimed_alert(alert_id, context=context)
+
+    def start_alert(
+        self,
+        alert_id: str,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocCorpusWorkbenchStartResult:
+        """Reserve an alert atomically and execute it outside the HTTP request."""
+
+        self._validate_process_request(alert_id, context=context)
+        claim = self._reserve_execution(alert_id, context=context)
+        try:
+            future = self._execution_executor.submit(
+                self._run_reserved_alert,
+                alert_id,
+                context,
+                claim,
+            )
+        except BaseException:
+            self._release_execution(claim)
+            raise
+        future.add_done_callback(self._observe_background_result)
+        return SocCorpusWorkbenchStartResult(
+            alert_id=alert_id,
+            active_execution=self._active_execution_view(
+                claim,
+                now=datetime.now(UTC),
+            ),
+        )
+
+    def _validate_process_request(
+        self,
+        alert_id: str,
+        *,
+        context: ServiceRequestContext,
+    ) -> None:
         case = self._cases.get(alert_id)
         if case is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id!r} is not part of the configured DEV corpus")
         if "soc_admin" not in context.actor.roles:
             raise SocCorpusWorkbenchError("the DEV corpus workbench requires the soc_admin role")
+
+    def _run_reserved_alert(
+        self,
+        alert_id: str,
+        context: ServiceRequestContext,
+        claim: _ActiveExecutionClaim,
+    ) -> SocCorpusWorkbenchProcessResult:
+        try:
+            return self._process_claimed_alert(alert_id, context=context)
+        finally:
+            self._release_execution(claim)
+
+    @staticmethod
+    def _observe_background_result(
+        future: concurrent.futures.Future[SocCorpusWorkbenchProcessResult],
+    ) -> None:
+        try:
+            future.result()
+        except Exception:  # noqa: BLE001 - background DEV failures are persisted and logged
+            logger.exception("SOC corpus workbench background execution failed")
+
+    def _process_claimed_alert(
+        self,
+        alert_id: str,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocCorpusWorkbenchProcessResult:
+        case = self._cases[alert_id]
         observation_id: str | None = None
         pattern_observation_reused = False
         idempotent = False
-        with self._claim_execution(alert_id, context=context):
-            current = self._get_alert_view(
-                alert_id,
-                exclude_active_alert_id=alert_id,
+        current = self._get_alert_view(
+            alert_id,
+            exclude_active_alert_id=alert_id,
+        )
+        if not current.can_process:
+            raise SocCorpusWorkbenchBusyError(self._persisted_running_execution(current, context=context))
+
+        if current.run_id is None:
+            execution_mode: Literal[
+                "initial",
+                "rerun",
+                "pattern_resume",
+            ] = "initial"
+            request_context = context.model_copy(update={"idempotency_key": self._analysis_idempotency_key(alert_id)})
+            run = self._analysis_service.analyze(
+                copy.deepcopy(self._payload_for_case(case)),
+                context=request_context,
             )
-            if not current.can_process:
-                raise SocCorpusWorkbenchBusyError(self._persisted_running_execution(current, context=context))
-
-            if current.run_id is None:
-                execution_mode: Literal[
-                    "initial",
-                    "rerun",
-                    "pattern_resume",
-                ] = "initial"
-                request_context = context.model_copy(update={"idempotency_key": self._analysis_idempotency_key(alert_id)})
-                run = self._analysis_service.analyze(
-                    copy.deepcopy(self._payload_for_case(case)),
-                    context=request_context,
-                )
-            elif current.workflow_state == "analysis_only":
-                execution_mode = "pattern_resume"
-                request_context = context
-                run = self._repository.get_run(current.run_id)
-                if run is None:
-                    raise SocCorpusWorkbenchError(f"alert {alert_id} Runtime run {current.run_id} no longer exists")
-            else:
-                execution_mode = "rerun"
-                request_context = context.model_copy(
-                    update={
-                        "idempotency_key": self._rerun_idempotency_key(
-                            alert_id,
-                            context=context,
-                        )
-                    }
-                )
-                run = self._analysis_service.replay(
-                    current.run_id,
-                    context=request_context,
-                )
-
-            if run.status is not AnalysisRunStatus.FAILED:
-                if execution_mode == "rerun" and current.observation_id is not None:
-                    observation_id = current.observation_id
-                    pattern_observation_reused = True
-                    idempotent = True
-                else:
-                    aggregation = self._pattern_service.observe_run(
-                        run,
-                        source_type=MemoryPatternSourceType.BATCH_ALERT,
-                        transport_ref=(f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:v1"),
-                        environment=CORPUS_WORKBENCH_ENVIRONMENT,
-                        data_class=MemoryPatternDataClass.OPERATIONAL,
-                        context=request_context,
+        elif current.workflow_state == "analysis_only":
+            execution_mode = "pattern_resume"
+            request_context = context
+            run = self._repository.get_run(current.run_id)
+            if run is None:
+                raise SocCorpusWorkbenchError(f"alert {alert_id} Runtime run {current.run_id} no longer exists")
+        else:
+            execution_mode = "rerun"
+            request_context = context.model_copy(
+                update={
+                    "idempotency_key": self._rerun_idempotency_key(
+                        alert_id,
+                        context=context,
                     )
-                    observation_id = aggregation.observation.observation_id
-                    pattern_observation_reused = aggregation.idempotent
-                    idempotent = aggregation.idempotent
+                }
+            )
+            run = self._analysis_service.replay(
+                current.run_id,
+                context=request_context,
+            )
+
+        if run.status is not AnalysisRunStatus.FAILED:
+            if execution_mode == "rerun" and current.observation_id is not None:
+                observation_id = current.observation_id
+                pattern_observation_reused = True
+                idempotent = True
+            else:
+                aggregation = self._pattern_service.observe_run(
+                    run,
+                    source_type=MemoryPatternSourceType.BATCH_ALERT,
+                    transport_ref=(f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:v1"),
+                    environment=CORPUS_WORKBENCH_ENVIRONMENT,
+                    data_class=MemoryPatternDataClass.OPERATIONAL,
+                    context=request_context,
+                )
+                observation_id = aggregation.observation.observation_id
+                pattern_observation_reused = aggregation.idempotent
+                idempotent = aggregation.idempotent
 
         return SocCorpusWorkbenchProcessResult(
             alert_id=alert_id,
@@ -3137,6 +3234,7 @@ __all__ = [
     "SocCorpusWorkbenchExecution",
     "SocCorpusWorkbenchProcessResult",
     "SocCorpusWorkbenchService",
+    "SocCorpusWorkbenchStartResult",
     "SocCorpusWorkbenchState",
     "build_corpus_workbench_index",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -74,7 +75,7 @@ class _FakeWorkbenchService:
         self.state_query = query
         return SimpleNamespace(alerts=[])
 
-    def process_alert(self, alert_id: str, *, context):
+    def start_alert(self, alert_id: str, *, context):
         self.calls.append(alert_id)
         return SimpleNamespace(alert_id=alert_id, actor=context.actor)
 
@@ -92,7 +93,7 @@ class _FakeWorkbenchService:
 
 
 class _BusyWorkbenchService(_FakeWorkbenchService):
-    def process_alert(self, alert_id: str, *, context):
+    def start_alert(self, alert_id: str, *, context):
         raise SocCorpusWorkbenchBusyError(
             SocCorpusWorkbenchActiveExecution(
                 execution_id="CWE-ACTIVE",
@@ -454,6 +455,62 @@ def test_corpus_workbench_rejects_duplicate_active_alert_without_second_analysis
     thread.join(timeout=10)
     assert len(first_result) == 1
     assert service.get_activity().active_count == 0
+
+
+@pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+def test_corpus_workbench_start_returns_before_background_analysis_finishes(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    settings = SocLLMSettings(
+        mode=SocAnalyzerMode.STUB,
+        max_concurrency=1,
+    )
+    delegate = build_soc_analysis_service(
+        repository,
+        settings=settings,
+        runtime_environment=CORPUS_WORKBENCH_ENVIRONMENT,
+    )
+    analysis_service = _BlockingAnalysisService(delegate)
+    service = SocCorpusWorkbenchService(
+        repository=repository,
+        analysis_service=analysis_service,
+        pattern_service=SocMemoryPatternService(
+            repository=repository,
+            candidate_repository=repository,
+            profile_registry=build_soc_memory_profile_registry(),
+        ),
+        source_path=_CORPUS,
+        settings=settings,
+        database_file="soc-corpus-workbench.sqlite",
+    )
+    alert_id = next(iter(service._cases))
+
+    accepted = service.start_alert(
+        alert_id,
+        context=_admin_context("background-request", actor_id="analyst-1"),
+    )
+
+    assert accepted.schema_version == "soc.corpus_dev_workbench_start.v1"
+    assert accepted.alert_id == alert_id
+    assert accepted.accepted is True
+    assert accepted.active_execution.alert_id == alert_id
+    assert analysis_service.entered.wait(timeout=5)
+    assert service.get_activity().active_count == 1
+    with pytest.raises(SocCorpusWorkbenchBusyError):
+        service.start_alert(
+            alert_id,
+            context=_admin_context("duplicate-request", actor_id="analyst-2"),
+        )
+
+    analysis_service.release.set()
+    for _ in range(100):
+        if service.get_activity().active_count == 0:
+            break
+        time.sleep(0.01)
+
+    assert service.get_activity().active_count == 0
+    assert len(analysis_service.calls) == 1
 
 
 def test_operational_projection_keeps_detection_and_disposition_separate() -> None:
