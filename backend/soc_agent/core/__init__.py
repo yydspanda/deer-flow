@@ -12,6 +12,7 @@ from soc_agent.core.authorization_enrichment import (
 )
 from soc_agent.core.authorized_activity import SocAuthorizedActivityService
 from soc_agent.core.automation import SocAutomationError, SocAutomationService
+from soc_agent.core.case_outcomes import project_soc_case_outcome
 from soc_agent.core.correlation import (
     InMemoryAlertSummaryRepository,
     SocCorrelationService,
@@ -91,6 +92,7 @@ __all__ = [
     "classify_alert_result",
     "is_required_human_intervention_item",
     "required_human_intervention_reason",
+    "project_soc_case_outcome",
     "DeterministicAnalysisRuntime",
     "AuthorizationEnrichmentIdempotencyConflictError",
     "InMemoryInvestigationEvidenceRepository",

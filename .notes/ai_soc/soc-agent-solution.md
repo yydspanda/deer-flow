@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-08-28
+Last updated: 2026-09-07
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -109,6 +109,7 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 租户策略判断 | Tenant Policy Decision | `TenantPolicyDecision` | 完整 Runtime/Memory 之后的独立运营判断；确定性规则优先，可选 bounded Policy Skill |
 | 有效研判 | Effective Decision | `SocDecisionTransitionRecord.after` + `effective_disposition` | 汇总 Base、Memory、Tenant Policy 后的当前有效技术判断、复核要求与运营处置 |
 | 决策迁移 | Decision Transition | `SocDecisionTransitionRecord` | 追加保存 Base/Memory/Tenant/Effective 四阶段、before/after、contributors 与 hash |
+| 研判处置结果 | Operator Case Outcome | `SocCaseOutcomeView` | 从既有决策链确定性投影的一份运营答案；分开显示最终安全判断、运营处置和闭环进度，不产生新结论 |
 | 动作授权 | Action Authorization | `SocActionAuthorizationRecord` | 独立判断精确 route/action/target/adapter 是否可执行；不等同于 verdict 或 Memory |
 | 动作执行 | Action Execution | `SocActionExecutionRecord` | 保存真实调用 attempt、幂等键、外部 request ID、前后状态和错误 |
 | 业务变更审计 | Mutation Audit | `SocMutationAuditRecord` | L3 服务命令的追加式审计；记录 actor、来源、原因、幂等和有界结果，不保存原始敏感 payload |
@@ -1338,6 +1339,38 @@ The operator workflow is intentionally split:
   authority. It never runs inside the alert task.
 - **动作审批**: authorize or reject a high-risk external action independently of the alert verdict.
 - **技术审计**: inspect raw contracts and lineage only when needed; it is collapsed by default.
+
+The primary result is `SocCaseOutcomeView`, a read-only projection of persisted Runtime, Memory,
+tenant-policy, external-feedback, and action lineage. It does not call an LLM or make another
+decision. It keeps three questions separate so internal stages no longer appear to contradict each
+other:
+
+```mermaid
+flowchart LR
+    L["🧠 Runtime + reviewed sources<br/>Base / Memory / Tenant / Feedback"] --> P["🧩 Deterministic projection<br/>SocCaseOutcomeView"]
+    P --> V["🛡️ Final security verdict<br/>是否真实攻击"]
+    P --> D["⚙️ Operational disposition<br/>忽略 / 转交 / 抑制 / 结案"]
+    P --> C["✅ Closure status<br/>完成 / 待处置 / 待补关键事实"]
+    P --> G["🔎 Gap impact<br/>提示 / 能力受限 / 阻断闭环"]
+```
+
+- An advisory gap remains visible but does not erase a usable verdict or manufacture a task.
+- A capability-limiting gap preserves the verdict while blocking only dependent targeting or
+  automation.
+- A decision-blocking gap prevents the case from appearing closed and exposes concrete next steps.
+- A reviewed Memory override is shown as one final verdict plus a concise change explanation; the
+  immutable before/after stages remain available in collapsed technical audit.
+- Tenant policy may change handling without rewriting detection truth. For example, a confirmed
+  authorized activity can remain a technical true positive while its operational disposition is
+  `ignored` or `closed_benign_true_positive`.
+- A tenant rule that alone changes `needs_review=false -> true` for an `escalated` disposition
+  is an operational handoff, not a decision-blocking evidence gap. The read projection checks
+  the applied stage and final snapshot, preserves independent materiality review, and displays
+  `研判完成，待按规则转交` with the policy explanation beside the verdict. For example, alert
+  `2502512` remains a model-assessed false positive (0.82); the configured forced-transfer rule
+  supplies its handoff requirement. No completed handoff is inferred from a policy recommendation.
+- The result includes bounded contribution facts such as traced evidence, reviewed Memory reuse,
+  tenant-policy application, and recurring-pattern support so users can see what the system added.
 
 ### 7.2 Decision, Authorization, and Execution / 决策、授权与执行边界
 

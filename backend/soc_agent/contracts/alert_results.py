@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
 from soc_agent.contracts.schemas import (
     AlertSummary,
+    AnalysisCapability,
     AnalysisRun,
     AuthorizationEnrichmentRecord,
     CorrelationResult,
@@ -24,7 +25,9 @@ from soc_agent.contracts.schemas import (
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryRetrievalResult,
+    SocOperationalDisposition,
     UnifiedInvestigationView,
+    Verdict,
 )
 
 
@@ -42,6 +45,92 @@ class SocDecisionUsability(StrEnum):
     USABLE = "usable"
     DEGRADED = "degraded"
     FAILED = "failed"
+
+
+class SocCaseClosureStatus(StrEnum):
+    """Operator-facing completion state for one analysis and handling chain."""
+
+    CLOSED = "closed"
+    CLOSED_WITH_LIMITATIONS = "closed_with_limitations"
+    HANDLING_PENDING = "handling_pending"
+    FOLLOW_UP_REQUIRED = "follow_up_required"
+    FAILED = "failed"
+
+
+class SocCaseEvidenceGapImpact(StrEnum):
+    """Material effect of missing evidence on the operator-facing outcome."""
+
+    NONE = "none"
+    ADVISORY = "advisory"
+    CAPABILITY_LIMITED = "capability_limited"
+    DECISION_BLOCKING = "decision_blocking"
+
+
+class SocCaseDecisionChange(StrEnum):
+    """How governed post-processing changed the technical verdict."""
+
+    UNCHANGED = "unchanged"
+    MEMORY_REINFORCED = "memory_reinforced"
+    MEMORY_OVERRIDDEN = "memory_overridden"
+    CONFLICTED = "conflicted"
+
+
+class SocCaseOutcomeBasisKind(StrEnum):
+    CURRENT_ANALYSIS = "current_analysis"
+    CONFIRMED_MEMORY = "confirmed_memory"
+    TENANT_POLICY = "tenant_policy"
+    EXTERNAL_FEEDBACK = "external_feedback"
+
+
+class SocCaseOutcomeBasis(BaseModel):
+    """One bounded reason behind the final security or handling outcome."""
+
+    kind: SocCaseOutcomeBasisKind
+    summary: str = Field(min_length=1, max_length=3000)
+    source_id: str | None = Field(default=None, max_length=512)
+
+
+class SocCaseContributionKind(StrEnum):
+    EVIDENCE_TRACE = "evidence_trace"
+    REVIEWED_MEMORY_REUSED = "reviewed_memory_reused"
+    TENANT_POLICY_APPLIED = "tenant_policy_applied"
+    RECURRING_PATTERN = "recurring_pattern"
+
+
+class SocCaseContribution(BaseModel):
+    """Measured work contributed by the system for this alert."""
+
+    kind: SocCaseContributionKind
+    summary: str = Field(min_length=1, max_length=1000)
+    count: int | None = Field(default=None, ge=0)
+
+
+class SocCaseOutcomeView(BaseModel):
+    """Single operator-facing answer derived from existing governed lineage."""
+
+    schema_version: Literal["soc.case_outcome_view.v1"] = "soc.case_outcome_view.v1"
+    event_summary: str = Field(min_length=1, max_length=4000)
+    security_verdict: Verdict | None = None
+    base_verdict: Verdict | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    decision_usable: bool = False
+    decision_reason: str | None = Field(default=None, max_length=8000)
+    decision_change: SocCaseDecisionChange = SocCaseDecisionChange.UNCHANGED
+    change_summary: str | None = Field(default=None, max_length=2000)
+    operational_disposition: SocOperationalDisposition | None = None
+    handling_reason: str | None = Field(default=None, max_length=3000)
+    handling_recommendation: str | None = Field(default=None, max_length=1000)
+    closure_status: SocCaseClosureStatus
+    closure_reason_codes: list[str] = Field(default_factory=list, max_length=20)
+    evidence_gap_impact: SocCaseEvidenceGapImpact = SocCaseEvidenceGapImpact.NONE
+    evidence_gaps: list[str] = Field(default_factory=list, max_length=20)
+    blocked_capabilities: list[AnalysisCapability] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list, max_length=20)
+    basis: list[SocCaseOutcomeBasis] = Field(default_factory=list, max_length=10)
+    contributions: list[SocCaseContribution] = Field(default_factory=list, max_length=10)
+    memory_context_count: int = Field(default=0, ge=0)
+    memory_directive_applied: bool = False
+    tenant_policy_applied: bool = False
 
 
 class SocAlertResult(BaseModel):
@@ -75,11 +164,20 @@ class SocAlertInvestigationContext(BaseModel):
     correlation_result: CorrelationResult | None = None
     domain_triage_results: list[SocDomainTriageResult] = Field(default_factory=list)
     investigation_view: UnifiedInvestigationView | None = None
+    operator_outcome: SocCaseOutcomeView | None = None
 
 
 __all__ = [
     "SocAlertAttentionLevel",
     "SocAlertInvestigationContext",
     "SocAlertResult",
+    "SocCaseClosureStatus",
+    "SocCaseContribution",
+    "SocCaseContributionKind",
+    "SocCaseDecisionChange",
+    "SocCaseEvidenceGapImpact",
+    "SocCaseOutcomeBasis",
+    "SocCaseOutcomeBasisKind",
+    "SocCaseOutcomeView",
     "SocDecisionUsability",
 ]

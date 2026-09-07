@@ -49,6 +49,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
 import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
 import { SocLeadershipDemoGuidePanel } from "@/components/workspace/soc/soc-leadership-demo-guide";
 import { memoryRunUsageCopy } from "@/components/workspace/soc/soc-memory-copy";
@@ -690,7 +691,9 @@ function AlertDetail({
     alert.manual_candidate_status ?? alert.candidate_status ?? "pending_review";
   const candidateKind = alert.manual_candidate_id ? "人工提炼" : "同类模式";
   const candidateNeedsReview = candidateStatus === "pending_review";
-  const decision = decisionPresentation(alert.effective_verdict);
+  const decision = decisionPresentation(
+    alert.operator_outcome?.security_verdict ?? alert.effective_verdict,
+  );
   const memoryUsage = memoryRunUsageCopy(
     alert.memory_contexts.length,
     alert.memory_directive_applied,
@@ -784,7 +787,14 @@ function AlertDetail({
         </div>
       </div>
 
-      {alert.run_id ? (
+      {alert.operator_outcome ? (
+        <SocCaseOutcomePanel
+          outcome={alert.operator_outcome}
+          className="border-x-0"
+        />
+      ) : null}
+
+      {alert.run_id && !alert.operator_outcome ? (
         <div
           className={cn(
             "flex flex-wrap items-center justify-between gap-4 border-y px-5 py-4 md:px-7",
@@ -828,7 +838,7 @@ function AlertDetail({
         </div>
       ) : null}
 
-      {operationalActionChanged ? (
+      {!alert.operator_outcome && operationalActionChanged ? (
         <div className="border-b border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 md:px-7">
           <div className="flex items-start gap-3">
             <AlertTriangleIcon className="mt-0.5 size-5 shrink-0" />
@@ -934,10 +944,12 @@ function AlertDetail({
           </p>
         </div>
         <div className="border-r px-5 py-4">
-          <p className="text-muted-foreground text-xs">Runtime Decision</p>
-          <p className="mt-1 text-sm">
-            Base {verdictLabel(alert.base_verdict)} → Effective{" "}
-            {verdictLabel(alert.effective_verdict)}
+          <p className="text-muted-foreground text-xs">当前研判结果</p>
+          <p className="mt-1 text-sm font-medium">
+            {verdictLabel(
+              alert.operator_outcome?.security_verdict ??
+                alert.effective_verdict,
+            )}
           </p>
           <p className="text-muted-foreground mt-1 text-xs">
             {formatDuration(alert.total_duration_ms)} ·{" "}
@@ -981,78 +993,83 @@ function AlertDetail({
       <ExecutionMonitor execution={execution} isLoading={executionLoading} />
       <SocCorpusAuditViewer alertId={alert.alert_id} runId={alert.run_id} />
 
-      <div className="grid border-b lg:grid-cols-4">
-        <div className="border-r px-5 py-4">
-          <p className="text-muted-foreground text-xs">历史处置标签</p>
-          <p className="mt-1 text-sm font-medium">
-            {!alert.operational_label_available
-              ? "无标签"
-              : alert.operational_label_revealed
-                ? alert.operational_label
-                : "Runtime 运行后揭示"}
-          </p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            运营结果，不等同于独立技术真值
-          </p>
-        </div>
-        <div className="border-r px-5 py-4">
-          <p className="text-muted-foreground text-xs">模型结论对应动作</p>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="text-sm font-medium">
-              {projectionLabel(alert.base_operational_projection)}
-            </span>
-            <Badge
-              variant="outline"
-              className={comparisonClass(alert.base_label_comparison)}
-            >
-              {comparisonLabel(alert.base_label_comparison)}
-            </Badge>
+      <details className="border-b">
+        <summary className="hover:bg-muted/50 cursor-pointer px-5 py-3 text-sm font-semibold md:px-7">
+          历史处置对比（DEV 评测）
+        </summary>
+        <div className="grid border-t lg:grid-cols-4">
+          <div className="border-r px-5 py-4">
+            <p className="text-muted-foreground text-xs">历史处置标签</p>
+            <p className="mt-1 text-sm font-medium">
+              {!alert.operational_label_available
+                ? "无标签"
+                : alert.operational_label_revealed
+                  ? alert.operational_label
+                  : "Runtime 运行后揭示"}
+            </p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              运营结果，不等同于独立技术真值
+            </p>
           </div>
-          <p className="text-muted-foreground mt-1 font-mono text-xs">
-            {alert.base_projection_basis ?? "-"}
-          </p>
-        </div>
-        <div className="border-r px-5 py-4">
-          <p className="text-muted-foreground text-xs">企业策略后最终动作</p>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="text-sm font-medium">
-              {projectionLabel(alert.effective_operational_projection)}
-            </span>
-            <Badge
-              variant="outline"
-              className={comparisonClass(alert.effective_label_comparison)}
-            >
-              {comparisonLabel(alert.effective_label_comparison)}
-            </Badge>
+          <div className="border-r px-5 py-4">
+            <p className="text-muted-foreground text-xs">模型结论对应动作</p>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-sm font-medium">
+                {projectionLabel(alert.base_operational_projection)}
+              </span>
+              <Badge
+                variant="outline"
+                className={comparisonClass(alert.base_label_comparison)}
+              >
+                {comparisonLabel(alert.base_label_comparison)}
+              </Badge>
+            </div>
+            <p className="text-muted-foreground mt-1 font-mono text-xs">
+              {alert.base_projection_basis ?? "-"}
+            </p>
           </div>
-          <p className="text-muted-foreground mt-1 font-mono text-xs">
-            {alert.effective_projection_basis ?? "-"}
-          </p>
+          <div className="border-r px-5 py-4">
+            <p className="text-muted-foreground text-xs">企业策略后最终动作</p>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-sm font-medium">
+                {projectionLabel(alert.effective_operational_projection)}
+              </span>
+              <Badge
+                variant="outline"
+                className={comparisonClass(alert.effective_label_comparison)}
+              >
+                {comparisonLabel(alert.effective_label_comparison)}
+              </Badge>
+            </div>
+            <p className="text-muted-foreground mt-1 font-mono text-xs">
+              {alert.effective_projection_basis ?? "-"}
+            </p>
+          </div>
+          <div className="px-5 py-4">
+            <p className="text-muted-foreground text-xs">标签时间边界</p>
+            <p className="mt-1 text-sm font-medium">
+              {alert.label_temporal_status === "valid"
+                ? "告警之后形成，可评测"
+                : alert.label_temporal_status === "unlabeled"
+                  ? "无历史标签"
+                  : "时间无效，不计入准确率"}
+            </p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              {alert.operational_label_revealed &&
+              alert.operational_label_observed_at
+                ? formatDateTime(alert.operational_label_observed_at)
+                : "标签详情尚未揭示"}
+            </p>
+          </div>
         </div>
-        <div className="px-5 py-4">
-          <p className="text-muted-foreground text-xs">标签时间边界</p>
-          <p className="mt-1 text-sm font-medium">
-            {alert.label_temporal_status === "valid"
-              ? "告警之后形成，可评测"
-              : alert.label_temporal_status === "unlabeled"
-                ? "无历史标签"
-                : "时间无效，不计入准确率"}
-          </p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            {alert.operational_label_revealed &&
-            alert.operational_label_observed_at
-              ? formatDateTime(alert.operational_label_observed_at)
-              : "标签详情尚未揭示"}
-          </p>
-        </div>
-      </div>
 
-      {alert.operational_label_revealed && alert.operational_label_reason ? (
-        <div className="border-b bg-sky-50 px-5 py-3 text-sm md:px-7">
-          <span className="font-medium">历史处置依据：</span>
-          {alert.operational_label_reason}
-        </div>
-      ) : null}
+        {alert.operational_label_revealed && alert.operational_label_reason ? (
+          <div className="border-t bg-sky-50 px-5 py-3 text-sm md:px-7">
+            <span className="font-medium">历史处置依据：</span>
+            {alert.operational_label_reason}
+          </div>
+        ) : null}
+      </details>
 
       {alert.failure_message ? (
         <div className="border-b border-red-200 bg-red-50 px-5 py-4 text-sm text-red-900 md:px-7">
@@ -1165,11 +1182,11 @@ function AlertDetail({
       ) : null}
 
       {alert.decision_stages.length ? (
-        <div className="px-5 py-4 md:px-7">
-          <h3 className="text-sm font-semibold">
-            决策来源与演变 / Decision Lineage
-          </h3>
-          <div className="mt-3 overflow-x-auto border">
+        <details className="border-t">
+          <summary className="hover:bg-muted/50 cursor-pointer px-5 py-4 text-sm font-semibold md:px-7">
+            技术审计：模型、经验与企业规则如何形成最终结果
+          </summary>
+          <div className="overflow-x-auto border-t">
             <table className="w-full min-w-[780px] text-left text-sm">
               <thead className="bg-zinc-50 text-xs">
                 <tr>
@@ -1197,7 +1214,7 @@ function AlertDetail({
               </tbody>
             </table>
           </div>
-        </div>
+        </details>
       ) : null}
 
       <Dialog open={promotionOpen} onOpenChange={setPromotionOpen}>

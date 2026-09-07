@@ -44,6 +44,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useCorrectSocReviewRun,
@@ -123,16 +124,6 @@ function verdictClass(verdict?: SocVerdict | null) {
     return "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300";
   }
   return "border-border bg-muted text-muted-foreground";
-}
-
-function attentionClass(level: SocAlertAttentionLevel) {
-  if (level === "required") {
-    return "border-red-300 bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300";
-  }
-  if (level === "advisory") {
-    return "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300";
-  }
-  return "border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300";
 }
 
 function resultTitle(item: SocAlertResult) {
@@ -270,6 +261,9 @@ export function SocAlertResultsWorkbench({
     ? analysis.scenario_assessments.map(asRecord)
     : [];
   const primaryScenario = scenarios.find((item) => item.is_primary === true);
+  const operatorOutcome = context?.operator_outcome ?? null;
+  const displayVerdict =
+    operatorOutcome?.security_verdict ?? selectedResult?.summary.verdict;
   const memoryCandidate = context?.memory_candidates[0] ?? null;
   const correctMutation = useCorrectSocReviewRun();
   const promoteMutation = usePromoteSocRunToMemory();
@@ -495,7 +489,7 @@ export function SocAlertResultsWorkbench({
             </div>
           ) : (
             <div className="mx-auto flex max-w-7xl flex-col gap-5 p-5 md:p-7">
-              <section className="overflow-hidden border">
+              <section className="border">
                 <div className="flex flex-wrap items-start justify-between gap-4 border-b p-5">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -504,19 +498,11 @@ export function SocAlertResultsWorkbench({
                       </h2>
                       <Badge
                         variant="outline"
-                        className={verdictClass(selectedResult.summary.verdict)}
+                        className={verdictClass(displayVerdict)}
                       >
-                        {selectedResult.summary.verdict
-                          ? VERDICT_LABELS[selectedResult.summary.verdict]
+                        {displayVerdict
+                          ? VERDICT_LABELS[displayVerdict]
                           : "无结论"}
-                      </Badge>
-                      <Badge
-                        variant="outline"
-                        className={attentionClass(
-                          selectedResult.attention_level,
-                        )}
-                      >
-                        {ATTENTION_LABELS[selectedResult.attention_level]}
                       </Badge>
                     </div>
                     <p className="text-muted-foreground mt-1 font-mono text-xs">
@@ -560,11 +546,15 @@ export function SocAlertResultsWorkbench({
                     )}
                   </div>
                 </div>
+              </section>
 
-                <div className="grid divide-y lg:grid-cols-[1.3fr_0.7fr] lg:divide-x lg:divide-y-0">
+              {operatorOutcome ? (
+                <SocCaseOutcomePanel outcome={operatorOutcome} />
+              ) : (
+                <section className="grid divide-y border lg:grid-cols-[1.3fr_0.7fr] lg:divide-x lg:divide-y-0">
                   <div className="p-5">
                     <div className="text-muted-foreground text-xs font-medium">
-                      当前结论 / Current Decision
+                      当前结论
                     </div>
                     <p className="mt-3 text-base leading-7 font-medium">
                       {asText(
@@ -608,10 +598,10 @@ export function SocAlertResultsWorkbench({
                       value={`${selectedResult.summary.rule_code ?? "-"} / ${selectedResult.summary.rule_name ?? "-"}`}
                     />
                   </dl>
-                </div>
-              </section>
+                </section>
+              )}
 
-              {selectedResult.attention_level !== "none" ? (
+              {!operatorOutcome && selectedResult.attention_level !== "none" ? (
                 <section
                   className={cn(
                     "flex items-start gap-3 border-l-4 p-4",
@@ -636,19 +626,21 @@ export function SocAlertResultsWorkbench({
                 </section>
               ) : null}
 
-              <section className="grid gap-6 border p-5 xl:grid-cols-2">
-                <GuidanceList
-                  title="证据缺口"
-                  items={evidenceGaps}
-                  empty="当前研判未报告关键证据缺口。"
-                  warning
-                />
-                <GuidanceList
-                  title="可选核查建议"
-                  items={manualChecks}
-                  empty="当前没有额外人工核查建议。"
-                />
-              </section>
+              {!operatorOutcome ? (
+                <section className="grid gap-6 border p-5 xl:grid-cols-2">
+                  <GuidanceList
+                    title="证据缺口"
+                    items={evidenceGaps}
+                    empty="当前研判未报告关键证据缺口。"
+                    warning
+                  />
+                  <GuidanceList
+                    title="可选核查建议"
+                    items={manualChecks}
+                    empty="当前没有额外人工核查建议。"
+                  />
+                </section>
+              ) : null}
 
               <section className="border">
                 <div className="flex items-center justify-between gap-3 border-b p-4">

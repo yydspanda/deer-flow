@@ -175,6 +175,9 @@ def test_review_service_opens_alert_context_by_run_without_queue_item() -> None:
     assert context.result.summary == summary
     assert context.result.queue_item is None
     assert context.result.requires_human_intervention is False
+    assert context.operator_outcome is not None
+    assert context.operator_outcome.security_verdict is None
+    assert context.operator_outcome.closure_status.value == "failed"
 
 
 def test_alert_router_exposes_result_list_and_run_context() -> None:

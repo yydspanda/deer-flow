@@ -42,6 +42,14 @@ Runtime decisions, construct Memory, or infer action authority.
   result. Do not turn `unknown`, low confidence, missing enrichment, provider failure, or
   a suggested manual check into analyst work. Only the server-owned `required` attention
   classification may link to `/review/alerts`.
+- Use the server-owned `SocCaseOutcomeView` as the primary result narrative: one final
+  security verdict, a separate operational disposition, and an explicit closure state.
+  Explain whether a gap is advisory, limits only a dependent capability, or blocks the
+  decision. Base/Memory/Tenant/Effective lineage belongs in collapsed technical audit;
+  never render those stages as four peer conclusions or derive closure state in React.
+  Render the server's `tenant_policy_handoff_pending` reason as a policy-required handoff,
+  with `handling_reason` beside the verdict. Never label that requirement as missing facts
+  or imply that the handoff has already executed.
 - The result page owns two explicit optional commands: correct this run and promote this
   run into the governed Memory Candidate flow. Correction preserves decision lineage;
   promotion creates at most a pending Candidate and does not review it inline.

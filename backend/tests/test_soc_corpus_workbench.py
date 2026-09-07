@@ -316,6 +316,10 @@ def test_corpus_workbench_reruns_one_alert_without_duplicate_pattern_support(
     assert projected.replay_of_run_id == first.run_id
     assert projected.pattern_support_count == 1
     assert projected.can_process is True
+    assert first.alert.operator_outcome is not None
+    assert projected.operator_outcome is not None
+    assert projected.operator_outcome.security_verdict is first.alert.operator_outcome.security_verdict
+    assert projected.operator_outcome.closure_status is first.alert.operator_outcome.closure_status
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")

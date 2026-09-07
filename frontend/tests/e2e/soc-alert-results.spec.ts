@@ -22,6 +22,10 @@ test.describe("SOC alert results", () => {
     await expect(
       page.getByText("Verify the destination host business owner"),
     ).toBeVisible();
+    await expect(page.getByText("安全判断：可疑")).toBeVisible();
+    await expect(page.getByText("关键事实待确认").first()).toBeVisible();
+    await expect(page.getByText("关键问题影响闭环")).toBeVisible();
+    await expect(page.getByText("本次系统完成了什么")).toBeVisible();
     await expect(
       page.getByRole("link", { name: "处理人工介入" }),
     ).toHaveAttribute(

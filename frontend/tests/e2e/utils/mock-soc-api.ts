@@ -467,6 +467,44 @@ function alertInvestigationContext(state: MockSocApiState) {
         reason: "Current evidence supports a suspicious network behavior.",
       },
     },
+    operator_outcome: {
+      schema_version: "soc.case_outcome_view.v1",
+      event_summary: "Potential reverse shell requires role verification.",
+      security_verdict: "suspicious",
+      base_verdict: "suspicious",
+      confidence: 0.72,
+      decision_usable: false,
+      decision_reason:
+        "Current evidence supports a suspicious network behavior.",
+      decision_change: "conflicted",
+      change_summary:
+        "当前证据与受治理决策来源存在冲突，系统没有把任一来源伪装成最终结论。",
+      operational_disposition: null,
+      handling_recommendation: "Investigate current network roles",
+      closure_status: "follow_up_required",
+      closure_reason_codes: ["material_follow_up_required"],
+      evidence_gap_impact: "decision_blocking",
+      evidence_gaps: ["Missing confirmed asset ownership"],
+      blocked_capabilities: ["response_action"],
+      next_steps: ["Verify the destination host business owner"],
+      basis: [
+        {
+          kind: "current_analysis",
+          summary: "Current evidence supports a suspicious network behavior.",
+          source_id: "RUN-ALPHA-001",
+        },
+      ],
+      contributions: [
+        {
+          kind: "evidence_trace",
+          count: 4,
+          summary: "保留了 4 条可追踪研判证据。",
+        },
+      ],
+      memory_context_count: 0,
+      memory_directive_applied: false,
+      tenant_policy_applied: false,
+    },
   };
 }
 

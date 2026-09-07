@@ -136,6 +136,7 @@ from soc_agent.core.alert_results import (
     is_required_human_intervention_item,
     required_human_intervention_reason,
 )
+from soc_agent.core.case_outcomes import project_soc_case_outcome
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
 from soc_agent.memory import (
     InMemoryMemoryCandidateRepository,
@@ -801,6 +802,7 @@ class SocReviewService:
         disposition_proposal_repository: SocDispositionProposalRepository | None = None,
         disposition_evaluation_repository: SocDispositionEvaluationRepository | None = None,
         external_disposition_repository: SocExternalDispositionRepository | None = None,
+        automation_repository: SocAutomationRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
         memory_record_repository: MemoryRecordRepository | None = None,
         memory_pattern_observation_repository: MemoryPatternObservationRepository | None = None,
@@ -821,6 +823,15 @@ class SocReviewService:
         self._disposition_proposal_repository = disposition_proposal_repository
         self._disposition_evaluation_repository = disposition_evaluation_repository
         self._external_disposition_repository = external_disposition_repository
+        self._automation_repository = automation_repository
+        if self._automation_repository is None and all(
+            callable(getattr(repository, method, None))
+            for method in (
+                "list_decision_transitions",
+                "list_action_executions",
+            )
+        ):
+            self._automation_repository = cast(SocAutomationRepository, repository)
         self._memory_candidate_repository = memory_candidate_repository
         self._memory_record_repository = memory_record_repository
         self._memory_pattern_observation_repository = memory_pattern_observation_repository
@@ -1297,6 +1308,22 @@ class SocReviewService:
             if self._external_disposition_repository is not None
             else []
         )
+        decision_transitions = (
+            self._automation_repository.list_decision_transitions(
+                run_id=run_id,
+                limit=1,
+            )
+            if self._automation_repository is not None
+            else []
+        )
+        action_executions = (
+            self._automation_repository.list_action_executions(
+                run_id=run_id,
+                limit=20,
+            )
+            if self._automation_repository is not None
+            else []
+        )
         memory_candidates = (
             self._memory_candidate_repository.list_memory_candidates(
                 queue_id=queue_item.queue_id if queue_item is not None else None,
@@ -1326,6 +1353,12 @@ class SocReviewService:
             external_dispositions=external_dispositions,
             memory_candidates=memory_candidates,
             correlation_result=correlation_result,
+            operator_outcome=project_soc_case_outcome(
+                run,
+                decision_transition=(decision_transitions[0] if decision_transitions else None),
+                external_dispositions=external_dispositions,
+                action_executions=action_executions,
+            ),
         )
         if self._memory_record_repository is not None:
             relevant_memories = SocMemoryService(
@@ -1664,6 +1697,7 @@ class SocReviewService:
             disposition_proposal_repository=(repository if self._disposition_proposal_repository is not None else None),
             disposition_evaluation_repository=(repository if self._disposition_evaluation_repository is not None else None),
             external_disposition_repository=(repository if self._external_disposition_repository is not None else None),
+            automation_repository=(repository if self._automation_repository is not None else None),
             memory_candidate_repository=(repository if self._memory_candidate_repository is not None else None),
             memory_record_repository=(repository if self._memory_record_repository is not None else None),
             memory_pattern_observation_repository=(repository if self._memory_pattern_observation_repository is not None else None),

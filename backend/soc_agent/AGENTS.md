@@ -151,6 +151,15 @@ file for SOC code. The authoritative product and engineering documents are:
   advisory result metadata. Only unresolved material current-fact conflicts enter
   ReviewQueue. Do not recreate the old behavior where `needs_review=true` manufactured a
   task for nearly every alert.
+- `SocCaseOutcomeView` is the deterministic operator projection of persisted Runtime,
+  Memory, tenant-policy, external-feedback, and action lineage. It presents one final
+  security verdict while keeping operational disposition and closure progress separate.
+  Classify evidence gaps by material impact; an advisory gap must not erase a usable
+  verdict, while a decision-blocking gap must prevent the case from appearing closed.
+  Trace `needs_review` to its owning decision stage: an applied tenant policy that alone
+  requires an operational handoff does not imply missing critical facts. Preserve independent
+  materiality review and keep the handoff pending until execution/feedback confirms it.
+  API and Web clients consume this projection and must not calculate a competing outcome.
 - Candidate review, action approval, and normalization maintenance own independent
   repositories and APIs. ReviewQueue resolution must not inline or implicitly perform
   any of those state transitions.

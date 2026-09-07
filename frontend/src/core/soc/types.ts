@@ -183,6 +183,84 @@ export type SocAlertAttentionLevel = "none" | "advisory" | "required";
 
 export type SocDecisionUsability = "usable" | "degraded" | "failed";
 
+export type SocCaseClosureStatus =
+  | "closed"
+  | "closed_with_limitations"
+  | "handling_pending"
+  | "follow_up_required"
+  | "failed";
+
+export type SocCaseEvidenceGapImpact =
+  | "none"
+  | "advisory"
+  | "capability_limited"
+  | "decision_blocking";
+
+export type SocCaseDecisionChange =
+  | "unchanged"
+  | "memory_reinforced"
+  | "memory_overridden"
+  | "conflicted";
+
+export type SocCaseOutcomeBasisKind =
+  | "current_analysis"
+  | "confirmed_memory"
+  | "tenant_policy"
+  | "external_feedback";
+
+export type SocAnalysisCapability =
+  | "scenario_routing"
+  | "network_direction"
+  | "source_targeting"
+  | "destination_targeting"
+  | "attacker_targeting"
+  | "victim_targeting"
+  | "impacted_asset_targeting"
+  | "user_targeting"
+  | "response_action";
+
+export interface SocCaseOutcomeBasis {
+  kind: SocCaseOutcomeBasisKind;
+  summary: string;
+  source_id?: string | null;
+}
+
+export interface SocCaseContribution {
+  kind:
+    | "evidence_trace"
+    | "reviewed_memory_reused"
+    | "tenant_policy_applied"
+    | "recurring_pattern";
+  summary: string;
+  count?: number | null;
+}
+
+export interface SocCaseOutcomeView {
+  schema_version: "soc.case_outcome_view.v1";
+  event_summary: string;
+  security_verdict?: SocVerdict | null;
+  base_verdict?: SocVerdict | null;
+  confidence?: number | null;
+  decision_usable: boolean;
+  decision_reason?: string | null;
+  decision_change: SocCaseDecisionChange;
+  change_summary?: string | null;
+  operational_disposition?: SocOperationalDisposition | null;
+  handling_reason?: string | null;
+  handling_recommendation?: string | null;
+  closure_status: SocCaseClosureStatus;
+  closure_reason_codes: string[];
+  evidence_gap_impact: SocCaseEvidenceGapImpact;
+  evidence_gaps: string[];
+  blocked_capabilities: SocAnalysisCapability[];
+  next_steps: string[];
+  basis: SocCaseOutcomeBasis[];
+  contributions: SocCaseContribution[];
+  memory_context_count: number;
+  memory_directive_applied: boolean;
+  tenant_policy_applied: boolean;
+}
+
 export interface SocAlertResult {
   schema_version: "soc.alert_result.v1";
   summary: SocAlertSummary;
@@ -1355,6 +1433,7 @@ export interface SocCorpusWorkbenchAlert {
   memory_directive_applied: boolean;
   memory_effect?: string | null;
   decision_stages: SocCorpusWorkbenchDecisionStage[];
+  operator_outcome?: SocCaseOutcomeView | null;
   operational_label_available: boolean;
   operational_label_revealed: boolean;
   operational_label?: SocCorpusOperationalLabel | null;
@@ -2050,6 +2129,7 @@ export interface SocAlertInvestigationContext {
   correlation_result?: SocCorrelationResult | null;
   domain_triage_results?: SocDomainTriageResult[];
   investigation_view?: SocUnifiedInvestigationView | null;
+  operator_outcome?: SocCaseOutcomeView | null;
 }
 
 export interface SocReviewCloseRequest {

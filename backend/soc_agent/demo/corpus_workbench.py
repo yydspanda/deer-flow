@@ -33,11 +33,16 @@ from soc_agent.contracts import (
     PipelineStepStatus,
     SensitiveEvidenceMode,
     ServiceRequestContext,
+    SocCaseOutcomeView,
     SocMemoryCandidateSourceType,
     SocOperationalDisposition,
     Verdict,
 )
-from soc_agent.core import SocAnalysisService, SocMemoryPatternService
+from soc_agent.core import (
+    SocAnalysisService,
+    SocMemoryPatternService,
+    project_soc_case_outcome,
+)
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
@@ -544,6 +549,7 @@ class SocCorpusWorkbenchAlert(BaseModel):
     memory_directive_applied: bool = False
     memory_effect: str | None = None
     decision_stages: list[SocCorpusWorkbenchDecisionStage] = Field(default_factory=list)
+    operator_outcome: SocCaseOutcomeView | None = None
     operational_label_available: bool = False
     operational_label_revealed: bool = False
     operational_label: CorpusOperationalLabel | None = None
@@ -1457,6 +1463,16 @@ class SocCorpusWorkbenchService:
             decision=effective,
             disposition=effective_disposition,
         )
+        operator_outcome = (
+            project_soc_case_outcome(
+                run,
+                decision_transition=transition,
+                memory_context_count=len(memory_contexts),
+                pattern_support_count=(replay.support_count if replay is not None else None),
+            )
+            if run is not None
+            else None
+        )
         return SocCorpusWorkbenchAlert(
             alert_id=case.alert_id,
             source_index=case.source_index,
@@ -1522,6 +1538,7 @@ class SocCorpusWorkbenchService:
             memory_directive_applied=applied_use is not None,
             memory_effect=(applied_use.effect.value if applied_use is not None else None),
             decision_stages=stages,
+            operator_outcome=operator_outcome,
             operational_label_available=case.operational_label_available,
             operational_label_revealed=label_revealed,
             operational_label=(case.operational_label if label_revealed else None),
