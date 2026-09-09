@@ -142,6 +142,20 @@ def test_analysis_prompt_selects_one_relevant_complete_example() -> None:
     assert 'id="conflicted"' in conflicted_prompt.user
 
 
+def test_prompt_and_public_skill_do_not_require_reproving_adopted_memory() -> None:
+    prompt = build_analysis_prompt(_analysis_request("missing_fields.json"))
+    assert "Optional enrichment is not a gap" in prompt.system
+    assert "Future invalidation triggers are not current missing evidence" in prompt.user
+    for name in ("context_memory", "context_memory_true_positive"):
+        example = analysis_output_examples()[name]
+        assert example["conclusion_support"]["resolved_questions"]
+        assert example["conclusion_support"]["context_refs"] == example["decision_context_refs"]
+        assert example["evidence_gaps"] == example["manual_checks"] == []
+    skill = (Path(__file__).resolve().parents[2] / "skills/public/soc-alert-triage/SKILL.md").read_text()
+    assert "Distinguish unreviewed historical alerts from reviewed Memory" in skill
+    assert "retrieval hints, not proof" not in skill
+
+
 def test_analysis_prompt_exposes_context_only_memory_as_semantic_input_without_directive_authority() -> None:
     request = _analysis_request("pingan_legacy_apt.json")
     memory = AnalysisContextCatalogItem(

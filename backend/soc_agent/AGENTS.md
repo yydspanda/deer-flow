@@ -152,14 +152,51 @@ file for SOC code. The authoritative product and engineering documents are:
   ReviewQueue. Do not recreate the old behavior where `needs_review=true` manufactured a
   task for nearly every alert.
 - `SocCaseOutcomeView` is the deterministic operator projection of persisted Runtime,
-  Memory, tenant-policy, external-feedback, and action lineage. It presents one final
-  security verdict while keeping operational disposition and closure progress separate.
+  Memory, tenant-policy, external-feedback, and action lineage. The primary operator answer
+  is `recommended_handling` (ignore/transfer); security verdict, disposition and progress
+  remain separate audit fields. Failed runs cannot suggest ignore from a retained decision.
   Classify evidence gaps by material impact; an advisory gap must not erase a usable
   verdict, while a decision-blocking gap must prevent the case from appearing closed.
   Trace `needs_review` to its owning decision stage: an applied tenant policy that alone
   requires an operational handoff does not imply missing critical facts. Preserve independent
   materiality review and keep the handoff pending until execution/feedback confirms it.
+  A review-only policy with no concrete disposition is also operational follow-up, not
+  evidence failure. Policy `unknown` means abstention: preserve the pre-policy Base/Memory
+  recommendation and keep the raw advisor output for audit. New effective decisions use
+  `soc.effective_decision_policy.v4`; historical transitions are not rewritten.
+  `core/handling.py` owns shared decision-level blockers, not a second evidence evaluator:
+  prose gaps and optional targeting/calibration/truncation flags alone cannot require transfer.
+  Unresolved decision-level reasons take priority over an ignore plan and project transfer with
+  the concrete reason. Automation preserves these independent guards after Memory/policy clear:
+  do not persist an adopted disposition or select/authorize actions for a decision-blocked run.
+  Explicit policy authorization under a general review flag still works without those defects.
+  Unadopted historical plans stay in lineage; actual external feedback is never erased.
+  Base may already use retrieved context-only Memory. The later Memory stage applies eligible
+  typed directives, not initial retrieval; `no_input` there never proves the model had no Memory.
+  `recommended_handling` is a read-only classification shared with lightweight alert lists,
+  corpus comparison and ZEUS result mapping. `core/handling.py` resolves scoped mapped
+  feedback before the effective disposition and then classifies the effective verdict.
+  List reads use bounded transition/feedback lookups, never full AnalysisRun/model loads.
+  It is distinct from `operational_disposition`, must not close a
+  case, and must not create authorization or execution.
   API and Web clients consume this projection and must not calculate a competing outcome.
+  Progress uses the existing closure aggregate plus specific reason codes and server-owned
+  `progress_label` / `progress_detail` from `core/case_progress.py`. Do not describe output/citation
+  errors, policy application restrictions or unattributed review as missing business facts.
+  Policy disposition is a plan; only mapped terminal disposition feedback can produce `closed*`.
+  A single action result, including mock success, never closes the entire alert. Scope supplied
+  executions and feedback to the current Run (or explicit alert-only feedback). This read model
+  must not rerun LLMs, schedule work, rewrite decisions or bypass review/authority gates.
+  Optional `AnalysisResult.conclusion_support` is a same-call narrative, not a new decision
+  or authority: adopted Memory explains resolved business questions, optional checks and
+  future reassessment triggers separately from current material gaps. References must be
+  confirmed M-* items cited by decision reasoning in the frozen request. Malformed support
+  is omitted with a hydration log, never a core failure or extra model call. It cannot
+  clear evidence gaps or materiality guards. A successfully applied directive may supersede
+  Base prose; retain it as `prior_analysis_gaps`, without rewriting the run. Source coverage
+  gaps remain intact. Unused targeting limits stay in technical detail, not verdict failure.
+  Workbench cohort `memory_id` means a group has a governed record; actual retrieved/cited
+  Memory comes from the frozen run catalog. Link by metadata `memory_id`, not `source_id@vN`.
 - Candidate review, action approval, and normalization maintenance own independent
   repositories and APIs. ReviewQueue resolution must not inline or implicitly perform
   any of those state transitions.

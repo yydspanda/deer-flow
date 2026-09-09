@@ -24,11 +24,12 @@ from soc_agent.contracts import (
     SocDecisionStageStatus,
     SocDecisionTransitionKind,
     SocDecisionTransitionRecord,
-    SocExternalDispositionApplyStatus,
     SocExternalDispositionRecord,
     SocOperationalDisposition,
     Verdict,
 )
+from soc_agent.core.case_progress import follow_up_reason_codes, progress_text
+from soc_agent.core.handling import concrete_disposition, handling_blockers, policy_requires_follow_up, project_operational_handling, resolve_operational_disposition
 
 _TERMINAL_DISPOSITIONS = frozenset(
     {
@@ -59,29 +60,48 @@ def project_soc_case_outcome(
     """
 
     analysis = run.analysis
+    action_executions = tuple(item for item in action_executions if item.run_id == run.run_id and item.alert_id == run.alert_id)
+    external_dispositions = tuple(item for item in external_dispositions if item.target_run_id == run.run_id or (item.target_run_id is None and item.target_alert_id == run.alert_id))
     base_decision = run.decision
     effective = decision_transition.after if decision_transition is not None else base_decision
     transition_conflicted = bool(decision_transition is not None and decision_transition.transition_kind is SocDecisionTransitionKind.CONFLICTED)
     materiality = run.analysis_materiality
-    material_decision_block = bool(materiality is not None and (not materiality.decision_usable or materiality.review_required))
+    blockers = handling_blockers(needs_review=base_decision.needs_review if base_decision else False, review_reasons=base_decision.review_reasons if base_decision else (), transition=decision_transition, materiality=materiality)
     failed = bool(run.status is AnalysisRunStatus.FAILED or analysis is None or effective is None)
     final_verdict = effective.verdict if effective is not None else None
-    decision_usable = bool(not failed and not transition_conflicted and not material_decision_block and final_verdict not in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW})
-    policy_handoff_only = _policy_handoff_only(decision_transition)
-    follow_up_required = bool(not failed and (not decision_usable or (effective is not None and effective.needs_review and not policy_handoff_only)))
+    decision_usable = bool(not failed and not blockers and final_verdict not in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW})
+    policy_review_only = policy_requires_follow_up(decision_transition)
+    follow_up_required = bool(not failed and not decision_usable)
 
+    decision_change, change_summary = _decision_change(decision_transition)
+    memory_applied = decision_change in {
+        SocCaseDecisionChange.MEMORY_REINFORCED,
+        SocCaseDecisionChange.MEMORY_OVERRIDDEN,
+    }
     gaps = _evidence_gaps(run)
+    prior_analysis_gaps: list[str] = []
+    # A governed directive replaces the Base decision, not missing source evidence.
+    # Keep superseded Base prose in audit; never use prose to clear a material guard.
+    if memory_applied and not follow_up_required and analysis is not None:
+        prior_analysis_gaps = _dedupe_text(analysis.evidence_gaps)[:20]
+        gaps = _coverage_gaps(run)
     blocked_capabilities = _blocked_capabilities(run)
+    action_limits_relevant = bool(blocked_capabilities and (action_executions or (analysis is not None and analysis.role_adjudication.response_target_proposals)))
     gap_impact = _gap_impact(
         has_gaps=bool(gaps),
         follow_up_required=follow_up_required,
-        blocked_capabilities=blocked_capabilities,
+        blocked_capabilities=blocked_capabilities if action_limits_relevant else (),
     )
-    operational_disposition, external_basis = _operational_disposition(
+    operational_disposition, external_basis = resolve_operational_disposition(
+        run_id=run.run_id,
+        alert_id=run.alert_id,
         decision_transition=decision_transition,
         external_dispositions=external_dispositions,
-        conflicted=transition_conflicted,
     )
+    # Keep historical plans in lineage, but do not present a blocked plan as adopted.
+    if blockers and external_basis is None:
+        operational_disposition = None
+    recommended_handling, recommended_handling_basis = project_operational_handling(verdict=final_verdict, disposition=operational_disposition, blockers=blockers, policy_review_only=policy_review_only, failed=failed)
     latest_execution = max(
         action_executions,
         key=lambda item: (item.started_at, item.execution_id),
@@ -93,14 +113,13 @@ def project_soc_case_outcome(
         gap_impact=gap_impact,
         disposition=operational_disposition,
         execution=latest_execution,
-        policy_handoff_only=policy_handoff_only and external_basis is None,
+        policy_review_only=policy_review_only and external_basis is None,
+        disposition_confirmed=external_basis is not None,
     )
-    decision_change, change_summary = _decision_change(decision_transition)
+    if closure_status is SocCaseClosureStatus.FOLLOW_UP_REQUIRED:
+        closure_reasons.extend(follow_up_reason_codes(run, conflicted=transition_conflicted, verdict=final_verdict, transition=decision_transition))
+    progress_label, progress_detail = progress_text(closure_status, closure_reasons)
     memory_count = memory_context_count if memory_context_count is not None else _memory_context_count(run)
-    memory_applied = decision_change in {
-        SocCaseDecisionChange.MEMORY_REINFORCED,
-        SocCaseDecisionChange.MEMORY_OVERRIDDEN,
-    }
     tenant_applied = _tenant_policy_applied(decision_transition)
     event_summary = _bounded_text(
         analysis.summary if analysis is not None else run.failure.message if run.failure is not None else "本次研判未形成可用结果。",
@@ -108,11 +127,25 @@ def project_soc_case_outcome(
     )
     base_decision_reason = base_decision.reason if base_decision is not None else analysis.reason if analysis is not None else None
     handling_recommendation = effective.suggested_action if effective is not None else analysis.recommended_action if analysis is not None else None
+    # Old transitions may have replaced useful Base/Memory advice with an abstaining policy.
+    # Read its pre-policy snapshot without rewriting the persisted lineage.
+    if decision_transition is not None:
+        stage = next((item for item in decision_transition.stages if item.stage is SocDecisionStageKind.TENANT_POLICY), None)
+        if (
+            stage is not None
+            and stage.status is SocDecisionStageStatus.APPLIED
+            and stage.before is not None
+            and concrete_disposition(stage.disposition_after) is None
+            and concrete_disposition(decision_transition.effective_disposition) is None
+            and stage.after == decision_transition.after
+        ):
+            handling_recommendation = stage.before.suggested_action
+    if policy_review_only and final_verdict is Verdict.FALSE_POSITIVE:
+        handling_recommendation = "按企业策略转交复核，具体核查范围见策略依据。"
     next_steps = _next_steps(
         run,
         closure_status=closure_status,
         handling_recommendation=handling_recommendation,
-        latest_execution=latest_execution,
         closure_reason_codes=closure_reasons,
     )
     basis = _outcome_basis(
@@ -126,6 +159,18 @@ def project_soc_case_outcome(
         change_summary=change_summary,
         basis=basis,
     )
+    handling_reason = decision_reason
+    if external_basis is not None:
+        handling_reason = external_basis.apply_reason
+    elif tenant_applied and (operational_disposition is not None or policy_review_only):
+        policy_basis = next((item.summary for item in basis if item.kind is SocCaseOutcomeBasisKind.TENANT_POLICY), None)
+        if policy_basis:
+            handling_reason = policy_basis
+            if final_verdict is Verdict.FALSE_POSITIVE and operational_disposition is SocOperationalDisposition.ESCALATED:
+                handling_reason = "研判倾向误报，但企业策略要求转交。" + policy_basis
+    if blockers and not failed:
+        handling_reason = "本次转交确认：" + progress_detail
+        handling_recommendation = _bounded_text("；".join(next_steps), limit=1000)
     contributions = _contributions(
         run,
         memory_context_count=memory_count,
@@ -144,19 +189,20 @@ def project_soc_case_outcome(
         decision_change=decision_change,
         change_summary=change_summary,
         operational_disposition=operational_disposition,
-        handling_reason=(
-            "研判为误报；企业规则要求此类告警仍须转交复核。"
-            if "tenant_policy_handoff_pending" in closure_reasons and final_verdict is Verdict.FALSE_POSITIVE
-            else "研判已完成；企业规则要求此类告警转交复核。"
-            if "tenant_policy_handoff_pending" in closure_reasons
-            else None
-        ),
+        recommended_handling=recommended_handling,
+        recommended_handling_basis=recommended_handling_basis,
+        handling_reason=_bounded_text(handling_reason, limit=3000) if handling_reason else None,
         handling_recommendation=handling_recommendation,
         closure_status=closure_status,
         closure_reason_codes=closure_reasons,
+        progress_label=progress_label,
+        progress_detail=progress_detail,
         evidence_gap_impact=gap_impact,
         evidence_gaps=gaps,
         blocked_capabilities=blocked_capabilities,
+        action_limits_relevant=action_limits_relevant,
+        conclusion_support=(analysis.conclusion_support if analysis is not None and final_verdict == analysis.verdict else None),
+        prior_analysis_gaps=prior_analysis_gaps,
         next_steps=next_steps,
         basis=basis,
         contributions=contributions,
@@ -168,28 +214,12 @@ def project_soc_case_outcome(
 
 def _evidence_gaps(run: AnalysisRun) -> list[str]:
     gaps = list(run.analysis.evidence_gaps if run.analysis is not None else ())
+    return _dedupe_text([*gaps, *_coverage_gaps(run)])[:20]
+
+
+def _coverage_gaps(run: AnalysisRun) -> list[str]:
     request = run.llm_analysis_request
-    if request is not None:
-        gaps.extend(f"{item.reason}（{item.field_path}）" for item in request.evidence_coverage.high_value_gaps)
-    return _dedupe_text(gaps)[:20]
-
-
-def _policy_handoff_only(transition: SocDecisionTransitionRecord | None) -> bool:
-    """Identify review introduced solely by an applied operational handoff rule."""
-    if transition is None or transition.transition_kind is SocDecisionTransitionKind.CONFLICTED:
-        return False
-    stage = next((item for item in transition.stages if item.stage is SocDecisionStageKind.TENANT_POLICY), None)
-    return bool(
-        stage is not None
-        and stage.status is SocDecisionStageStatus.APPLIED
-        and stage.disposition_after is SocOperationalDisposition.ESCALATED
-        and transition.effective_disposition is SocOperationalDisposition.ESCALATED
-        and stage.before is not None
-        and not stage.before.needs_review
-        and stage.after.needs_review
-        and stage.before.verdict is stage.after.verdict
-        and stage.after == transition.after
-    )
+    return [f"{item.reason}（{item.field_path}）" for item in request.evidence_coverage.high_value_gaps][:20] if request is not None else []
 
 
 def _blocked_capabilities(run: AnalysisRun) -> list[AnalysisCapability]:
@@ -216,27 +246,6 @@ def _gap_impact(
     return SocCaseEvidenceGapImpact.NONE
 
 
-def _operational_disposition(
-    *,
-    decision_transition: SocDecisionTransitionRecord | None,
-    external_dispositions: Sequence[SocExternalDispositionRecord],
-    conflicted: bool,
-) -> tuple[SocOperationalDisposition | None, SocExternalDispositionRecord | None]:
-    if conflicted:
-        return None, None
-    mapped = [item for item in external_dispositions if item.apply_status is SocExternalDispositionApplyStatus.MAPPED and item.canonical_status is not SocOperationalDisposition.UNKNOWN]
-    latest_external = max(
-        mapped,
-        key=lambda item: (item.created_at, item.disposition_id),
-        default=None,
-    )
-    if latest_external is not None:
-        return latest_external.canonical_status, latest_external
-    if decision_transition is not None:
-        return decision_transition.effective_disposition, None
-    return None, None
-
-
 def _closure_status(
     *,
     failed: bool,
@@ -244,14 +253,14 @@ def _closure_status(
     gap_impact: SocCaseEvidenceGapImpact,
     disposition: SocOperationalDisposition | None,
     execution: SocActionExecutionRecord | None,
-    policy_handoff_only: bool,
+    policy_review_only: bool,
+    disposition_confirmed: bool,
 ) -> tuple[SocCaseClosureStatus, list[str]]:
     if failed:
         return SocCaseClosureStatus.FAILED, ["runtime_result_unavailable"]
     if follow_up_required:
         return SocCaseClosureStatus.FOLLOW_UP_REQUIRED, ["material_follow_up_required"]
-    execution_succeeded = bool(execution is not None and execution.status is SocActionExecutionStatus.SUCCEEDED)
-    if disposition in _TERMINAL_DISPOSITIONS or execution_succeeded:
+    if disposition_confirmed and disposition in _TERMINAL_DISPOSITIONS:
         if gap_impact in {
             SocCaseEvidenceGapImpact.ADVISORY,
             SocCaseEvidenceGapImpact.CAPABILITY_LIMITED,
@@ -261,15 +270,25 @@ def _closure_status(
                 "non_blocking_limitations_present",
             ]
         return SocCaseClosureStatus.CLOSED, ["handling_applied"]
-    if execution is not None and execution.status in {
-        SocActionExecutionStatus.FAILED_RETRYABLE,
-        SocActionExecutionStatus.FAILED_TERMINAL,
-    }:
-        return SocCaseClosureStatus.HANDLING_PENDING, ["action_execution_failed"]
+    if disposition_confirmed and disposition is SocOperationalDisposition.ESCALATED:
+        return SocCaseClosureStatus.HANDLING_PENDING, ["handoff_recorded"]
+    if execution is not None:
+        reason = {
+            SocActionExecutionStatus.PENDING: "action_execution_pending",
+            SocActionExecutionStatus.FAILED_RETRYABLE: "action_execution_failed",
+            SocActionExecutionStatus.FAILED_TERMINAL: "action_execution_failed",
+            SocActionExecutionStatus.SKIPPED: "action_execution_skipped",
+            SocActionExecutionStatus.SUCCEEDED: "action_result_recorded",
+        }[execution.status]
+        return SocCaseClosureStatus.HANDLING_PENDING, [reason]
     if disposition is SocOperationalDisposition.ESCALATED:
-        if policy_handoff_only:
+        if policy_review_only:
             return SocCaseClosureStatus.HANDLING_PENDING, ["tenant_policy_handoff_pending"]
         return SocCaseClosureStatus.HANDLING_PENDING, ["handoff_confirmation_pending"]
+    if policy_review_only:
+        return SocCaseClosureStatus.HANDLING_PENDING, ["tenant_policy_review_pending"]
+    if disposition in _TERMINAL_DISPOSITIONS:
+        return SocCaseClosureStatus.HANDLING_PENDING, ["disposition_decided"]
     return SocCaseClosureStatus.HANDLING_PENDING, ["handling_not_applied"]
 
 
@@ -319,19 +338,36 @@ def _next_steps(
     *,
     closure_status: SocCaseClosureStatus,
     handling_recommendation: str | None,
-    latest_execution: SocActionExecutionRecord | None,
     closure_reason_codes: Sequence[str],
 ) -> list[str]:
     if closure_status is SocCaseClosureStatus.FAILED:
         return ["修复运行失败原因后重新执行研判。"]
     if closure_status is SocCaseClosureStatus.FOLLOW_UP_REQUIRED:
+        if "memory_review_required" in closure_reason_codes:
+            return ["查看已应用经验指令的复核要求和使用边界，按该经验要求处理。"]
+        if "decision_source_conflict" in closure_reason_codes:
+            return ["查看 Memory 与企业策略阶段的分歧或应用限制，确认采用的依据；保留原始研判记录。"]
+        if "analysis_validation_failed" in closure_reason_codes or "critical_input_missing" in closure_reason_codes:
+            return ["检查本次运行的输入覆盖、输出结构和引用校验记录，修复具体问题后再决定是否重跑。"]
+        if "review_requirement_unattributed" in closure_reason_codes:
+            return ["查看各决策阶段的复核要求与来源，补充具体复核原因。"]
         checks = _dedupe_text(run.analysis.manual_checks if run.analysis is not None else ())
-        return checks[:20] or ["核实关键事实冲突或缺口后更新最终判断。"]
+        return checks[:20] or [progress_text(closure_status, closure_reason_codes)[1]]
     if closure_status is SocCaseClosureStatus.HANDLING_PENDING:
-        if latest_execution is not None and latest_execution.error_message:
-            return [f"重试或人工处理失败动作：{latest_execution.error_message}"]
+        if "action_execution_failed" in closure_reason_codes:
+            return ["查看动作执行错误及可重试状态，处理接口问题；无需因此重新调用模型研判。"]
+        if "action_execution_pending" in closure_reason_codes:
+            return ["查看已有动作的执行结果；不要重复发起相同动作。"]
+        if "action_execution_skipped" in closure_reason_codes:
+            return ["查看动作跳过原因，确认是否需要后续处理。"]
+        if "action_result_recorded" in closure_reason_codes or "handoff_recorded" in closure_reason_codes:
+            return ["等待或记录最终处置反馈；不重复执行已完成的动作。"]
+        if "disposition_decided" in closure_reason_codes:
+            return ["按已确定的处置方案处理，并记录实际结果；当前方案不代表外部系统已完成。"]
         if "tenant_policy_handoff_pending" in closure_reason_codes:
-            return ["按企业规则转交复核，并记录接收方及处理结果。"]
+            return ["按企业策略转交复核，并记录接收方及处理结果。"]
+        if "tenant_policy_review_pending" in closure_reason_codes:
+            return _dedupe_text([*([handling_recommendation] if handling_recommendation else []), *(run.analysis.manual_checks if run.analysis is not None else [])])[:20]
         if handling_recommendation:
             return [handling_recommendation]
         return ["确认并记录本次告警的运营处置结果。"]

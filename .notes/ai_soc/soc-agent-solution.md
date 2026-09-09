@@ -109,7 +109,7 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 租户策略判断 | Tenant Policy Decision | `TenantPolicyDecision` | 完整 Runtime/Memory 之后的独立运营判断；确定性规则优先，可选 bounded Policy Skill |
 | 有效研判 | Effective Decision | `SocDecisionTransitionRecord.after` + `effective_disposition` | 汇总 Base、Memory、Tenant Policy 后的当前有效技术判断、复核要求与运营处置 |
 | 决策迁移 | Decision Transition | `SocDecisionTransitionRecord` | 追加保存 Base/Memory/Tenant/Effective 四阶段、before/after、contributors 与 hash |
-| 研判处置结果 | Operator Case Outcome | `SocCaseOutcomeView` | 从既有决策链确定性投影的一份运营答案；分开显示最终安全判断、运营处置和闭环进度，不产生新结论 |
+| 处理结论 | Operator Case Outcome | `SocCaseOutcomeView` | 从既有决策链确定性投影忽略/转交、依据和必要下一步；安全判断、进度及阶段记录默认折叠，不产生新结论 |
 | 动作授权 | Action Authorization | `SocActionAuthorizationRecord` | 独立判断精确 route/action/target/adapter 是否可执行；不等同于 verdict 或 Memory |
 | 动作执行 | Action Execution | `SocActionExecutionRecord` | 保存真实调用 attempt、幂等键、外部 request ID、前后状态和错误 |
 | 业务变更审计 | Mutation Audit | `SocMutationAuditRecord` | L3 服务命令的追加式审计；记录 actor、来源、原因、幂等和有界结果，不保存原始敏感 payload |
@@ -1342,22 +1342,44 @@ The operator workflow is intentionally split:
 
 The primary result is `SocCaseOutcomeView`, a read-only projection of persisted Runtime, Memory,
 tenant-policy, external-feedback, and action lineage. It does not call an LLM or make another
-decision. It keeps three questions separate so internal stages no longer appear to contradict each
-other:
+decision. Operators see one handling conclusion (ignore/transfer), its adopted reason and necessary
+next steps. Security judgment, disposition and execution progress remain separate internal facts,
+not three competing headline cards. Failed or undetermined results remain explicit exceptions.
 
 ```mermaid
 flowchart LR
     L["🧠 Runtime + reviewed sources<br/>Base / Memory / Tenant / Feedback"] --> P["🧩 Deterministic projection<br/>SocCaseOutcomeView"]
-    P --> V["🛡️ Final security verdict<br/>是否真实攻击"]
-    P --> D["⚙️ Operational disposition<br/>忽略 / 转交 / 抑制 / 结案"]
-    P --> C["✅ Closure status<br/>完成 / 待处置 / 待补关键事实"]
-    P --> G["🔎 Gap impact<br/>提示 / 能力受限 / 阻断闭环"]
+    P --> D["📋 Main result / 处理结论<br/>忽略 / 转交<br/>处理依据 + 必要下一步"]
 ```
 
+**页面说明 / UI disclosure, not a workflow branch:** “研判与处置详情”只展开同一份结果已经保存的
+风险判断、置信度、处置方案、执行反馈、Memory/企业策略及原始疑点。它不是第三种处理结果，
+不要求运营额外走一步，也不触发重新研判、创建任务或改判。业务流程图不绘制“查看详情”分支。
+The diagram shows the normal result path. Runtime failures, material conflicts and action failures
+remain visible exceptions; simplifying the diagram does not remove their existing guards or records.
+
 - An advisory gap remains visible but does not erase a usable verdict or manufacture a task.
+- Analysis Prompt v39 and the public triage Skill distinguish reviewed Memory from unreviewed
+  historical labels. Adopted Memory may resolve business uncertainty even in context-only use;
+  missing duplicate CMDB/PCAP/authorization evidence must not recreate that question as a task.
+  Optional `AnalysisResult.conclusion_support` records cited Memory, resolved questions, optional
+  checks and future reassessment triggers in the same model call. Current material questions stay
+  in `evidence_gaps`/`manual_checks`. Parser v25 validates frozen, decision-cited M-* references;
+  a malformed optional explanation is omitted with an audit log, without invalidating the verdict.
+  This is explanatory data, not authority to clear other gaps or bypass materiality.
+- The operator view separates resolved questions, required investigation, future triggers and
+  expandable supplementary/audit records. Target limits matter to the primary view only when
+  there is a proposed or executed action. A reviewed directive that supersedes Base questions
+  retains them in `prior_analysis_gaps`; high-value source gaps and independent guards remain.
+  Existing runs are not rewritten and do not receive fabricated Memory explanations.
+- Corpus Memory links distinguish frozen run retrieval/citation from the cohort's confirmed
+  record. A version-qualified `source_id` stays in audit; links use the actual `memory_id`.
 - A capability-limiting gap preserves the verdict while blocking only dependent targeting or
   automation.
-- A decision-blocking gap prevents the case from appearing closed and exposes concrete next steps.
+- A decision-blocking gap projects transfer with the specific unresolved reason, even if the
+  retained technical verdict is false_positive; it prevents ignore and exposes concrete next steps.
+  Prose `evidence_gaps` alone never select this branch. Existing decision/materiality reason codes
+  distinguish critical input loss, unresolved facts and core validation from advisory or action-only limits.
 - A reviewed Memory override is shown as one final verdict plus a concise change explanation; the
   immutable before/after stages remain available in collapsed technical audit.
 - Tenant policy may change handling without rewriting detection truth. For example, a confirmed
@@ -1366,11 +1388,42 @@ flowchart LR
 - A tenant rule that alone changes `needs_review=false -> true` for an `escalated` disposition
   is an operational handoff, not a decision-blocking evidence gap. The read projection checks
   the applied stage and final snapshot, preserves independent materiality review, and displays
-  `研判完成，待按规则转交` with the policy explanation beside the verdict. For example, alert
+  `转交` with the policy explanation; `待转交复核` remains in execution details. For example, alert
   `2502512` remains a model-assessed false positive (0.82); the configured forced-transfer rule
   supplies its handoff requirement. No completed handoff is inferred from a policy recommendation.
+- A policy's `unknown` disposition is an abstention, not a replacement handling decision.
+  Preserve the pre-policy Runtime/Memory recommendation; raw advice stays in policy audit.
+  A review-only policy that introduces `needs_review` without changing technical truth is
+  `tenant_policy_review_pending` (`待按建议排查`), unless independent materiality or
+  a decision conflict still blocks the result. Alert `2471269` keeps its suspicious/0.75
+  judgment and original host-investigation advice; it does not become a failed analysis.
+- `recommended_handling` and its `recommended_handling_basis` share one deterministic
+  mapping across lightweight result lists, the result panel, corpus historical comparison, and
+  the ZEUS result adapter. Lists filter this final handling, not the immutable Base verdict.
+  Runtime failure and unresolved decision-level blockers precede concrete plans; otherwise false positives suggest ignore and
+  suspicious/true-positive verdicts suggest transfer. Unknown verdicts remain undetermined
+  (legacy ZEUS's two-lane protocol routes these to review). This read-only suggestion does
+  not write a disposition, close a case, or prove that isolation/cleanup/handoff ran.
+  Existing saved transitions are reprojected without replaying models or modifying audit history.
+  Shared `core/handling.py` resolves mapped Run/alert feedback before the effective disposition;
+  paged result lists load bounded transition/feedback records, not complete AnalysisRun payloads.
+  A failed run must remain undetermined even when a previous decision object survives in its data.
+  A review-only enterprise policy still projects transfer even if technical truth is false_positive;
+  a historical broad review flag for normal truncation, uncalibrated confidence or unresolved optional
+  roles does not independently force transfer. An unattributed review requirement remains explicit.
+  Blocked historical plans stay in lineage rather than appearing as currently adopted handling;
+  actual mapped external feedback is never deleted. ZEUS audit retains `recorded_disposition`.
 - The result includes bounded contribution facts such as traced evidence, reviewed Memory reuse,
   tenant-policy application, and recurring-pattern support so users can see what the system added.
+- Progress keeps the five aggregate closure states but adds explicit reasons for input omission,
+  output/reference validation, fact/role/decision conflicts, fallback, unknown verdict and
+  unattributed review. Server-owned `progress_label/progress_detail` explain the actual problem,
+  not a generic missing-facts message. Normal progress is collapsed; current decision blockers and
+  execution failures stay visible beside the handling conclusion. Pending work distinguishes a chosen plan, handoff and every
+  action status. A policy plan or one successful (possibly mocked) action does not prove case
+  closure; mapped terminal feedback scoped to this Run/alert is required. This read projection
+  makes no LLM calls, mutations or automatic human tasks. Corpus replay does not fetch live
+  receipts. See [all decision-to-policy branches](governance/decision-to-policy-flow.md).
 
 ### 7.2 Decision, Authorization, and Execution / 决策、授权与执行边界
 
@@ -1378,8 +1431,10 @@ High-risk actions have two governed authorization modes. Neither mode gives the 
 
 ```mermaid
 flowchart TD
-    R["⚙️ Runtime Base Decision<br/>immutable"] --> E["🔁 Effective Decision<br/>typed Memory directive optional"]
-    M["✅ Confirmed Memory"] -. "free text: context only<br/>typed directive: scoped transition" .-> E
+    M["✅ Confirmed Memory"] -->|"retrieved lesson: bounded context"| L["🧠 Main analysis<br/>current evidence + Skill + tenant knowledge"]
+    L --> R["⚙️ Runtime Base Decision<br/>already context-informed; immutable"]
+    R --> E["🔁 Effective Decision<br/>Memory directive + tenant policy + materiality guard"]
+    M -. "eligible exact directive: scoped transition" .-> E
     E --> P{"🛡️ SocAutomationPolicy<br/>exact tenant/env/version/rule"}
     P -->|"human_approval"| A["📬 Approval Inbox"]
     A --> H["🧑‍💻 Approver"]
@@ -1399,6 +1454,8 @@ Current contract:
   `M-*` may carry a bounded `AnalysisMemoryContextComparison` containing exact shared facets,
   current-only facets, Memory-only facets, applicability gaps, exclusions, and one explicit use mode:
   `directive_applicable`, `exact_context`, or `context_only`.
+  The four-stage audit is decision adoption order, not four LLM calls. Base can already reflect
+  context-only business explanations; `Memory/no_input` means no eligible directive, not no retrieval.
 - `context_only` means that no deterministic `SocMemoryDecisionDirective` may be applied. It does
   **not** mean that the reviewed lesson is irrelevant: the LLM may use it in the immutable Base
   Decision after comparing the current behavior with the lesson's applicability, generalization,
@@ -1420,6 +1477,12 @@ Current contract:
   `needs_review=false`. Matching `needs_review=true` is allowed only
   with a separate `review_required_override_reason`; it leaves ReviewQueue open and does not pretend
   that a human reviewed the alert.
+- Effective policy v4 preserves independent decision-level blockers after Memory/Tenant processing.
+  A directive or policy `clear` cannot erase those defects: final `needs_review` stays true, no
+  handling rule is selected and no disposition adoption, authorization or execution is created.
+  Prior verdicts and policy proposals remain in their immutable stages. An explicit policy override
+  of a general review flag still works when no decision defect exists; action-only guards continue
+  to restrict only dependent targets. This changes no vendor rule, model judgment or database schema.
 - The model cannot choose transition/authorization/execution IDs, actor identity, policy version,
   adapter binding or context lineage. Lead Agent proposals still enter the human Approval path unless
   a separate reviewed automation rule independently matches the persisted run.

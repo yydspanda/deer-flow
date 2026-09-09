@@ -2,6 +2,7 @@ import { describe, expect, test } from "@rstest/core";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
+import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
 import type { SocCaseOutcomeView } from "@/core/soc";
 
 function outcome(
@@ -14,6 +15,8 @@ function outcome(
     base_verdict: "true_positive",
     confidence: 0.86,
     decision_usable: true,
+    recommended_handling: "ignore",
+    handling_reason: "已授权活动按企业规则忽略。",
     decision_reason: "当前告警事实支持该安全判断。",
     decision_change: "unchanged",
     operational_disposition: "ignored",
@@ -50,83 +53,122 @@ function outcome(
   };
 }
 
+function render(value: Partial<SocCaseOutcomeView> = {}) {
+  const html = renderToStaticMarkup(
+    <SocCaseOutcomePanel outcome={outcome(value)} />,
+  );
+  return { html, primary: html.split("<details")[0]! };
+}
+
 describe("SocCaseOutcomePanel", () => {
-  test("separates technical truth from tenant handling without conflict copy", () => {
-    const html = renderToStaticMarkup(
-      <SocCaseOutcomePanel outcome={outcome()} />,
-    );
-
-    expect(html).toContain("安全判断：真实攻击");
-    expect(html).toContain("处置：忽略");
-    expect(html).toContain("处理完成");
-    expect(html).toContain("企业处置规则");
-    expect(html).not.toContain("Effective Decision");
-    expect(html).not.toContain("Base：");
+  test("has one handling conclusion and keeps technical verdict and progress collapsed", () => {
+    const { html, primary } = render({
+      progress_label: "已确定处置方案",
+      progress_detail: "尚无外部处置回执。",
+    });
+    expect(primary).toContain("处理结论");
+    expect(primary).toContain("忽略");
+    expect(primary).toContain("已授权活动按企业规则忽略");
+    for (const text of [
+      "最终安全判断",
+      "运营处置",
+      "处理进度",
+      "真实攻击",
+      "研判置信度",
+      "下一步",
+    ])
+      expect(primary).not.toContain(text);
+    expect(html).toContain("真实攻击");
+    expect(html).toContain("尚无外部处置回执");
+    expect(html).toContain("研判与处置详情");
+    expect(html).not.toContain("<details open");
   });
-
-  test("states explicitly when an evidence gap does not block the result", () => {
-    const html = renderToStaticMarkup(
-      <SocCaseOutcomePanel
-        outcome={outcome({
-          security_verdict: "false_positive",
-          base_verdict: "suspicious",
-          closure_status: "closed_with_limitations",
-          evidence_gap_impact: "advisory",
-          evidence_gaps: ["缺少 CMDB 资产负责人。"],
-          decision_change: "memory_overridden",
-          change_summary: "已审核经验将模型初判调整为当前最终安全判断。",
-        })}
-      />,
-    );
-
-    expect(html).toContain("安全判断：误报 / 无风险");
+  test("uses the same transfer label in list and detail despite a false-positive technical verdict", () => {
+    const { primary } = render({
+      security_verdict: "false_positive",
+      recommended_handling: "transfer",
+      operational_disposition: "escalated",
+      handling_reason: "当前倾向误报，但命中企业指定转交规则。",
+      handling_recommendation: "核实业务授权。",
+      next_steps: ["按企业规则转交。"],
+    });
+    expect(primary).toContain("转交");
+    expect(primary).toContain("当前倾向误报，但命中企业指定转交规则。");
+    expect(primary).toContain("下一步");
+    expect(primary).toContain("核实业务授权。");
+    expect(primary).not.toContain("忽略");
+    expect(
+      renderToStaticMarkup(<SocHandlingBadge value="transfer" />),
+    ).toContain("转交");
+  });
+  test("keeps nonblocking evidence and superseded Memory questions in details", () => {
+    const { html, primary } = render({
+      security_verdict: "false_positive",
+      evidence_gap_impact: "advisory",
+      evidence_gaps: ["缺少 CMDB 资产负责人。"],
+      prior_analysis_gaps: ["原先怀疑反弹连接。"],
+      blocked_capabilities: ["attacker_targeting"],
+      action_limits_relevant: false,
+      conclusion_support: {
+        context_refs: ["M-1"],
+        resolved_questions: ["经验已确认正常内部调用。"],
+        optional_checks: ["可补充负责人。"],
+        reassessment_triggers: ["出现新的恶意载荷。"],
+      },
+    });
+    expect(primary).toContain("经验已确认正常内部调用。");
+    expect(primary).not.toContain("CMDB");
+    expect(primary).not.toContain("原先怀疑");
+    expect(primary).not.toContain("能力检查");
     expect(html).toContain("补充信息，不影响当前结论");
-    expect(html).toContain("缺少 CMDB 资产负责人");
-    expect(html).toContain("已审核经验将模型初判调整");
+    expect(html).toContain("何时需要重新研判");
   });
-
-  test("turns a material gap into a concrete unfinished state", () => {
-    const html = renderToStaticMarkup(
-      <SocCaseOutcomePanel
-        outcome={outcome({
-          security_verdict: "suspicious",
-          operational_disposition: null,
-          closure_status: "follow_up_required",
-          evidence_gap_impact: "decision_blocking",
-          evidence_gaps: ["缺少命令执行结果。"],
-          next_steps: ["补查目标主机的命令执行记录。"],
-        })}
-      />,
-    );
-
-    expect(html).toContain("关键事实待确认");
-    expect(html).toContain("关键问题影响闭环");
-    expect(html).toContain("补查目标主机的命令执行记录");
-    expect(html).not.toContain("处置：忽略");
+  test("does not hide a material conflict behind disclosure", () => {
+    const { primary } = render({
+      recommended_handling: "transfer",
+      evidence_gap_impact: "decision_blocking",
+      closure_status: "follow_up_required",
+      progress_label: "待解决决策分歧",
+      progress_detail: "两条经验对当前行为有相反判断。",
+      next_steps: ["确认两条经验的适用范围。"],
+    });
+    expect(primary).toContain("两条经验对当前行为有相反判断。");
+    expect(primary).toContain("确认两条经验的适用范围。");
+    expect(primary).not.toContain("关键事实待确认");
   });
-
-  test("explains policy-required transfer for a usable false-positive decision", () => {
-    const html = renderToStaticMarkup(
-      <SocCaseOutcomePanel
-        outcome={outcome({
-          security_verdict: "false_positive",
-          base_verdict: "false_positive",
-          operational_disposition: "escalated",
-          handling_reason: "研判为误报；企业规则要求此类告警仍须转交复核。",
-          closure_status: "handling_pending",
-          closure_reason_codes: ["tenant_policy_handoff_pending"],
-          evidence_gap_impact: "capability_limited",
-          evidence_gaps: ["缺少资产归属信息。"],
-          blocked_capabilities: ["attacker_targeting"],
-          next_steps: ["按企业规则转交复核，并记录接收方及处理结果。"],
-        })}
-      />,
-    );
-
-    expect(html).toContain("研判为误报；企业规则要求此类告警仍须转交复核。");
-    expect(html).toContain("研判完成，待按规则转交");
-    expect(html).toContain("按企业规则转交复核，并记录接收方及处理结果。");
-    expect(html).not.toContain("关键事实待确认");
-    expect(html).not.toContain("关键问题影响闭环");
+  test("runtime failure is not displayed as a completed business decision", () => {
+    const { primary } = render({
+      closure_status: "failed",
+      recommended_handling: "undetermined",
+      progress_detail: "模型连接失败。",
+      next_steps: ["恢复连接后重试。"],
+    });
+    expect(primary).toContain("运行失败");
+    expect(primary).toContain("模型连接失败");
+    expect(primary).not.toContain("忽略");
+    expect(primary).not.toContain("转交");
+    expect(primary).not.toContain("已完成");
+  });
+  test("unknown does not become false positive or a fabricated transfer", () => {
+    const { primary } = render({
+      recommended_handling: "undetermined",
+      security_verdict: "unknown",
+      handling_reason: "本次没有生成可用判断。",
+    });
+    expect(primary).toContain("未形成处理结论");
+    expect(primary).not.toContain("忽略");
+    expect(primary).not.toContain("转交");
+  });
+  test("execution failure stays visible without changing the security conclusion", () => {
+    const { primary } = render({
+      closure_status: "handling_pending",
+      closure_reason_codes: ["action_execution_failed"],
+      progress_label: "动作执行失败",
+      progress_detail: "接口暂不可用。",
+      next_steps: ["检查接口，按原任务重试。"],
+    });
+    expect(primary).toContain("忽略");
+    expect(primary).toContain("动作执行失败");
+    expect(primary).toContain("检查接口，按原任务重试。");
   });
 });

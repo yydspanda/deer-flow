@@ -1,8 +1,10 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-08-27
+> Updated: 2026-09-08
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
+>
+> 研判结束后的细分状态与完整中文分支图见 [从研判结论到企业策略](governance/decision-to-policy-flow.md)，包含真实告警 `1966558` 的路径。
 >
 > Principle / 原则：LLM、Lead Agent、skills、MCP/tools 都只能在受控边界内参与研判；主流程、状态机、权限、审计和持久化由 SOC Runtime / Core Services 掌握。
 
@@ -409,13 +411,15 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["🧠 AnalysisResult<br/>verdict + raw confidence"] --> MAT["🧭 AnalysisMateriality v1<br/>decision impact / capability guards"]
+    CTX["📥 Evidence + Skill + tenant knowledge<br/>retrieved Memory, including context-only"] --> LLM["🧠 主模型综合研判"]
+    LLM --> A["🧠 AnalysisResult<br/>verdict + raw confidence"]
+    A --> MAT["🧭 AnalysisMateriality v1<br/>decision impact / capability guards"]
     C["🔎 EvidenceCoverage<br/>schema / gap / truncation"] --> MAT
     D["⚖️ FactReconstruction<br/>conflicts"] --> MAT
     GR["🔗 EvidenceGrounding v3<br/>E-* exact facts + R-* references"] --> MAT
     RV["🧭 Role Verification<br/>confirmed / challenged / unresolved / unavailable"] --> MAT
     MAT --> B["⚙️ SocDecisionPolicy v7<br/>确定性策略"]
-    B --> E["📋 Base Decision<br/>immutable Runtime result"]
+    B --> E["📋 Base Decision<br/>已可能使用参考型 Memory；初判不可覆盖"]
     M["✅ Active Memory<br/>ordinary M-* or typed directive"] --> T{"📎 Directive gates pass?"}
     E --> T
     T -->|"no / ordinary text"| U["🔁 Memory Stage unchanged"]
@@ -423,19 +427,25 @@ flowchart TD
     T -->|"conflicting overrides"| W["⚠️ Memory Stage conflicted<br/>review required"]
     U --> TP{"🛡️ Tenant Policy<br/>deterministic then optional Skill"}
     V --> TP
+    W --> TP
     TP --> F["📋 Effective Decision<br/>technical truth + operational disposition"]
-    F --> P{"🛡️ Automation Policy match?"}
-    W --> Q
-    P -->|"none / shadow"| Q["🗃️ ReviewQueue or no action"]
+    F --> G{"结论级阻断或决策冲突仍存在？"}
+    G -->|"是"| BQ["📨 转交确认具体问题<br/>保留技术判断和审计<br/>不采用忽略方案、不授权自动动作"]
+    G -->|"否"| P{"🛡️ Automation Policy match?"}
+    P -->|"none / shadow"| Q["🗃️ 保存结果，不执行外部动作"]
     P -->|"human_approval"| H["🛂 Approval required"]
     P -->|"automatic_policy"| X["🔐 Machine authorization<br/>Memory not required"]
 ```
 
 `AnalysisResult.confidence` 是分析器原始自评，不是生产概率。当前
-`Decision.calibrated_probability=null`、`confidence_is_calibrated=false`；基础 Runtime 因此通常保留
-ReviewQueue。受评审的自动策略若要在 `needs_review=true` 时仍对精确动作授权，必须显式匹配该状态并
+`Decision.calibrated_probability=null`、`confidence_is_calibrated=false`；**未校准本身不要求人工复核**。
+普通 `evidence_gaps` 不决定忽略/转交，关键问题使用已有结构化 reason/materiality 判断。
+受评审的自动策略若要在通用 `needs_review=true` 时仍对精确动作授权，必须显式匹配该状态并
 记录 `review_required_override_reason`；这不会删除 ReviewQueue 或伪装成人工复核。mock/failed/denied
 调查证据不满足场景所需证据，也不能提高 finding confidence；它们只在调查时间线或 demo 审计中可见。
+Effective policy v4 不允许该例外绕过独立结论级缺陷；可选目标区块问题只限制依赖该目标的动作。
+Base 已可能受 context-only 经验影响；后续 Memory 阶段是指令采用，不是第一次检索经验。
+标记到忽略/转交的对应表见 [处置映射](governance/decision-to-policy-flow.md#这些标记到底对应忽略还是转交)。
 
 租户策略是独立的运营判断，不是第二次技术检测。`SOC_TENANT_POLICY_ENABLED` 默认关闭；开启后必须
 固定 policy/environment，策略 Skill 仍需单独启用。持久化 lineage 固定包含 Base、Memory、Tenant

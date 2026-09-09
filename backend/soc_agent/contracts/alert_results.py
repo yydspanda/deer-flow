@@ -11,6 +11,7 @@ from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
 from soc_agent.contracts.schemas import (
     AlertSummary,
     AnalysisCapability,
+    AnalysisConclusionSupport,
     AnalysisRun,
     AuthorizationEnrichmentRecord,
     CorrelationResult,
@@ -118,13 +119,20 @@ class SocCaseOutcomeView(BaseModel):
     decision_change: SocCaseDecisionChange = SocCaseDecisionChange.UNCHANGED
     change_summary: str | None = Field(default=None, max_length=2000)
     operational_disposition: SocOperationalDisposition | None = None
+    recommended_handling: Literal["ignore", "transfer", "undetermined"] = "undetermined"
+    recommended_handling_basis: str | None = Field(default=None, max_length=128)
     handling_reason: str | None = Field(default=None, max_length=3000)
     handling_recommendation: str | None = Field(default=None, max_length=1000)
     closure_status: SocCaseClosureStatus
     closure_reason_codes: list[str] = Field(default_factory=list, max_length=20)
+    progress_label: str | None = Field(default=None, max_length=128)
+    progress_detail: str | None = Field(default=None, max_length=4000)
     evidence_gap_impact: SocCaseEvidenceGapImpact = SocCaseEvidenceGapImpact.NONE
     evidence_gaps: list[str] = Field(default_factory=list, max_length=20)
     blocked_capabilities: list[AnalysisCapability] = Field(default_factory=list)
+    action_limits_relevant: bool = False
+    conclusion_support: AnalysisConclusionSupport | None = None
+    prior_analysis_gaps: list[str] = Field(default_factory=list, max_length=20)
     next_steps: list[str] = Field(default_factory=list, max_length=20)
     basis: list[SocCaseOutcomeBasis] = Field(default_factory=list, max_length=10)
     contributions: list[SocCaseContribution] = Field(default_factory=list, max_length=10)
@@ -142,6 +150,7 @@ class SocAlertResult(BaseModel):
     attention_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     decision_usability: SocDecisionUsability = SocDecisionUsability.USABLE
     requires_human_intervention: bool = False
+    recommended_handling: Literal["ignore", "transfer", "undetermined"] = "undetermined"
     queue_item: ReviewQueueItem | None = None
 
 

@@ -30,12 +30,13 @@ from soc_agent.contracts import (
     RoleVerificationCandidate,
     RoleVerificationClaim,
 )
+from soc_agent.contracts.schemas import AnalysisConclusionSupport
 from soc_agent.model_reference_aliases import (
     ModelReferenceAliases,
     build_model_reference_aliases,
 )
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v24"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v25"
 LEGACY_ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION = "soc.analysis_model_output.v1"
 LEGACY_ANALYSIS_MODEL_OUTPUT_V2_SCHEMA_VERSION = "soc.analysis_model_output.v2"
 LEGACY_ANALYSIS_MODEL_OUTPUT_V3_SCHEMA_VERSION = "soc.analysis_model_output.v3"
@@ -454,6 +455,7 @@ _ANALYSIS_RECOVERABLE_TOP_LEVEL_FIELDS = _ANALYSIS_CORE_FIELDS | {
     "reasoning",
     "evidence_gaps",
     "manual_checks",
+    "conclusion_support",
 }
 _ANALYSIS_OPTIONAL_SECTION_FIELDS = {
     AnalysisOutputSection.SCENARIO_ASSESSMENTS: "scenario_assessments",
@@ -527,6 +529,8 @@ def _decode_analysis_candidate(
         evidence_catalog=evidence_catalog,
         context_catalog=context_catalog,
     )
+    normalized, support_log = _normalize_conclusion_support(normalized, context_catalog=context_catalog)
+    hydration_log.extend(support_log)
     hydration_repair_applied = any(item.get("operation") in _OPTIONAL_HYDRATION_REPAIR_OPERATIONS for item in hydration_log)
     repair_log = [
         *syntactic_repair_log,
@@ -576,6 +580,7 @@ def _recover_analysis_candidate(
     guidance, guidance_issues = _recover_guidance(decoded.data)
     accepted_data["reasoning"] = reasoning
     accepted_data.update(guidance)
+    accepted_data["conclusion_support"] = decoded.data.get("conclusion_support")
     accepted_data.update(defaults)
     try:
         core_result = _validate_analysis_result_data(
@@ -987,6 +992,34 @@ def _recover_reasoning_items(
     return accepted, issues
 
 
+def _normalize_conclusion_support(
+    data: dict[str, Any],
+    *,
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Isolate optional prose failures; never remove a gap or change a verdict."""
+    raw = data.get("conclusion_support")
+    if raw is None:
+        return data, []
+    try:
+        support = AnalysisConclusionSupport.model_validate(raw)
+        decision_ids = set(data.get("decision_reasoning_refs", []))
+        cited = {ref for item in data.get("reasoning", []) if isinstance(item, dict) and item.get("reasoning_id") in decision_ids for ref in item.get("context_refs", []) if isinstance(ref, str)}
+        memories = {item.context_ref for item in context_catalog if item.kind.value == "confirmed_memory"}
+        if not set(support.context_refs) <= (cited & memories):
+            raise ValueError("conclusion support references must be reviewed memories cited by the decision")
+    except (ValidationError, ValueError, TypeError):
+        return {**data, "conclusion_support": None}, [
+            {
+                "stage": "runtime_hydration",
+                "operation": "omit_invalid_conclusion_support",
+                "field": "conclusion_support",
+                "core_preserved": True,
+            }
+        ]
+    return {**data, "conclusion_support": support.model_dump(mode="json")}, []
+
+
 def _recover_guidance(
     data: Mapping[str, Any],
 ) -> tuple[dict[str, list[str]], list[AnalysisSectionValidationIssue]]:
@@ -1107,7 +1140,7 @@ _MODEL_OUTPUT_V3_OPTIONAL_FIELDS = frozenset(
     }
 )
 _MODEL_OUTPUT_V4_CORE_FIELDS = _MODEL_OUTPUT_V3_CORE_FIELDS
-_MODEL_OUTPUT_V4_OPTIONAL_FIELDS = _MODEL_OUTPUT_V3_OPTIONAL_FIELDS
+_MODEL_OUTPUT_V4_OPTIONAL_FIELDS = _MODEL_OUTPUT_V3_OPTIONAL_FIELDS | {"conclusion_support"}
 _MODEL_OUTPUT_RUNTIME_OWNED_FIELDS = frozenset(
     {
         "evidence",
@@ -3683,6 +3716,7 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
     optional_fields = {
         "decision_evidence_refs",
         "decision_reasoning_refs",
+        "conclusion_support",
     }
     allowed_fields = set(required_fields) | optional_fields
     missing_fields = sorted(required_fields - data.keys())

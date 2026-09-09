@@ -31,6 +31,22 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > The alert verdict (`误报` / `真实攻击` / `可疑`) is separate from candidate governance: `放弃沉淀此候选`
 > rejects only the reusable Memory candidate. A mistaken rejection can be returned to `pending_review` through the
 > audited `重新打开审核` action; it is never repaired by editing SQLite directly.
+> Alert results present one handling conclusion, **忽略 / 转交**, with its reason and necessary next steps.
+> Security judgment, confidence, execution progress and decision lineage remain available in collapsed
+> details. Actual failures and material conflicts stay visible; they are not hidden as successful handling.
+> A tenant policy that does not select a disposition preserves existing Runtime/Memory advice;
+> a request for operational review is not automatically a critical evidence gap. The Web and ZEUS
+> result adapter share this handling classification, and a recommendation never proves execution.
+> Ordinary evidence gaps do not force transfer. Unresolved decision-level conflicts or validation
+> defects do: the original verdict stays in audit, but an ignore plan cannot be adopted or automated.
+> Base may already use reference Memory; the later Memory stage applies eligible direct-use instructions.
+> Progress identifies specific input, output/citation, role or decision issues separately from
+> pending handoff and action results. A policy plan or one successful action does not prove case
+> closure; mapped final feedback does. See the [decision-to-policy flow diagrams](.notes/ai_soc/governance/decision-to-policy-flow.md).
+> Adopted reviewed Memory can explain business uncertainty without repeating the same verification.
+> Results separate resolved questions, necessary investigation, optional enrichment and future
+> reassessment triggers. Original analysis remains available for audit. The corpus workbench shows
+> the Memory actually read/cited by a run separately from the experience saved by its cohort.
 > A browser-driven local lifecycle is available for the reviewed 14-alert
 > `GalaxyLab_T1003-SAM-Dumping` cohort. For a trusted shared demonstration, run
 > `./scripts/soc-memory-dev.sh demo-start`, then open

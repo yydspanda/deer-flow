@@ -4336,6 +4336,37 @@ class ConfidenceCalibrationReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class AnalysisConclusionSupport(BaseModel):
+    """Optional same-call explanation, never an authority or gap-clearing command."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context_refs: list[str] = Field(default_factory=list, max_length=10)
+    resolved_questions: list[str] = Field(default_factory=list, max_length=5)
+    optional_checks: list[str] = Field(default_factory=list, max_length=5)
+    reassessment_triggers: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("resolved_questions", "optional_checks", "reassessment_triggers")
+    @classmethod
+    def bound_explanations(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() or len(value) > 1000 for value in values):
+            raise ValueError("conclusion support entries must contain 1..1000 characters")
+        return values
+
+    @field_validator("context_refs")
+    @classmethod
+    def require_memory_refs(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)) or any(not re.fullmatch(r"M-[A-F0-9]{12}", value) for value in values):
+            raise ValueError("conclusion support must cite unique M-* references")
+        return values
+
+    @model_validator(mode="after")
+    def require_resolution_basis(self) -> AnalysisConclusionSupport:
+        if self.resolved_questions and not self.context_refs:
+            raise ValueError("resolved questions require reviewed-memory references")
+        return self
+
+
 class AnalysisResult(BaseModel):
     schema_version: Literal["soc.analysis_result.v4"] = "soc.analysis_result.v4"
     verdict: Verdict
@@ -4357,6 +4388,7 @@ class AnalysisResult(BaseModel):
     )
     evidence_gaps: list[str] = Field(default_factory=list, max_length=20)
     manual_checks: list[str] = Field(default_factory=list, max_length=20)
+    conclusion_support: AnalysisConclusionSupport | None = None
     reason: str = Field(min_length=1, max_length=8000)
     recommended_action: str = Field(min_length=1, max_length=1000)
     knowledge_candidates: list[AnalysisKnowledgeCandidate] = Field(

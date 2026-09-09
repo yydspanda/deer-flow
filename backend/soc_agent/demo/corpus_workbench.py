@@ -36,13 +36,13 @@ from soc_agent.contracts import (
     SocCaseOutcomeView,
     SocMemoryCandidateSourceType,
     SocOperationalDisposition,
-    Verdict,
 )
 from soc_agent.core import (
     SocAnalysisService,
     SocMemoryPatternService,
     project_soc_case_outcome,
 )
+from soc_agent.core.handling import project_operational_handling
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
@@ -460,6 +460,9 @@ class SocCorpusWorkbenchMemoryContext(BaseModel):
     use_mode: str | None = None
     applicability_status: str | None = None
     reviewed_verdict: str | None = None
+    memory_id: str | None = None
+    memory_version: int | None = None
+    decision_cited: bool = False
 
 
 class SocCorpusWorkbenchDecisionStage(BaseModel):
@@ -1405,6 +1408,9 @@ class SocCorpusWorkbenchService:
                         use_mode=(comparison.use_mode.value if comparison is not None else None),
                         applicability_status=(comparison.applicability_status.value if comparison is not None and comparison.applicability_status is not None else None),
                         reviewed_verdict=(comparison.reviewed_verdict.value if comparison is not None and comparison.reviewed_verdict is not None else None),
+                        memory_id=item.metadata.get("memory_id"),
+                        memory_version=item.metadata.get("memory_version"),
+                        decision_cited=bool(analysis is not None and any(item.context_ref in reasoning.context_refs for reasoning in analysis.reasoning if reasoning.reasoning_id in analysis.decision_reasoning_refs)),
                     )
                 )
         stages: list[SocCorpusWorkbenchDecisionStage] = []
@@ -1473,6 +1479,9 @@ class SocCorpusWorkbenchService:
             if run is not None
             else None
         )
+        if operator_outcome is not None:
+            effective_projection = operator_outcome.recommended_handling
+            effective_basis = operator_outcome.recommended_handling_basis
         return SocCorpusWorkbenchAlert(
             alert_id=case.alert_id,
             source_index=case.source_index,
@@ -2952,26 +2961,7 @@ def _project_operational_outcome(
 
     if decision is None:
         return "undetermined", None
-    if disposition in {
-        SocOperationalDisposition.CLOSED_FALSE_POSITIVE,
-        SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
-        SocOperationalDisposition.SUPPRESSED,
-        SocOperationalDisposition.IGNORED,
-        SocOperationalDisposition.DUPLICATE,
-    }:
-        return "ignore", f"disposition:{disposition.value}"
-    if disposition in {
-        SocOperationalDisposition.CLOSED_TRUE_POSITIVE,
-        SocOperationalDisposition.ESCALATED,
-    }:
-        return "transfer", f"disposition:{disposition.value}"
-
-    verdict = decision.verdict
-    if verdict is Verdict.FALSE_POSITIVE:
-        return "ignore", f"verdict:{verdict.value}"
-    if verdict in {Verdict.TRUE_POSITIVE, Verdict.SUSPICIOUS}:
-        return "transfer", f"verdict:{verdict.value}"
-    return "undetermined", f"verdict:{verdict.value}"
+    return project_operational_handling(verdict=decision.verdict, disposition=disposition)
 
 
 def _case_matches_search(

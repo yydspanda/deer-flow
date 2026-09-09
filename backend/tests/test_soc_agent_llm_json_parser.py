@@ -317,6 +317,43 @@ def test_parse_compact_model_output_v4_restores_short_reference_aliases() -> Non
     assert alias_hydration["rewrite_count"] > 2
 
 
+@pytest.mark.parametrize("invalid", [False, True])
+def test_conclusion_support_is_optional_and_requires_cited_reviewed_memory(invalid: bool) -> None:
+    payload = _compact_v4_payload()
+    payload["decision_context_refs"] = ["M-001"]
+    payload["conclusion_support"] = {
+        "context_refs": ["M-999" if invalid else "M-001"],
+        "resolved_questions": ["已审核经验解释了内部服务通信，不必再次要求业务授权证明。"],
+        "optional_checks": [],
+        "reassessment_triggers": ["发现与已审核业务范围不一致的恶意载荷时重新研判。"],
+    }
+    catalog = [
+        AnalysisEvidenceCatalogItem(evidence_ref=ref, source_path=path, value=value, value_type="string", trust_level="high")
+        for ref, path, value in [
+            ("E-A1B2C3D4E5F6", "canonical_entities.network.source_ip", "30.116.114.150"),
+            ("E-B1C2D3E4F5A6", "canonical_entities.network.destination_ip", "30.174.29.44"),
+        ]
+    ]
+    contexts = [AnalysisContextCatalogItem(context_ref="M-C1D2E3F4A5B6", kind="confirmed_memory", label="Reviewed service", source_id="MEM-TEST@v1", summary="Reviewed internal service communication.")]
+    parsed = parse_analysis_result_output(json.dumps(payload), evidence_catalog=catalog, context_catalog=contexts)
+    assert parsed.result.verdict.value == payload["verdict"]
+    if invalid:
+        assert parsed.result.conclusion_support is None
+        assert any(item.get("operation") == "omit_invalid_conclusion_support" for item in parsed.hydration_log)
+    else:
+        assert parsed.result.conclusion_support.context_refs == ["M-C1D2E3F4A5B6"]
+        assert parsed.result.conclusion_support.resolved_questions == payload["conclusion_support"]["resolved_questions"]
+
+
+def test_malformed_conclusion_support_preserves_core_and_real_gaps() -> None:
+    payload = _valid_payload()
+    payload["conclusion_support"] = {"resolved_questions": "bad structure"}
+    parsed = parse_analysis_result_output(json.dumps(payload))
+    assert parsed.result.conclusion_support is None
+    assert parsed.result.evidence_gaps == payload["evidence_gaps"]
+    assert parsed.result.verdict is Verdict.SUSPICIOUS
+
+
 def test_parse_compact_model_output_v4_copies_reason_into_missing_summary() -> None:
     payload = _compact_v4_payload()
     payload.pop("summary")

@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
+import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useCorrectSocReviewRun,
@@ -59,14 +60,6 @@ import type {
   SocVerdict,
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
-
-const VERDICT_LABELS: Record<SocVerdict, string> = {
-  true_positive: "真实攻击",
-  false_positive: "误报 / 无风险",
-  suspicious: "可疑",
-  unknown: "暂无法判断",
-  needs_review: "需要进一步确认",
-};
 
 const ATTENTION_LABELS: Record<SocAlertAttentionLevel, string> = {
   none: "结论可用",
@@ -111,19 +104,6 @@ function asTextList(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
-}
-
-function verdictClass(verdict?: SocVerdict | null) {
-  if (verdict === "true_positive") {
-    return "border-red-300 bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300";
-  }
-  if (verdict === "false_positive") {
-    return "border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300";
-  }
-  if (verdict === "suspicious") {
-    return "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300";
-  }
-  return "border-border bg-muted text-muted-foreground";
 }
 
 function resultTitle(item: SocAlertResult) {
@@ -201,7 +181,9 @@ export function SocAlertResultsWorkbench({
     initialRunId ?? null,
   );
   const [search, setSearch] = useState("");
-  const [verdictFilter, setVerdictFilter] = useState<SocVerdict | "all">("all");
+  const [handlingFilter, setHandlingFilter] = useState<
+    "ignore" | "transfer" | "undetermined" | "all"
+  >("all");
   const [attentionFilter, setAttentionFilter] = useState<
     SocAlertAttentionLevel | "all"
   >("all");
@@ -216,7 +198,10 @@ export function SocAlertResultsWorkbench({
   const results = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return resultsQuery.results.filter((item) => {
-      if (verdictFilter !== "all" && item.summary.verdict !== verdictFilter) {
+      if (
+        handlingFilter !== "all" &&
+        item.recommended_handling !== handlingFilter
+      ) {
         return false;
       }
       if (
@@ -235,7 +220,7 @@ export function SocAlertResultsWorkbench({
         item.summary.summary,
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     });
-  }, [attentionFilter, resultsQuery.results, search, verdictFilter]);
+  }, [attentionFilter, resultsQuery.results, search, handlingFilter]);
 
   useEffect(() => {
     if (
@@ -262,8 +247,6 @@ export function SocAlertResultsWorkbench({
     : [];
   const primaryScenario = scenarios.find((item) => item.is_primary === true);
   const operatorOutcome = context?.operator_outcome ?? null;
-  const displayVerdict =
-    operatorOutcome?.security_verdict ?? selectedResult?.summary.verdict;
   const memoryCandidate = context?.memory_candidates[0] ?? null;
   const correctMutation = useCorrectSocReviewRun();
   const promoteMutation = usePromoteSocRunToMemory();
@@ -351,9 +334,9 @@ export function SocAlertResultsWorkbench({
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Select
-                value={verdictFilter}
+                value={handlingFilter}
                 onValueChange={(value) =>
-                  setVerdictFilter(value as SocVerdict | "all")
+                  setHandlingFilter(value as typeof handlingFilter)
                 }
               >
                 <SelectTrigger aria-label="按结论筛选">
@@ -361,11 +344,9 @@ export function SocAlertResultsWorkbench({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部结论</SelectItem>
-                  {VERDICT_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="ignore">忽略</SelectItem>
+                  <SelectItem value="transfer">转交</SelectItem>
+                  <SelectItem value="undetermined">未形成处理结论</SelectItem>
                 </SelectContent>
               </Select>
               <Select
@@ -434,17 +415,10 @@ export function SocAlertResultsWorkbench({
                             {item.summary.alert_id}
                           </div>
                         </div>
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "shrink-0",
-                            verdictClass(item.summary.verdict),
-                          )}
-                        >
-                          {item.summary.verdict
-                            ? VERDICT_LABELS[item.summary.verdict]
-                            : "无结论"}
-                        </Badge>
+                        <SocHandlingBadge
+                          value={item.recommended_handling}
+                          failed={item.decision_usability === "failed"}
+                        />
                       </div>
                       <div className="mt-2 flex items-center justify-between gap-2 text-xs">
                         <span
@@ -496,14 +470,6 @@ export function SocAlertResultsWorkbench({
                       <h2 className="text-lg font-semibold">
                         {resultTitle(selectedResult)}
                       </h2>
-                      <Badge
-                        variant="outline"
-                        className={verdictClass(displayVerdict)}
-                      >
-                        {displayVerdict
-                          ? VERDICT_LABELS[displayVerdict]
-                          : "无结论"}
-                      </Badge>
                     </div>
                     <p className="text-muted-foreground mt-1 font-mono text-xs">
                       {selectedResult.summary.alert_id} /{" "}

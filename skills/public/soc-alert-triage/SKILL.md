@@ -54,7 +54,9 @@ Separate the analysis into these buckets before giving a verdict:
 - Conflicts: raw evidence vs processed fields, attacker/victim reversal, ambiguous proxy chain, stale threat intelligence, and ownership mismatch.
 - Missing context: asset ownership, process tree, host event context, identity context, response status/body, and authorization tags.
 
-Treat historical alerts and customer memory as retrieval hints, not proof. If a memory item is tenant-scoped, cite the match reason and keep the final decision reviewable.
+Distinguish unreviewed historical alerts from reviewed Memory. Historical alert labels alone are hints; an applicable reviewed Memory is a scoped business conclusion that can explain the current behavior and support either a benign or risky verdict. Cite the Memory and compare current differences and invalidation conditions. Context-only limits automatic directive authority, not its value to reasoning. Memory does not invent current-event telemetry.
+
+When adopted Memory resolves a business question, do not ask the analyst to prove that same fact again. Missing optional CMDB, packet capture or endpoint enrichment is not a mandatory investigation. Report only concrete current questions that could materially change the judgment as evidence gaps, with necessary checks. Put useful optional enrichment and future invalidation triggers in separate guidance. A benign event need not have an attacker or victim target. Keep the summary, recommendation and remaining work consistent with the chosen verdict; do not call it a false positive while still demanding generic proof of business legitimacy.
 
 ## Domain Routing Hints
 

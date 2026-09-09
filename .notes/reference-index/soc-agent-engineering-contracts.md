@@ -3059,6 +3059,43 @@ tool permission denial rate
 
 ### 23.4 幂等、失败与审计
 
+- 可选 `AnalysisResult.conclusion_support` 与主研判同次生成；仅引用冻结目录中被 decision reasoning
+  引用的 confirmed M-*，拆分已解决业务问题、可选补充、未来重判触发条件。无效结构/引用只丢弃
+  该说明并记录 hydration log；不能因此降级有效 verdict 或增加模型调用。说明本身不清空
+  `evidence_gaps`、coverage gap 或 materiality guard；当前实质问题仍由原契约表达。
+- 生效 Memory directive 已解除 Base review 时，原始疑点投影为 `prior_analysis_gaps`；来源高价值缺口
+  和独立 materiality/conflict 不受影响。旧 Run 无此说明时不能伪造“经验已解决”。Workbench 的
+  cohort `memory_id` 与本次冻结检索/引用分开展示，跳转不能使用带 `@vN` 的 source_id 充当 record ID。
+
+- Tenant Policy 的 `recommended_disposition=unknown` 表示未选择处置，归一为无 disposition；原始
+  advisor advice 仍保留。没有明确 disposition 时不得覆盖之前 Base/Memory 的 `suggested_action`。
+  Effective policy v3 记录此边界；旧 transition 只读投影时恢复其 pre-policy recommendation，不重写历史。
+- Effective policy v4 进一步在 Memory/Policy 采用后检查已有结论级 reason/materiality：独立问题未解决
+  时保留 `needs_review=true`，不选择自动化规则、不记录已采用 disposition、不授权或执行动作。
+  各阶段 verdict 和原始策略建议保留。通用复核标志仍可由明确受治理规则授权；此例外不能绕过
+  核心校验、事实冲突等独立问题。仅目标能力受限不能扩大为整份判断失败。
+- 共享 `core/handling.py` 按运行失败、结论级阻断、有效处置/纯策略复核、verdict 分类。
+  结论级阻断统一建议转交并给出具体原因，不能同时显示“忽略且结果不可用”。普通 prose gap、
+  旧的截断/未校准/可选角色未决标志不能单独强制转交。无来源复核保留明确提示，不虚构缺字段。
+  旧受阻计划不投影为当前已采用处置，ZEUS `soc_lineage.recorded_disposition` 保留原值；真实已映射
+  外部反馈不能删除。映射只消费已有通用契约，不读取厂商字段或重新裁判模型。
+- Base 已包含主模型对参考型 Memory 的使用，后续 Memory 阶段仅代表 typed directive 采用。
+  文档与审计不能把 `Memory=no_input` 解释成“主模型没有用过 Memory”。
+- Policy 单独引入的运营复核不得被 `SocCaseOutcomeView` 误标为关键证据失败；独立的 materiality、
+  Runtime review 和来源冲突仍有效。`recommended_handling` 共享于 Web、语料对比和 ZEUS projection，
+  与 `operational_disposition` / execution 分离，不产生处置权限，不凭建议宣称已经执行。
+- `SocCaseOutcomeView.progress_label/progress_detail` 是服务端只读解释；具体 closure reasons 区分
+  输入遗漏、输出/引用校验、事实/角色/决策分歧、兜底与来源不明的复核，禁止统一称事实缺失。
+  策略 terminal disposition 只证明方案已确定；单个 execution 成功（含 mock）不证明告警结案。
+  只有已映射 terminal feedback 可产生 `closed*`；转交回执产生 `handoff_recorded`。其他动作状态
+  与失败独立解释，不触发重跑模型。过滤非当前 Run/alert 的执行和反馈；旧 Run 只读重投影，
+  不重写决策或清除原有阻断。前端不重复实现规则。
+- 运营主结果只展示 `recommended_handling`（忽略/转交）、采用依据和必要下一步；安全判断、
+  置信度、执行进度、非阻断疑点与阶段链路默认折叠。真实运行失败、决策阻断及动作失败不能隐藏。
+  `SocAlertResult` 的同名字段使用有效决策和当前 Run/alert 的已映射反馈，列表按该字段过滤，
+  不再拿 Base verdict 充当最终处理结论。失败或无可用判断保持 undetermined，不能伪造忽略。
+  投影本身不修改状态；上述 v4 采用约束复用现有阶段和原因，不新增状态机、模型调用、持久化表或动作权限。
+
 - decision/disposition/authorization identity 必须包含 source transition、selected rule、policy version/hash、
   exact action/target 和模式；重复 observer 运行返回已保存记录。
 - external idempotency key 固定从 authorization key 派生，同一授权的 retryable attempts 必须复用它。

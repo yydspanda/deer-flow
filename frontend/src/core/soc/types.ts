@@ -235,6 +235,13 @@ export interface SocCaseContribution {
   count?: number | null;
 }
 
+export interface SocConclusionSupport {
+  context_refs: string[];
+  resolved_questions: string[];
+  optional_checks: string[];
+  reassessment_triggers: string[];
+}
+
 export interface SocCaseOutcomeView {
   schema_version: "soc.case_outcome_view.v1";
   event_summary: string;
@@ -246,13 +253,20 @@ export interface SocCaseOutcomeView {
   decision_change: SocCaseDecisionChange;
   change_summary?: string | null;
   operational_disposition?: SocOperationalDisposition | null;
+  recommended_handling?: "ignore" | "transfer" | "undetermined";
+  recommended_handling_basis?: string | null;
   handling_reason?: string | null;
   handling_recommendation?: string | null;
   closure_status: SocCaseClosureStatus;
   closure_reason_codes: string[];
+  progress_label?: string | null;
+  progress_detail?: string | null;
   evidence_gap_impact: SocCaseEvidenceGapImpact;
   evidence_gaps: string[];
   blocked_capabilities: SocAnalysisCapability[];
+  action_limits_relevant?: boolean;
+  conclusion_support?: SocConclusionSupport | null;
+  prior_analysis_gaps?: string[];
   next_steps: string[];
   basis: SocCaseOutcomeBasis[];
   contributions: SocCaseContribution[];
@@ -268,6 +282,7 @@ export interface SocAlertResult {
   attention_reasons: string[];
   decision_usability: SocDecisionUsability;
   requires_human_intervention: boolean;
+  recommended_handling?: "ignore" | "transfer" | "undetermined";
   queue_item?: SocReviewQueueItem | null;
 }
 
@@ -1254,6 +1269,9 @@ export interface SocCorpusWorkbenchMemoryContext {
   use_mode?: "directive_applicable" | "exact_context" | "context_only" | null;
   applicability_status?: "applicable" | "partial" | "inapplicable" | null;
   reviewed_verdict?: SocVerdict | null;
+  memory_id?: string | null;
+  memory_version?: number | null;
+  decision_cited?: boolean;
 }
 
 export interface SocCorpusWorkbenchDecisionStage {

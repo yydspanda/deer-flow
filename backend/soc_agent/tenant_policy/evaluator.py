@@ -249,6 +249,8 @@ def apply_tenant_policy_advisor_result(
             ],
         ),
     ]
+    # UNKNOWN is an abstention, not an operational disposition. Keep raw advice for audit.
+    disposition = None if advice.recommended_disposition is SocOperationalDisposition.UNKNOWN else advice.recommended_disposition
     updates: dict[str, object] = {
         "decision_key": decision_key,
         "idempotency_key": f"tenant-policy:{decision_key}",
@@ -258,7 +260,7 @@ def apply_tenant_policy_advisor_result(
         "selected_rule_id": (rule_id if advice.evaluation_status is TenantPolicyEvaluationStatus.MATCHED else None),
         "rule_evaluations": rule_evaluations,
         "response_posture": advice.response_posture,
-        "recommended_disposition": advice.recommended_disposition,
+        "recommended_disposition": disposition,
         "review_effect": advice.review_effect,
         "suggested_action": advice.suggested_action,
         "summary": advice.summary,
@@ -272,7 +274,7 @@ def apply_tenant_policy_advisor_result(
             _application_fields(
                 policy_mode=decision.policy_mode,
                 review_effect=advice.review_effect,
-                recommended_disposition=advice.recommended_disposition,
+                recommended_disposition=disposition,
             )
         )
     payload = decision.model_dump(mode="python")

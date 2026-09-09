@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.gateway.routers import soc_alerts
 from soc_agent.contracts import (
     AlertSummary,
@@ -11,7 +13,11 @@ from soc_agent.contracts import (
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAlertAttentionLevel,
+    SocDecisionSnapshot,
+    SocDecisionTransitionKind,
+    SocDecisionTransitionRecord,
     SocDecisionUsability,
+    SocOperationalDisposition,
     Verdict,
 )
 from soc_agent.core import SocReviewService
@@ -74,6 +80,53 @@ def _summary(
         review_reasons=review_reasons,
         summary="Current best-effort conclusion",
     )
+
+
+@pytest.mark.parametrize(("verdict", "expected"), [(Verdict.FALSE_POSITIVE, "ignore"), (Verdict.SUSPICIOUS, "transfer"), (Verdict.TRUE_POSITIVE, "transfer"), (Verdict.UNKNOWN, "undetermined")])
+def test_result_list_exposes_one_server_owned_handling(verdict, expected):
+    assert classify_alert_result(_summary(verdict=verdict)).recommended_handling == expected
+
+
+def _handling_transition(summary, disposition):
+    snapshot = SocDecisionSnapshot(verdict=summary.verdict, confidence=0.8, evidence_state="sufficient", suggested_action="Follow the reviewed policy.", needs_review=False, policy_version="test")
+    return SocDecisionTransitionRecord.model_construct(run_id=summary.run_id, transition_kind=SocDecisionTransitionKind.UNCHANGED, before=snapshot, after=snapshot, effective_disposition=disposition)
+
+
+def test_list_uses_governed_policy_even_when_base_is_false_positive():
+    summary = _summary(verdict=Verdict.FALSE_POSITIVE)
+    transition = _handling_transition(summary, SocOperationalDisposition.ESCALATED)
+    result = classify_alert_result(summary, decision_transition=transition)
+    assert result.recommended_handling == "transfer"
+    assert result.summary.verdict is Verdict.FALSE_POSITIVE
+    assert classify_alert_result(summary.model_copy(update={"status": AnalysisRunStatus.FAILED}), decision_transition=transition).recommended_handling == "undetermined"
+
+
+@pytest.mark.parametrize(
+    "reason,expected",
+    [(DecisionReviewReason.FACT_CONFLICT, "transfer"), (DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP, "transfer"), (DecisionReviewReason.ROLE_VERIFICATION_UNRESOLVED, "ignore"), (DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE, "ignore")],
+)
+def test_handling_uses_review_impact_not_the_boolean_alone(reason, expected):
+    summary = _summary(verdict=Verdict.FALSE_POSITIVE, reasons=[reason])
+    transition = _handling_transition(summary, SocOperationalDisposition.IGNORED)
+    assert classify_alert_result(summary, decision_transition=transition).recommended_handling == expected
+
+
+def test_listing_governed_handling_does_not_load_full_runs():
+    repository = InMemoryAlertResultRepository()
+    summary = _summary(verdict=Verdict.FALSE_POSITIVE)
+    repository.summaries[summary.run_id] = summary
+
+    class Decisions:
+        def list_decision_transitions(self, *, run_id, limit):
+            assert (run_id, limit) == (summary.run_id, 1)
+            return [_handling_transition(summary, SocOperationalDisposition.ESCALATED)]
+
+    def forbidden_run_read(run_id):
+        raise AssertionError("list must not load full Runtime payloads")
+
+    repository.get_run = forbidden_run_read
+    result = SocReviewService(repository=repository, summary_repository=repository, automation_repository=Decisions()).list_alert_results()[0]
+    assert result.recommended_handling == "transfer"
 
 
 def test_advisory_uncertainty_does_not_become_a_human_task() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -389,7 +390,7 @@ class _PolicyAdviceClient:
     def complete(self, messages, *, model_name: str):
         self.messages.append(messages)
         return LLMChatResponse(
-            content=self.payload,
+            content=json.dumps(self.payload, ensure_ascii=False),
             model_name=model_name,
             usage={"input_tokens": 100, "output_tokens": 50},
         )
@@ -460,6 +461,48 @@ def test_policy_skill_handles_provider_success_after_deterministic_abstention() 
     assert decision.review_effect is TenantPolicyReviewEffect.REQUIRE
     assert decision.advisor_advice is not None
     assert decision.advisor_advice.policy_signal_keys == ["provider_success_with_response_context"]
+
+
+@pytest.mark.parametrize("disposition", [None, "unknown"])
+@pytest.mark.parametrize("old_persisted_unknown", [False, True])
+def test_policy_advice_without_disposition_preserves_effective_handling(disposition, old_persisted_unknown) -> None:
+    run = _run(status_code=403, labels={"host_state": "攻击成功"})
+    advice = {**_provider_success_advice(), "recommended_disposition": disposition, "suggested_action": "Supplementary investigation only."}
+    repository = InMemoryTenantPolicyDecisionRepository()
+    service = SocTenantPolicyEvaluationService(
+        policy_resolver=StaticTenantPolicyResolver([load_pingan_tenant_disposition_policy()]),
+        repository=repository,
+        environment="dev",
+        event_timezone="Asia/Shanghai",
+        advisor=LLMTenantPolicyAdvisor(
+            client=_PolicyAdviceClient(advice),
+            model_name="deepseek-v4-flash",
+            skill_path=PINGAN_TENANT_DISPOSITION_SKILL_PATH,
+        ),
+    )
+    decision = service.evaluate(run, context=ServiceRequestContext())
+    assert decision is not None
+    assert decision.recommended_disposition is None
+    assert decision.disposition_impact == "none"
+    assert decision.advisor_advice.suggested_action == advice["suggested_action"]
+    assert decision.advisor_advice.recommended_disposition == (SocOperationalDisposition.UNKNOWN if disposition else None)
+
+    if old_persisted_unknown:
+        repository = InMemoryTenantPolicyDecisionRepository()
+        repository.save_tenant_policy_decision(decision.model_copy(update={"recommended_disposition": SocOperationalDisposition.UNKNOWN, "disposition_impact": "eligible"}))
+
+    result = SocAutomationService(
+        repository=InMemorySocAutomationRepository(),
+        policy=None,
+        environment="dev",
+        tenant_policy_repository=repository,
+        tenant_policy_application_enabled=True,
+    ).evaluate(run, context=ServiceRequestContext())
+
+    assert result.decision_transition.after.suggested_action == result.decision_transition.stages[2].before.suggested_action
+    assert result.decision_transition.after.needs_review is True
+    assert result.effective_disposition is None
+    assert result.execution is None
 
 
 def test_policy_skill_applies_explicit_request_failure_with_lineage() -> None:

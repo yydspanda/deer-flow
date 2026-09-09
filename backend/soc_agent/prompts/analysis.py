@@ -21,7 +21,7 @@ from soc_agent.model_reference_aliases import (
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v38"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v39"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -44,6 +44,10 @@ _MEMORY_REASONING_GUIDANCE = """<memory_reasoning_rules>
 - Material changes in service, vulnerability, behavior family, execution result, or authorization scope block conclusion transfer. Explain the difference and decide from current evidence.
 - directive_applicable only permits a later Runtime stage to apply a reviewed directive. The analyzer still produces an independent Base Decision and never authorizes an action.
 - Never choose suspicious only because Memory is context-only, lacks directive authority, or has another host/account/IP.
+- When you adopt reviewed Memory, state which business question it resolves in conclusion_support.resolved_questions and cite the same M-* in decision_context_refs and conclusion_support.context_refs.
+  Do not ask analysts to re-prove a reviewed business fact merely because live CMDB, full PCAP, endpoint logs, or duplicate authorization evidence was not supplied.
+  A concrete current difference that invalidates the lesson stays in evidence_gaps with a targeted manual_check. A hypothetical future change belongs only in reassessment_triggers.
+  Partial matching is not automatic acceptance: explain why the actual deltas do or do not change applicability. Never claim a service difference is immaterial solely because the rule is the same.
 - Keep technical detection truth separate from operational disposition. Authorized real activity can remain true_positive for later Tenant Policy handling; use false_positive when the detector interpretation itself is wrong.
 </memory_reasoning_rules>
 
@@ -87,6 +91,12 @@ _ANALYSIS_OUTPUT_EXAMPLES: dict[str, dict[str, Any]] = {
         "summary": "当前行为与已复核的内部服务误触发模式一致，新增端点差异不改变其业务语义。",
         "decision_evidence_refs": ["EX-E-001", "EX-E-002"],
         "decision_context_refs": ["EX-M-001"],
+        "conclusion_support": {
+            "context_refs": ["EX-M-001"],
+            "resolved_questions": ["已审核经验确认该行为属于内部服务通信，当前差异不改变业务含义，无需再次核实相同业务用途。"],
+            "optional_checks": [],
+            "reassessment_triggers": ["后续出现超出已审核业务范围的恶意载荷或执行行为时重新研判。"],
+        },
         "scenario_assessments": [
             {
                 "scenario_name": "内部服务流量误触发检测",
@@ -331,6 +341,12 @@ _CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE.update(
         "summary": "当前行为与已复核的恶意活动模式及其适用条件一致，当前证据没有显示失效条件。",
         "reason": "该 M-* 的人工确认结论为真实风险，确定性比较显示全部必需条件命中且没有实质差异或失效命中；当前 E-* 证据与该经验一致，因此支持 Base true_positive 判断。",
         "recommended_action": "保留真实风险结论，并由后续 Runtime 根据角色、租户策略和动作权限决定处置。",
+        "conclusion_support": {
+            "context_refs": ["EX-M-001"],
+            "resolved_questions": ["已审核经验确认该重复行为具有真实风险，当前事实符合其适用范围。"],
+            "optional_checks": [],
+            "reassessment_triggers": ["取得覆盖本次行为的有效授权事实时重新研判。"],
+        },
     }
 )
 _CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE["scenario_assessments"][0].update(
@@ -497,7 +513,10 @@ Use security expertise to produce the best current conclusion from the supplied 
 
 <output_language_and_scope>
 - Write summary, reason, rationale, evidence_gaps, manual_checks, and recommended_action in concise analyst-facing Chinese.
-- manual_checks are concrete checks only when they would materially improve the conclusion.
+- evidence_gaps: unresolved current questions materially affecting this judgment; manual_checks: necessary checks for those questions. Optional enrichment is not a gap.
+- Optional conclusion_support separates reviewed-Memory resolutions, optional checks and future reassessment triggers; use empty arrays instead of investigative wish lists.
+- Keep all conclusions and advice consistent. Adopted Memory with no current material counterevidence means evidence_gaps=[] and manual_checks=[]; do not demand repeated business confirmation.
+- Missing attacker/victim targets in benign activity are not verdict gaps. Specific action prerequisites belong to role/direction sections.
 - Allowed verdict values: {verdict_values}.
 - The user message ends with the authoritative response shape and final checklist. Follow that tail contract exactly.
 </output_language_and_scope>"""
@@ -551,6 +570,10 @@ def _user_prompt(
             "- Use schema_version exactly soc.analysis_model_output.v4.",
             "- Core fields are always present: verdict, numeric confidence, summary, non-empty decision_evidence_refs, decision_context_refs, reason, and recommended_action.",
             "- Always include scenario_assessments, network_direction, role_adjudication, evidence_gaps, and manual_checks; use empty arrays or the allowed not_assessed form when appropriate.",
+            (
+                "- Before returning, reconcile the answer: no question resolved by adopted Memory may also appear as an unresolved evidence_gap or mandatory manual_check. "
+                "Future invalidation triggers are not current missing evidence. Do not clear a real contradiction to make the answer look consistent."
+            ),
             (
                 "- Each scenario item contains exactly these keys: scenario_name, scenario_key, is_primary, origin, confidence, activity_stage, "
                 "evidence_refs, context_refs, rationale, competing_explanations. scenario_name is always present and non-empty; "
@@ -635,8 +658,14 @@ def _analysis_response_schema() -> dict[str, Any]:
             "evidence_gaps": ["missing evidence needed to improve role assignment"],
             "rationale": "REQUIRED non-empty overall semantic role adjudication",
         },
-        "evidence_gaps": ["optional missing evidence that would materially change or strengthen the conclusion"],
-        "manual_checks": ["optional concrete analyst verification step"],
+        "evidence_gaps": ["unresolved current question with a specific material effect on the judgment; otherwise empty"],
+        "manual_checks": ["necessary check to resolve a current material question; otherwise empty"],
+        "conclusion_support": {
+            "context_refs": ["M-* aliases also cited in decision_context_refs; empty without adopted Memory"],
+            "resolved_questions": ["business question resolved by that reviewed Memory and why current differences do not invalidate it; otherwise empty"],
+            "optional_checks": ["useful non-blocking enrichment, not a required task; normally empty"],
+            "reassessment_triggers": ["specific new counterevidence that would require reassessment, not a current gap; otherwise empty"],
+        },
         "reason": "Chinese reasoning summary, non-empty; include uncertainty when conflicts or fallback evidence exist",
         "recommended_action": "short action string, non-empty; no direct destructive action",
     }

@@ -45,6 +45,7 @@
 | 设计通用记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
 | 审阅 PingAn Memory 的同类关联、候选质量、改判、反馈和失效闭环 | `memory/pingan-soc-memory-design.md` | `governance/decision-disposition-action-automation.md` |
 | 理解 Memory 改判、无 Memory 自动处置和完整动作留痕 | `governance/decision-disposition-action-automation.md` | `soc-agent-solution.md` Section 7.2 / 10 |
+| 追踪标记由谁产生、怎样传递、什么条件触发状态/处置变化 | [`governance/decision-to-policy-flow.md`](governance/decision-to-policy-flow.md) | 第 0 节传递图，第 1～5 节触发条件，第 6 节实例与逐步读法 |
 | 审阅研判准确率、漏报、转交、自动忽略、Rule Code 质量和算力优化口径 | `governance/effectiveness-and-rule-optimization.md` | `alert-lifecycle-flow.md` 的最终状态回流与 Memory feedback |
 | 管理授权活动、影子处置建议、抽样 outcome 与评测 gate，规划变更窗口与护网身份 | `governance/governed-context-facts.md` | `soc-agent-solution.md` Section 7.4 |
 | 设计 Lead/Sub Agent、skill、MCP 开放配置 | `governance/agent-profile-governance.md` | 工程契约 Profile / Skill / MCP 章节 |

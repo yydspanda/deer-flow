@@ -12,7 +12,6 @@ import {
   DatabaseIcon,
   ExternalLinkIcon,
   EyeIcon,
-  FilePenLineIcon,
   FileSearchIcon,
   FilterIcon,
   LoaderCircleIcon,
@@ -50,9 +49,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
+import { SocDecisionLineageTable } from "@/components/workspace/soc/soc-decision-lineage-table";
 import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
+import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
 import { SocLeadershipDemoGuidePanel } from "@/components/workspace/soc/soc-leadership-demo-guide";
 import { memoryRunUsageCopy } from "@/components/workspace/soc/soc-memory-copy";
+import { SocRunMemoryContext } from "@/components/workspace/soc/soc-run-memory-context";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   formatCorpusGroupOption,
@@ -71,7 +73,6 @@ import type {
   SocCorpusWorkbenchReadiness,
   SocCorpusWorkbenchState,
   SocLeadershipDemoTarget,
-  SocVerdict,
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
 
@@ -87,14 +88,6 @@ const SocCorpusAuditViewer = dynamic(
     loading: () => <Skeleton className="h-96 w-full rounded-none" />,
   },
 );
-
-const VERDICT_LABELS: Record<SocVerdict, string> = {
-  true_positive: "真实风险",
-  suspicious: "可疑",
-  false_positive: "误报",
-  unknown: "未知",
-  needs_review: "需复核",
-};
 
 const READINESS: Record<
   SocCorpusWorkbenchReadiness,
@@ -283,75 +276,6 @@ function formatPercent(value?: number | null) {
 function shortHash(value?: string | null) {
   if (!value) return "-";
   return `${value.slice(0, 10)}...${value.slice(-6)}`;
-}
-
-function verdictLabel(value?: SocVerdict | null) {
-  return value ? VERDICT_LABELS[value] : "-";
-}
-
-function verdictClass(value?: SocVerdict | null) {
-  if (value === "true_positive") {
-    return "border-red-300 bg-red-50 text-red-800";
-  }
-  if (value === "suspicious" || value === "needs_review") {
-    return "border-amber-300 bg-amber-50 text-amber-800";
-  }
-  if (value === "false_positive") {
-    return "border-emerald-300 bg-emerald-50 text-emerald-800";
-  }
-  return "border-zinc-300 bg-zinc-50 text-zinc-700";
-}
-
-function verdictRowClass(value?: SocVerdict | null) {
-  if (value === "true_positive") return "border-l-4 border-l-red-500";
-  if (value === "suspicious" || value === "needs_review") {
-    return "border-l-4 border-l-amber-500";
-  }
-  if (value === "false_positive") {
-    return "border-l-4 border-l-emerald-500";
-  }
-  return "border-l-4 border-l-zinc-300";
-}
-
-function decisionPresentation(value?: SocVerdict | null) {
-  if (value === "true_positive") {
-    return {
-      title: "真实风险 / True Positive",
-      description: "当前有效决策认为告警代表真实安全风险。",
-      className: "border-red-300 bg-red-50 text-red-950",
-      icon: AlertTriangleIcon,
-    };
-  }
-  if (value === "suspicious") {
-    return {
-      title: "可疑风险 / Suspicious",
-      description: "当前有效决策认为存在风险迹象，但仍有证据缺口。",
-      className: "border-amber-300 bg-amber-50 text-amber-950",
-      icon: AlertTriangleIcon,
-    };
-  }
-  if (value === "false_positive") {
-    return {
-      title: "误报 / False Positive",
-      description: "当前有效决策认为该告警不代表真实攻击。",
-      className: "border-emerald-300 bg-emerald-50 text-emerald-950",
-      icon: ShieldCheckIcon,
-    };
-  }
-  if (value === "needs_review") {
-    return {
-      title: "需要复核 / Needs Review",
-      description: "当前证据尚不足以形成可直接复用的安全结论。",
-      className: "border-amber-300 bg-amber-50 text-amber-950",
-      icon: AlertTriangleIcon,
-    };
-  }
-  return {
-    title: "尚未定性 / Unknown",
-    description: "尚未运行，或当前结果未形成明确安全结论。",
-    className: "border-zinc-300 bg-zinc-50 text-zinc-900",
-    icon: ActivityIcon,
-  };
 }
 
 function projectionLabel(
@@ -691,22 +615,10 @@ function AlertDetail({
     alert.manual_candidate_status ?? alert.candidate_status ?? "pending_review";
   const candidateKind = alert.manual_candidate_id ? "人工提炼" : "同类模式";
   const candidateNeedsReview = candidateStatus === "pending_review";
-  const decision = decisionPresentation(
-    alert.operator_outcome?.security_verdict ?? alert.effective_verdict,
-  );
   const memoryUsage = memoryRunUsageCopy(
     alert.memory_contexts.length,
     alert.memory_directive_applied,
   );
-  const DecisionIcon = decision.icon;
-  const tenantPolicyStage = alert.decision_stages.find(
-    (stage) => stage.stage === "tenant_policy" && stage.status === "applied",
-  );
-  const operationalActionChanged =
-    alert.base_operational_projection !== "undetermined" &&
-    alert.effective_operational_projection !== "undetermined" &&
-    alert.base_operational_projection !==
-      alert.effective_operational_projection;
   const canPromote =
     !!alert.run_id &&
     alert.workflow_state !== "failed" &&
@@ -795,80 +707,15 @@ function AlertDetail({
       ) : null}
 
       {alert.run_id && !alert.operator_outcome ? (
-        <div
-          className={cn(
-            "flex flex-wrap items-center justify-between gap-4 border-y px-5 py-4 md:px-7",
-            decision.className,
-          )}
-          aria-label="当前安全结论"
-        >
-          <div className="flex min-w-0 items-start gap-3">
-            <DecisionIcon className="mt-0.5 size-6 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-xs font-medium">
-                当前安全结论 / Effective Decision
-              </p>
-              <p className="mt-1 text-xl font-semibold">{decision.title}</p>
-              <p className="mt-1 text-sm">{decision.description}</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge
-              variant="outline"
-              className={verdictClass(alert.base_verdict)}
-            >
-              Base：{verdictLabel(alert.base_verdict)}
-            </Badge>
-            <ArrowRightIcon className="size-3.5" />
-            <Badge
-              variant="outline"
-              className={verdictClass(alert.effective_verdict)}
-            >
-              Effective：{verdictLabel(alert.effective_verdict)}
-            </Badge>
-            <Badge variant="outline">
-              置信度 {formatPercent(alert.effective_confidence)}
-            </Badge>
-            {alert.effective_needs_review ? (
-              <Badge className="bg-amber-700 text-white">需要人工复核</Badge>
-            ) : (
-              <Badge className="bg-emerald-700 text-white">无需强制复核</Badge>
-            )}
-          </div>
-        </div>
+        <p className="text-muted-foreground px-5 py-4 text-sm">
+          处理结论暂不可用，请刷新后查看。
+        </p>
       ) : null}
 
-      {!alert.operator_outcome && operationalActionChanged ? (
-        <div className="border-b border-amber-300 bg-amber-50 px-5 py-4 text-amber-950 md:px-7">
-          <div className="flex items-start gap-3">
-            <AlertTriangleIcon className="mt-0.5 size-5 shrink-0" />
-            <div className="min-w-0">
-              <p className="font-semibold">企业策略调整了运营动作</p>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-                <Badge
-                  variant="outline"
-                  className={verdictClass(alert.base_verdict)}
-                >
-                  模型判断：{verdictLabel(alert.base_verdict)}
-                </Badge>
-                <ArrowRightIcon className="size-3.5" />
-                <Badge variant="outline">
-                  基础动作：{projectionLabel(alert.base_operational_projection)}
-                </Badge>
-                <ArrowRightIcon className="size-3.5" />
-                <Badge className="bg-amber-700 text-white">
-                  最终动作：
-                  {projectionLabel(alert.effective_operational_projection)}
-                </Badge>
-              </div>
-              <p className="mt-2 text-sm leading-6">
-                {tenantPolicyStage?.summary ??
-                  "受治理策略改变了运营处置，但没有改写模型的技术判断。"}
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <SocRunMemoryContext
+        memories={alert.memory_contexts}
+        runId={alert.run_id}
+      />
 
       {alert.memory_id ? (
         <div
@@ -879,9 +726,9 @@ function AlertDetail({
           <div className="flex min-w-0 items-start gap-3">
             <DatabaseIcon className="mt-0.5 size-5 shrink-0" />
             <div className="min-w-0">
-              <p className="font-semibold">已关联一条审核通过的经验</p>
+              <p className="font-semibold">同类组已沉淀经验</p>
               <p className="mt-1 text-sm">
-                本次研判可查看其业务结论、使用历史，或在发现不适用时发起修订。
+                这是该组已审核的经验；本次是否读取、引用，以本次研判记录为准。
               </p>
               <p className="mt-1 font-mono text-xs opacity-70">
                 技术编号 {alert.memory_id} ·{" "}
@@ -944,13 +791,16 @@ function AlertDetail({
           </p>
         </div>
         <div className="border-r px-5 py-4">
-          <p className="text-muted-foreground text-xs">当前研判结果</p>
-          <p className="mt-1 text-sm font-medium">
-            {verdictLabel(
-              alert.operator_outcome?.security_verdict ??
-                alert.effective_verdict,
-            )}
-          </p>
+          <p className="text-muted-foreground text-xs">处理结论</p>
+          <div className="mt-1">
+            <SocHandlingBadge
+              value={
+                alert.operator_outcome?.recommended_handling ??
+                alert.effective_operational_projection
+              }
+              failed={alert.workflow_state === "failed"}
+            />
+          </div>
           <p className="text-muted-foreground mt-1 text-xs">
             {formatDuration(alert.total_duration_ms)} ·{" "}
             {alert.output_quality ?? "-"}
@@ -1115,105 +965,12 @@ function AlertDetail({
         </div>
       </div>
 
-      {alert.memory_contexts.length ? (
-        <div className="border-b px-5 py-4 md:px-7">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold">本次使用的历史经验</h3>
-            <Badge
-              variant={
-                memoryUsage.tone === "decision" ? "default" : "secondary"
-              }
-            >
-              {memoryUsage.label}
-            </Badge>
-          </div>
-          <p className="text-muted-foreground mt-2 text-xs">
-            {memoryUsage.detail}
-          </p>
-          <div className="mt-3 divide-y border">
-            {alert.memory_contexts.map((memory) => (
-              <div key={memory.context_ref} className="px-4 py-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <Badge variant="outline">{memory.context_ref}</Badge>
-                    <span className="text-sm font-medium">{memory.label}</span>
-                    {memory.applicability_status === "applicable" ? (
-                      <Badge className="bg-emerald-700 text-white">
-                        审核条件全部命中
-                      </Badge>
-                    ) : memory.use_mode === "context_only" ? (
-                      <Badge
-                        variant="outline"
-                        className="border-sky-300 bg-sky-50 text-sky-800"
-                      >
-                        部分相似，仅供参考
-                      </Badge>
-                    ) : null}
-                    {memory.reviewed_verdict ? (
-                      <Badge
-                        variant="outline"
-                        className={verdictClass(memory.reviewed_verdict)}
-                      >
-                        历史审核：{verdictLabel(memory.reviewed_verdict)}
-                      </Badge>
-                    ) : null}
-                    <span className="text-muted-foreground font-mono text-xs break-all">
-                      {memory.source_id}
-                    </span>
-                  </div>
-                  {alert.run_id && memory.source_id.startsWith("MEM-") ? (
-                    <Button size="sm" variant="outline" asChild>
-                      <Link
-                        href={`/workspace/soc/memory/records/${encodeURIComponent(memory.source_id)}/revise?run_id=${encodeURIComponent(alert.run_id)}`}
-                      >
-                        <FilePenLineIcon className="size-4" />
-                        纠正此 Memory
-                      </Link>
-                    </Button>
-                  ) : null}
-                </div>
-                <p className="text-muted-foreground mt-2 text-sm leading-6">
-                  {memory.summary}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
       {alert.decision_stages.length ? (
         <details className="border-t">
           <summary className="hover:bg-muted/50 cursor-pointer px-5 py-4 text-sm font-semibold md:px-7">
             技术审计：模型、经验与企业规则如何形成最终结果
           </summary>
-          <div className="overflow-x-auto border-t">
-            <table className="w-full min-w-[780px] text-left text-sm">
-              <thead className="bg-zinc-50 text-xs">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">Stage</th>
-                  <th className="px-4 py-2.5 font-medium">Status</th>
-                  <th className="px-4 py-2.5 font-medium">Verdict</th>
-                  <th className="px-4 py-2.5 font-medium">Confidence</th>
-                  <th className="px-4 py-2.5 font-medium">Summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alert.decision_stages.map((stage) => (
-                  <tr key={stage.stage} className="border-t">
-                    <td className="px-4 py-3 font-mono text-xs">
-                      {stage.stage}
-                    </td>
-                    <td className="px-4 py-3">{stage.status}</td>
-                    <td className="px-4 py-3">{verdictLabel(stage.verdict)}</td>
-                    <td className="px-4 py-3 tabular-nums">
-                      {formatPercent(stage.confidence)}
-                    </td>
-                    <td className="px-4 py-3">{stage.summary}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SocDecisionLineageTable stages={alert.decision_stages} />
         </details>
       ) : null}
 
@@ -1958,10 +1715,8 @@ export function SocCorpusValidationWorkbench() {
                   <th className="w-36 px-4 py-2.5 font-medium">时间 / 来源</th>
                   <th className="w-72 px-4 py-2.5 font-medium">规则</th>
                   <th className="w-40 px-4 py-2.5 font-medium">分组质量</th>
-                  <th className="w-36 px-4 py-2.5 font-medium">最终结论</th>
-                  <th className="w-44 px-4 py-2.5 font-medium">
-                    本次动作 / 历史标签
-                  </th>
+                  <th className="w-36 px-4 py-2.5 font-medium">处理结论</th>
+                  <th className="w-44 px-4 py-2.5 font-medium">历史处置对比</th>
                   <th className="w-32 px-4 py-2.5 font-medium">模式样本</th>
                   <th className="w-32 px-4 py-2.5 font-medium">历史经验</th>
                   <th className="w-44 px-4 py-2.5 text-right font-medium">
@@ -1991,7 +1746,6 @@ export function SocCorpusValidationWorkbench() {
                       data-alert-id={alert.alert_id}
                       className={cn(
                         "cursor-pointer border-t align-top hover:bg-zinc-50",
-                        verdictRowClass(alert.effective_verdict),
                         selectedAlertId === alert.alert_id && "bg-sky-50/70",
                       )}
                       onClick={() => setSelectedAlertId(alert.alert_id)}
@@ -2037,33 +1791,13 @@ export function SocCorpusValidationWorkbench() {
                         </p>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-start gap-2">
-                          {alert.effective_verdict === "false_positive" ? (
-                            <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-emerald-700" />
-                          ) : alert.effective_verdict ? (
-                            <AlertTriangleIcon
-                              className={cn(
-                                "mt-0.5 size-4 shrink-0",
-                                alert.effective_verdict === "true_positive"
-                                  ? "text-red-700"
-                                  : "text-amber-700",
-                              )}
-                            />
-                          ) : (
-                            <ActivityIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
-                          )}
-                          <div className="min-w-0">
-                            <Badge
-                              variant="outline"
-                              className={verdictClass(alert.effective_verdict)}
-                            >
-                              {verdictLabel(alert.effective_verdict)}
-                            </Badge>
-                            <p className="text-muted-foreground mt-1 text-xs">
-                              Base {verdictLabel(alert.base_verdict)}
-                            </p>
-                          </div>
-                        </div>
+                        <SocHandlingBadge
+                          value={
+                            alert.operator_outcome?.recommended_handling ??
+                            alert.effective_operational_projection
+                          }
+                          failed={alert.workflow_state === "failed"}
+                        />
                         <p
                           className={cn(
                             "mt-1 text-xs",

@@ -1226,6 +1226,8 @@ class SocReviewService:
             classify_alert_result(
                 summary,
                 queue_item=(self._review_queue_repository.get_open_review_item_by_run(summary.run_id) if self._review_queue_repository is not None else None),
+                decision_transition=next(iter(self._automation_repository.list_decision_transitions(run_id=summary.run_id, limit=1)), None) if self._automation_repository is not None else None,
+                external_dispositions=self._external_disposition_repository.list_external_dispositions(run_id=summary.run_id, alert_id=summary.alert_id, limit=20) if self._external_disposition_repository is not None else (),
             )
             for summary in self._summary_repository.list_alert_summaries(limit=repository_limit)
         ]
@@ -1316,6 +1318,7 @@ class SocReviewService:
             if self._automation_repository is not None
             else []
         )
+        result = classify_alert_result(summary, queue_item=queue_item, decision_transition=decision_transitions[0] if decision_transitions else None, external_dispositions=external_dispositions)
         action_executions = (
             self._automation_repository.list_action_executions(
                 run_id=run_id,

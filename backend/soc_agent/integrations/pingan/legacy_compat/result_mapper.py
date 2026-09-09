@@ -9,21 +9,8 @@ from soc_agent.contracts import (
     AnalysisRun,
     SocActionExecutionRecord,
     SocDecisionTransitionRecord,
-    SocOperationalDisposition,
-    Verdict,
 )
-
-_IGNORE_DISPOSITIONS = {
-    SocOperationalDisposition.CLOSED_FALSE_POSITIVE,
-    SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
-    SocOperationalDisposition.SUPPRESSED,
-    SocOperationalDisposition.IGNORED,
-    SocOperationalDisposition.DUPLICATE,
-}
-_TRANSFER_DISPOSITIONS = {
-    SocOperationalDisposition.CLOSED_TRUE_POSITIVE,
-    SocOperationalDisposition.ESCALATED,
-}
+from soc_agent.core.case_outcomes import project_soc_case_outcome
 
 
 class PingAnLegacyResultMapper:
@@ -45,11 +32,14 @@ class PingAnLegacyResultMapper:
         )
         base_verdict = run.decision.verdict
         effective_verdict = transition.after.verdict if transition is not None else base_verdict
-        disposition = transition.effective_disposition if transition is not None else None
-        alert_action = _legacy_action(effective_verdict, disposition)
+        outcome = project_soc_case_outcome(run, decision_transition=transition, action_executions=action_executions)
+        disposition = outcome.operational_disposition
+        # Legacy ZEUS has no undetermined lane: unresolved results still go to review.
+        alert_action = "忽略" if outcome.recommended_handling == "ignore" else "转交"
         title = _alert_title(run)
         alert_type = _alert_type(run)
-        rationale = run.decision.reason
+        rationale = outcome.handling_reason or outcome.decision_reason or run.decision.reason
+        handling_recommendation = outcome.handling_recommendation or ""
         executions = [
             {
                 "execution_id": item.execution_id,
@@ -66,7 +56,7 @@ class PingAnLegacyResultMapper:
             "alert_action": alert_action,
             "alert_rationale": rationale,
             "disposal_action": (disposition.value if disposition is not None else ""),
-            "disposal_rationale": run.decision.suggested_action,
+            "disposal_rationale": handling_recommendation,
             "warning_flag": 0 if alert_action == "忽略" else 1,
             "attack_detail": {
                 "gen_answer": {
@@ -85,7 +75,7 @@ class PingAnLegacyResultMapper:
             "disposal": {
                 "gen_answer": {
                     "disposal_action": (disposition.value if disposition is not None else ""),
-                    "disposal_rationale": run.decision.suggested_action,
+                    "disposal_rationale": handling_recommendation,
                 },
                 "trace_msg": None,
             },
@@ -98,6 +88,9 @@ class PingAnLegacyResultMapper:
                 "effective_verdict": effective_verdict.value,
                 "decision_transition_id": (transition.transition_id if transition is not None else None),
                 "effective_disposition": (disposition.value if disposition is not None else None),
+                "recorded_disposition": (transition.effective_disposition.value if transition is not None and transition.effective_disposition is not None else None),
+                "recommended_handling": outcome.recommended_handling,
+                "recommended_handling_basis": outcome.recommended_handling_basis,
                 "action_executions": executions,
             },
         }
@@ -198,19 +191,6 @@ class PingAnLegacyResultMapper:
                 "elapsed_seconds": round(max(0.0, elapsed_seconds), 3),
             },
         }
-
-
-def _legacy_action(
-    verdict: Verdict,
-    disposition: SocOperationalDisposition | None,
-) -> str:
-    if disposition in _IGNORE_DISPOSITIONS:
-        return "忽略"
-    if disposition in _TRANSFER_DISPOSITIONS:
-        return "转交"
-    if verdict is Verdict.FALSE_POSITIVE:
-        return "忽略"
-    return "转交"
 
 
 def _alert_title(run: AnalysisRun) -> str:

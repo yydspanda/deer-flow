@@ -42,14 +42,33 @@ Runtime decisions, construct Memory, or infer action authority.
   result. Do not turn `unknown`, low confidence, missing enrichment, provider failure, or
   a suggested manual check into analyst work. Only the server-owned `required` attention
   classification may link to `/review/alerts`.
-- Use the server-owned `SocCaseOutcomeView` as the primary result narrative: one final
-  security verdict, a separate operational disposition, and an explicit closure state.
+- Use the server-owned `SocCaseOutcomeView.recommended_handling` as the one primary
+  handling conclusion: **忽略 / 转交**, followed by its reason and necessary next steps.
+  Security verdict, confidence, disposition and progress remain distinct data but belong
+  in default-collapsed details, not competing headline cards. Failed/unusable results must
+  show an explicit exception, never a fabricated ignore or completed handoff.
   Explain whether a gap is advisory, limits only a dependent capability, or blocks the
   decision. Base/Memory/Tenant/Effective lineage belongs in collapsed technical audit;
   never render those stages as four peer conclusions or derive closure state in React.
-  Render the server's `tenant_policy_handoff_pending` reason as a policy-required handoff,
-  with `handling_reason` beside the verdict. Never label that requirement as missing facts
+  Render the server's `tenant_policy_handoff_pending` reason as a policy-selected handoff,
+  with `handling_reason` beside the handling conclusion. Never label that requirement as missing facts
   or imply that the handoff has already executed.
+  Render `tenant_policy_review_pending` as `待按建议排查`. When no concrete
+  disposition exists, display the server's `recommended_handling` as a recommendation,
+  not `处置未明确`; keep `handling_recommendation` visible even when policy was applied.
+  Show same-call `conclusion_support` as resolved business questions and future reassessment
+  triggers, not new mandatory tasks. Keep non-blocking supplementary information and unused
+  targeting guards in expandable records. Actual current blockers remain prominent. Do not
+  invent resolved questions for saved runs without this field. In the corpus workbench,
+  show frozen run Memory separately from cohort-owned Memory; retrieval is not adoption,
+  and record/revision links use `memory_id`, never a version-qualified source reference.
+- Progress text comes from the server-owned
+  `progress_label/progress_detail`; React supplies only aggregate styles and neutral fallbacks.
+  Keep normal progress in details; show current material blockers and execution failures
+  beside the main conclusion. Lists and filters use `SocAlertResult.recommended_handling`,
+  not the immutable Base verdict. The audit table includes every stage's disposition,
+  review requirement and suggested action, not just verdict/confidence. Applied policy means
+  applied to a decision, not executed externally; original summaries remain expandable.
 - The result page owns two explicit optional commands: correct this run and promote this
   run into the governed Memory Candidate flow. Correction preserves decision lineage;
   promotion creates at most a pending Candidate and does not review it inline.

@@ -9,11 +9,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import (
+    AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
     CallbackOutboxStatus,
     Decision,
     DecisionEvidenceState,
+    DecisionReviewReason,
     ProcessingJobStatus,
     ServiceRequestContext,
     SocDecisionSnapshot,
@@ -73,6 +75,14 @@ def _run(
         status=AnalysisRunStatus.SUCCESS,
         model_name="deepseek-v4-flash-0731",
         prompt_version="soc-analysis-v1",
+        analysis=AnalysisResult.model_construct(
+            verdict=verdict,
+            confidence=0.82,
+            summary="兼容回传测试中的有效分析结果。",
+            reasoning=[],
+            reason="当前证据支持该研判结论。",
+            recommended_action="转交安全运营复核",
+        ),
         decision=Decision(
             verdict=verdict,
             confidence=0.82,
@@ -82,6 +92,19 @@ def _run(
             reason="当前证据支持该研判结论。",
         ),
     )
+
+
+def test_callback_cannot_send_ignore_for_a_materially_conflicted_benign_verdict():
+    run = _run(verdict=Verdict.FALSE_POSITIVE)
+    run.decision.needs_review = True
+    run.decision.review_reasons = [DecisionReviewReason.FACT_CONFLICT]
+    run.decision.suggested_action = "忽略。"
+    result = PingAnLegacyResultMapper().project(run, decision_transitions=[], action_executions=[])
+    assert result["alert_action"] == "转交"
+    assert result["warning_flag"] == 1
+    assert "事实冲突" in result["alert_rationale"]
+    assert result["disposal_rationale"] != "忽略。"
+    assert result["soc_lineage"]["effective_verdict"] == "false_positive"
 
 
 def test_lifecycle_http_port_preserves_signed_get_alert_brief_contract() -> None:
@@ -217,6 +240,8 @@ def test_result_mapper_uses_effective_decision_not_only_base_model_output() -> N
     )
 
     assert result["alert_action"] == "忽略"
+    assert result["disposal_rationale"] == "忽略"
+    assert result["disposal"]["gen_answer"]["disposal_rationale"] == "忽略"
     assert result["evaluation"]["gen_answer"]["evaluation_action"] == "忽略"
     assert result["model_name"] == "deepseek-v4-flash-0731"
     assert result["soc_lineage"]["base_verdict"] == "true_positive"

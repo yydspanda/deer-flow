@@ -9,7 +9,7 @@
 - **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。新交付同时把 PingAn DeerFlow chat 固定为 buffered non-streaming，并将模型网关与 Runtime 并发统一为 `3`；SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
 - **Next Gate:** 部署 buffered chat / `3 + 3` 并发配置，验证普通聊天不再发送 `stream=true`、三条不同告警可同时研判；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-03`
+- **Last Updated:** `2026-09-09`
 
 ## Current Constraints / 当前约束
 
@@ -22,6 +22,42 @@
 | Upstream baseline | `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`；2026-08-26 测量为 ahead `261` / behind `0` |
 
 ## Recent Completion Records / 近期完成记录
+
+### 2026-09-08 — Explain decision lineage and concrete handling progress
+
+- **Task:** `PI-04C`
+- **Status:** `Done`
+- **Outcome:** Effective policy v3 将 Tenant Policy 的 `unknown` 作为未选择处置，而非新处置；保留前一阶段 Base/Memory 的处理建议和完整原始策略审计。企业单独要求排查不再显示为关键事实失败，独立的 materiality/conflict 仍受限。Web、语料历史对比、ZEUS 回传共用处置分类；建议与实际执行进度分离。旧记录只读重投影，不重写数据库或重新调用模型。
+- **Verification:** 96 项后端结果、策略、Memory/自动化、语料与兼容回归、12 项架构检查，以及 5 项前端组件测试、lint/type-check 通过。只读核对现存 `2471269` 和 `2502512`，并在桌面/移动尺寸点击验证：前者保留可疑/75%及原始主机排查建议，后者保留误报/82%及企业强制转交要求；没有真实模型或外部处置调用。
+  后续同一项优化将 Prompt v39 / public triage Skill 中的已审核经验与普通历史标签分开，使用可选
+  `conclusion_support` 在同次研判中说明已解决问题、可选补充和未来重判条件。Parser v25 校验冻结
+  M-* 引用，无效说明独立丢弃；真实缺口/反证不清除。页面将非阻断补充与未用动作能力放入展开
+  记录，并区分本次实际读取/引用的 Memory 与同类组沉淀记录，修复版本化 source_id 被当作链接 ID。
+  当前接口只读核对 `2448168`：确实引用 `MEM-52B94F38659F@v4` 的 context-only 经验，保留误报
+  结论及企业转交要求，不再因未使用的目标能力显示结论受限。旧 Run 不伪造新说明；本轮不跑真实模型。
+  本次新增路径通过 140 项后端 Prompt/parser/analyzer/outcome/架构回归、8 项前端组件测试及前端
+  lint/type-check；只读浏览器在 1440/390 宽度核对真实保存结果、经验链接和折叠记录，无业务写请求。
+  09-08 继续细分处理进度：结构/引用、关键输入、事实/角色/决策分歧分别说明；后续处理区分
+  方案已确定、转交待确认、动作待执行/失败/跳过/成功待最终反馈。策略忽略或单个动作成功不再
+  直接显示告警结案；使用当前 Run/alert 已映射终态反馈。页面展示服务端进度依据，技术审计表
+  补齐处置方案、复核要求和建议。全部分支与 `1966558` 实例见 `governance/decision-to-policy-flow.md`。
+  90 项后端结果/策略/兼容/架构回归和 10 项前端组件测试通过；只读投影，不修改 verdict、策略、
+  数据库或增加模型调用。8 张 Mermaid 图可解析渲染；1440/390 页面核对进度依据与阶段字段，
+  未发起 SOC 业务写请求，前端 lint/type-check 通过。
+  根据运营反馈继续简化为一份主处理结论：忽略/转交、采用依据和必要下一步。技术风险判断、
+  置信度、普通进度与非阻断疑点默认折叠；实质分歧、运行/动作失败仍可见。告警列表和过滤
+  读取服务端有效处置分类，不再显示 Base verdict 为最终结果；与详情、历史对比共用投影。
+  本次结果/兼容核心 64 项回归通过，语料/策略/架构另 57 项通过；前端 10 项组件测试及
+  lint/type-check 通过。只读浏览器在 1440/390 核对 `2502512`、`1966558` 单一主结论、
+  折叠后可查原始风险与决策阶段，无页面溢出、无 SOC 写请求；9 张流程图可渲染。
+  未重跑模型、清空数据库或改变 Memory/策略/动作权限，内部详细状态只保留作复盘。
+  09-09 补齐标记到处置的实际对应：普通缺口与可选能力限制不单独触发转交；未解决的结论级
+  问题即使保留误报 verdict 也显示转交确认、具体原因和下一步。Effective policy v4 保留这些
+  独立阻断，不采用忽略方案、不生成处置应用记录或动作授权；通用复核的明确策略授权仍可用。
+  旧受阻计划只留阶段审计，已发生的外部反馈不删。列表、详情、历史对比与 ZEUS 共用分类。
+  流程图明确 context-only Memory 在主模型前进入上下文、Base 已可使用它，之后是指令复用。
+  聚焦后端结果/自动化/回传 92 项及策略/materiality/架构/语料 64 项通过；50 张 Mermaid 图可解析，
+  其中 9 张处置图实际渲染通过。无真实模型调用、内网请求、数据库迁移、清空或重打包。
 
 ### 2026-09-03 — Governed Agent Platform target mapping
 
@@ -87,13 +123,6 @@
 - **Status:** `Done`
 - **Outcome:** PingAn DEV 工作台显式开启确定性处置规则、安全软件路径和 bounded Policy Advisor，同时继续禁止真实外部动作；Memory Center 强制重取生命周期投影，详情/修订页区分 exact Directive 与 context-only 使用语义。
 - **Verification:** DEV safety contract、Docker/macOS 启动配置、tenant policy/software-path 回归、前端 lint/type-check 和浏览器验收。
-
-### 2026-08-26 — Progress ledger governance and monthly archive
-
-- **Task:** `PI-06`
-- **Status:** `Done`
-- **Outcome:** 将 8,008 行混合台账收敛为单一当前指针；289 条历史完成记录按 `2026-06/07/08` 归档，重复的能力表和早期计划转为只读 legacy register。
-- **Verification:** `scripts/check_soc_progress.py`、聚焦单元测试和 GitHub Actions 同时约束唯一 Stage/task、Roadmap 引用、实验 manifest、活动文件预算及归档月份。
 
 ## Update Contract / 更新约定
 

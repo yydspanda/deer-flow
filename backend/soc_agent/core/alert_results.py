@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from soc_agent.contracts import (
     AlertSummary,
     AnalysisRunStatus,
@@ -9,9 +11,12 @@ from soc_agent.contracts import (
     ReviewQueueItem,
     SocAlertAttentionLevel,
     SocAlertResult,
+    SocDecisionTransitionRecord,
     SocDecisionUsability,
+    SocExternalDispositionRecord,
     Verdict,
 )
+from soc_agent.core.handling import handling_blockers, policy_requires_follow_up, project_operational_handling, resolve_operational_disposition
 
 SOC_ALERT_ATTENTION_POLICY_VERSION = "soc.alert_attention.v1"
 
@@ -39,6 +44,8 @@ def classify_alert_result(
     summary: AlertSummary,
     *,
     queue_item: ReviewQueueItem | None = None,
+    decision_transition: SocDecisionTransitionRecord | None = None,
+    external_dispositions: Sequence[SocExternalDispositionRecord] = (),
 ) -> SocAlertResult:
     """Separate result quality from the optional human-task lifecycle."""
 
@@ -51,12 +58,21 @@ def classify_alert_result(
         attention_level = SocAlertAttentionLevel.ADVISORY
     else:
         attention_level = SocAlertAttentionLevel.NONE
+    disposition, _ = resolve_operational_disposition(run_id=summary.run_id, alert_id=summary.alert_id, decision_transition=decision_transition, external_dispositions=external_dispositions)
+    handling, _ = project_operational_handling(
+        verdict=decision_transition.after.verdict if decision_transition is not None else summary.verdict,
+        disposition=disposition,
+        blockers=handling_blockers(needs_review=summary.needs_review, review_reasons=summary.review_reasons, transition=decision_transition),
+        policy_review_only=policy_requires_follow_up(decision_transition),
+        failed=summary.status is AnalysisRunStatus.FAILED,
+    )
     return SocAlertResult(
         summary=summary,
         attention_level=attention_level,
         attention_reasons=required_reasons or reasons,
         decision_usability=usability,
         requires_human_intervention=bool(required_reasons),
+        recommended_handling=handling,
         queue_item=queue_item,
     )
 

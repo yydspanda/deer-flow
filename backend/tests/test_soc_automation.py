@@ -19,9 +19,12 @@ from soc_agent.contracts import (
     AdjudicatedRoleType,
     AnalysisContextCatalogItem,
     AnalysisContextReferenceKind,
+    AnalysisMaterialityReport,
     AnalysisReasoningBasis,
     AnalysisReasoningItem,
+    DecisionConfidenceSource,
     DecisionEvidenceState,
+    DecisionReviewReason,
     EntrySurface,
     EvidenceItem,
     RoleAdjudicationResult,
@@ -57,6 +60,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core import SocAutomationService
+from soc_agent.core.case_outcomes import project_soc_case_outcome
 from soc_agent.core.runtime import analyze_alert
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.memory import InMemoryMemoryCandidateRepository
@@ -191,6 +195,9 @@ def test_enforced_policy_can_authorize_without_memory() -> None:
     assert result.authorization.target_value == "203.0.113.10"
     assert result.execution is not None
     assert result.execution.status.value == "succeeded"
+    outcome = project_soc_case_outcome(run, decision_transition=result.decision_transition)
+    assert outcome.recommended_handling == "ignore"
+    assert outcome.decision_usable is True
     assert result.execution.external_state_before == {"blocked": False}
     assert result.execution.external_state_after == {"blocked": True}
     assert adapter.execute_count == 1
@@ -199,6 +206,44 @@ def test_enforced_policy_can_authorize_without_memory() -> None:
     assert replay.idempotent is True
     assert replay.execution == result.execution
     assert adapter.execute_count == 1
+
+
+@pytest.mark.parametrize("reason", [DecisionReviewReason.FACT_CONFLICT, DecisionReviewReason.STUB_ANALYZER, DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP])
+def test_decision_blocker_prevents_persisting_an_automatic_ignore_plan(reason):
+    run = _automation_ready_run()
+    run.decision.review_reasons = [reason]
+    run.decision.needs_review = True
+    policy = _policy(
+        rules=[SocAutomationRule(rule_id="ignore-pattern", name="Ignore the reviewed pattern", match=SocAutomationRuleMatch(verdicts=[run.decision.verdict]), disposition=SocOperationalDisposition.IGNORED, rationale="Reviewed ignore rule.")]
+    )
+    service = SocAutomationService(repository=InMemorySocAutomationRepository(), policy=policy, environment="dev", now_provider=lambda: NOW)
+    result = service.evaluate(run, context=_context())
+    assert result.effective_disposition is None
+    assert result.selected_rule_id is None
+    assert result.disposition_transition is None
+    assert result.authorization is None
+    assert result.execution is None
+    assert result.decision_transition.after.verdict == run.decision.verdict
+    assert result.decision_transition.after.needs_review is True
+    assert reason.value in result.decision_transition.stages[-1].summary
+
+
+def test_memory_directive_clear_cannot_authorize_a_materially_conflicted_run():
+    run = _runtime_run()
+    run.decision.review_reasons = [DecisionReviewReason.FACT_CONFLICT]
+    run.analysis_materiality = AnalysisMaterialityReport(review_required=True, review_reasons=[DecisionReviewReason.FACT_CONFLICT])
+    record = _active_memory_record()
+    repository = InMemoryMemoryCandidateRepository()
+    repository.save_memory_record(record)
+    run.llm_analysis_request.context_catalog = [_memory_catalog_item(record, "M-111111111111")]
+    result = SocAutomationService(repository=InMemorySocAutomationRepository(), policy=None, environment="dev", memory_repository=repository, now_provider=lambda: NOW).evaluate(run, context=_context())
+    memory_stage = result.decision_transition.stages[1]
+    assert memory_stage.after.needs_review is False
+    assert result.decision_transition.after.verdict == memory_stage.after.verdict
+    assert result.decision_transition.after.needs_review is True
+    assert result.disposition_transition is None
+    assert result.authorization is None
+    assert project_soc_case_outcome(run, decision_transition=result.decision_transition).recommended_handling == "transfer"
 
 
 def test_semantic_action_target_uses_accepted_role_and_materiality_guard() -> None:
@@ -770,6 +815,8 @@ def _runtime_run():
     )
     assert run.decision is not None
     assert run.llm_analysis_request is not None
+    # These tests exercise governed decisions, not the deterministic analyzer stub.
+    run.decision = run.decision.model_copy(update={"review_reasons": [DecisionReviewReason.UNCERTAIN_VERDICT], "confidence_source": DecisionConfidenceSource.LLM_SELF_REPORT})
     return run
 
 
@@ -782,6 +829,7 @@ def _automation_ready_run():
             "confidence": 0.95,
             "evidence_state": DecisionEvidenceState.SUFFICIENT,
             "needs_review": False,
+            "review_reasons": [],
             "suggested_action": "block the confirmed attack source",
         }
     )
