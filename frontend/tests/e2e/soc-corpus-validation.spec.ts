@@ -1346,7 +1346,7 @@ test("searches confirmed Memory records and opens their usage history", async ({
   );
 
   await page.goto("/workspace/soc/memory/records");
-  await page.getByLabel("搜索经验台账").fill("MEM-GALAXY Windows 更新");
+  await page.getByLabel("搜索已确认经验").fill("MEM-GALAXY Windows 更新");
   await page.getByTitle("搜索").click();
   await expect(page.getByText("Windows 更新部署正常行为")).toBeVisible();
   await page.getByText("Windows 更新部署正常行为").click();

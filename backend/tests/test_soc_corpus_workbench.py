@@ -684,6 +684,8 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
     )
     assert memory.payload["pattern_observation"]["observation_id"] == aggregation.observation.observation_id
     assert memory.payload["memory_candidates"][0]["candidate_id"] == candidate.candidate_id
+    assert memory.payload["memory_context_exclusions"] == []
+    assert memory.metrics["memory_comparisons_only"] == 0
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")

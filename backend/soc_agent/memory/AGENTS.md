@@ -76,6 +76,16 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   reinterpret an unrelated behavior under the same detection key.
 - `M-*` is historical reasoning context, not `E-*` current evidence. Free-form Memory
   never deterministically changes a decision.
+- Before freezing the M-* catalog, `ConfirmedMemoryAnalysisRequestEnricher` applies
+  `soc.memory_context_precedence.v1` to the bounded eligible results. An exactly
+  applicable, fingerprint-scoped reviewed true/false-positive lesson excludes opposing
+  partial lessons related through matched canonical detection/scenario anchors from
+  model reasoning. Keep them in `LLMAnalysisRequest.memory_context_exclusions` with
+  identity, hashes, comparison and preferred sources, never as citable M-* or MemoryUse
+  records. This is run-local selection, not deactivation or a new matching rule.
+  No exact answer, unknown/suspicious exact outcomes, unrelated scopes, or contradictory
+  exact answers must not trigger that exclusion. Never pick a winner by score/recency.
+  Audit-only comparisons are not model-visible gaps and must not degrade a decision.
 - Only a human-reviewed `SocMemoryDecisionDirective` may alter the post-Runtime decision.
   The exact record version, content/facet hashes, activation, validity, review due,
   minimum score, and required facets must all match. Record Base, Memory, Tenant, and
@@ -107,11 +117,28 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 
 ## Reinforcement And Revision
 
+- Before activation, compare the full eligible record inventory, not retrieval top-K.
+  Same strong typed scopes must not publish duplicate answers; opposing same-scope
+  lessons cannot both be enabled, including reference-only lessons. Opposing overlapping
+  directives are rejected. Profiles may declare `exclusive_scope_facet_keys`; disjoint
+  entity sets do not prove disjoint applicability. Unknown overlap is conservative.
+- Candidate review exposes a read-only governance comparison and accepts an explicit
+  predecessor ID/version for atomic replacement. Reuse revision lineage and supersession;
+  preserve old runs and history. A model verdict or tenant-policy handoff is not authority
+  to replace a reviewed lesson. Reject stale versions without any partial mutation.
+- Pending strong-scope proposals coalesce independently of risk class. Preserve their
+  original content/quality snapshot, bounded additional source references, and events.
+  Legacy candidates are compared read-only without a Profile bump or database reset.
+- Governance check-and-write must share the UoW lock: SQLite write transaction or
+  PostgreSQL transaction advisory lock. In-memory repositories are test-only and cannot
+  perform atomic predecessor replacement.
+
 - New analyst outcomes may reinforce, contradict, or propose a revision to an existing
   Memory. Keep observations and proposals append-only; do not mutate an old lesson or
   silently re-enable a deprecated/expired record.
-- `SocMemoryService.propose_revision_candidate()` is the only manual correction
-  boundary and supports two explicit provenance modes. `observed_use` carries an exact
+- `SocMemoryService.propose_revision_candidate()` is the inventory correction
+  boundary; candidate review may explicitly attach the same lineage at confirmation.
+  The inventory command supports two explicit provenance modes. `observed_use` carries an exact
   source run and must verify the persisted `SocMemoryUseRecord` plus content/facet
   hashes. `operator_direct` starts from the Memory inventory without inventing a use;
   it freezes the current predecessor version/hashes and retains the predecessor's
@@ -125,6 +152,9 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 - One Memory may have only one open revision. A second request against a predecessor
   carrying `revision_pending=true` must fail with a conflict rather than creating a
   parallel candidate.
+- Pending revisions remain discoverable through the candidate list's server-side
+  `revision_of_memory_id` filter over persisted predecessor lineage, before pagination.
+  This read path must work for existing records without a metadata backfill or new write.
 - A revision candidate reuses the normal Business Lesson and applicability review. On
   confirmation, create a new record and mark the predecessor record/candidate as
   superseded/deprecated without rewriting their content. Retrieval activation for the
@@ -132,6 +162,12 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   predecessor carries `revision_pending=true` and the normal retrieval service must
   reject attempts to re-enable it. Rejecting or expiring the revision closes that flag
   but leaves the predecessor disabled; an explicit activation mutation is required.
+  Candidate review may explicitly combine `reject` with `restore_predecessor`, expected
+  predecessor version, activation validity and review scheduling. Close and activation
+  must share one audited transaction, preserving content, scope and directive. This also
+  supports the latest already-rejected revision while its predecessor is unchanged;
+  stale, replaced, expired or subsequently modified records cannot be restored this way.
+  Ordinary rejection remains disable-only. Restoration retries must never undo a later pause.
   Rejected revision candidates cannot be reopened with stale lineage. Start a new
   revision through a later exact Memory use or a new authenticated inventory review.
 - Final-outcome comparison uses the explicit reviewer verdict even when a Memory was used

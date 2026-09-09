@@ -251,6 +251,13 @@ flowchart TD
 
 ## 2. Memory 指令复用：五个可能结果
 
+**先在经验审核端预防冲突，再在运行端兜底。** 现在启用 Memory 时会检查完整有效经验集，
+相同范围的相反答案、重叠范围的相反直接复用指令不能同时启用；新告警提出的挑战可在原审核页
+明确选择修订旧经验，确认后新旧原子替换。下面“多个 override 目标相反”的分支仍保留，
+用于历史遗留记录等情况，不能靠选最新一条或让模型猜哪条有效来掩盖。
+范围比较、审核入口与可复现实例见
+[Memory 治理对照](../memory/pingan-soc-memory-design.md#审核时怎样处理新旧经验--governance-comparison)。
+
 ```mermaid
 flowchart TD
     B["📌 Base 初判"] --> G{"存在当前可用的已审核经验指令？<br/>版本、有效期、范围、强匹配均满足"}
@@ -270,6 +277,24 @@ flowchart TD
 
 **context-only 不走上图的直接改判分支**：它已经进入主模型上下文，模型可以依据其业务解释给出误报或真实攻击。`Memory=no_input` 仅表示无可应用的直接结论指令，不表示模型没读取过经验。
 同一条 Memory 的最终用法仍按本 Run 的实际记录归因；不是因为分两处画图，就把一次使用记成两次改判。
+
+**不是所有召回的参考经验都会进入主模型。** 如果当前行为已有精确匹配的明确审核结论，
+同检测/场景中结论相反的部分匹配经验只留差异审计，不再供模型泛化当前风险结论：
+
+```mermaid
+flowchart LR
+    R["检索到有效经验"] --> S{"当前行为有精确匹配<br/>且结论明确、不互相矛盾？"}
+    S -->|"没有"| C["保留相似经验<br/>模型比较差异后研判"]
+    S -->|"有"| E["优先精确审核经验<br/>相反 partial 只留审计"]
+    C --> B["主模型形成 Base"]
+    E --> B
+    E -. "不是处置分支，不是模型输入" .-> A["memory_context_exclusions<br/>哪条未用、原因、优先哪条"]
+```
+
+触发值是 `applicability_status=applicable`、必需行为指纹已命中、审核判断为
+`true_positive/false_positive`，且同范围精确判断不存在分歧。没有这些条件不执行排除。
+差异审计不计作 Memory 使用，也不产生 `evidence_gaps` 或新增转交；完整规则见
+[Memory 设计](../memory/pingan-soc-memory-design.md#研判时怎样处理相反参考经验--exact-context-precedence)。
 
 ### 2.1 Memory 具体带什么标记到下一步
 

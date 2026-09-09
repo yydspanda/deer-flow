@@ -7,6 +7,12 @@ Runtime decisions, construct Memory, or infer action authority.
 
 ## API And Navigation
 
+- Candidate governance comparison is server-owned. Show the old business conclusion,
+  scope relation/differences and an explicit replacement selection in the existing review
+  page. Selection alone does not mutate Memory. Submit predecessor ID/version with the
+  existing confirm command; no second mandatory reason. Clear a stale selection after
+  scope/version changes and show server conflicts, never silently pick the newest Memory.
+
 - Use `/api/soc/*`, typed success bodies, `X-SOC-API-Version: 1`, and RFC Problem Details
   mapped to `SocApiError`. Authenticated Gateway identity is authoritative; actor headers
   are attribution only.
@@ -96,6 +102,19 @@ Runtime decisions, construct Memory, or infer action authority.
 
 ## Memory Governance
 
+- One Memory Center owns three route-backed views: confirmed experiences at `/memory`
+  (`/memory/records` remains a compatible alias), review and its history at
+  `/review/memory-candidates`, and accumulation at `/memory/patterns`. Use shared
+  `SocMemoryNavigation` with owning-tab highlighting on details/revisions. Do not expose
+  a second "inventory/ledger center" to analysts. Each view loads only its own list;
+  entering the default view must not fetch Pattern detail or candidate review data.
+  Keep explicit back links to confirmed experiences or review records; preserve old deep links.
+
+- A record with `revision_pending=true` links to its existing pending Candidate from
+  both the record and revision pages; never show a second creation form. Resolve via
+  the server-side `revision_of_memory_id` candidate filter, not a latest-N browser scan.
+  Missing, failed or ambiguous lookup exposes recovery, never enables another revision.
+
 - Candidate inventory is all-status by default. Confirmed, rejected, superseded,
   expired, and deprecated records remain discoverable for audit; terminal history may be
   an explicit server filter.
@@ -143,9 +162,13 @@ Runtime decisions, construct Memory, or infer action authority.
   Business Lesson and applicability. React must never edit a confirmed record in place.
   The Memory record detail may also start an `operator_direct` revision without a source
   use. It must identify that provenance explicitly and never fabricate a run/use pair.
-  A rejected revision leaves the predecessor disabled and must not expose the generic
-  `reopen` action; direct the analyst to create a fresh governed revision.
-- Memory Center is list-first and consumes only the server lineage read model. One row is
+  Ordinary rejection leaves the predecessor disabled and must not expose generic `reopen`.
+  Revision review links directly to the predecessor and offers explicit cancel-and-restore,
+  including restore from the latest already-rejected revision. Show the original use mode
+  and renewed activation/review dates before confirmation; send one review command with
+  `restore_predecessor` and the displayed expected version. Navigate to the old record only
+  on confirmed restoration. Do not change lessons, matching scope, directives or historical runs.
+- The accumulation view is list-first and consumes only the server lineage read model. One row is
   one stable Pattern across windows; observations, distinct sources, window count,
   frozen candidate snapshot, and later reinforcement remain separate values.
 - Render Pattern lifecycle and future-alert use as separate, icon-labelled states; do not

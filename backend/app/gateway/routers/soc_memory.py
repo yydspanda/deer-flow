@@ -55,6 +55,7 @@ from soc_agent.contracts import (
     SocMemoryRunPromotionResult,
     Verdict,
 )
+from soc_agent.contracts.memory_governance import MemoryGovernancePreview
 from soc_agent.core import (
     SocMemoryCenterService,
     SocMemoryEvolutionError,
@@ -116,6 +117,12 @@ class MemoryRunPromotionRequest(BaseModel):
         return self
 
 
+class MemoryGovernancePreviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    reviewer_verdict: Verdict | None = None
+    promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+
+
 class MemoryCandidateReviewRequest(BaseModel):
     decision: SocMemoryCandidateReviewDecision
     reason: str = Field(min_length=1)
@@ -128,14 +135,24 @@ class MemoryCandidateReviewRequest(BaseModel):
     apply_to_future_matches: bool = False
     clear_review_on_match: bool = False
     activate_retrieval: bool = False
+    restore_predecessor: bool = False
+    expected_predecessor_version: int | None = Field(default=None, ge=1)
     activation_valid_until: datetime | None = None
     activation_review_after_days: int | None = Field(default=None, ge=1, le=365)
+    replaces_memory_id: str | None = Field(default=None, min_length=1, max_length=64)
+    expected_replaced_version: int | None = Field(default=None, ge=1)
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def require_reviewed_lesson_for_decision_authority(
         self,
     ) -> MemoryCandidateReviewRequest:
+        if self.restore_predecessor or self.expected_predecessor_version is not None:
+            SocMemoryCandidateReviewCommand(candidate_id="validation", **self.model_dump())
+        if (self.replaces_memory_id is None) != (self.expected_replaced_version is None):
+            raise ValueError("replacement requires both memory ID and expected version")
+        if self.replaces_memory_id is not None and (self.decision is not SocMemoryCandidateReviewDecision.CONFIRM or self.confirmed_verdict is None or self.record_lesson is None):
+            raise ValueError("replacement requires confirmation with a reviewed verdict and lesson")
         if (self.apply_to_future_matches or self.decision_directive is not None) and self.record_lesson is None:
             raise ValueError("decision-bearing Memory requires an explicit reviewed record_lesson")
         return self
@@ -244,6 +261,7 @@ def get_soc_memory_lesson_draft_service(
     service = SocMemoryLessonDraftService(
         candidate_repository=repository,
         drafter=build_configured_memory_lesson_drafter(),
+        governance_service=get_soc_memory_service(request),
     )
     request.app.state.soc_memory_lesson_draft_service = service
     return service
@@ -284,6 +302,7 @@ def list_memory_candidates(
     run_id: str | None = Query(default=None),
     alert_id: str | None = Query(default=None),
     queue_id: str | None = Query(default=None),
+    revision_of_memory_id: Annotated[str | None, Query(max_length=64)] = None,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> MemoryCandidateListResponse:
     try:
@@ -295,6 +314,7 @@ def list_memory_candidates(
                 run_id=run_id,
                 alert_id=alert_id,
                 queue_id=queue_id,
+                revision_of_memory_id=revision_of_memory_id,
                 limit=limit,
             )
         )
@@ -405,6 +425,18 @@ def promote_run_to_memory_candidate(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.post("/candidates/{candidate_id}/governance-preview", response_model=MemoryGovernancePreview)
+def preview_memory_candidate_governance(candidate_id: str, payload: MemoryGovernancePreviewRequest, service: MemoryServiceDep) -> MemoryGovernancePreview:
+    try:
+        return service.preview_candidate_governance(candidate_id, reviewer_verdict=payload.reviewer_verdict, promoted_facet_keys=payload.promoted_facet_keys)
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/candidates/{candidate_id}/review", response_model=SocMemoryCandidateReviewResult)
 def review_memory_candidate(
     candidate_id: str,
@@ -427,8 +459,12 @@ def review_memory_candidate(
                 apply_to_future_matches=payload.apply_to_future_matches,
                 clear_review_on_match=payload.clear_review_on_match,
                 activate_retrieval=payload.activate_retrieval,
+                restore_predecessor=payload.restore_predecessor,
+                expected_predecessor_version=payload.expected_predecessor_version,
                 activation_valid_until=payload.activation_valid_until,
                 activation_review_after_days=payload.activation_review_after_days,
+                replaces_memory_id=payload.replaces_memory_id,
+                expected_replaced_version=payload.expected_replaced_version,
                 metadata=payload.metadata,
             ),
             context=soc_service_context_from_request(request, include_soc_roles=True),
@@ -439,6 +475,8 @@ def review_memory_candidate(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

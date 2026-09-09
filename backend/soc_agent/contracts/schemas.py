@@ -565,6 +565,23 @@ class AnalysisMemoryContextComparison(BaseModel):
         return self
 
 
+class AnalysisMemoryContextExclusion(BaseModel):
+    """Run-local comparison audit, never a model reference or a Memory use."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.analysis_memory_context_exclusion.v1"] = "soc.analysis_memory_context_exclusion.v1"
+    policy_version: Literal["soc.memory_context_precedence.v1"] = "soc.memory_context_precedence.v1"
+    source_id: str = Field(min_length=1, max_length=512)
+    summary: str = Field(min_length=1, max_length=2000)
+    record_content_hash: str | None = None
+    record_facets_hash: str | None = None
+    memory_comparison: AnalysisMemoryContextComparison
+    preferred_source_ids: list[str] = Field(min_length=1, max_length=100)
+    reason_code: Literal["opposing_partial_superseded_by_exact"] = "opposing_partial_superseded_by_exact"
+    explanation: str = Field(min_length=1, max_length=1000)
+
+
 class SocMemoryBusinessLesson(BaseModel):
     """Reviewer-owned reusable knowledge carried by confirmed Memory.
 
@@ -1999,14 +2016,24 @@ class SocMemoryCandidateReviewCommand(BaseModel):
     apply_to_future_matches: bool = False
     clear_review_on_match: bool = False
     activate_retrieval: bool = False
+    restore_predecessor: bool = False
+    expected_predecessor_version: int | None = Field(default=None, ge=1)
     activation_valid_until: datetime | None = None
     activation_review_after_days: int | None = Field(default=None, ge=1, le=365)
+    replaces_memory_id: str | None = Field(default=None, min_length=1, max_length=64)
+    expected_replaced_version: int | None = Field(default=None, ge=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def restrict_decision_directive_to_confirmation(
         self,
     ) -> SocMemoryCandidateReviewCommand:
+        if (self.replaces_memory_id is None) != (self.expected_replaced_version is None):
+            raise ValueError("replacing Memory requires its ID and expected version")
+        if self.replaces_memory_id is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+            raise ValueError("Memory replacement is allowed only during confirmation")
+        if self.replaces_memory_id is not None and (self.confirmed_verdict is None or self.record_lesson is None):
+            raise ValueError("replacement requires a reviewed verdict and business lesson")
         if self.record_applicability is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
             raise ValueError("record_applicability is allowed only when confirming a memory candidate")
         if self.record_lesson is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
@@ -2028,15 +2055,22 @@ class SocMemoryCandidateReviewCommand(BaseModel):
             raise ValueError("confirmed_verdict is allowed only when confirming a memory candidate")
         if (self.apply_to_future_matches or self.decision_directive is not None) and self.record_lesson is None:
             raise ValueError("decision-bearing Memory requires an explicit reviewed record_lesson")
-        if self.activate_retrieval:
-            if self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
-                raise ValueError("activate_retrieval is allowed only when confirming a memory candidate")
+        if self.restore_predecessor:
+            if self.decision is not SocMemoryCandidateReviewDecision.REJECT or self.expected_predecessor_version is None:
+                raise ValueError("restoring a predecessor requires rejection and its expected version")
+            if self.activate_retrieval:
+                raise ValueError("restoring a predecessor cannot activate a candidate record")
+        elif self.expected_predecessor_version is not None:
+            raise ValueError("expected_predecessor_version requires restore_predecessor")
+        if self.activate_retrieval and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+            raise ValueError("activate_retrieval is allowed only when confirming a memory candidate")
+        if self.activate_retrieval or self.restore_predecessor:
             if self.activation_valid_until is None or self.activation_review_after_days is None:
-                raise ValueError("activate_retrieval requires activation_valid_until and activation_review_after_days")
+                raise ValueError("activation or restoration requires activation_valid_until and activation_review_after_days")
             if self.activation_valid_until.utcoffset() is None:
                 raise ValueError("activation_valid_until must include a timezone")
         elif self.activation_valid_until is not None or self.activation_review_after_days is not None:
-            raise ValueError("activation fields require activate_retrieval")
+            raise ValueError("activation fields require activate_retrieval or restore_predecessor")
         return self
 
 
@@ -2354,6 +2388,7 @@ class SocMemoryCandidateReviewResult(BaseModel):
     schema_version: str = "soc.memory_candidate_review_result.v1"
     candidate: SocMemoryCandidate
     memory_record: SocMemoryRecord | None = None
+    restored_predecessor_record: SocMemoryRecord | None = None
     previous_status: SocMemoryCandidateStatus
     decision: SocMemoryCandidateReviewDecision
     reviewed_at: datetime = Field(default_factory=utc_now)
@@ -3868,6 +3903,7 @@ class LLMAnalysisRequest(BaseModel):
         default_factory=list,
         max_length=100,
     )
+    memory_context_exclusions: list[AnalysisMemoryContextExclusion] = Field(default_factory=list, max_length=100)
 
 
 class NormalizationReport(BaseModel):

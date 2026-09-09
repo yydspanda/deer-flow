@@ -15,6 +15,8 @@ import { type ReactNode, useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils";
 
+import { SocMemoryNavigation } from "./soc-memory-navigation";
+
 const NAVIGATION: {
   href: string;
   activePrefixes?: string[];
@@ -185,6 +187,7 @@ export function SocWorkspaceHeader({
           })}
         </nav>
       </div>
+      <SocMemoryNavigation pathname={pathname} />
     </header>
   );
 }

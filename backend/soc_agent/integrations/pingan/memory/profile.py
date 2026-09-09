@@ -53,6 +53,8 @@ _PINGAN_PATTERN_FACET_KEYS = (
 class PingAnSocMemoryProfile:
     """Conservative PingAn profile layered on the generic Memory Kernel."""
 
+    exclusive_scope_facet_keys = frozenset({"environment", "detection_key", "detection_signature", "behavior_fingerprint", "behavior_strength"})
+
     identity = SocMemoryProfileIdentity(
         profile_id="pingan.soc",
         profile_version="7",

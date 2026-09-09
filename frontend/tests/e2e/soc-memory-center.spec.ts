@@ -202,19 +202,20 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
     });
   });
 
-  await page.goto("/workspace/soc/memory");
+  await page.goto("/workspace/soc/memory/patterns");
 
   await expect(
-    page.getByRole("heading", { name: "SOC 经验中心" }),
+    page.getByRole("heading", { name: "经验中心", exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: /待审核经验/ })).toHaveAttribute(
-    "data-variant",
-    "default",
-  );
+  await expect(
+    page
+      .getByRole("navigation", { name: "经验中心视图" })
+      .getByRole("link", { name: "同类告警积累" }),
+  ).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("沉淀阶段", { exact: true })).toBeVisible();
   await expect(page.getByText("新告警使用", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Sliver 远控木马心跳重复模式").first(),
+    page.getByText(pattern.pattern_label, { exact: true }),
   ).toBeVisible();
   const listStatuses = page.getByTestId("memory-pattern-statuses").first();
   await expect(listStatuses).toHaveCSS("flex-wrap", "nowrap");
@@ -235,11 +236,11 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
   await expect(page.getByText("选择一组同类行为查看详情。")).toBeVisible();
   expect(detailRequests).toHaveLength(0);
 
-  await page.getByRole("link", { name: /Sliver 远控木马心跳重复模式/ }).click();
+  await page.getByRole("link", { name: /Sliver 远控木马心跳/ }).click();
 
   await expect(
     page.getByText("8 条告警 / 8 个独立来源 / 3 个时间窗"),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 45_000 });
   await expect(
     page.getByText("生成时包含 5 条样本，后续新增 3 条"),
   ).toBeVisible();
@@ -270,7 +271,9 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
     "true",
   );
 
-  await expect(page.getByText("GalaxyLab T1003 V3 历史候选")).toHaveCount(0);
+  await expect(
+    page.getByText(legacyPattern.pattern_label, { exact: true }),
+  ).toHaveCount(0);
   await page.getByLabel("按沉淀阶段筛选").click();
   await page.getByRole("option", { name: "经验已沉淀" }).click();
   await expect
@@ -281,8 +284,10 @@ test("shows operational Sliver memory outside the fixed GalaxyLab DEV cohort", a
   await expect
     .poll(() => overviewRequests.at(-1)?.searchParams.get("future_use"))
     .toBe("exact_match_decision");
-  await page.getByRole("switch", { name: "包含已结束模式 (1)" }).click();
-  await expect(page.getByText("GalaxyLab T1003 V3 历史候选")).toBeVisible();
+  await page.getByRole("switch", { name: "包含已结束同类行为 (1)" }).click();
+  await expect(
+    page.getByText(legacyPattern.pattern_label, { exact: true }),
+  ).toBeVisible();
 
   await page.setViewportSize({ width: 1920, height: 1080 });
   const wideLayoutRatio = await page

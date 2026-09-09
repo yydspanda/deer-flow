@@ -113,6 +113,8 @@ class SocMemoryProfile(Protocol):
 class GenericSocMemoryProfile:
     """Portable fallback with conservative, vendor-neutral semantics."""
 
+    exclusive_scope_facet_keys = frozenset({"environment", "detection_key"})
+
     identity = SocMemoryProfileIdentity(
         profile_id="soc.generic",
         profile_version="2",

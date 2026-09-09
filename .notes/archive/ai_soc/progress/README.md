@@ -6,6 +6,7 @@
 
 | Month | Records | Notes |
 |---|---:|---|
+| [2026-09](2026-09.md) | 2 | Memory governance and unified Memory Center experiments |
 | [2026-08](2026-08.md) | 92 | Legacy records migrated by `PI-06` |
 | [2026-07](2026-07.md) | 172 | Legacy records migrated by `PI-06` |
 | [2026-06](2026-06.md) | 25 | Legacy records migrated by `PI-06` |

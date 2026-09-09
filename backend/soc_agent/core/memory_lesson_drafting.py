@@ -17,6 +17,7 @@ from .errors import (
     SocServiceError,
     SocServiceNotFoundError,
 )
+from .service import SocMemoryService
 
 
 class SocMemoryLessonDraftService:
@@ -29,9 +30,11 @@ class SocMemoryLessonDraftService:
         *,
         candidate_repository: MemoryCandidateRepository,
         drafter: MemoryBusinessLessonDrafter,
+        governance_service: SocMemoryService | None = None,
     ) -> None:
         self._candidate_repository = candidate_repository
         self._drafter = drafter
+        self._governance_service = governance_service
 
     def draft_business_lesson(
         self,
@@ -67,9 +70,15 @@ class SocMemoryLessonDraftService:
             )
         except ValueError as exc:
             raise SocServiceConflictError(str(exc)) from exc
-        draft_candidate = candidate.model_copy(
-            update={"applicability": draft_applicability},
-        )
+        metadata = {key: value for key, value in candidate.metadata.items() if key != "governance_comparison"}
+        if self._governance_service is not None:
+            comparison = self._governance_service.preview_candidate_governance(
+                candidate_id,
+                reviewer_verdict=reviewer_verdict,
+                promoted_facet_keys=promoted_facet_keys,
+            )
+            metadata["governance_comparison"] = comparison.model_dump(mode="json")
+        draft_candidate = candidate.model_copy(update={"applicability": draft_applicability, "metadata": metadata})
         try:
             return self._drafter.draft(
                 draft_candidate,

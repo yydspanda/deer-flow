@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memory-decision-capability";
+import { SocMemoryPendingRevision } from "@/components/workspace/soc/soc-memory-pending-revision";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useCreateSocMemoryRevisionCandidate,
@@ -74,7 +75,7 @@ export function SocMemoryRevisionWorkbench({
   sourceRunId: string | null;
 }) {
   const router = useRouter();
-  const { record, isLoading, error } = useSocMemoryRecord(memoryId);
+  const { record, isLoading, error, refetch } = useSocMemoryRecord(memoryId);
   const revisionMutation = useCreateSocMemoryRevisionCandidate();
   const [issueType, setIssueType] = useState<SocMemoryRevisionIssueType>(
     "incorrect_conclusion",
@@ -83,6 +84,7 @@ export function SocMemoryRevisionWorkbench({
   const selectedIssue = ISSUE_OPTIONS.find((item) => item.value === issueType);
   const canSubmit =
     record !== null &&
+    record.metadata.revision_pending !== true &&
     reason.trim().length >= 10 &&
     !revisionMutation.isPending;
 
@@ -103,6 +105,7 @@ export function SocMemoryRevisionWorkbench({
         `/workspace/soc/review/memory-candidates/${result.candidate.candidate_id}`,
       );
     } catch (cause) {
+      void refetch();
       toast.error(cause instanceof Error ? cause.message : "创建修订候选失败");
     }
   };
@@ -131,13 +134,15 @@ export function SocMemoryRevisionWorkbench({
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-5xl px-5 py-6 md:px-7">
-          <Alert className="rounded-md border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-            <AlertTriangleIcon />
-            <AlertTitle>提交纠错会立即暂停旧经验用于新告警</AlertTitle>
-            <AlertDescription>
-              本次告警结论和历史记录不会被改写。新经验只有在候选审核通过后才会替代旧版本；旧版本会作为审计历史保留。
-            </AlertDescription>
-          </Alert>
+          {record?.metadata.revision_pending !== true ? (
+            <Alert className="rounded-md border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+              <AlertTriangleIcon />
+              <AlertTitle>提交纠错会立即暂停旧经验用于新告警</AlertTitle>
+              <AlertDescription>
+                本次告警结论和历史记录不会被改写。新经验只有在候选审核通过后才会替代旧版本；旧版本会作为审计历史保留。
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           {isLoading ? (
             <div className="mt-5 space-y-4">
@@ -152,6 +157,10 @@ export function SocMemoryRevisionWorkbench({
                 {error instanceof Error ? error.message : `未找到 ${memoryId}`}
               </AlertDescription>
             </Alert>
+          ) : record.metadata.revision_pending === true ? (
+            <div className="mt-5">
+              <SocMemoryPendingRevision memoryId={record.memory_id} />
+            </div>
           ) : (
             <div className="mt-5 space-y-5">
               <section className="border">
@@ -214,7 +223,7 @@ export function SocMemoryRevisionWorkbench({
                   <BookOpenCheckIcon />
                   <AlertTitle>运营人员直接修订</AlertTitle>
                   <AlertDescription>
-                    本次修订由经验台账直接发起，系统会使用旧经验
+                    本次修订从已确认经验发起，系统会使用旧经验
                     的来源与哈希作为审计依据。若选择“范围过宽”，仍需存在可回放的来源
                     Run。
                   </AlertDescription>

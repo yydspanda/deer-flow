@@ -695,6 +695,8 @@ class MemoryCandidateRepository(Protocol):
 
     def get_memory_candidate(self, candidate_id: str) -> SocMemoryCandidate | None: ...
 
+    def find_pending_memory_candidate_by_scope(self, scope_key: str) -> SocMemoryCandidate | None: ...
+
     def find_memory_candidate_by_idempotency_key(self, idempotency_key: str) -> SocMemoryCandidate | None: ...
 
     def find_memory_candidate_by_source_id(
@@ -711,6 +713,7 @@ class MemoryCandidateRepository(Protocol):
         run_id: str | None = None,
         alert_id: str | None = None,
         queue_id: str | None = None,
+        revision_of_memory_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]: ...
 
@@ -1228,6 +1231,8 @@ class SocMutationRepository(
     Protocol,
 ):
     """Composite repository exposed only inside one mutation transaction."""
+
+    def lock_memory_governance(self) -> None: ...
 
 
 class SocMutationUnitOfWork(Protocol):

@@ -35,6 +35,9 @@ class InMemoryMemoryCandidateRepository:
     def get_memory_candidate(self, candidate_id: str) -> SocMemoryCandidate | None:
         return self._candidates.get(candidate_id)
 
+    def find_pending_memory_candidate_by_scope(self, scope_key: str) -> SocMemoryCandidate | None:
+        return next((item for item in self._candidates.values() if item.status in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE} and item.metadata.get("governance_scope_key") == scope_key), None)
+
     def find_memory_candidate_by_idempotency_key(self, idempotency_key: str) -> SocMemoryCandidate | None:
         for candidate in self._candidates.values():
             if candidate.idempotency_key == idempotency_key:
@@ -59,6 +62,7 @@ class InMemoryMemoryCandidateRepository:
         run_id: str | None = None,
         alert_id: str | None = None,
         queue_id: str | None = None,
+        revision_of_memory_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]:
         items = list(self._candidates.values())
@@ -68,6 +72,8 @@ class InMemoryMemoryCandidateRepository:
             items = [item for item in items if item.tenant_scope == tenant_scope]
         if tenant_id is not None:
             items = [item for item in items if item.tenant_id == tenant_id]
+        if revision_of_memory_id is not None:
+            items = [item for item in items if item.revision_lineage is not None and item.revision_lineage.predecessor_memory_id == revision_of_memory_id]
         source_filters = {
             "run_id": run_id,
             "alert_id": alert_id,

@@ -1466,6 +1466,12 @@ Current contract:
   supported Base verdict from current evidence, generic Skill guidance, reviewed adapter semantics,
   and selected tenant knowledge. `suspicious` is a positive conclusion, not a fallback for missing
   optional enrichment.
+- Before the model sees M-* context, `soc.memory_context_precedence.v1` prefers an exactly
+  applicable fingerprint-scoped reviewed answer over opposing partial lessons for the same
+  canonical detection/scenario. Excluded partial lessons remain run-local difference audit in
+  `LLMAnalysisRequest.memory_context_exclusions`, outside the citable context and Memory-use
+  statistics. This neither deactivates records nor disables context-only generalization when no
+  exact answer exists. Unknown/suspicious or conflicting exact answers do not select a winner.
 - `AnalysisRun.decision` remains immutable. Optional reviewed `SocMemoryDecisionDirective` produces an
   append-only effective-decision transition after exact version/content/facets identity validation;
   ordinary Memory text cannot do so, and no Memory directly
@@ -1977,19 +1983,25 @@ and confirmed memory text.
 
 ### 10.2 Memory Lifecycle / 记忆生命周期
 
+Candidate 审核先比较已有经验：同范围一致结论补充/修订，不重复发布；相反结论需明确修订或
+区分机器适用条件。确认时通过同一事务替换旧记录，启用检查完整有效 Memory 集。
+模型可疑或企业转交不自动推翻旧经验。具体交互、冲突边界与验收入口见
+[新旧经验治理](memory/pingan-soc-memory-design.md#审核时怎样处理新旧经验--governance-comparison)。
+
 ```mermaid
 flowchart TD
     S1["📝 Source<br/>correction / accepted conclusion / reviewed finding / repeated pattern / explicit run promotion"] --> A{"🚦 MemoryAdmissionService<br/>human signal + reason + reusable anchor"}
     A -->|"observed_only"| O["📊 Observation / audit only<br/>no candidate noise"]
     A -->|"admitted"| C["🧬 SocMemoryCandidate<br/>pending_review"]
-    C --> V["👤 Reviewer outcome<br/>final verdict + optional business fact"]
+    C --> CMP["🔎 Existing lesson comparison<br/>supplement / revise / distinguish"]
+    CMP --> V["👤 Reviewer outcome<br/>final verdict + optional business fact"]
     V --> D["✨ AI Business Lesson draft<br/>bounded D-* refs / no persistence"]
     D --> R{"👤 Human review<br/>read by default / edit / confirm"}
     R -->|"confirm"| M["📖 SocMemoryRecord<br/>confirmed + retrieval disabled"]
     R -->|"reject"| X["🗃️ rejected"]
     R -->|"expire/deprecate"| E["⏳ expired/deprecated"]
     M --> G{"🛡️ Retrieval governor<br/>soc_memory_reviewer / soc_admin"}
-    G -->|"enable: reason + expected version<br/>valid-until + review period"| P["✅ Governed activation<br/>CAS + mutation audit"]
+    G -->|"enable: expected version + valid window<br/>no overlapping conflicting answer"| P["✅ Governed activation<br/>transaction lock + CAS + audit"]
     G -->|"disable"| NO["🚫 retrieval disabled"]
     P --> RP{"🔎 Retrieval policy<br/>confirmed + current activation<br/>review current + budget + match"}
     RP -->|"eligible"| CTX["📚 M-* + typed comparison<br/>shared / delta / invalidation"]
@@ -2067,6 +2079,8 @@ flowchart LR
     R["👤 Normal Candidate Review<br/>重写/生成 Business Lesson<br/>只允许收窄适用范围"]
     R -->|reject / expire| H["🗃️ Close revision, keep old disabled<br/>结束冻结标记；显式治理后才能重新启用"]
     R -->|confirm| N["📖 New Memory version<br/>旧 Record deprecated<br/>旧 Candidate superseded"]
+    R -->|cancel and restore| B["↩️ Cancel revision + restore predecessor<br/>一次事务：版本/有效期/发布检查 + 原使用方式 + 审计"]
+    H -->|explicit restore after rejection| B
     N --> G["🛡️ Separate retrieval activation<br/>有效期 + 复核期 + CAS + audit"]
 ```
 
@@ -2079,6 +2093,12 @@ Memory 影响的运行。每次修订都能回答：是实际命中还是运营�
 lineage 重新打开，必须重新发起受治理修订。同一 Memory 同时只能有一个开放修订，第二个并行请求直接
 返回 conflict。
 
+运营明确选择“取消修订并恢复旧经验”时，仍使用同一 review API，提交
+`decision=reject + restore_predecessor=true`、所见旧版本、开放期限与复查周期。
+一个事务中结束修订并调用现有 activation 门禁；任一失败整体回滚。最新修订已经被放弃但旧记录未变
+时也可恢复，不要求重新创建候选。恢复不改内容、匹配范围、Directive 或历史 Run；原来仅供参考的经验
+恢复后仍仅供参考。已经过期、被替代或有后续变更的旧经验不会被这个操作自动重新启用。
+
 `applicability_too_broad` 不是“复制旧 Memory 再改一句说明”。Service 必须加载发现误命中的 exact
 `AnalysisRun`，由当前 tenant Profile 重新投影 canonical behavior facets 和 typed applicability；Run
 缺失或无法形成可复用范围时 fail closed。检索时 tenant Profile 还会先拒绝 network service、CVE、行为族等
@@ -2087,25 +2107,27 @@ lineage 重新打开，必须重新发起受治理修订。同一 Memory 同时�
 
 正式 Memory Center 与固定 GalaxyLab DEV 工作台是两个产品面：
 
-- `/workspace/soc/memory` 展示数据库中的实际 Pattern lineage、Candidate 和 Profile 演进状态。
-- `/workspace/soc/memory/records` 是确认 Memory 台账，可按 Memory/Alert/Run/Candidate ID、Rule、场景、
+- `/workspace/soc/memory` 是唯一经验中心入口，默认展示 **已确认经验**；`/memory/records` 保留为兼容入口。
+  可按 Memory/Alert/Run/Candidate ID、Rule、场景、
   Business Lesson、CVE、服务和 typed facets 搜索；详情集中展示匹配范围、召回治理、Use/Feedback lineage
   与版本化修订入口。
+- `/workspace/soc/memory/patterns` 是中心内的 **同类告警积累** 视图，展示实际 Pattern lineage、Candidate 和 Profile 演进状态。
 - `/workspace/soc/dev/memory-validation/galaxylab` 只用于固定 14 条样本的开发验收。
-- `/workspace/soc/review/memory-candidates[/candidate_id]` 是候选经验的专用审核入口；告警与抽样审核
+- `/workspace/soc/review/memory-candidates[/candidate_id]` 是同一中心内的 **经验审核** 视图；告警与抽样审核
   分别使用 `/review/alerts` 和 `/review/samples`。
 
-候选治理首页默认是全状态审计台账，不是只显示 `pending_review` 的收件箱。详情页必须直接展示“本次
+三个视图共享固定导航，详情和修订仍标亮所属视图；不再要求用户在“中心/台账”之间辨别入口。
+经验审核默认保留全状态记录，可筛选待审或历史，不是只显示 `pending_review` 的收件箱。详情页必须直接展示“本次
 审核对象”正文、来源和证据引用；只有可编辑状态展示审核表单，已确认状态展示关联 Memory 中持久化的
 六段 `Business Lesson`，被拒绝、替代、过期或停用的候选展示只读治理历史及合法后续动作。
 
-Memory Center 以稳定 `lineage_key` 作为一级对象，Profile 定义的 fixed-window `aggregation_key` 只是候选生成窗口；
+同类告警积累视图以稳定 `lineage_key` 作为一级对象，Profile 定义的 fixed-window `aggregation_key` 只是候选生成窗口；
 generic 默认 24h，PingAn Profile v7 默认 30d。一个模式
 跨三个窗口出现 `6 + 1 + 1` 次时，页面展示一个 8 条 observation、3 个 window 的 Pattern；候选创建时
 冻结的 5 条与后续 3 条 reinforcement 分开显示，所有原始 observation 仍可审计和 replay。这样既不会
 让固定 Demo 冒充生产 Memory，也不会把长期重复模式按日期切碎。
 
-页面采用 list-first + lazy detail：进入 Memory Center 只加载 Pattern 台账，不自动打开第一条；进入
+页面采用 list-first + lazy detail：进入经验中心只加载已确认经验列表，不自动取第一条详情；切换到积累视图才加载 Pattern 列表。进入
 具体 Pattern 先加载治理摘要，关联告警与研判摘要由用户显式展开，每页最多 20 条。候选、告警、抽样
 三个审核 route 只加载当前视图所需数据，短时导航缓存由 mutation invalidation 保证一致性。
 

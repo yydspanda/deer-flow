@@ -55,7 +55,7 @@ function queueItem(state: MockSocApiState) {
   };
 }
 
-function memoryCandidate(state: MockSocApiState) {
+export function memoryCandidate(state: MockSocApiState) {
   return {
     schema_version: "soc.memory_candidate.v1",
     candidate_id: "MC-ALPHA-001",
@@ -130,7 +130,7 @@ function memoryCandidate(state: MockSocApiState) {
   };
 }
 
-function memoryRecord(state: MockSocApiState) {
+export function memoryRecord(state: MockSocApiState) {
   return {
     schema_version: "soc.memory_record.v1",
     memory_id: "MEM-ALPHA-001",
@@ -1098,7 +1098,9 @@ export async function mockSocAPI(
         candidate_id: "MC-ALPHA-001",
         reviewer_verdict: "false_positive",
         lesson: {
-          schema_version: "soc.memory_business_lesson.v1",
+          schema_version: "soc.memory_business_lesson.v2",
+          detection_scenario: "反连检测规则报告了疑似反弹 Shell 网络行为。",
+          observed_event: "运营已确认该行为是已登记内部服务的正常调用。",
           conclusion:
             "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
           business_rationale: [

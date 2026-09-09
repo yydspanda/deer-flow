@@ -21,7 +21,7 @@ from soc_agent.model_reference_aliases import (
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v39"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v40"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -42,6 +42,9 @@ _MEMORY_REASONING_GUIDANCE = """<memory_reasoning_rules>
   Start from reviewed_verdict in that case. Depart from it only when exact current E-* evidence establishes a material behavior difference or triggers a stated invalidation condition, and identify that evidence in the reason.
   A changed IP/host/account, repeated connection count, or detector wording already represented by shared facets is not by itself a contradiction.
 - Material changes in service, vulnerability, behavior family, execution result, or authorization scope block conclusion transfer. Explain the difference and decide from current evidence.
+- Prefer an exactly applicable reviewed lesson for the current behavior over a contrasting lesson from another scope.
+  Runtime keeps excluded partial lessons in audit only; they are not missing evidence and must not be reconstructed or cited.
+- Without an exact lesson, continue semantic use of relevant context-only experience. Conflicting exact lessons are not resolved by recency, score, or a majority vote; explain their applicability and current evidence.
 - directive_applicable only permits a later Runtime stage to apply a reviewed directive. The analyzer still produces an independent Base Decision and never authorizes an action.
 - Never choose suspicious only because Memory is context-only, lacks directive authority, or has another host/account/IP.
 - When you adopt reviewed Memory, state which business question it resolves in conclusion_support.resolved_questions and cite the same M-* in decision_context_refs and conclusion_support.context_refs.

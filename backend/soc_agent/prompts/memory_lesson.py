@@ -13,7 +13,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v5"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v6"
 MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v3"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000
@@ -268,6 +268,12 @@ Write concise analyst-facing Chinese. A Business Lesson explains what the repeat
 7. Give handling guidance that starts with deterministic applicability checks. For an exact future match with no invalidation evidence,
    explain how to reuse the reviewed verdict instead of requiring routine per-alert review; external actions remain separately governed.
 8. Put unresolved material facts in uncertainties instead of guessing.
+9. When existing_memory_comparison is supplied, explain in business_rationale whether
+   the reviewed facts supplement, correct, or distinguish the old lesson. A model's
+   suspicious verdict or a tenant-policy handoff is not proof that an old benign
+   lesson is wrong. Follow the reviewer's technical verdict without inventing facts.
+   If no supplied fact explains the difference, state that specific gap in uncertainties.
+   Prose never narrows machine applicability: use only supplied typed conditions.
 </drafting_method>
 
 <output_rules>
@@ -358,6 +364,14 @@ def _build_source_catalog(
     add("candidate", "candidate_content", candidate.content)
     add("candidate", "candidate_type", candidate.candidate_type.value)
     add("candidate", "decision_impact", candidate.decision_impact.value)
+    comparison = candidate.metadata.get("governance_comparison")
+    if isinstance(comparison, Mapping):
+        compact = {key: comparison.get(key) for key in ("recommendation", "explanation", "related_count")}
+        compact["related_memories"] = [
+            {"memory_id": item["memory_id"], "version": item["version"], "reviewed_verdict": item["reviewed_verdict"], "scope_relation": item["scope_relation"], "conclusion": item["conclusion"][:1000]}
+            for item in comparison.get("related_memories", [])[:3]
+        ]
+        add("candidate", "existing_memory_comparison", json.dumps(compact, ensure_ascii=False, sort_keys=True))
     add("cohort", "candidate_confidence_basis", f"{candidate.confidence:.4f}")
     cohort_quality = candidate.metadata.get("cohort_quality")
     if isinstance(cohort_quality, Mapping):

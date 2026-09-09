@@ -2084,6 +2084,31 @@ export interface SocDispositionSampleReviewInbox {
   decision_impact: "none";
 }
 
+export interface SocMemoryGovernancePreview {
+  candidate_id: string;
+  recommendation: "new" | "reinforce" | "revise" | "distinguish" | "inspect";
+  explanation: string;
+  related_count: number;
+  source_reason?: string | null;
+  related_memories: Array<{
+    memory_id: string;
+    version: number;
+    summary: string;
+    conclusion: string;
+    reviewed_verdict: SocVerdict | null;
+    scope_relation: "same" | "overlap" | "disjoint" | "unknown";
+    conclusion_relation: "agrees" | "differs" | "undetermined";
+    retrieved_in_source_run: boolean;
+    retrieval_enabled: boolean;
+    directive_enabled: boolean;
+    differences: Array<{
+      facet: string;
+      candidate_values: string[];
+      memory_values: string[];
+    }>;
+  }>;
+}
+
 export interface SocMemoryCandidateReviewRequest {
   decision: SocMemoryCandidateReviewDecision;
   reason: string;
@@ -2096,8 +2121,12 @@ export interface SocMemoryCandidateReviewRequest {
   apply_to_future_matches?: boolean;
   clear_review_on_match?: boolean;
   activate_retrieval?: boolean;
+  restore_predecessor?: boolean;
+  expected_predecessor_version?: number;
   activation_valid_until?: string | null;
   activation_review_after_days?: number | null;
+  replaces_memory_id?: string;
+  expected_replaced_version?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -2105,6 +2134,7 @@ export interface SocMemoryCandidateReviewResult {
   schema_version: string;
   candidate: SocMemoryCandidate;
   memory_record?: SocMemoryRecord | null;
+  restored_predecessor_record?: SocMemoryRecord | null;
   previous_status: SocMemoryCandidateStatus;
   decision: SocMemoryCandidateReviewDecision;
   reviewed_at: string;

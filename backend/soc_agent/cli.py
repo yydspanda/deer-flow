@@ -1193,6 +1193,8 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_review.add_argument("--reason", required=True, help="Human review reason")
     memory_review.add_argument("--record-summary", help="Optional confirmed memory summary override")
     memory_review.add_argument("--record-content", help="Optional confirmed memory content override")
+    memory_review.add_argument("--replaces-memory-id", help="Explicitly replace this existing Memory during confirmation")
+    memory_review.add_argument("--expected-replaced-version", type=int, help="Expected current version of the Memory being replaced")
     memory_lesson_group = memory_review.add_mutually_exclusive_group()
     memory_lesson_group.add_argument(
         "--record-lesson",
@@ -2485,6 +2487,7 @@ def _memory_draft_lesson(args: argparse.Namespace) -> int:
         draft = SocMemoryLessonDraftService(
             candidate_repository=repository,
             drafter=drafter,
+            governance_service=SocMemoryService(candidate_repository=repository, record_repository=repository, analysis_run_repository=repository, profile_registry=build_soc_memory_profile_registry()),
         ).draft_business_lesson(
             args.candidate_id,
             reviewer_verdict=Verdict(args.reviewer_verdict),
@@ -2535,7 +2538,7 @@ def _memory_review(args: argparse.Namespace) -> int:
                     payload_label="memory business lesson",
                 )
             )
-        result = SocMemoryService(candidate_repository=repository, record_repository=repository).review_candidate(
+        result = SocMemoryService(candidate_repository=repository, record_repository=repository, profile_registry=build_soc_memory_profile_registry()).review_candidate(
             SocMemoryCandidateReviewCommand(
                 candidate_id=args.candidate_id,
                 decision=SocMemoryCandidateReviewDecision(args.decision),
@@ -2544,6 +2547,8 @@ def _memory_review(args: argparse.Namespace) -> int:
                 record_content=args.record_content,
                 record_lesson=record_lesson,
                 record_applicability=record_applicability,
+                replaces_memory_id=args.replaces_memory_id,
+                expected_replaced_version=args.expected_replaced_version,
                 decision_directive=decision_directive,
                 confirmed_verdict=(Verdict(args.confirmed_verdict) if args.confirmed_verdict else None),
                 apply_to_future_matches=args.apply_to_future_matches,
@@ -2795,6 +2800,7 @@ def _memory_records_retrieval(args: argparse.Namespace) -> int:
         result = SocMemoryService(
             candidate_repository=repository,
             record_repository=repository,
+            profile_registry=build_soc_memory_profile_registry(),
         ).set_retrieval_activation(command, context=context)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

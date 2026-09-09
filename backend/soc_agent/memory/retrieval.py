@@ -9,6 +9,7 @@ from soc_agent.contracts import (
     AnalysisContextCatalogItem,
     AnalysisContextReferenceKind,
     AnalysisMemoryContextComparison,
+    AnalysisMemoryContextExclusion,
     AnalysisMemoryUseMode,
     LLMAnalysisRequest,
     SocMemoryApplicabilityStatus,
@@ -17,12 +18,14 @@ from soc_agent.contracts import (
     SocMemoryQuery,
     SocMemoryRetrievalDiff,
     SocMemoryRetrievalResult,
+    Verdict,
 )
 from soc_agent.memory.profiles import (
     GenericSocMemoryProfile,
     SocMemoryProfile,
     SocMemoryProfileRegistry,
 )
+from soc_agent.memory.scoring import normalize_memory_facets
 from soc_agent.utils.hashing import stable_hash
 
 logger = logging.getLogger(__name__)
@@ -105,7 +108,53 @@ class ConfirmedMemoryAnalysisRequestEnricher:
             )
             for match in result.matches
         ]
-        return request.model_copy(update={"context_catalog": _dedupe_context_items([*request.context_catalog, *memory_items])})
+        selected, exclusions = _select_memory_reasoning_context(_dedupe_context_items([*request.context_catalog, *memory_items]))
+        return request.model_copy(update={"context_catalog": selected, "memory_context_exclusions": exclusions})
+
+
+def _select_memory_reasoning_context(
+    items: list[AnalysisContextCatalogItem],
+) -> tuple[list[AnalysisContextCatalogItem], list[AnalysisMemoryContextExclusion]]:
+    # Inspect the whole bounded set before filtering; conflicting exact answers
+    # must not be resolved by record order, recency, or retrieval score.
+    exact = [
+        item
+        for item in items
+        if (comparison := item.memory_comparison) is not None and comparison.applicability_status is SocMemoryApplicabilityStatus.APPLICABLE and not comparison.missing_required_facet_keys and not comparison.excluded_facet_hits
+    ]
+    definite = {Verdict.FALSE_POSITIVE, Verdict.TRUE_POSITIVE}
+    scope_keys = {"detection_key", "detection_signature", "behavior_fingerprint", "scenario_key"}
+    # Display comparisons truncate values; selection must use the full matcher report.
+    scopes = {}
+    for item in items:
+        report = item.metadata.get("applicability_report")
+        scopes[item.context_ref] = normalize_memory_facets(report.get("matched_required_facets", {})) if isinstance(report, dict) else {}
+    selected: list[AnalysisContextCatalogItem] = []
+    exclusions: list[AnalysisMemoryContextExclusion] = []
+    for item in items:
+        comparison = item.memory_comparison
+        if comparison is None or comparison.applicability_status is not SocMemoryApplicabilityStatus.PARTIAL or comparison.reviewed_verdict not in definite:
+            selected.append(item)
+            continue
+        required = scopes[item.context_ref]
+        relevant = [other for other in exact if any(required.get(key, set()) & scopes[other.context_ref].get(key, set()) for key in scope_keys)]
+        verdicts = {other.memory_comparison.reviewed_verdict for other in relevant}
+        preferred = [other for other in relevant if scopes[other.context_ref].get("behavior_fingerprint")]
+        if not preferred or len(verdicts) != 1 or not verdicts <= definite or comparison.reviewed_verdict in verdicts:
+            selected.append(item)
+            continue
+        exclusions.append(
+            AnalysisMemoryContextExclusion(
+                source_id=item.source_id,
+                summary=item.summary[:2000],
+                record_content_hash=item.metadata.get("record_content_hash"),
+                record_facets_hash=item.metadata.get("record_facets_hash"),
+                memory_comparison=comparison,
+                preferred_source_ids=sorted({other.source_id for other in preferred}),
+                explanation="当前行为已有精确匹配的审核经验；这条相似经验结论相反且匹配条件不完整，仅保留作差异审计，不进入本次模型上下文。",
+            )
+        )
+    return selected, exclusions
 
 
 def memory_query_from_analysis_request(

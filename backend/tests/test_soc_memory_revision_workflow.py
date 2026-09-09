@@ -406,6 +406,42 @@ def test_operator_can_diagnose_one_memory_against_a_persisted_alert_run() -> Non
     assert "missing_strong_anchor" in result.exclusion_reasons
 
 
+@pytest.mark.parametrize("persistent", [False, True])
+def test_pending_revision_can_be_found_by_predecessor_without_latest_n_scan(tmp_path: Path, persistent: bool) -> None:
+    now = datetime(2026, 8, 21, 9, 45, tzinfo=UTC)
+    engine = create_engine(f"sqlite:///{tmp_path / 'revision-navigation.sqlite'}")
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False)) if persistent else RevisionRepository()
+    service, _, memory_id = _active_memory_fixture(repository, now=now)
+    revision = service.propose_revision_candidate(
+        SocMemoryRevisionCandidateCreateCommand(
+            memory_id=memory_id,
+            expected_record_version=service.get_record(memory_id).version,
+            issue_type=SocMemoryRevisionIssueType.LESSON_INCOMPLETE,
+            reason="The business lesson needs a clearer explanation of the authorized activity.",
+        ),
+        context=_reviewer_context(key="revision-navigation"),
+    )
+    # Newer unrelated candidates must not hide the exact revision at a small page limit.
+    repository.save_memory_candidate(
+        revision.candidate.model_copy(
+            update={
+                "candidate_id": "MC-UNRELATED-REVISION",
+                "idempotency_key": "unrelated-revision",
+                "created_at": now + timedelta(minutes=1),
+                "revision_lineage": revision.candidate.revision_lineage.model_copy(update={"predecessor_memory_id": "MEM-OTHER"}),
+            }
+        )
+    )
+    matches = service.list_candidates(status=SocMemoryCandidateStatus.PENDING_REVIEW, revision_of_memory_id=memory_id, limit=1)
+    assert [item.candidate_id for item in matches] == [revision.candidate.candidate_id]
+    assert service.get_record(memory_id) == revision.predecessor_record
+    repository.save_memory_candidate(revision.candidate.model_copy(update={"status": SocMemoryCandidateStatus.REJECTED}))
+    assert service.list_candidates(status=SocMemoryCandidateStatus.PENDING_REVIEW, revision_of_memory_id=memory_id) == []
+    assert service.list_candidates(status=SocMemoryCandidateStatus.PENDING_REVIEW, revision_of_memory_id="MEM-MISSING") == []
+    engine.dispose()
+
+
 def test_confirmed_revision_supersedes_old_memory_without_overwriting_history() -> None:
     now = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
     repository = RevisionRepository()

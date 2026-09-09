@@ -58,6 +58,106 @@
   流程图明确 context-only Memory 在主模型前进入上下文、Base 已可使用它，之后是指令复用。
   聚焦后端结果/自动化/回传 92 项及策略/materiality/架构/语料 64 项通过；50 张 Mermaid 图可解析，
   其中 9 张处置图实际渲染通过。无真实模型调用、内网请求、数据库迁移、清空或重打包。
+  09-09 补齐新旧经验治理：候选审核展示已有业务结论及范围差异；同范围挑战合并待审任务，
+  不让模型可疑/企业转交自动推翻旧经验。启用端拦截同范围重复答案和相反答案、重叠范围相反指令，
+  审核人可在原页面选择旧经验并以一次确认原子修订，保留新旧 lineage、版本与审核审计。
+  AI 起草 Prompt v6 接收有界的新旧对照，没有新增每告警模型调用或必填理由。94 项聚焦后端回归、
+  3 项组件测试及 1440/390 两项浏览器演练通过；前端类型/lint 与后端格式检查通过。
+  PostgreSQL advisory-lock 路径尚未真实并发验收；现有数据不清空、不迁移或自动废止，Profile 不变。
+
+新旧经验治理 `EXP-20260909-memory-governance` 与统一经验中心 `EXP-20260909-memory-center-navigation` 完成记录已归档至 [2026-09](../archive/ai_soc/progress/2026-09.md)；经验中心默认显示已确认经验，审核和同类积累共用导航，未改变 Memory 业务规则。
+
+09-09 同项补齐检索后、主模型前的精确经验优先边界。`soc.memory_context_precedence.v1`
+将同检测/场景内与明确精确经验相反的 partial 经验放入运行级差异审计，不进入可引用 M-*、
+MemoryUse 或模型使用统计；没有精确答案仍可泛化，相互矛盾的精确答案不按分数选优。
+Prompt v40、75 项聚焦测试和真实保存请求 `2448168` 的三组隔离筛选对比通过。
+没有修改现存 Memory、增加模型调用或重写历史 Run；B 的相反审核结论为仿真，不是人工真值。
+
+#### Experiment — Exact Memory context precedence
+
+```json soc-experiment
+{
+  "experiment_id": "EXP-20260909-memory-context-precedence",
+  "task_id": "PI-04C",
+  "upstream_commit": "9146bfa03da1d8b463a54494d8e050771640008c",
+  "model": "none (saved real request; simulated opposite reviewed Memory; no inference)",
+  "config_hash": "sha256:7cdf592955f75adf3f27af9a7b95c583156681ff4bc65618b8b44209266a6b2d",
+  "config_basis": "backend/soc_agent/memory/retrieval.py; prompt soc-analysis-v40",
+  "data_hash": "sha256:9afd1669967c83eef4326a5e016d1cc19c5616ccd769dd887aaf245934056913",
+  "data_basis": "exported saved audit 2448168; Memory inventory hash and three simulated variants retained in comparison.json",
+  "hardware": "local Linux x86_64 CPU; Python 3.12.7; no GPU/model calls",
+  "command": "backend/.venv/bin/python validation/compact_zeus/memory/validate_memory_context_precedence.py --audit-file /tmp/soc-2448168-audit-current.json --memory-records /tmp/soc-memory-records-current.json --memory-id MEM-52B94F38659F --output-dir backend/.deer-flow/soc-validation/memory-context-precedence-20260909/final",
+  "metrics": {
+    "focused_tests_passed": 75,
+    "replay_cases_passed": 3,
+    "excluded_opposite_lessons_visible_in_prompt": 0,
+    "real_model_calls": 0,
+    "production_database_mutations": 0
+  },
+  "artifacts": "backend/.deer-flow/soc-validation/memory-context-precedence-20260909/final/comparison.json"
+}
+```
+
+09-09 同项修复待审修订的导航断点：经验详情与修订页按持久化 predecessor lineage
+查询已有候选，提供“继续审核修订”，不再展示重复创建入口。候选查询在数据库分页前
+按 `revision_of_memory_id` 过滤；旧记录无需迁移。只读确认实际 `MEM-52B94F38659F`
+对应待审 `MC-17407CB73CB8`，未代用户审核、删除、恢复使用或调用模型。
+
+#### Experiment — Pending Memory revision navigation
+
+```json soc-experiment
+{
+  "experiment_id": "EXP-20260909-memory-revision-navigation",
+  "task_id": "PI-04C",
+  "upstream_commit": "9146bfa03da1d8b463a54494d8e050771640008c",
+  "model": "none (read-only navigation; synthetic browser fixtures)",
+  "config_hash": "sha256:233a022714cd9d7e3fe126ef2113c0a330c7b07c9d02074e61e00fa788025002",
+  "config_basis": "frontend/src/components/workspace/soc/soc-memory-pending-revision.tsx",
+  "data_hash": "sha256:c567fce44794c0baf31748fdb5a95e12b69d6341f3f12524bee0b69649db5588",
+  "data_basis": "frontend/tests/e2e/soc-memory-pending-revision.spec.ts synthetic pending revision fixture",
+  "hardware": "Linux x86_64; Python 3.12.7; Node 24.14.0; Chromium; 1440/390px viewports",
+  "command": "cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:2026 PLAYWRIGHT_SKIP_WEB_SERVER=1 python3 ../scripts/pnpm.py exec playwright test tests/e2e/soc-memory-pending-revision.spec.ts --workers=1 --reporter=line",
+  "metrics": {
+    "backend_tests_passed": 37,
+    "frontend_component_tests_passed": 3,
+    "browser_tests_passed": 2,
+    "real_model_calls": 0,
+    "user_database_mutations": 0
+  },
+  "artifacts": "backend/.deer-flow/soc-validation/memory-revision-navigation-20260909"
+}
+```
+
+09-09 同项补齐“取消修订并恢复旧经验”：支持待审及最新已放弃修订。复用 review/activation Service，一次事务检查版本/有效期/发布冲突并恢复原使用方式，保留两项审计。失败整体回滚，重试不能撤销后来暂停；普通放弃仍保持暂停。
+审核页提供旧经验直达与确认恢复弹窗，成功后进入旧记录；context-only 不变为 Directive。18 项恢复测试、37 项修订/API 回归、3 项浏览器测试及类型/lint/格式检查通过。
+真实 `MC-17407CB73CB8` 只读确认已 rejected，未替用户恢复；运行 Gateway 已加载新增契约。
+
+#### Experiment — Cancel revision and restore old Memory
+
+```json soc-experiment
+{
+  "experiment_id": "EXP-20260909-memory-revision-restore",
+  "task_id": "PI-04C",
+  "upstream_commit": "9146bfa03da1d8b463a54494d8e050771640008c",
+  "model": "none (transactional synthetic fixtures and intercepted browser APIs)",
+  "config_hash": "sha256:77f96c93c5e7e5114c94f8b4546c1a064122da4c94915bccd456357ece3d6e9c",
+  "config_basis": "backend/soc_agent/core/service.py; working tree after d1dccd6598728b81856f25805bd042f9feba0cc3",
+  "data_hash": "sha256:be2fe7d0274f9bc3c7aacd9cbc125b95e04399cb328e9a4078f000a268b7d20d",
+  "data_basis": "backend/tests/test_soc_memory_revision_restore.py synthetic SQLite revisions",
+  "hardware": "Linux x86_64; Python 3.12.7; Node 24; Chromium at 1440/390px; no GPU",
+  "command": "backend/.venv/bin/pytest backend/tests/test_soc_memory_revision_restore.py -q --tb=short; cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:2026 PLAYWRIGHT_SKIP_WEB_SERVER=1 python3 ../scripts/pnpm.py exec playwright test tests/e2e/soc-memory-revision-restore.spec.ts --workers=1 --reporter=line",
+  "metrics": {
+    "restore_tests_passed": 18,
+    "existing_revision_router_tests_passed": 37,
+    "browser_tests_passed": 3,
+    "restore_test_duration_seconds": 61.21,
+    "browser_test_duration_seconds": 14.5,
+    "real_model_calls": 0,
+    "user_database_mutations": 0
+  },
+  "artifacts": "backend/.deer-flow/soc-validation/memory-revision-restore-20260909"
+}
+```
 
 ### 2026-09-03 — Governed Agent Platform target mapping
 

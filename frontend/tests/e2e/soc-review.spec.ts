@@ -107,7 +107,7 @@ test.describe("SOC review workbench", () => {
     await page.goto("/workspace/soc/review/memory-candidates");
 
     await expect(
-      page.getByRole("heading", { name: "Candidate 治理台账" }),
+      page.getByRole("heading", { name: "待审核与历史记录" }),
     ).toBeVisible();
     await expect(page.getByLabel("候选状态")).toContainText("全部状态");
     await expect(page.getByText("Authorized scanner pattern")).toBeVisible();
@@ -149,10 +149,12 @@ test.describe("SOC review workbench", () => {
 
     await expect(page.getByRole("heading", { name: "经验审核" })).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "返回经验中心" }),
+      page
+        .getByRole("navigation", { name: "经验中心视图" })
+        .getByRole("link", { name: "已确认经验" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "经验候选审核" }),
+      page.getByRole("heading", { name: "审核这条经验" }),
     ).toBeVisible();
     await expect(page.getByText("MC-ALPHA-001", { exact: true })).toBeVisible();
     await expect(
@@ -173,7 +175,7 @@ test.describe("SOC review workbench", () => {
       has: page.getByRole("heading", { name: "候选记忆" }),
     });
     const generateDraftButton = candidateSection.getByRole("button", {
-      name: "AI 生成 Business Lesson",
+      name: "AI 生成研判经验",
     });
     await expect(generateDraftButton).toBeDisabled();
     await candidateSection
@@ -183,14 +185,14 @@ test.describe("SOC review workbench", () => {
     await expect(generateDraftButton).toBeEnabled();
     await generateDraftButton.click();
     await expect(
-      page.getByRole("link", { name: "返回候选台账" }),
+      page.getByRole("link", { name: "返回审核列表" }),
     ).toHaveAttribute("href", "/workspace/soc/review/memory-candidates");
     for (const lessonField of [
-      "经验结论",
-      "业务依据",
+      "审核结论",
+      "判断依据",
       "适用条件",
       "泛化边界",
-      "失效条件",
+      "失效与反例",
       "处置建议",
     ]) {
       await expect(
@@ -215,7 +217,7 @@ test.describe("SOC review workbench", () => {
       candidateSection.getByText("精确匹配时复用审核结论", { exact: true }),
     ).toBeVisible();
     await expect(
-      candidateSection.getByRole("button", { name: "确认并沉淀 Memory" }),
+      candidateSection.getByRole("button", { name: "确认并启用经验" }),
     ).toHaveAttribute("data-variant", "default");
     await expect(
       candidateSection.getByRole("button", { name: "放弃沉淀此候选" }),
@@ -243,7 +245,7 @@ test.describe("SOC review workbench", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(
-      page.getByRole("heading", { name: "经验候选审核" }),
+      page.getByRole("heading", { name: "审核这条经验" }),
     ).toBeVisible();
     await expect(
       page.evaluate(

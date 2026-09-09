@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  BrainCircuitIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   DatabaseIcon,
@@ -94,21 +93,15 @@ export function SocMemoryRecordInventory() {
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
         icon={DatabaseIcon}
-        title="经验台账"
-        description="查找、审计和修订已经由专家确认的 SOC 经验"
+        title="经验中心"
+        description="已确认的业务经验及其使用状态"
         actions={
           <>
-            <Button size="sm" variant="outline" asChild>
-              <Link href="/workspace/soc/memory">
-                <BrainCircuitIcon className="size-4" />
-                返回经验中心
-              </Link>
-            </Button>
             <Button
               size="icon-sm"
               variant="ghost"
-              title="刷新经验台账"
-              aria-label="刷新经验台账"
+              title="刷新已确认经验"
+              aria-label="刷新已确认经验"
               onClick={() => void refetch()}
               disabled={isFetching}
             >
@@ -134,7 +127,7 @@ export function SocMemoryRecordInventory() {
                 value={searchDraft}
                 onChange={(event) => setSearchDraft(event.target.value)}
                 placeholder="经验 ID、告警 ID、规则、场景、CVE 或服务"
-                aria-label="搜索经验台账"
+                aria-label="搜索已确认经验"
               />
               <Button type="submit" size="icon" variant="outline" title="搜索">
                 <SearchIcon className="size-4" />
@@ -185,11 +178,11 @@ export function SocMemoryRecordInventory() {
             </div>
             {isLoading ? (
               <div className="text-muted-foreground flex h-48 items-center justify-center text-sm">
-                正在读取经验台账...
+                正在读取已确认经验...
               </div>
             ) : error ? (
               <div className="text-destructive flex h-48 items-center justify-center px-6 text-center text-sm">
-                {error instanceof Error ? error.message : "经验台账加载失败"}
+                {error instanceof Error ? error.message : "已确认经验加载失败"}
               </div>
             ) : records.length === 0 ? (
               <div className="text-muted-foreground flex h-48 items-center justify-center text-sm">

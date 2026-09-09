@@ -105,6 +105,9 @@ import type {
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
 
+import { SocMemoryGovernancePanel } from "./soc-memory-governance-panel";
+import { SocMemoryRevisionRecovery } from "./soc-memory-revision-recovery";
+
 const STATUS_OPTIONS: { value: SocReviewQueueStatus | "all"; label: string }[] =
   [
     { value: "open", label: "等待确认" },
@@ -289,6 +292,7 @@ interface MemoryCandidateReviewDraft {
   lessonDraftProvenance: string;
   lessonDraftUncertainties: string[];
   lessonEditing: boolean;
+  replacement: { memoryId: string; version: number } | null;
 }
 
 function defaultMemoryCandidateReviewDraft(
@@ -309,6 +313,7 @@ function defaultMemoryCandidateReviewDraft(
     lessonDraftProvenance: "",
     lessonDraftUncertainties: [],
     lessonEditing: false,
+    replacement: null,
   };
 }
 
@@ -1742,7 +1747,7 @@ function MemoryCandidateInventory({
     <section className="rounded-md border">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
         <div>
-          <h3 className="text-sm font-semibold">Candidate 治理台账</h3>
+          <h3 className="text-sm font-semibold">待审核与历史记录</h3>
           <p className="text-muted-foreground mt-1 text-xs">
             待审、已确认和历史候选都保留在这里；打开详情查看完整审核对象和治理结果。
           </p>
@@ -1764,8 +1769,8 @@ function MemoryCandidateInventory({
             type="button"
             size="icon-sm"
             variant="outline"
-            title="刷新候选台账"
-            aria-label="刷新候选台账"
+            title="刷新审核记录"
+            aria-label="刷新审核记录"
             disabled={isFetching}
             onClick={onRefresh}
           >
@@ -1888,7 +1893,7 @@ function MemoryCandidateGovernanceStatus({
     confirmed:
       "该候选已完成审核并沉淀为 Memory。审核后的完整 Business Lesson 在下方展示。",
     rejected: candidate.revision_lineage
-      ? "本次 Memory 修订已结束，旧 Memory 保持停用。若后续告警再次证明经验有误，应从那次实际命中记录重新发起修订。"
+      ? "本次修订已放弃，旧经验内容保持不变。可查看当前使用状态，或明确恢复旧经验。"
       : "该候选已被审核人放弃沉淀。候选正文和历史审计仍保留，可显式重新打开审核。",
     superseded: "该候选已被更新版本替代，仅作为历史审计记录保留。",
     expired: "该候选已过有效期，仅作为历史审计记录保留。",
@@ -2059,12 +2064,7 @@ function MemoryCandidateSection({
                         }
                       </Badge>
                     </div>
-                    <p className="mt-2 leading-6">
-                      前置经验{" "}
-                      {candidate.revision_lineage.predecessor_memory_id} v
-                      {candidate.revision_lineage.predecessor_memory_version}
-                      已暂停用于新告警。只有本候选审核通过后，系统才会创建替代版本并将旧版本标记为历史记录。
-                    </p>
+                    <SocMemoryRevisionRecovery candidate={candidate} />
                     <div className="mt-2 grid gap-1 text-xs md:grid-cols-2">
                       <span className="font-mono break-all">
                         source run: {candidate.revision_lineage.source_run_id}
@@ -2081,6 +2081,18 @@ function MemoryCandidateSection({
                 ) : null}
 
                 <MemoryCandidateProposal candidate={candidate} />
+                {editable && !candidate.revision_lineage && (
+                  <SocMemoryGovernancePanel
+                    candidateId={candidate.candidate_id}
+                    verdict={draft.confirmedVerdict}
+                    promotedFacets={draft.promotedFacetKeys}
+                    replacement={draft.replacement}
+                    onReplace={(replacement) =>
+                      onReviewDraftChange(candidate, { replacement })
+                    }
+                    facetLabel={memoryFacetLabel}
+                  />
+                )}
 
                 <div className="mt-4 grid grid-cols-2 overflow-hidden border lg:grid-cols-4">
                   <CandidateMetric
@@ -2622,7 +2634,7 @@ function MemoryCandidateSection({
                     {candidate.status === "rejected" &&
                     candidate.revision_lineage ? (
                       <span className="text-muted-foreground max-w-sm text-right text-xs leading-5">
-                        修订版本已冻结；请从新的实际误命中告警重新发起。
+                        本次修订已结束，可在上方查看或恢复旧经验。
                       </span>
                     ) : candidate.status === "rejected" ? (
                       <Button
@@ -2646,7 +2658,9 @@ function MemoryCandidateSection({
                           onClick={() => onReview(candidate, "confirm")}
                         >
                           <CheckCircle2Icon className="size-4" />
-                          确认并启用经验
+                          {draft.replacement
+                            ? "确认修订并替换旧经验"
+                            : "确认并启用经验"}
                         </Button>
                         <Button
                           size="sm"
@@ -2656,7 +2670,9 @@ function MemoryCandidateSection({
                           onClick={() => onReview(candidate, "reject")}
                         >
                           <XCircleIcon className="size-4" />
-                          放弃沉淀此候选
+                          {candidate.revision_lineage
+                            ? "放弃修订，保持暂停"
+                            : "放弃沉淀此候选"}
                         </Button>
                         <Button
                           size="sm"
@@ -3574,6 +3590,7 @@ export function SocReviewQueueWorkbench({
         ...(current[candidate.candidate_id] ??
           defaultMemoryCandidateReviewDraft(candidate)),
         ...patch,
+        ...(patch.promotedFacetKeys ? { replacement: null } : {}),
       },
     }));
   };
@@ -3623,6 +3640,12 @@ export function SocReviewQueueWorkbench({
             : {}),
           ...(decision === "confirm" && recordLesson
             ? { record_lesson: recordLesson }
+            : {}),
+          ...(decision === "confirm" && draft.replacement
+            ? {
+                replaces_memory_id: draft.replacement.memoryId,
+                expected_replaced_version: draft.replacement.version,
+              }
             : {}),
           ...(decision === "confirm"
             ? {
@@ -3773,7 +3796,9 @@ export function SocReviewQueueWorkbench({
         }
         title={
           workspaceView === "memory"
-            ? "经验审核"
+            ? initialCandidateId
+              ? "经验审核"
+              : "经验中心"
             : workspaceView === "sample"
               ? "质量评测"
               : "需人工介入"
@@ -3824,13 +3849,6 @@ export function SocReviewQueueWorkbench({
                   刷新
                 </Button>
               </>
-            ) : workspaceView === "memory" ? (
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/workspace/soc/memory">
-                  <ChevronLeftIcon className="size-4" />
-                  返回经验中心
-                </Link>
-              </Button>
             ) : null}
           </>
         }
@@ -3847,7 +3865,9 @@ export function SocReviewQueueWorkbench({
             <section className="border px-4 py-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-sm font-semibold">经验候选审核</h2>
+                  <h2 className="text-sm font-semibold">
+                    {initialCandidateId ? "审核这条经验" : "经验审核"}
+                  </h2>
                   <p className="text-muted-foreground mt-1 text-sm">
                     决定跨告警经验是否值得沉淀，以及未来新告警可以如何使用。
                   </p>
@@ -3857,14 +3877,14 @@ export function SocReviewQueueWorkbench({
                     <Button variant="ghost" size="sm" asChild>
                       <Link href="/workspace/soc/review/memory-candidates">
                         <ChevronLeftIcon className="size-4" />
-                        返回候选台账
+                        返回审核列表
                       </Link>
                     </Button>
                     <Badge variant="outline">{initialCandidateId}</Badge>
                   </div>
                 ) : (
                   <Badge variant="secondary">
-                    {standaloneMemoryCandidates.length} 条待审核经验
+                    {standaloneMemoryCandidates.length} 条审核记录
                   </Badge>
                 )}
               </div>

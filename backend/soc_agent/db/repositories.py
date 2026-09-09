@@ -132,6 +132,7 @@ class _MutationTransactionState:
     write_hook: MutationWriteHook | None = None
     write_count: int = 0
     aborted: bool = False
+    memory_governance_locked: bool = False
 
     def flush_write(self) -> None:
         self.session.flush()
@@ -213,6 +214,53 @@ class SqlAlchemyAlertRepository:
             except BaseException:
                 session.rollback()
                 raise
+
+    def lock_memory_governance(self) -> None:
+        """Serialize infrequent governance writes, including empty-scope checks."""
+        state = self._transaction_state
+        if state is None:
+            raise RuntimeError("Memory governance lock requires a mutation transaction")
+        if state.memory_governance_locked:
+            return
+        connection = state.session.connection()
+        if connection.dialect.name == "sqlite":
+            if not connection.connection.driver_connection.in_transaction:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+        elif connection.dialect.name == "postgresql":
+            connection.execute(select(func.pg_advisory_xact_lock(738102941)))
+        else:
+            raise RuntimeError("Memory governance locking supports SQLite and PostgreSQL")
+        state.memory_governance_locked = True
+
+    def find_pending_memory_candidate_by_scope(self, scope_key: str) -> SocMemoryCandidate | None:
+        with self._session_factory() as session:
+            row = session.execute(
+                select(SocMemoryCandidateRow)
+                .where(
+                    SocMemoryCandidateRow.status.in_([SocMemoryCandidateStatus.PENDING_REVIEW.value, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE.value]),
+                    SocMemoryCandidateRow.candidate_payload["metadata"]["governance_scope_key"].as_string() == scope_key,
+                )
+                .order_by(SocMemoryCandidateRow.created_at.asc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                return SocMemoryCandidate.model_validate(row.candidate_payload)
+            # Existing deployments predate the scope key; compare without rewriting them.
+            from soc_agent.memory.governance import scope_identity
+
+            legacy_rows = session.execute(
+                select(SocMemoryCandidateRow)
+                .where(
+                    SocMemoryCandidateRow.status.in_([SocMemoryCandidateStatus.PENDING_REVIEW.value, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE.value]),
+                    SocMemoryCandidateRow.candidate_payload["metadata"]["governance_scope_key"].as_string().is_(None),
+                )
+                .order_by(SocMemoryCandidateRow.created_at.asc())
+            ).scalars()
+            for legacy_row in legacy_rows:
+                candidate = SocMemoryCandidate.model_validate(legacy_row.candidate_payload)
+                if candidate.revision_lineage is None and scope_identity(candidate) == scope_key:
+                    return candidate
+            return None
 
     def save_run(self, run: AnalysisRun) -> None:
         with self._session_factory() as session:
@@ -1362,6 +1410,7 @@ class SqlAlchemyAlertRepository:
         run_id: str | None = None,
         alert_id: str | None = None,
         queue_id: str | None = None,
+        revision_of_memory_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]:
         source_filters = []
@@ -1382,6 +1431,8 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocMemoryCandidateRow.tenant_id == tenant_id)
             if source_filters:
                 query = query.where(or_(*source_filters))
+            if revision_of_memory_id is not None:
+                query = query.where(SocMemoryCandidateRow.candidate_payload["revision_lineage"]["predecessor_memory_id"].as_string() == revision_of_memory_id)
             result = session.execute(query.order_by(SocMemoryCandidateRow.created_at.desc()).limit(limit))
             return [SocMemoryCandidate.model_validate(row.candidate_payload) for row in result.scalars()]
 

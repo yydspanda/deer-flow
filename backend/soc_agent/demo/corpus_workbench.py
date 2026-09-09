@@ -1927,6 +1927,7 @@ def _audit_bundle(
                 "candidates": len(candidates),
                 "memory_records": len(memory_records),
                 "memory_uses": len(memory_uses),
+                "memory_comparisons_only": len(request.memory_context_exclusions) if request else 0,
             },
             review_guide=[
                 "Observation 是一次有效告警观察，不等于一条 Memory；Replay 汇总同一 aggregation_key 在窗口内的支持度和一致性。",
@@ -1938,6 +1939,7 @@ def _audit_bundle(
                 "memory_candidates": _audit_json(candidates),
                 "memory_records": _audit_json(memory_records),
                 "memory_uses": _audit_json(memory_uses),
+                "memory_context_exclusions": _audit_json(request.memory_context_exclusions) if request else [],
             },
         ),
     ]

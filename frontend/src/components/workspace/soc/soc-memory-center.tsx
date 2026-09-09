@@ -395,34 +395,17 @@ export function SocMemoryCenter({
     <div className="flex size-full min-h-0 flex-col">
       <SocWorkspaceHeader
         icon={BrainCircuitIcon}
-        title="SOC 经验中心"
-        description="查看重复告警如何沉淀为经验，以及已确认经验是否开放给新告警使用"
+        title="经验中心"
+        description="同类告警的积累情况与经验沉淀进度"
         actions={
           <>
-            <Button size="sm" variant="outline" asChild>
-              <Link href="/workspace/soc/memory/records">
-                <DatabaseIcon className="size-4" />
-                经验台账
-              </Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link href="/workspace/soc/review/memory-candidates">
-                <ShieldCheckIcon className="size-4" />
-                待审核经验
-                {(overview?.metrics.pending_candidate_count ?? 0) > 0 ? (
-                  <span className="bg-primary-foreground/15 min-w-5 px-1.5 text-center text-xs tabular-nums">
-                    {overview?.metrics.pending_candidate_count}
-                  </span>
-                ) : null}
-              </Link>
-            </Button>
             <Button
               variant="ghost"
               size="icon-sm"
               onClick={() => void refetch()}
               disabled={isFetching}
-              title="刷新经验中心"
-              aria-label="刷新经验中心"
+              title="刷新同类告警积累"
+              aria-label="刷新同类告警积累"
             >
               <RefreshCwIcon
                 className={cn("size-4", isFetching && "animate-spin")}

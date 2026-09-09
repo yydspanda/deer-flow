@@ -34,6 +34,8 @@ import type {
   SocMemoryBusinessLessonDraftRequest,
   SocMemoryCandidateListResponse,
   SocMemoryCandidateReviewRequest,
+  SocMemoryGovernancePreview,
+  SocVerdict,
   SocMemoryCandidateReviewResult,
   SocMemoryCandidateStatus,
   SocMemoryCandidateSupersessionRequest,
@@ -768,6 +770,7 @@ export async function listSocMemoryCandidates({
   runId,
   alertId,
   queueId,
+  revisionOfMemoryId,
   limit = 50,
   context,
 }: {
@@ -777,6 +780,7 @@ export async function listSocMemoryCandidates({
   runId?: string | null;
   alertId?: string | null;
   queueId?: string | null;
+  revisionOfMemoryId?: string | null;
   limit?: number;
   context?: SocRequestContext;
 } = {}): Promise<SocMemoryCandidate[]> {
@@ -798,6 +802,9 @@ export async function listSocMemoryCandidates({
   }
   if (queueId) {
     params.set("queue_id", queueId);
+  }
+  if (revisionOfMemoryId) {
+    params.set("revision_of_memory_id", revisionOfMemoryId);
   }
   params.set("limit", String(limit));
 
@@ -899,6 +906,25 @@ export async function getSocMemoryCandidate(
     response,
     "Failed to load SOC memory candidate",
   );
+}
+
+export async function previewSocMemoryGovernance(
+  candidateId: string,
+  request: {
+    reviewer_verdict: SocVerdict | null;
+    promoted_facet_keys: string[];
+  },
+  context?: SocRequestContext,
+): Promise<SocMemoryGovernancePreview> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}/governance-preview`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryGovernancePreview>(response, "无法比较已有经验");
 }
 
 export async function reviewSocMemoryCandidate(

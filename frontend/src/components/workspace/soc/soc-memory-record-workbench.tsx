@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { memoryAvailabilityCopy } from "@/components/workspace/soc/soc-memory-copy";
 import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memory-decision-capability";
+import { SocMemoryPendingRevision } from "@/components/workspace/soc/soc-memory-pending-revision";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useSocMemoryLineage,
@@ -207,6 +208,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
 
   const handleRetrieval = async () => {
     if (!record || !governanceReason.trim()) return;
+    if (record.metadata.revision_pending === true) return;
     const action = record.retrieval_enabled ? "disable" : "enable";
     try {
       await retrievalMutation.mutateAsync({
@@ -257,9 +259,9 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
         description="查看经验、使用历史和版本化治理状态"
         actions={
           <Button size="sm" variant="outline" asChild>
-            <Link href="/workspace/soc/memory/records">
+            <Link href="/workspace/soc/memory">
               <ArrowLeftIcon className="size-4" />
-              返回经验台账
+              返回已确认经验
             </Link>
           </Button>
         }
@@ -443,13 +445,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
               </section>
 
               {record.metadata.revision_pending === true ? (
-                <Alert className="border-amber-300 bg-amber-50 text-amber-950">
-                  <AlertTriangleIcon />
-                  <AlertTitle>该经验正在修订</AlertTitle>
-                  <AlertDescription>
-                    旧版本已暂停用于新告警，请先完成修订候选的审核。
-                  </AlertDescription>
-                </Alert>
+                <SocMemoryPendingRevision memoryId={record.memory_id} />
               ) : null}
 
               <section className="border px-5 py-5">
@@ -484,18 +480,16 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       经验候选。
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    disabled={record.metadata.revision_pending === true}
-                    asChild
-                  >
-                    <Link
-                      href={`/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}/revise`}
-                    >
-                      <FilePenLineIcon className="size-4" />
-                      创建修订版本
-                    </Link>
-                  </Button>
+                  {record.metadata.revision_pending !== true ? (
+                    <Button size="sm" asChild>
+                      <Link
+                        href={`/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}/revise`}
+                      >
+                        <FilePenLineIcon className="size-4" />
+                        创建修订版本
+                      </Link>
+                    </Button>
+                  ) : null}
                 </div>
                 {record.status === "confirmed" ? (
                   <div className="mt-4 grid gap-3 border-t pt-4 lg:grid-cols-[minmax(0,1fr)_13rem_8rem_auto] lg:items-end">
@@ -537,7 +531,9 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       size="sm"
                       variant={record.retrieval_enabled ? "outline" : "default"}
                       disabled={
-                        !governanceReason.trim() || retrievalMutation.isPending
+                        record.metadata.revision_pending === true ||
+                        !governanceReason.trim() ||
+                        retrievalMutation.isPending
                       }
                       onClick={() => void handleRetrieval()}
                     >

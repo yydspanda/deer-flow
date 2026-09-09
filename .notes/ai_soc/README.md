@@ -4,6 +4,17 @@
 
 ## Start Here
 
+Web 只保留一个 **经验中心**：默认打开 **已确认经验**，可切换 **经验审核** 和 **同类告警积累**。
+查找、暂停或修订已有经验去第一个视图；处理新候选或查看历史审核去第二个；查看样本积累去第三个。
+原“经验台账”并入已确认经验，旧链接继续可用。三个视图共用导航，详情返回明确的所属列表。
+
+经验已发起修订后，可在经验详情或修订页点击 **继续审核修订** 返回已有待审候选；
+无需重新创建。旧经验在审核期间保持暂停，审核记录与历史告警不被改写。
+不再修改时，可选 **取消修订并恢复旧经验**；若已经放弃修订，可选 **恢复旧经验**。
+确认原使用方式与开放期限后，系统原子结束修订并恢复旧经验，随后进入旧经验详情。
+普通 **放弃修订，保持暂停** 不会恢复使用；**返回审核列表** 返回审核记录列表，
+**查看旧经验** 才进入原 Memory 详情。恢复不改变内容、适用范围或 context-only/精确复用方式。
+
 | 你要做什么 | 先看 | 再看 |
 |---|---|---|
 | 与颜耀明复盘人工交接、AI自动化机会和数据治理前置要求 | `briefings/yan-yaoming-automation-review-20260814/README.md` | `audits/alpha-journey-inventory.md` 与 `integrations/mock-and-real-register.md` |
@@ -43,7 +54,7 @@
 | 查看旧 sec-model/ZEUS 状态/safe-path 审计结论 | `integrations/pingan-legacy-source-audit.md` | `integrations/pingan-internal-continuation-handoff.md` |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
 | 设计通用记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
-| 审阅 PingAn Memory 的同类关联、候选质量、改判、反馈和失效闭环 | `memory/pingan-soc-memory-design.md` | `governance/decision-disposition-action-automation.md` |
+| 审阅 PingAn Memory 的同类关联、候选质量、新旧经验对照、精确经验优先与冲突修订 | `memory/pingan-soc-memory-design.md` | `governance/decision-disposition-action-automation.md` |
 | 理解 Memory 改判、无 Memory 自动处置和完整动作留痕 | `governance/decision-disposition-action-automation.md` | `soc-agent-solution.md` Section 7.2 / 10 |
 | 追踪标记由谁产生、怎样传递、什么条件触发状态/处置变化 | [`governance/decision-to-policy-flow.md`](governance/decision-to-policy-flow.md) | 第 0 节传递图，第 1～5 节触发条件，第 6 节实例与逐步读法 |
 | 审阅研判准确率、漏报、转交、自动忽略、Rule Code 质量和算力优化口径 | `governance/effectiveness-and-rule-optimization.md` | `alert-lifecycle-flow.md` 的最终状态回流与 Memory feedback |

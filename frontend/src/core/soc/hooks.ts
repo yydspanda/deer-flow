@@ -46,6 +46,7 @@ import {
   processSocMemoryWorkbenchAlert,
   processSocCorpusWorkbenchAlert,
   promoteSocRunToMemory,
+  previewSocMemoryGovernance,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
@@ -55,6 +56,7 @@ import {
   updateSocMemoryRetrievalActivation,
   updateSocNormalizationIssue,
 } from "./api";
+import type { SocVerdict } from "./types";
 import type {
   SocAgentApprovedActionCommand,
   SocAlertAttentionLevel,
@@ -145,6 +147,7 @@ export const socMemoryQueryKeys = {
     runId,
     alertId,
     queueId,
+    revisionOfMemoryId,
     limit,
   }: {
     status: SocMemoryCandidateStatus | null;
@@ -153,6 +156,7 @@ export const socMemoryQueryKeys = {
     runId: string | null | undefined;
     alertId: string | null | undefined;
     queueId: string | null | undefined;
+    revisionOfMemoryId?: string | null;
     limit: number;
   }) =>
     [
@@ -165,6 +169,7 @@ export const socMemoryQueryKeys = {
       alertId,
       queueId,
       limit,
+      revisionOfMemoryId,
     ] as const,
   candidate: (candidateId: string | null | undefined) =>
     [...socMemoryQueryKeys.all, "candidate", candidateId] as const,
@@ -735,6 +740,7 @@ export function useSocMemoryCandidates({
   runId,
   alertId,
   queueId,
+  revisionOfMemoryId,
   limit = 50,
   enabled = true,
 }: {
@@ -744,6 +750,7 @@ export function useSocMemoryCandidates({
   runId?: string | null;
   alertId?: string | null;
   queueId?: string | null;
+  revisionOfMemoryId?: string | null;
   limit?: number;
   enabled?: boolean;
 } = {}) {
@@ -756,6 +763,7 @@ export function useSocMemoryCandidates({
       runId,
       alertId,
       queueId,
+      revisionOfMemoryId,
       limit,
     }),
     queryFn: () =>
@@ -766,6 +774,7 @@ export function useSocMemoryCandidates({
         runId,
         alertId,
         queueId,
+        revisionOfMemoryId,
         limit,
         context,
       }),
@@ -775,6 +784,29 @@ export function useSocMemoryCandidates({
   return { candidates: data ?? [], isLoading, isFetching, error, refetch };
 }
 
+export function useSocMemoryGovernancePreview(
+  candidateId: string,
+  verdict: SocVerdict | null,
+  promotedFacets: string[],
+) {
+  const context = useSocWebRequestContext();
+  return useQuery({
+    queryKey: [
+      ...socMemoryQueryKeys.all,
+      "governance-preview",
+      candidateId,
+      verdict,
+      promotedFacets,
+    ],
+    queryFn: () =>
+      previewSocMemoryGovernance(
+        candidateId,
+        { reviewer_verdict: verdict, promoted_facet_keys: promotedFacets },
+        context,
+      ),
+    staleTime: 0,
+  });
+}
 export function useSocMemoryCandidate(candidateId: string | null | undefined) {
   const context = useSocWebRequestContext();
   const { data, isLoading, error, isFetching } = useQuery({
@@ -973,13 +1005,13 @@ export function useSocMemorySearch(query: SocMemoryQuery | null | undefined) {
 
 export function useSocMemoryRecord(memoryId: string | null | undefined) {
   const context = useSocWebRequestContext();
-  const { data, isLoading, error, isFetching } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: socMemoryQueryKeys.record(memoryId),
     queryFn: () => getSocMemoryRecord(memoryId!, context),
     enabled: !!memoryId,
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
-  return { record: data ?? null, isLoading, isFetching, error };
+  return { record: data ?? null, isLoading, isFetching, error, refetch };
 }
 
 export function useSocMemoryLineage(memoryId: string | null | undefined) {

@@ -3,6 +3,23 @@
 This directory contains offline, replay-stable validation for memory admission
 and retrieval. It does not call an LLM or an internal PingAn service.
 
+`validate_memory_context_precedence.py` reads an exported DEV audit and Memory
+inventory, replays production retrieval/projection in an in-memory repository, and
+compares reference-only against a simulated opposite exact lesson, with and without
+a directive. It never publishes the simulated lesson or calculates a new verdict.
+The output directory must be empty. `comparison.json` retains source hashes, policy,
+prompt, hardware and upstream revision, selected Memory and audit-only exclusions.
+Protected `source-audit.json` and `source-records.json` snapshots preserve the inputs
+for a later replay after temporary exports have been removed.
+
+```bash
+backend/.venv/bin/python validation/compact_zeus/memory/validate_memory_context_precedence.py \
+  --audit-file /tmp/soc-2448168-audit-current.json \
+  --memory-records /tmp/soc-memory-records-current.json \
+  --memory-id MEM-52B94F38659F \
+  --output-dir backend/.deer-flow/soc-validation/memory-context-precedence-20260909
+```
+
 The canonical human-labeled quality lane now lives in `soc_agent.eval.memory` and
 uses the committed sample under `backend/samples/eval/memory/`:
 

@@ -15,6 +15,18 @@ const SocMemoryCenter = dynamic(
   },
 );
 
+const SocMemoryRecordInventory = dynamic(
+  () =>
+    import("@/components/workspace/soc/soc-memory-record-inventory").then(
+      (module) => module.SocMemoryRecordInventory,
+    ),
+  { loading: () => <SocMemoryLoading />, ssr: false },
+);
+
 export function SocMemoryCenterLoader() {
+  return <SocMemoryRecordInventory />;
+}
+
+export function SocMemoryPatternsLoader() {
   return <SocMemoryCenter />;
 }
