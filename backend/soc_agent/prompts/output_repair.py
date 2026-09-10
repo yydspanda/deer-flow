@@ -13,10 +13,11 @@ from soc_agent.model_reference_aliases import (
     project_model_reference_aliases,
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
+from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 
-ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v7"
-ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-section-output-repair-v1"
-ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-role-verification-output-repair-v2"
+ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v8"
+ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-section-output-repair-v2"
+ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-role-verification-output-repair-v3"
 MAX_OUTPUT_REPAIR_CANDIDATE_CHARS = 100_000
 MAX_OUTPUT_REPAIR_ERROR_CHARS = 4_000
 MAX_OUTPUT_REPAIR_CONTEXT_CHARS = 190_000
@@ -196,6 +197,8 @@ def _build_prompt(
             "If a claim cannot be made structurally valid from the supplied candidate and catalogs, remove the optional claim or mark the supported status unresolved where the schema permits.",
             "Return one complete JSON object only, without markdown or prose outside it.",
             *additional_rules,
+            OPERATOR_OUTPUT_LANGUAGE,
+            "Apply the language rule to generated or rewritten prose only; do not modify an already accepted core or an immutable section just to translate it.",
         ]
     )
     user = "\n".join(

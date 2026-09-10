@@ -2092,10 +2092,10 @@ class SocMemoryService:
             _transaction_active=True,
         )
 
-    def preview_candidate_governance(self, candidate_id: str, *, reviewer_verdict: Verdict | None = None, promoted_facet_keys: list[str] | None = None) -> MemoryGovernancePreview:
+    def preview_candidate_governance(self, candidate_id: str, *, reviewer_verdict: Verdict | None = None, promoted_facet_keys: list[str] | None = None, promoted_facet_values: dict[str, list[str]] | None = None) -> MemoryGovernancePreview:
         candidate = self.get_candidate(candidate_id)
         if candidate.applicability is not None:
-            candidate = candidate.model_copy(update={"applicability": promote_memory_applicability_facets(candidate.applicability, promoted_facet_keys or [])})
+            candidate = candidate.model_copy(update={"applicability": promote_memory_applicability_facets(candidate.applicability, promoted_facet_keys or [], promoted_facet_values)})
         if self._record_repository is None:
             raise SocServiceNotImplementedError("Memory comparison requires a MemoryRecordRepository")
         used_ids: set[str] = set()

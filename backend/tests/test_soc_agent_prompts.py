@@ -19,6 +19,7 @@ from soc_agent.prompts import (
     analysis_output_examples,
     build_analysis_prompt,
 )
+from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -95,6 +96,7 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert 'never add prose such as "无冲突" as an array item' in prompt.user
     assert "Render Windows paths in generated prose with forward slashes" in prompt.user
     assert "Write every free-text value in concise Chinese" in prompt.user
+    assert OPERATOR_OUTPUT_LANGUAGE in prompt.user
     assert prompt.user.count("<output_example ") == 1
     assert 'id="network_roles"' in prompt.user
     assert "Never copy an EX-* reference into the answer" in prompt.user

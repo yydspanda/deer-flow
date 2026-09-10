@@ -132,7 +132,12 @@ Runtime decisions, construct Memory, or infer action authority.
 - `AI generate Memory` is available only after the reviewer selects the technical
   verdict. Optional business context is separate. A verdict change invalidates the
   browser draft.
-- The generated Lesson is read-only until explicit Edit. Applicability is server-derived;
+- Generated Lessons open directly as editable fields for both new and revision candidates;
+  preview is optional and returning to editing preserves every draft value. Regeneration
+  requires explicit overwrite confirmation, keeps the current draft until success, and
+  disables editing, verdict/scope changes and confirmation while generation is in flight.
+  Optional business facts remain human input; never fill them from the selected verdict.
+  Applicability is server-derived;
   the browser may only promote known optional facets to required and must submit the
   complete narrowed contract. It cannot widen scope, persist the draft automatically,
   enable retrieval, or infer directive eligibility.
@@ -140,6 +145,16 @@ Runtime decisions, construct Memory, or infer action authority.
   reviewer-selectable optional narrowing. Selecting an optional facet adds it to the
   required set; clearing it removes only that reviewer-added restriction. Arbitrary
   facet keys or values require a tenant Memory Profile change, not a browser input.
+- Candidate and record details share `SocMemoryScope`. Only server-verified `scope_view`
+  may explain fingerprint contents or classify redundant narrowing options. Do not hash,
+  parse tenant detection identities, or infer applicability in React. Keep raw contracts
+  and original Lesson applicability prose in collapsed audit; unknown projections retain
+  explicit unresolved fingerprint labels. Show required conditions and independent optional
+  values directly, including unselected options on read-only detail. Remove only verified
+  redundant values, never an entire mixed group. Review sends `promoted_facet_values` to
+  drafting/preview and the same narrowed `record_applicability` to confirmation. Multiple
+  selected values within one group remain OR; different groups remain AND. Similarity keys
+  stay optional. Never mutate persisted scope on read or invent arbitrary keys/values.
 - Retrieval activation sends current record version, reason, idempotency key, and
   validity/review settings. Refresh server state after mutation. Render context-only
   matches separately from applicable decision directives.

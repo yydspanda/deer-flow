@@ -1,7 +1,7 @@
 {
   "schema_version": "soc.tenant_disposition_policy.v1",
   "policy_id": "pingan.soc.disposition",
-  "policy_version": "pingan-disposition-v2.4.1",
+  "policy_version": "pingan-disposition-v2.4.2",
   "tenant_id": "pingan",
   "applicable_environments": [
     "dev",
@@ -11,7 +11,7 @@
   ],
   "owner": "PingAn SOC Operations",
   "source_ref": ".notes/ai_soc/capabilities/pingan/disposition-policy-extraction.md",
-  "change_reason": "Allow the isolated dev-corpus-eval replay scope to exercise the reviewed PingAn policy end to end while external action execution remains disabled; production environments and rule behavior are unchanged.",
+  "change_reason": "将运营可见的策略名称、理由和建议统一为中文；匹配条件、优先级、结论、复核要求、适用环境及外部动作权限均不变。",
   "reviewed_by": "pingan-soc-project-owner",
   "reviewed_at": "2026-08-11T00:00:00+08:00",
   "internal_networks": [
@@ -54,7 +54,7 @@
         "summary": "当前行为与有效、范围完整且事件时间匹配的授权活动事实精确一致；保留基础技术研判，运营上按授权良性真阳性关闭。",
         "rationale": [
           "平安旧流程会依据有效渗透测试名单或扫描器身份关闭预警。",
-          "新策略不相信单一标签或字符串；只有 subject、target、behavior、tenant、environment 和 event time 全部精确匹配的 Governed Context 授权事实才可应用。"
+          "单一标签不足以证明授权；必须与已确认授权事实中的主体、目标、行为、企业、环境及事件时间全部匹配，才可应用。"
         ],
         "manual_checks": []
       }
@@ -76,14 +76,14 @@
         "response_posture": "manual_validation_required",
         "recommended_disposition": "escalated",
         "review_effect": "require",
-        "suggested_action": "按平安历史规则转交；封禁或抑制必须继续通过独立 Automation Policy 授权。",
-        "summary": "告警命中平安旧流程中明确的强制转交规则码，形成独立 escalated 运营决策；不在租户策略层直接执行封禁。",
+        "suggested_action": "按平安规则转交复核；如需封禁或抑制，仍须通过独立的自动化策略授权。",
+        "summary": "告警命中平安明确要求转交的规则编码，按企业规则转交复核；这不代表已经执行封禁。",
         "rationale": [
           "旧 APT 流程对两个精确规则码直接设置转交并进入后续风险评分与封禁链。",
           "新实现保留规则码处置经验，但将转交、动作授权和真实执行拆开留痕。"
         ],
         "manual_checks": [
-          "确认对应 Automation Policy 的模型、证据、目标和 adapter 版本仍在评审有效期内。"
+          "如需自动处置，确认对应自动化策略授权的模型、证据、目标和适配器版本仍然有效。"
         ]
       }
     },
@@ -105,11 +105,11 @@
         "response_posture": "no_automated_response",
         "recommended_disposition": "ignored",
         "review_effect": "clear",
-        "suggested_action": "保留 Runtime 技术检测结论，按平安安全软件路径快速策略忽略本次运营告警，不执行自动响应。",
-        "summary": "本次 EDR 告警中的全部相关 canonical 进程/可执行文件路径均精确命中 Excel safe_paths 或其路径族；按显式开启的平安高吞吐策略直接忽略。",
+        "suggested_action": "保留技术检测结论，按平安安全软件路径快速策略忽略本次告警，不执行自动响应。",
+        "summary": "本次终端告警的全部相关进程或可执行文件路径均命中已确认的安全路径或路径族；按已开启的平安快速处置策略忽略。",
         "rationale": [
-          "只消费 PingAn Integration 生成的受审计策略信号；通用 Tenant Policy 不读取 Excel、平安字段名或路径模板。",
-          "精确路径与路径族具有相同的忽略效力；路径族只由 safe_paths 推导，other_paths 不获得该权限。",
+          "安全路径匹配由平安适配模块完成并保留依据，企业策略据此给出处置建议。",
+          "精确路径与路径族具有相同的忽略效力；路径族仅由已确认的安全路径推导，其他路径不获得该权限。",
           "任一路径未命中、哈希冲突、路径数量超限或目录不可用时不生成聚合信号，并回到正常研判。"
         ],
         "manual_checks": []
@@ -117,7 +117,7 @@
     },
     {
       "rule_id": "canonical-http-non-200-ignore",
-      "name": "平安 canonical HTTP 非 200 忽略",
+      "name": "平安 HTTP 响应非 200 忽略",
       "priority": 30,
       "match": {
         "source_types": [
@@ -140,11 +140,11 @@
         "response_posture": "no_automated_response",
         "recommended_disposition": "ignored",
         "review_effect": "clear",
-        "suggested_action": "保留 Runtime 技术检测结论，按明确的 HTTP 非 200 请求结果忽略本次运营告警，不执行自动响应。",
-        "summary": "当前告警至少包含一个 canonical HTTP 响应状态，且所有 canonical HTTP 状态均非 200；在没有更高优先级授权、强制转交或需要组合研判的成功/失陷标记时按平安策略忽略。",
+        "suggested_action": "保留技术检测结论，按明确的 HTTP 非 200 请求结果忽略本次告警，不执行自动响应。",
+        "summary": "当前告警至少包含一个标准化后的 HTTP 响应状态，且所有响应状态均非 200；在没有更高优先级授权、强制转交或需要综合研判的成功或失陷标记时，按平安策略忽略。",
         "rationale": [
-          "该规则只读取 canonical_entities.http.status_code 与 HTTP observations，不读取工单、转发、规则或处置状态字段。",
-          "同一告警只要包含 HTTP 200、明确攻击成功/失陷标签或命中强制转交规则，就不会由本规则忽略；成功/失陷标签本身不产生确定性转交，而交给 Policy Skill 综合研判。"
+          "该规则只读取标准化后的 HTTP 响应状态及会话观察，不把工单、转发、规则或处置状态当作请求结果。",
+          "同一告警只要包含 HTTP 200、明确攻击成功或失陷标签，或命中强制转交规则，就不会由本规则忽略；成功或失陷标签本身不直接决定转交，仍须由企业策略研判综合判断。"
         ],
         "manual_checks": []
       }
@@ -172,12 +172,12 @@
         "response_posture": "no_automated_response",
         "recommended_disposition": "ignored",
         "review_effect": "clear",
-        "suggested_action": "保留 Runtime 技术检测结论，按上游明确请求失败/攻击失败状态忽略本次运营告警，不执行自动响应。",
-        "summary": "当前告警包含平安 Adapter 规范化后的明确请求失败或攻击失败状态；在没有更高优先级授权、强制转交或成功标记时按平安策略忽略。",
+        "suggested_action": "保留技术检测结论，按上游明确请求失败或攻击失败状态忽略本次告警，不执行自动响应。",
+        "summary": "当前告警包含平安适配器标准化后的明确请求失败或攻击失败状态；在没有更高优先级授权、强制转交或成功标记时，按平安策略忽略。",
         "rationale": [
-          "该规则匹配 classification.labels.host_state 的精确值，不把其他 status 字段猜成请求结果。",
+          "该规则只匹配适配器明确声明的请求结果字段，不把其他业务状态猜成请求结果。",
           "企图或尝试只表示检测到了攻击尝试，不等于请求失败，不能由本规则直接忽略。",
-          "请求失败类运营忽略不改变 Runtime 对攻击尝试本身的技术检测结论。"
+          "因请求失败而忽略告警，不改变对攻击尝试本身的技术检测结论。"
         ],
         "manual_checks": []
       }

@@ -448,6 +448,11 @@ Runtime rules:
 
 - Every node has typed input/output.
 - LLM output must pass parser and schema validation.
+- Operator-facing free text is Simplified Chinese across primary analysis, tenant policy,
+  role verification, Memory drafting and structure repair. Keep machine keys, enums,
+  references and raw evidence unchanged. Known fixed explanations are localized in the
+  read model without rewriting decision history; arbitrary old model prose is not
+  silently translated. Language alone does not trigger a repair call or invalidate a verdict.
 - Analyzer evidence must pass deterministic grounding against the exact bounded prompt projection.
   Ungrounded values or invalid source paths cannot disappear behind a high confidence score; they
   become structured review reasons.

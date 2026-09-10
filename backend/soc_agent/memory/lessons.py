@@ -96,18 +96,29 @@ def _memory_facet_value_label(key: str, value: str) -> str:
 def promote_memory_applicability_facets(
     applicability: SocMemoryApplicabilitySpec,
     promoted_facet_keys: list[str],
+    promoted_facet_values: dict[str, list[str]] | None = None,
 ) -> SocMemoryApplicabilitySpec:
     """Deterministically narrow candidate scope using reviewed optional facets."""
 
-    promoted = list(dict.fromkeys(str(key).strip() for key in promoted_facet_keys if str(key).strip()))
+    selected = promoted_facet_values or {}
+    promoted = list(dict.fromkeys([*(str(key).strip() for key in promoted_facet_keys if str(key).strip()), *selected]))
     unknown = sorted(set(promoted) - set(applicability.optional_facets))
     if unknown:
         raise ValueError("promoted memory facets are not candidate optional facets: " + ", ".join(unknown))
+    if set(promoted) & set(applicability.context_only_similarity_facet_keys):
+        raise ValueError("context-only similarity facets must remain optional")
     if not promoted:
         return applicability
+    narrowed = {}
+    for key in promoted:
+        allowed = applicability.optional_facets[key]
+        values = list(dict.fromkeys(selected.get(key, allowed)))
+        if not values or not set(values) <= set(allowed):
+            raise ValueError(f"promoted memory facet {key} must select candidate optional values")
+        narrowed[key] = values
     required = {
         **applicability.required_facets,
-        **{key: applicability.optional_facets[key] for key in promoted},
+        **narrowed,
     }
     optional = {key: values for key, values in applicability.optional_facets.items() if key not in promoted}
     if applicability.minimum_optional_matches > len(optional):
@@ -115,8 +126,9 @@ def promote_memory_applicability_facets(
     context_required = list(applicability.context_only_required_facet_keys)
     if context_required or applicability.context_only_missing_facet_keys or applicability.context_only_similarity_facet_keys:
         context_required = sorted({*context_required, *promoted})
-    return applicability.model_copy(
-        update={
+    return SocMemoryApplicabilitySpec.model_validate(
+        {
+            **applicability.model_dump(),
             "required_facets": required,
             "optional_facets": optional,
             "context_only_required_facet_keys": context_required,

@@ -22,6 +22,12 @@ file for SOC code. The authoritative product and engineering documents are:
 - Runtime owns the deterministic control flow. LLM nodes perform bounded reasoning and
   may suggest only whitelisted routes; they do not own loops, persistence, authority,
   retries, or state transitions.
+- Operator prose is Simplified Chinese, including nested explanations, actions, checks,
+  policy advice and repair-generated text. Reuse `prompts/operator_language.py`; preserve
+  JSON keys, enums, references and raw technical values. Known system templates may be
+  localized in read-only projections through `core/operator_language.py`, never by
+  rewriting stored decisions or inventing translations for arbitrary model output.
+  A language mismatch alone must not trigger another LLM call or degrade a usable verdict.
 - Keep detection truth, tenant disposition, Memory directives, action authorization, and
   external execution as separate decision layers with explicit lineage.
 - Treat `run_id` as the stable investigation identity. Every persisted Runtime run has an

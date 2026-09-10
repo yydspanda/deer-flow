@@ -913,6 +913,7 @@ export async function previewSocMemoryGovernance(
   request: {
     reviewer_verdict: SocVerdict | null;
     promoted_facet_keys: string[];
+    promoted_facet_values?: Record<string, string[]>;
   },
   context?: SocRequestContext,
 ): Promise<SocMemoryGovernancePreview> {

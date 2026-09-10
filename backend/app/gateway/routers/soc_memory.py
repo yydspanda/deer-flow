@@ -56,6 +56,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.contracts.memory_governance import MemoryGovernancePreview
+from soc_agent.contracts.memory_scope import MemoryScopeView
 from soc_agent.core import (
     SocMemoryCenterService,
     SocMemoryEvolutionError,
@@ -70,12 +71,25 @@ from soc_agent.core import (
     SocServiceNotImplementedError,
 )
 from soc_agent.llm import build_configured_memory_lesson_drafter
+from soc_agent.memory.scope_view import build_memory_scope_view
 
 router = create_soc_router(prefix="/api/soc/memory", tags=["soc-memory"])
 
 
 class MemoryCandidateListResponse(BaseModel):
     items: list[SocMemoryCandidate]
+
+
+class MemoryCandidateDetailResponse(SocMemoryCandidate):
+    scope_view: MemoryScopeView | None = None
+
+
+class MemoryRecordDetailResponse(SocMemoryRecord):
+    scope_view: MemoryScopeView | None = None
+
+
+class MemoryLineageResponse(SocMemoryLineageReport):
+    scope_view: MemoryScopeView | None = None
 
 
 class MemoryRecordListResponse(BaseModel):
@@ -121,6 +135,7 @@ class MemoryGovernancePreviewRequest(BaseModel):
     model_config = {"extra": "forbid"}
     reviewer_verdict: Verdict | None = None
     promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+    promoted_facet_values: dict[str, list[str]] = Field(default_factory=dict, max_length=20)
 
 
 class MemoryCandidateReviewRequest(BaseModel):
@@ -162,6 +177,7 @@ class MemoryBusinessLessonDraftRequest(BaseModel):
     reviewer_verdict: Verdict
     reviewer_context: str | None = Field(default=None, max_length=4000)
     promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+    promoted_facet_values: dict[str, list[str]] = Field(default_factory=dict, max_length=20)
 
     @field_validator("promoted_facet_keys")
     @classmethod
@@ -377,10 +393,11 @@ def get_memory_center_pattern(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.get("/candidates/{candidate_id}", response_model=SocMemoryCandidate)
-def get_memory_candidate(candidate_id: str, service: MemoryServiceDep) -> SocMemoryCandidate:
+@router.get("/candidates/{candidate_id}", response_model=MemoryCandidateDetailResponse)
+def get_memory_candidate(candidate_id: str, service: MemoryServiceDep) -> MemoryCandidateDetailResponse:
     try:
-        return service.get_candidate(candidate_id)
+        candidate = service.get_candidate(candidate_id)
+        return MemoryCandidateDetailResponse(**candidate.model_dump(), scope_view=build_memory_scope_view(candidate.applicability, candidate.facets, registry=build_soc_memory_profile_registry()))
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
@@ -428,7 +445,7 @@ def promote_run_to_memory_candidate(
 @router.post("/candidates/{candidate_id}/governance-preview", response_model=MemoryGovernancePreview)
 def preview_memory_candidate_governance(candidate_id: str, payload: MemoryGovernancePreviewRequest, service: MemoryServiceDep) -> MemoryGovernancePreview:
     try:
-        return service.preview_candidate_governance(candidate_id, reviewer_verdict=payload.reviewer_verdict, promoted_facet_keys=payload.promoted_facet_keys)
+        return service.preview_candidate_governance(candidate_id, reviewer_verdict=payload.reviewer_verdict, promoted_facet_keys=payload.promoted_facet_keys, promoted_facet_values=payload.promoted_facet_values)
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
@@ -531,6 +548,7 @@ def draft_memory_business_lesson(
             reviewer_verdict=payload.reviewer_verdict,
             reviewer_context=payload.reviewer_context,
             promoted_facet_keys=payload.promoted_facet_keys,
+            promoted_facet_values=payload.promoted_facet_values,
             context=soc_service_context_from_request(
                 request,
                 include_soc_roles=True,
@@ -585,10 +603,11 @@ def list_memory_records(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.get("/records/{memory_id}", response_model=SocMemoryRecord)
-def get_memory_record(memory_id: str, service: MemoryServiceDep) -> SocMemoryRecord:
+@router.get("/records/{memory_id}", response_model=MemoryRecordDetailResponse)
+def get_memory_record(memory_id: str, service: MemoryServiceDep) -> MemoryRecordDetailResponse:
     try:
-        return service.get_record(memory_id)
+        record = service.get_record(memory_id)
+        return MemoryRecordDetailResponse(**record.model_dump(), scope_view=build_memory_scope_view(record.applicability, record.facets, registry=build_soc_memory_profile_registry()))
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
@@ -658,14 +677,15 @@ def create_memory_revision_candidate(
 
 @router.get(
     "/records/{memory_id}/lineage",
-    response_model=SocMemoryLineageReport,
+    response_model=MemoryLineageResponse,
 )
 def get_memory_lineage(
     memory_id: str,
     service: MemoryEvolutionServiceDep,
-) -> SocMemoryLineageReport:
+) -> MemoryLineageResponse:
     try:
-        return service.get_lineage(memory_id)
+        lineage = service.get_lineage(memory_id)
+        return MemoryLineageResponse(**lineage.model_dump(), scope_view=build_memory_scope_view(lineage.record.applicability, lineage.record.facets, registry=build_soc_memory_profile_registry()))
     except SocMemoryEvolutionError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

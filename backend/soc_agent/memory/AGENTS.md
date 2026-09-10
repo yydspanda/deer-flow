@@ -56,6 +56,23 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 
 ## Retrieval And Decision Use
 
+- `scope_view.py` is a read-only detail projection. Registered Profiles may explain
+  stored scope ingredients; only verified same-version expansions can hide redundant
+  optional controls. HTTP detail DTOs add the view without changing stored records,
+  applicability, retrieval, activation, or Prompt input. Unknown/older profiles retain
+  opaque fingerprints. Remove only redundant values, not entire mixed groups. Review may
+  select a subset of an optional group's values via `promoted_facet_values`; drafting and
+  governance preview share the narrowing helper, and confirmation validates the complete
+  narrowed contract. All selected groups become required for exact and context-only use;
+  values within a group remain OR. Similarity keys stay optional. Never widen the stored
+  candidate scope or silently change historical Memory records.
+  A `rule:<16-hex>` entity is the shared hash of the canonical detection key,
+  not an independent vendor rule ID. PingAn omits that duplicate optional value
+  when constructing a scope with one required detector; verified old scope views
+  mark it covered. Keep extracted/query/indexed entities and existing required or
+  excluded conditions intact. Multi-detector OR scopes and unknown hashes are not
+  implicitly redundant; do not strip every `rule:` value.
+
 - Persisted Runtime resolves Memory after Skill selection and before catalog
   finalization/provider journaling, only through `SocMemoryService`. Retrieval failure is
   non-blocking.
@@ -112,7 +129,7 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   the typed applicability object remains authoritative. Legacy prose may be localized
   only at read time and must not be rewritten in storage.
 - Validate strict JSON/references and permit at most one bounded output-repair call. The
-  generated eight-section lesson is read-only by default, explicitly editable, and remains
+  generated lesson opens with editable business fields and read-only applicability, and remains
   non-persisted until the existing review command confirms it.
 
 ## Reinforcement And Revision

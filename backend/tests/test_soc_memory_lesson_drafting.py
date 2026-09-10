@@ -105,7 +105,9 @@ def test_memory_lesson_drafter_builds_high_quality_askbob_draft_without_persiste
         candidate_repository=repository,
         record_repository=repository,
     )
-    candidate = memory_service.propose_candidate(_candidate_command())
+    command = _candidate_command()
+    command.applicability.optional_facets["service_uri"].append("paic.com.cn/other-service")
+    candidate = memory_service.propose_candidate(command)
     prompt = build_memory_lesson_draft_prompt(
         candidate,
         reviewer_verdict=Verdict.FALSE_POSITIVE,
@@ -154,6 +156,7 @@ def test_memory_lesson_drafter_builds_high_quality_askbob_draft_without_persiste
         reviewer_verdict=Verdict.FALSE_POSITIVE,
         reviewer_context=("该流量实际访问平安内部 paic.com.cn/pws/askbob-gpt LLM 服务，并非真实反弹 Shell。"),
         promoted_facet_keys=["service_uri"],
+        promoted_facet_values={"service_uri": ["paic.com.cn/pws/askbob-gpt"]},
         context=_review_context(),
     )
 

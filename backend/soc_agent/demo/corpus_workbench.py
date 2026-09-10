@@ -43,6 +43,7 @@ from soc_agent.core import (
     project_soc_case_outcome,
 )
 from soc_agent.core.handling import project_operational_handling
+from soc_agent.core.operator_language import operator_text
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
@@ -1425,7 +1426,7 @@ class SocCorpusWorkbenchService:
                     suggested_action=item.after.suggested_action,
                     disposition=(item.disposition_after.value if item.disposition_after is not None else None),
                     source_id=item.source_id,
-                    summary=item.summary,
+                    summary=operator_text(item.summary),
                 )
                 for item in transition.stages
             ]

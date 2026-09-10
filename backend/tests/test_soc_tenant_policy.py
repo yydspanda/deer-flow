@@ -64,6 +64,8 @@ from soc_agent.integrations.pingan.tenant_disposition import (
     load_pingan_tenant_disposition_policy,
 )
 from soc_agent.llm import LLMChatResponse, SocLLMSettings
+from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
+from soc_agent.prompts.tenant_policy import build_tenant_policy_advisor_prompt
 from soc_agent.tenant_policy import (
     InMemoryTenantPolicyDecisionRepository,
     LLMTenantPolicyAdvisor,
@@ -84,6 +86,23 @@ class _FixedRuntime:
 class _FailingObserver:
     def observe(self, run: AnalysisRun, *, context: ServiceRequestContext) -> None:
         raise RuntimeError("shadow observer failed")
+
+
+def test_policy_prompt_requires_chinese_actions_even_when_prior_analysis_is_english() -> None:
+    run = _run()
+    prompt = build_tenant_policy_advisor_prompt(
+        load_pingan_tenant_disposition_policy(),
+        run,
+        skill_content="Reviewed policy guidance.",
+        skill_name="test-policy",
+        skill_version="1",
+    )
+    assert OPERATOR_OUTPUT_LANGUAGE in prompt.system
+    assert OPERATOR_OUTPUT_LANGUAGE in prompt.user
+    assert "Never copy an EX-* reference" in prompt.user
+    assert prompt.user.index("<output_examples>") > prompt.user.index("Bounded policy context:")
+    assert prompt.context["runtime"]["analysis"]["recommended_action"] == run.analysis.recommended_action
+    assert "Keep technical verdict and confidence unchanged" in prompt.user
 
 
 def _run(
@@ -538,7 +557,7 @@ def test_policy_skill_applies_explicit_request_failure_with_lineage() -> None:
     assert decision.advisor_advice.policy_signal_keys == ["request_failure"]
     assert decision.advisor_provenance is not None
     assert decision.advisor_provenance.model_name == "deepseek-v4-flash"
-    assert decision.advisor_provenance.skill_version == "v1.2.0"
+    assert decision.advisor_provenance.skill_version == "v1.2.1"
     assert "HTTP status other than `200`" in client.messages[0][1]["content"]
 
 

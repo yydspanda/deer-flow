@@ -15,8 +15,9 @@ from soc_agent.contracts import (
     LLMAnalysisRequest,
     RoleVerificationClaim,
 )
+from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 
-ROLE_VERIFICATION_PROMPT_VERSION = "soc-role-verification-v4"
+ROLE_VERIFICATION_PROMPT_VERSION = "soc-role-verification-v5"
 MAX_ROLE_VERIFICATION_CONTEXT_CHARS = 80_000
 
 _CORE_ROLE_TYPES = {
@@ -132,6 +133,7 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "supporting_context_refs and contradicting_context_refs may contain only exact S/A/M/C/T IDs from reasoning_context.",
             "Do not review response targets or other roles, and do not output a verdict, disposition, action authorization, execution result, confidence score, or new alert fact.",
             "Return JSON only without markdown or explanatory text outside the object.",
+            OPERATOR_OUTPUT_LANGUAGE,
             "The JSON object must match this shape:",
             json.dumps(response_schema, ensure_ascii=False, indent=2),
         ]
@@ -153,6 +155,7 @@ def _user_prompt(
             "",
             "Required JSON response schema:",
             json.dumps(response_schema, ensure_ascii=False, indent=2),
+            OPERATOR_OUTPUT_LANGUAGE,
         ]
     )
 
@@ -169,9 +172,9 @@ def _role_verification_response_schema() -> dict[str, Any]:
                 "supporting_context_refs": ["exact supporting S/A/M/C/T IDs, or empty"],
                 "contradicting_context_refs": ["exact contradicting S/A/M/C/T IDs, or empty"],
                 "alternative": {"assertion": {"field": "structured replacement using the original claim keys"}},
-                "rationale": "concise Chinese adversarial review explanation",
-                "counterevidence_assessment": "strongest bounded counterevidence considered, or explicit none found",
-                "evidence_gaps": ["required missing facts; non-empty for unresolved"],
+                "rationale": "用中文说明本条角色或方向主张是否成立及其依据",
+                "counterevidence_assessment": "用中文说明考虑过的最强反证；没有则明确说明未发现有依据的反证",
+                "evidence_gaps": ["用中文说明缺失的必要事实；unresolved 时不可为空"],
             }
         ],
     }

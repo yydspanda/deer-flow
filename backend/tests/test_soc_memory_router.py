@@ -34,6 +34,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import SocMemoryService
 from soc_agent.memory import InMemoryMemoryCandidateRepository
+from soc_agent.memory.lessons import promote_memory_applicability_facets
 
 
 class FakeRequest:
@@ -123,7 +124,8 @@ def test_soc_memory_api_gets_candidate() -> None:
 
     loaded = soc_memory.get_memory_candidate(candidate.candidate_id, service=service)
 
-    assert loaded == candidate
+    assert loaded.model_dump(exclude={"scope_view"}) == candidate.model_dump()
+    assert loaded.scope_view is None
 
 
 def test_soc_memory_api_returns_404_for_missing_candidate() -> None:
@@ -303,7 +305,8 @@ def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
     )
     assert records.items == [result.memory_record]
     assert records.has_more is False
-    assert soc_memory.get_memory_record(result.memory_record.memory_id, service=service) == result.memory_record
+    loaded = soc_memory.get_memory_record(result.memory_record.memory_id, service=service)
+    assert loaded.model_dump(exclude={"scope_view"}) == result.memory_record.model_dump()
 
     disabled_search = soc_memory.search_memory_records(
         SocMemoryQuery(facets={"tenant": ["pingan"]}),
@@ -374,24 +377,25 @@ def test_soc_memory_api_searches_confirmed_record_inventory() -> None:
     assert response.limit == 20
 
 
-def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
+@pytest.mark.parametrize("narrow_entity", [False, True])
+def test_soc_memory_api_preserves_reviewed_decision_directive(narrow_entity: bool) -> None:
     repository = InMemoryMemoryCandidateRepository()
     service = SocMemoryService(
         candidate_repository=repository,
         record_repository=repository,
         mutation_audit_repository=repository,
     )
-    candidate = service.propose_candidate(
-        _memory_candidate_command(
-            decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION,
-        )
-    )
+    command = _memory_candidate_command(decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION)
+    command.applicability.optional_facets["entity"] = ["asset:team-a", "rule:test"]
+    command.facets["entity"] = ["asset:team-a", "rule:test"]
+    candidate = service.propose_candidate(command)
+    reviewed_scope = promote_memory_applicability_facets(candidate.applicability, [], {"entity": ["asset:team-a"]}) if narrow_entity else candidate.applicability
     directive = SocMemoryDecisionDirective(
         effect=SocMemoryDecisionEffect.OVERRIDE,
         target_verdict=Verdict.FALSE_POSITIVE,
         review_effect=SocMemoryReviewEffect.CLEAR,
         minimum_match_score=0.8,
-        required_facet_keys=["tenant"],
+        required_facet_keys=sorted(reviewed_scope.required_facets),
         rationale="Reviewed tenant-scoped false-positive pattern.",
     )
     lesson = SocMemoryBusinessLesson(
@@ -409,7 +413,7 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason="Reviewer approved a bounded decision directive.",
             record_lesson=lesson,
-            record_applicability=candidate.applicability,
+            record_applicability=reviewed_scope,
             decision_directive=directive,
         ),
         request=FakeRequest(),
@@ -418,7 +422,8 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
 
     assert result.memory_record is not None
     assert result.memory_record.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
-    assert result.memory_record.applicability == candidate.applicability
+    assert result.memory_record.applicability == reviewed_scope
+    assert repository.get_memory_record(result.memory_record.memory_id).applicability == reviewed_scope
     assert result.memory_record.decision_directive == directive
     assert result.memory_record.business_lesson == lesson
     assert result.memory_record.metadata["business_lesson_source"] == ("reviewer_supplied")

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import ipaddress
 import re
 from urllib.parse import urlsplit
 
 from soc_agent.contracts import AlertInput, EntityKind, EntityMention, ExtractedEntities
+from soc_agent.utils.hashing import rule_entity_key
 
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 DOMAIN_RE = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
@@ -520,12 +520,8 @@ def _normalize_entity_value(kind: EntityKind, value: str | None) -> str | None:
 
 def _entity_key(kind: EntityKind, value: str) -> str:
     if kind is EntityKind.RULE:
-        return f"rule:{_short_hash(value)}"
+        return rule_entity_key(value)
     return f"{kind.value}:{value}"
-
-
-def _short_hash(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _dedupe_mentions(mentions: list[EntityMention]) -> list[EntityMention]:

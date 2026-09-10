@@ -32,7 +32,7 @@ export function SocMemoryGovernancePanel({
 }: {
   candidateId: string;
   verdict: SocVerdict | null;
-  promotedFacets: string[];
+  promotedFacets: Record<string, string[]>;
   replacement: { memoryId: string; version: number } | null;
   onReplace: (value: { memoryId: string; version: number } | null) => void;
   facetLabel: (key: string) => string;

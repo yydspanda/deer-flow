@@ -13,7 +13,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v6"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v7"
 MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v3"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000

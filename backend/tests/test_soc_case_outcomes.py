@@ -563,6 +563,26 @@ def test_tenant_policy_changes_handling_without_rewriting_attack_truth() -> None
     assert outcome.closure_status is SocCaseClosureStatus.HANDLING_PENDING
 
 
+def test_operator_projection_translates_fixed_explanation_without_rewriting_audit() -> None:
+    run = _run(verdict=Verdict.TRUE_POSITIVE)
+    snapshot = _snapshot(Verdict.TRUE_POSITIVE)
+    transition = _transition(
+        before=snapshot,
+        after=snapshot,
+        kind=SocDecisionTransitionKind.REINFORCED,
+        disposition=SocOperationalDisposition.ESCALATED,
+        tenant_status=SocDecisionStageStatus.APPLIED,
+    )
+    source = "Final governed decision after Memory, tenant policy, and optional automation policy evaluation."
+    transition.stages[2].summary = source
+    before = transition.model_dump(mode="json")
+    outcome = project_soc_case_outcome(run, decision_transition=transition)
+    assert any("综合已审核经验" in item.summary for item in outcome.basis)
+    assert transition.model_dump(mode="json") == before
+    assert outcome.security_verdict is Verdict.TRUE_POSITIVE
+    assert outcome.operational_disposition is SocOperationalDisposition.ESCALATED
+
+
 def test_policy_only_handoff_is_not_an_evidence_gap() -> None:
     run = _run(
         verdict=Verdict.FALSE_POSITIVE,

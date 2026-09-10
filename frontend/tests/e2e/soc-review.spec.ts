@@ -185,6 +185,12 @@ test.describe("SOC review workbench", () => {
     await expect(generateDraftButton).toBeEnabled();
     await generateDraftButton.click();
     await expect(
+      candidateSection.getByRole("textbox", { name: "审核结论", exact: true }),
+    ).toBeEditable();
+    await candidateSection
+      .getByRole("button", { name: "预览经验", exact: true })
+      .click();
+    await expect(
       page.getByRole("link", { name: "返回审核列表" }),
     ).toHaveAttribute("href", "/workspace/soc/review/memory-candidates");
     for (const lessonField of [

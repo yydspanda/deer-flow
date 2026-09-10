@@ -586,6 +586,18 @@ export interface SocMemoryApplicabilityReport {
   reason_codes: string[];
 }
 
+export interface SocMemoryScopeView {
+  schema_version: "soc.memory_scope_view.v1";
+  required_details: Record<string, Record<string, string[]>>;
+  unresolved_fingerprint_keys: string[];
+  options: {
+    key: string;
+    values: string[];
+    covered_values?: string[];
+    kind: "additional" | "covered" | "similarity";
+  }[];
+}
+
 export interface SocMemoryDecisionDirective {
   schema_version: "soc.memory_decision_directive.v1";
   effect: "reinforce" | "override";
@@ -669,6 +681,7 @@ export interface SocMemoryBusinessLessonDraftRequest {
   reviewer_verdict: SocVerdict;
   reviewer_context?: string | null;
   promoted_facet_keys?: string[];
+  promoted_facet_values?: Record<string, string[]>;
 }
 
 export type SocMemoryRevisionIssueType =
@@ -702,6 +715,7 @@ export interface SocMemoryRevisionCandidateCreateRequest {
 }
 
 export interface SocMemoryCandidate {
+  scope_view?: SocMemoryScopeView | null;
   schema_version: string;
   candidate_id: string;
   candidate_type: SocMemoryCandidateType;
@@ -741,6 +755,7 @@ export interface SocMemoryCandidateListResponse {
 }
 
 export interface SocMemoryRecord {
+  scope_view?: SocMemoryScopeView | null;
   schema_version: string;
   memory_id: string;
   version: number;
@@ -888,6 +903,7 @@ export interface SocMemoryRevisionProposal {
 }
 
 export interface SocMemoryLineageReport {
+  scope_view?: SocMemoryScopeView | null;
   schema_version: "soc.memory_lineage_report.v1";
   record: SocMemoryRecord;
   uses: SocMemoryUseRecord[];

@@ -118,8 +118,8 @@ class LLMTenantPolicyAdvisor:
             return TenantPolicyAdvisorResult(
                 advice=TenantPolicyAdvice(
                     evaluation_status=TenantPolicyEvaluationStatus.NO_MATCH,
-                    summary=("租户策略推理不可用；保留 Runtime 与 Memory 阶段结果，不自动改变处置或复核要求。"),
-                    rationale=["可选策略 Skill 调用或结构校验失败，系统按 fail-closed 处理。"],
+                    summary="企业策略研判暂不可用；保留基础研判与经验复用结果，不自动改变处置或复核要求。",
+                    rationale=["可选的企业策略模型调用或结果结构校验失败，本次不采用额外策略建议。"],
                 ),
                 provenance=TenantPolicyAdvisorProvenance(
                     advisor_id=TENANT_POLICY_ADVISOR_ID,

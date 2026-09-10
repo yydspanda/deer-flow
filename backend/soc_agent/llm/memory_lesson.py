@@ -29,6 +29,7 @@ from soc_agent.prompts.memory_lesson import (
     MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION,
     build_memory_lesson_draft_prompt,
 )
+from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 from soc_agent.utils.hashing import stable_hash
 
 MEMORY_LESSON_DRAFTER_ID = "bounded-memory-business-lesson-drafter"
@@ -360,7 +361,7 @@ def _build_output_repair_messages(
                 "approval, execution-authorization, and other action instructions to handling_guidance. "
                 "A source-backed factual authorization status may remain factual, but must not grant an action. "
                 "Preserve valid business meaning from invalid_output, fill only schema-required sections, "
-                "and obey additionalProperties=false."
+                "and obey additionalProperties=false. " + OPERATOR_OUTPUT_LANGUAGE
             ),
         },
         {

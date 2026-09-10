@@ -24,7 +24,7 @@ from soc_agent.memory.facets import (
 )
 from soc_agent.memory.profiles import SocMemoryProfileIdentity
 from soc_agent.normalizers import normalize_alert_payload
-from soc_agent.utils.hashing import stable_hash
+from soc_agent.utils.hashing import rule_entity_key, stable_hash
 
 _PINGAN_PATTERN_FACET_KEYS = (
     "source_type",
@@ -54,6 +54,11 @@ class PingAnSocMemoryProfile:
     """Conservative PingAn profile layered on the generic Memory Kernel."""
 
     exclusive_scope_facet_keys = frozenset({"environment", "detection_key", "detection_signature", "behavior_fingerprint", "behavior_strength"})
+
+    def explain_scope_facets(self, spec: SocMemoryApplicabilitySpec, facets: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
+        from soc_agent.integrations.pingan.memory.scope_view import explain_scope_facets
+
+        return explain_scope_facets(spec, facets)
 
     identity = SocMemoryProfileIdentity(
         profile_id="pingan.soc",
@@ -260,6 +265,16 @@ class PingAnSocMemoryProfile:
             )
             if key not in required and consensus_facets.get(key)
         }
+        # One required detector already fixes its rule-entity hash. Keep the
+        # entity index intact, but do not offer the same identity as a new limit.
+        required_detection = required.get("detection_key", [])
+        if len(required_detection) == 1 and "entity" in optional:
+            redundant = rule_entity_key(required_detection[0])
+            independent = [value for value in optional["entity"] if value != redundant]
+            if independent:
+                optional["entity"] = independent
+            else:
+                optional.pop("entity")
         context_only_required = sorted(set(required) - {"behavior_fingerprint"}) if decision_eligible and detection_key and optional.get("behavior_component_strong") else []
         context_only_missing = ["behavior_fingerprint"] if context_only_required else []
         context_only_similarity = ["behavior_component_strong"] if context_only_required else []

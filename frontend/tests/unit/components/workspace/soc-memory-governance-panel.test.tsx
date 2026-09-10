@@ -13,7 +13,7 @@ function panel(
     <SocMemoryGovernancePanel
       candidateId="MC-test"
       verdict="true_positive"
-      promotedFacets={[]}
+      promotedFacets={{}}
       replacement={replacement}
       onReplace={() => undefined}
       facetLabel={(value) => value}

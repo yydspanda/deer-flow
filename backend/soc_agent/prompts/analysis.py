@@ -20,8 +20,9 @@ from soc_agent.model_reference_aliases import (
     project_model_reference_aliases,
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
+from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v40"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v41"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -600,6 +601,7 @@ def _user_prompt(
             "- Confidence and is_primary values use JSON number/boolean types, never quoted strings.",
             "- Render Windows paths in generated prose with forward slashes, for example C:/Windows/System32. Do not emit backslash characters in JSON string values.",
             "- Write every free-text value in concise Chinese. Identifiers, reference aliases, and raw entity values may retain their original form.",
+            OPERATOR_OUTPUT_LANGUAGE,
             "- Do not emit fields outside the supplied response shape, including reasoning*, evidence objects, knowledge_candidates, or response targets.",
             "- Never emit an EX-* example reference. Every returned reference must come from the current analysis_context catalogs.",
             "- Derive every security conclusion from the current analysis_context; never copy a conclusion value from the synthetic example.",

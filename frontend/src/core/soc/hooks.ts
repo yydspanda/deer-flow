@@ -787,7 +787,7 @@ export function useSocMemoryCandidates({
 export function useSocMemoryGovernancePreview(
   candidateId: string,
   verdict: SocVerdict | null,
-  promotedFacets: string[],
+  promotedFacets: Record<string, string[]>,
 ) {
   const context = useSocWebRequestContext();
   return useQuery({
@@ -801,7 +801,11 @@ export function useSocMemoryGovernancePreview(
     queryFn: () =>
       previewSocMemoryGovernance(
         candidateId,
-        { reviewer_verdict: verdict, promoted_facet_keys: promotedFacets },
+        {
+          reviewer_verdict: verdict,
+          promoted_facet_keys: Object.keys(promotedFacets),
+          promoted_facet_values: promotedFacets,
+        },
         context,
       ),
     staleTime: 0,

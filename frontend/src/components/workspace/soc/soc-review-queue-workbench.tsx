@@ -9,6 +9,7 @@ import {
   ChevronRightIcon,
   ClipboardCheckIcon,
   CircleIcon,
+  EyeIcon,
   FilePenLineIcon,
   FlaskConicalIcon,
   InboxIcon,
@@ -93,6 +94,7 @@ import type {
   SocMemoryCandidate,
   SocMemoryCandidateReviewDecision,
   SocMemoryApplicabilitySpec,
+  SocMemoryScopeView,
   SocMemoryBusinessLesson,
   SocMemoryRecord,
   SocMemoryRetrievalActivationAction,
@@ -107,6 +109,7 @@ import { cn } from "@/lib/utils";
 
 import { SocMemoryGovernancePanel } from "./soc-memory-governance-panel";
 import { SocMemoryRevisionRecovery } from "./soc-memory-revision-recovery";
+import { SocMemoryScope } from "./soc-memory-scope";
 
 const STATUS_OPTIONS: { value: SocReviewQueueStatus | "all"; label: string }[] =
   [
@@ -281,7 +284,7 @@ interface MemoryCandidateReviewDraft {
   businessContext: string;
   applyToFutureMatches: boolean;
   confirmedVerdict: SocVerdict | null;
-  promotedFacetKeys: string[];
+  promotedFacetValues: Record<string, string[]>;
   lessonDetectionScenario: string;
   lessonObservedEvent: string;
   lessonConclusion: string;
@@ -302,7 +305,7 @@ function defaultMemoryCandidateReviewDraft(
     businessContext: "",
     applyToFutureMatches: false,
     confirmedVerdict: null,
-    promotedFacetKeys: [],
+    promotedFacetValues: {},
     lessonDetectionScenario: "",
     lessonObservedEvent: "",
     lessonConclusion: "",
@@ -322,8 +325,9 @@ function reviewedMemoryApplicability(
   draft: MemoryCandidateReviewDraft,
 ): SocMemoryApplicabilitySpec | undefined {
   const base = candidate.applicability;
-  if (!base || draft.promotedFacetKeys.length === 0) return undefined;
-  const promoted = draft.promotedFacetKeys.filter(
+  if (!base || Object.keys(draft.promotedFacetValues).length === 0)
+    return undefined;
+  const promoted = Object.keys(draft.promotedFacetValues).filter(
     (key) => base.optional_facets[key] !== undefined,
   );
   if (promoted.length === 0) return undefined;
@@ -337,7 +341,7 @@ function reviewedMemoryApplicability(
     required_facets: {
       ...base.required_facets,
       ...Object.fromEntries(
-        promoted.map((key) => [key, base.optional_facets[key]!]),
+        promoted.map((key) => [key, draft.promotedFacetValues[key]!]),
       ),
     },
     optional_facets: optionalFacets,
@@ -753,22 +757,6 @@ function memoryLessonDisplayValue(
   return value;
 }
 
-function candidateScopeHighlights(candidate: SocMemoryCandidate) {
-  const definitions = [
-    { key: "rule_code", label: memoryFacetLabel("rule_code") },
-    { key: "product", label: memoryFacetLabel("product") },
-    { key: "environment", label: memoryFacetLabel("environment") },
-    {
-      key: "behavior_component",
-      label: memoryFacetLabel("behavior_component"),
-    },
-  ];
-  return definitions.flatMap(({ key, label }) => {
-    const values = candidate.facets[key] ?? [];
-    return values.length > 0 ? [{ label, values: values.slice(0, 3) }] : [];
-  });
-}
-
 function CandidateMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 border-r border-b px-3 py-2 even:border-r-0 lg:border-b-0 lg:last:border-r-0 lg:even:border-r [&:nth-last-child(-n+2)]:border-b-0">
@@ -845,7 +833,15 @@ const MEMORY_LESSON_BLUEPRINT = [
   },
 ] as const;
 
-function MemoryLessonReadView({ lesson }: { lesson: SocMemoryBusinessLesson }) {
+function MemoryLessonReadView({
+  lesson,
+  applicability,
+  scopeView,
+}: {
+  lesson: SocMemoryBusinessLesson;
+  applicability?: SocMemoryApplicabilitySpec | null;
+  scopeView?: SocMemoryScopeView | null;
+}) {
   const values: Record<
     (typeof MEMORY_LESSON_BLUEPRINT)[number]["key"],
     string[]
@@ -885,9 +881,11 @@ function MemoryLessonReadView({ lesson }: { lesson: SocMemoryBusinessLesson }) {
               {item.description}
             </p>
           </div>
-          {["detection_scenario", "observed_event", "conclusion"].includes(
-            item.key,
-          ) ? (
+          {item.key === "applicability_conditions" && applicability ? (
+            <SocMemoryScope compact spec={applicability} view={scopeView} />
+          ) : ["detection_scenario", "observed_event", "conclusion"].includes(
+              item.key,
+            ) ? (
             <p className="text-sm leading-6 break-words">
               {values[item.key][0]}
             </p>
@@ -1972,6 +1970,9 @@ function MemoryCandidateSection({
   const [deprecationTarget, setDeprecationTarget] =
     useState<SocMemoryCandidate | null>(null);
   const [deprecationReason, setDeprecationReason] = useState("");
+  const [regenerationTarget, setRegenerationTarget] =
+    useState<SocMemoryCandidate | null>(null);
+  const busy = isReviewing || isDraftingLesson;
 
   const closeDeprecationDialog = () => {
     setDeprecationTarget(null);
@@ -2016,7 +2017,6 @@ function MemoryCandidateSection({
               candidate.status,
             );
             const cohortMetrics = candidateCohortMetrics(candidate);
-            const scopeHighlights = candidateScopeHighlights(candidate);
             const hasLessonDraft = hasMemoryLessonDraft(draft);
             const reviewContextId = `memory-review-context-${candidate.candidate_id}`;
             return (
@@ -2085,7 +2085,7 @@ function MemoryCandidateSection({
                   <SocMemoryGovernancePanel
                     candidateId={candidate.candidate_id}
                     verdict={draft.confirmedVerdict}
-                    promotedFacets={draft.promotedFacetKeys}
+                    promotedFacets={draft.promotedFacetValues}
                     replacement={draft.replacement}
                     onReplace={(replacement) =>
                       onReviewDraftChange(candidate, { replacement })
@@ -2121,175 +2121,22 @@ function MemoryCandidateSection({
                   />
                 </div>
 
-                {scopeHighlights.length > 0 ? (
-                  <div className="mt-4">
-                    <div className="text-xs font-medium">核心匹配条件</div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {scopeHighlights.map(({ label, values }) => (
-                        <Badge
-                          key={label}
-                          variant="outline"
-                          className="max-w-full text-left break-all whitespace-normal"
-                        >
-                          {label}：{values.join(", ")}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {applicability ? (
-                  <Collapsible className="mt-4 border-t">
-                    <CollapsibleTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="group h-auto w-full justify-between rounded-none px-0 py-3 text-xs"
-                      >
-                        <span>
-                          匹配规则详情 · {applicability.profile_id}@
-                          {applicability.profile_version}
-                        </span>
-                        <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
-                      </Button>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="pb-3">
-                      <div className="border bg-zinc-50 px-3 py-3 text-xs">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <KeyRoundIcon className="size-4" />
-                          <span className="font-semibold">系统锁定条件</span>
-                          <Badge variant="outline">全部必须命中</Badge>
-                        </div>
-                        <p className="text-muted-foreground mt-2 leading-5">
-                          系统根据候选证据和匹配规则版本{" "}
-                          {applicability.profile_id}@
-                          {applicability.profile_version}
-                          生成这些条件。它们保护规则与核心行为特征，审核页不能删除或改写。
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {Object.entries(applicability.required_facets).map(
-                            ([key, values]) => (
-                              <Badge
-                                key={key}
-                                variant="outline"
-                                className="max-w-full bg-white text-left break-all whitespace-normal"
-                              >
-                                {memoryFacetLabel(key)}：
-                                {values
-                                  .slice(0, 3)
-                                  .map((value) =>
-                                    memoryFacetValueLabel(key, value),
-                                  )
-                                  .join(", ")}
-                              </Badge>
-                            ),
-                          )}
-                        </div>
-                      </div>
-                      {Object.keys(applicability.optional_facets).length > 0 ? (
-                        <div className="mt-3 border px-3 py-3 text-xs">
-                          <div className="font-semibold">可选收窄条件</div>
-                          <p className="text-muted-foreground mt-1 leading-5">
-                            勾选等于增加一项必需条件；取消勾选等于删除本次增加。这里只能收窄，不能扩大，也不能输入
-                            系统匹配规则未提供的任意字段。
-                          </p>
-                          <div className="mt-3 grid gap-2 md:grid-cols-2">
-                            {Object.entries(applicability.optional_facets).map(
-                              ([key, values]) => {
-                                const checked =
-                                  draft.promotedFacetKeys.includes(key);
-                                const inputId = `memory-scope-${candidate.candidate_id}-${key}`;
-                                return (
-                                  <label
-                                    key={key}
-                                    htmlFor={inputId}
-                                    className={cn(
-                                      "flex min-w-0 items-start gap-2 border px-3 py-2",
-                                      checked &&
-                                        "border-sky-300 bg-sky-50 text-sky-950",
-                                    )}
-                                  >
-                                    <input
-                                      id={inputId}
-                                      type="checkbox"
-                                      checked={checked}
-                                      disabled={isReviewing || !editable}
-                                      className="mt-0.5 size-4 shrink-0"
-                                      aria-label={`增加匹配条件 ${memoryFacetLabel(key)}`}
-                                      onChange={(event) =>
-                                        onReviewDraftChange(candidate, {
-                                          promotedFacetKeys: event.target
-                                            .checked
-                                            ? [
-                                                ...draft.promotedFacetKeys.filter(
-                                                  (item) => item !== key,
-                                                ),
-                                                key,
-                                              ]
-                                            : draft.promotedFacetKeys.filter(
-                                                (item) => item !== key,
-                                              ),
-                                        })
-                                      }
-                                    />
-                                    <span className="min-w-0">
-                                      <span className="font-medium">
-                                        {memoryFacetLabel(key)}
-                                      </span>
-                                      <span className="text-muted-foreground ml-1 break-all">
-                                        {values
-                                          .slice(0, 3)
-                                          .map((value) =>
-                                            memoryFacetValueLabel(key, value),
-                                          )
-                                          .join(", ")}
-                                      </span>
-                                    </span>
-                                  </label>
-                                );
-                              },
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-                      {Object.keys(applicability.excluded_facets).length > 0 ? (
-                        <div className="mt-3 border border-red-200 bg-red-50 px-3 py-3 text-xs text-red-950">
-                          <div className="font-semibold">排除条件</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {Object.entries(applicability.excluded_facets).map(
-                              ([key, values]) => (
-                                <Badge key={key} variant="outline">
-                                  {memoryFacetLabel(key)}：
-                                  {values
-                                    .slice(0, 3)
-                                    .map((value) =>
-                                      memoryFacetValueLabel(key, value),
-                                    )
-                                    .join(", ")}
-                                </Badge>
-                              ),
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-                      <div className="text-muted-foreground mt-3 border-t pt-3 text-xs leading-5">
-                        当前匹配公式：
-                        <span className="font-medium text-zinc-900">
-                          {
-                            Object.keys(
-                              effectiveApplicability?.required_facets ?? {},
-                            ).length
-                          }{" "}
-                          组必需条件全部命中
-                        </span>
-                        {effectiveApplicability?.minimum_optional_matches
-                          ? `，并至少命中 ${effectiveApplicability.minimum_optional_matches} 组剩余可选条件`
-                          : ""}
-                        。新字段或新的匹配语义必须由租户匹配规则产生并经过后端契约验证，不能在浏览器中临时扩大适用范围。
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
-                ) : null}
+                <div className="mt-4 border-t pt-4">
+                  <SocMemoryScope
+                    spec={applicability}
+                    view={candidate.scope_view}
+                    promoted={draft.promotedFacetValues}
+                    disabled={busy || !editable}
+                    onPromote={
+                      editable
+                        ? (promotedFacetValues) =>
+                            onReviewDraftChange(candidate, {
+                              promotedFacetValues,
+                            })
+                        : undefined
+                    }
+                  />
+                </div>
 
                 {editable ? (
                   <>
@@ -2302,7 +2149,7 @@ function MemoryCandidateSection({
                           最终判断
                           <Select
                             value={draft.confirmedVerdict ?? ""}
-                            disabled={isReviewing || !editable}
+                            disabled={busy || !editable}
                             onValueChange={(value) =>
                               onReviewDraftChange(candidate, {
                                 confirmedVerdict: value as SocVerdict,
@@ -2350,9 +2197,9 @@ function MemoryCandidateSection({
                                 businessContext: event.target.value,
                               })
                             }
-                            placeholder="例如：已确认这是 Windows Update/WinRE 更新流程中的正常行为。"
+                            placeholder="补充日志之外已核实的情况，例如是否为授权测试、实际服务用途或受影响范围。"
                             className="min-h-20 text-xs"
-                            disabled={isReviewing || !editable}
+                            disabled={busy || !editable}
                           />
                         </label>
                       </div>
@@ -2360,13 +2207,18 @@ function MemoryCandidateSection({
                         <Button
                           type="button"
                           size="sm"
+                          variant={hasLessonDraft ? "outline" : "default"}
                           disabled={
                             isReviewing ||
                             isDraftingLesson ||
                             !editable ||
                             draft.confirmedVerdict === null
                           }
-                          onClick={() => onDraftLesson(candidate)}
+                          onClick={() => {
+                            if (hasLessonDraft)
+                              setRegenerationTarget(candidate);
+                            else onDraftLesson(candidate);
+                          }}
                         >
                           <SparklesIcon className="size-4" />
                           {isDraftingLesson
@@ -2383,7 +2235,7 @@ function MemoryCandidateSection({
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <div className="text-sm font-semibold">
-                              2. 审阅研判经验卡
+                              2. 审阅并修改研判经验
                             </div>
                             <div className="text-muted-foreground mt-1 text-xs">
                               {draft.lessonDraftProvenance}
@@ -2393,15 +2245,23 @@ function MemoryCandidateSection({
                             type="button"
                             size="sm"
                             variant="outline"
-                            disabled={isReviewing || !editable}
+                            disabled={
+                              busy ||
+                              !editable ||
+                              (draft.lessonEditing && !reviewedLesson)
+                            }
                             onClick={() =>
                               onReviewDraftChange(candidate, {
                                 lessonEditing: !draft.lessonEditing,
                               })
                             }
                           >
-                            <PencilIcon className="size-4" />
-                            {draft.lessonEditing ? "完成编辑" : "编辑"}
+                            {draft.lessonEditing ? (
+                              <EyeIcon className="size-4" />
+                            ) : (
+                              <PencilIcon className="size-4" />
+                            )}
+                            {draft.lessonEditing ? "预览经验" : "逐项修改"}
                           </Button>
                         </div>
                         {draft.lessonDraftUncertainties.length > 0 ? (
@@ -2410,7 +2270,11 @@ function MemoryCandidateSection({
                           </div>
                         ) : null}
                         {draft.lessonEditing || !reviewedLesson ? (
-                          <div className="mt-4 grid gap-3 md:grid-cols-2">
+                          <fieldset
+                            aria-label="研判经验草稿"
+                            disabled={busy || !editable}
+                            className="mt-4 grid min-w-0 gap-3 md:grid-cols-2"
+                          >
                             <label className="grid gap-1 text-xs font-medium md:col-span-2">
                               检测场景：规则报告了什么
                               <Textarea
@@ -2467,25 +2331,11 @@ function MemoryCandidateSection({
                               <div className="font-medium">
                                 适用条件（系统生成）
                               </div>
-                              <div className="flex flex-wrap gap-2">
-                                {Object.entries(
-                                  effectiveApplicability?.required_facets ?? {},
-                                ).map(([key, values]) => (
-                                  <Badge
-                                    key={key}
-                                    variant="outline"
-                                    className="max-w-full break-all whitespace-normal"
-                                  >
-                                    {memoryFacetLabel(key)}：
-                                    {values
-                                      .slice(0, 3)
-                                      .map((value) =>
-                                        memoryFacetValueLabel(key, value),
-                                      )
-                                      .join(", ")}
-                                  </Badge>
-                                ))}
-                              </div>
+                              <SocMemoryScope
+                                compact
+                                spec={effectiveApplicability}
+                                view={candidate.scope_view}
+                              />
                             </div>
                             <label className="grid gap-1 text-xs font-medium">
                               泛化边界（每行一条）
@@ -2528,10 +2378,14 @@ function MemoryCandidateSection({
                                 }
                               />
                             </label>
-                          </div>
+                          </fieldset>
                         ) : (
                           <div className="mt-4">
-                            <MemoryLessonReadView lesson={reviewedLesson} />
+                            <MemoryLessonReadView
+                              lesson={reviewedLesson}
+                              applicability={effectiveApplicability}
+                              scopeView={candidate.scope_view}
+                            />
                           </div>
                         )}
                       </div>
@@ -2558,9 +2412,7 @@ function MemoryCandidateSection({
                           <Switch
                             checked={draft.applyToFutureMatches}
                             disabled={
-                              isReviewing ||
-                              !editable ||
-                              reviewedLesson === undefined
+                              busy || !editable || reviewedLesson === undefined
                             }
                             onCheckedChange={(checked) =>
                               onReviewDraftChange(candidate, {
@@ -2623,7 +2475,10 @@ function MemoryCandidateSection({
                   </CollapsibleContent>
                 </Collapsible>
 
-                <div className="bg-background/95 sticky bottom-0 z-10 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t px-4 py-4 shadow-[0_-8px_20px_-18px_rgba(0,0,0,0.7)] backdrop-blur">
+                <div
+                  data-memory-review-actions
+                  className="bg-background/95 sticky bottom-0 z-10 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t px-4 py-4 shadow-[0_-8px_20px_-18px_rgba(0,0,0,0.7)] backdrop-blur"
+                >
                   <div>
                     <div className="text-sm font-semibold">审核决定</div>
                     <div className="text-muted-foreground mt-0.5 text-xs">
@@ -2651,7 +2506,7 @@ function MemoryCandidateSection({
                         <Button
                           size="sm"
                           disabled={
-                            isReviewing ||
+                            busy ||
                             draft.confirmedVerdict === null ||
                             !reviewedLesson
                           }
@@ -2665,7 +2520,7 @@ function MemoryCandidateSection({
                         <Button
                           size="sm"
                           variant="destructive"
-                          disabled={isReviewing}
+                          disabled={busy}
                           title="仅放弃这条 Memory 候选，不改变告警的最终判断"
                           onClick={() => onReview(candidate, "reject")}
                         >
@@ -2677,7 +2532,7 @@ function MemoryCandidateSection({
                         <Button
                           size="sm"
                           variant="ghost"
-                          disabled={isReviewing}
+                          disabled={busy}
                           onClick={() => onReview(candidate, "expire")}
                         >
                           过期
@@ -2755,6 +2610,40 @@ function MemoryCandidateSection({
               }}
             >
               确认废止
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={regenerationTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRegenerationTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>替换当前经验草稿？</DialogTitle>
+            <DialogDescription>
+              重新生成会替换当前草稿，包括你已修改的内容。最终判断、业务事实和匹配条件保持不变；生成失败会保留当前草稿。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRegenerationTarget(null)}
+            >
+              保留当前草稿
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() => {
+                if (!regenerationTarget) return;
+                onDraftLesson(regenerationTarget);
+                setRegenerationTarget(null);
+              }}
+            >
+              <RefreshCwIcon className="size-4" />
+              替换并重新生成
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3590,7 +3479,7 @@ export function SocReviewQueueWorkbench({
         ...(current[candidate.candidate_id] ??
           defaultMemoryCandidateReviewDraft(candidate)),
         ...patch,
-        ...(patch.promotedFacetKeys ? { replacement: null } : {}),
+        ...(patch.promotedFacetValues ? { replacement: null } : {}),
       },
     }));
   };
@@ -3694,7 +3583,8 @@ export function SocReviewQueueWorkbench({
         request: {
           reviewer_verdict: current.confirmedVerdict,
           reviewer_context: current.businessContext.trim() || null,
-          promoted_facet_keys: current.promotedFacetKeys,
+          promoted_facet_keys: Object.keys(current.promotedFacetValues),
+          promoted_facet_values: current.promotedFacetValues,
         },
       });
       if (result.reviewer_verdict !== current.confirmedVerdict) {
@@ -3712,7 +3602,7 @@ export function SocReviewQueueWorkbench({
         lessonHandlingGuidance: lesson.handling_guidance.join("\n"),
         lessonDraftProvenance: `${result.provenance.model_name} / ${result.provenance.prompt_version} / calls ${result.provenance.provider_call_count}${result.provenance.output_repair_call_count ? ` / repairs ${result.provenance.output_repair_call_count}` : ""}`,
         lessonDraftUncertainties: result.uncertainties,
-        lessonEditing: false,
+        lessonEditing: true,
       });
       toast.success("AI 经验草稿已生成，请审核后确认");
     } catch (err) {

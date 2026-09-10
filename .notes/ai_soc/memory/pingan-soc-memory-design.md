@@ -434,6 +434,37 @@ SocMemoryService`，来源为 `manual_note`，状态固定为 `pending_review`�
 
 ## 7. Human Review And Activation
 
+Web 首次生成和修订重新生成均直接进入逐项编辑，七个业务正文项可修改；适用条件仍由类型化匹配范围生成。
+预览与编辑来回切换保留草稿；重新生成需确认覆盖，失败保留当前内容。生成期间锁定正文、判断、范围与确认操作，
+避免异步结果覆盖正在编辑的业务输入。最终确认提交当前表单的 `record_lesson`，不是原始 AI 草稿。
+“业务事实”是可选的人工补充，不会仅凭选择真实攻击/误报就自动伪造业务事实，也不增加单独的模型调用。
+
+### Readable Scope / 可读适用范围
+
+候选 detail、Memory detail 和 lineage HTTP 只读响应附带 `soc.memory_scope_view.v1`，不写入
+Candidate/Memory、不参与检索或审核输入。通用投影调用已注册 Profile 的解释方法，PingAn 在 Integration
+核对当前版本及保存的检测签名、行为 Hash，只有重算完全一致才展示组成。缺失、版本不兼容或无法核验时
+保留原指纹匹配，并明确明细未核验；绝不根据相邻 facets 猜测适用范围。Profile 和 feature 版本均不变。
+
+Web 默认展示规则、产品、核心行为和数据使用范围；`dev-corpus-eval` 显示为告警演练数据，非业务资产环境。
+Hash、原始 required/optional/excluded 条件及阈值放入技术详情。页面直接列出必需条件与独立可选条件，
+已确认经验不出现编辑开关，未增加的可选条件仍可查阅。重复判断按具体值而非整组：例如 `entity` 中
+`rule_code` 已被覆盖，但资产组、其他 MITRE 标记和不属于当前检测规则的实体仍可单独选择。不能因为一项重复就隐藏整组。
+
+`rule:<16位Hash>` 由 `SHA-256(detection_key)[:16]` 生成，不是上游新增规则 ID。
+例如 `sec_guard_apt:rule_code:rpaadm_000451` 对应 `rule:e29555055c12b7c7`。
+当只有一个必需检测规则时，平安新候选不再把其同值 Hash 放进可选条件；旧候选/经验经核验后
+只读标为已覆盖，技术详情仍保留原契约。生成函数与实体提取共用，避免两处算法漂移。
+多检测规则 OR、不同 Hash、未知 Profile 或旧版未核验范围不猜测去重。已被人工设为必需/排除的
+条件不自动删除。通用实体、查询 facets、索引和评分保留，故不需要重跑、迁移或清空已有经验。
+
+审核页使用 `promoted_facet_values` 提交具体值，兼容原 `promoted_facet_keys` 整组请求。
+AI 草稿和治理比较调用同一收窄函数，确认提交完整 `record_applicability`，并由原审核服务校验只缩小、不扩大。
+例如只选 `entity=[asset:某资产组]`，落库后该组不再保留 `rule_code` 等其他候选值，单凭同规则不能满足该限制。
+同一组多选保留 OR 语义，不同组为 AND；新增限制也必须满足才允许 context-only 回退。
+相似召回键仍归原回退契约所有，不改成必需键。未选择不修改原范围，勾选本身不落库。
+不修改已有记录、Fingerprint/Profile 版本、匹配算法或改判权限，不新增数据库迁移或模型调用。
+
 Candidate confirmation is one explicit product action. The reviewer may:
 
 - request a candidate-level AI draft through `soc.memory_business_lesson_draft.v1`; the bounded model sees an

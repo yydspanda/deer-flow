@@ -26,17 +26,14 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { memoryAvailabilityCopy } from "@/components/workspace/soc/soc-memory-copy";
 import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memory-decision-capability";
 import { SocMemoryPendingRevision } from "@/components/workspace/soc/soc-memory-pending-revision";
+import { SocMemoryScope } from "@/components/workspace/soc/soc-memory-scope";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useSocMemoryLineage,
   useTestSocMemoryRecordMatch,
   useUpdateSocMemoryRetrievalActivation,
 } from "@/core/soc";
-import type {
-  SocMemoryBusinessLesson,
-  SocMemoryRecord,
-  SocMemoryUseEffect,
-} from "@/core/soc";
+import type { SocMemoryBusinessLesson, SocMemoryUseEffect } from "@/core/soc";
 
 const USE_EFFECT_LABELS: Record<SocMemoryUseEffect, string> = {
   context_only: "仅作研判参考",
@@ -91,7 +88,6 @@ function futureLocalDate(days: number) {
 function LessonSection({ lesson }: { lesson: SocMemoryBusinessLesson }) {
   const groups = [
     ["判断依据", lesson.business_rationale],
-    ["适用条件", lesson.applicability_conditions],
     ["泛化边界", lesson.generalization_boundaries],
     ["失效条件", lesson.invalidation_conditions],
     ["处理建议", lesson.handling_guidance],
@@ -130,51 +126,16 @@ function LessonSection({ lesson }: { lesson: SocMemoryBusinessLesson }) {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function FacetSection({ record }: { record: SocMemoryRecord }) {
-  const required = record.applicability?.required_facets ?? {};
-  const optional = record.applicability?.optional_facets ?? {};
-  const rows = [
-    ...Object.entries(required).map(([key, values]) => ({
-      key,
-      values,
-      kind: "必须命中",
-    })),
-    ...Object.entries(optional).map(([key, values]) => ({
-      key,
-      values,
-      kind: "可选收窄",
-    })),
-  ];
-  return rows.length === 0 ? (
-    <p className="text-muted-foreground text-sm">
-      这条历史经验没有结构化适用范围，只能帮助模型理解告警，不能直接复用结论。
-    </p>
-  ) : (
-    <div className="divide-y border">
-      {rows.map((row) => (
-        <div
-          key={`${row.kind}:${row.key}`}
-          className="grid gap-2 px-3 py-3 text-sm md:grid-cols-[7rem_12rem_minmax(0,1fr)]"
-        >
-          <Badge variant={row.kind === "必须命中" ? "default" : "outline"}>
-            {row.kind}
-          </Badge>
-          <span className="font-mono text-xs">{row.key}</span>
-          <div className="flex flex-wrap gap-1.5">
-            {row.values.map((value) => (
-              <Badge key={value} variant="secondary" className="max-w-full">
-                <span className="truncate" title={value}>
-                  {value}
-                </span>
-              </Badge>
-            ))}
-          </div>
-        </div>
-      ))}
+      <details className="border-t pt-3 text-xs">
+        <summary className="text-muted-foreground w-fit cursor-pointer">
+          经验原文中的适用说明
+        </summary>
+        <ul className="mt-2 space-y-2 leading-5 [overflow-wrap:anywhere]">
+          {lesson.applicability_conditions.map((value) => (
+            <li key={value}>{value}</li>
+          ))}
+        </ul>
+      </details>
     </div>
   );
 }
@@ -462,12 +423,11 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
               </section>
 
               <section className="border px-5 py-5">
-                <h2 className="text-sm font-semibold">匹配范围</h2>
-                <p className="text-muted-foreground mt-1 text-xs leading-5">
-                  必须条件决定能否精确复用；可选条件只用于收窄和排序，不能单独授权改判。
-                </p>
-                <div className="mt-4">
-                  <FacetSection record={record} />
+                <div>
+                  <SocMemoryScope
+                    spec={record.applicability}
+                    view={lineage?.scope_view ?? record.scope_view}
+                  />
                 </div>
               </section>
 

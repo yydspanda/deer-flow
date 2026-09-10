@@ -2,7 +2,7 @@
 name: pingan-soc-disposition-policy
 description: Apply reviewed PingAn SOC operational handling experience after generic Runtime analysis; use only for tenant policy advice, never detection truth or action authorization.
 metadata:
-  version: v1.2.0
+  version: v1.2.1
 ---
 
 # PingAn SOC Disposition Policy
@@ -124,6 +124,8 @@ failed.
 
 ## Output Discipline
 
+- 面向运营人员的摘要、策略理由、处理建议和核查项全部使用简体中文；保留 JSON
+  字段名、枚举值、引用编号和日志中的技术名称。不因本 Skill 使用英文就输出英文建议。
 - `evidence_refs` must contain exact current-alert `E-*` IDs.
 - `reasoning_refs` may cite existing Runtime `R-*` items.
 - `context_refs` may cite exact `S/A/M/C/T-*` governed context IDs.

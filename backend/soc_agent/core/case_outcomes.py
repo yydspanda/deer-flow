@@ -30,6 +30,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.case_progress import follow_up_reason_codes, progress_text
 from soc_agent.core.handling import concrete_disposition, handling_blockers, policy_requires_follow_up, project_operational_handling, resolve_operational_disposition
+from soc_agent.core.operator_language import operator_text
 
 _TERMINAL_DISPOSITIONS = frozenset(
     {
@@ -507,6 +508,7 @@ def _dedupe_text(values: Sequence[str]) -> list[str]:
 
 
 def _bounded_text(value: str, *, limit: int) -> str:
+    value = operator_text(value)
     if len(value) <= limit:
         return value
     return f"{value[: limit - 3]}..."

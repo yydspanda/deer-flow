@@ -67,6 +67,8 @@ class SocMemoryProfile(Protocol):
 
     identity: SocMemoryProfileIdentity
 
+    def explain_scope_facets(self, spec: SocMemoryApplicabilitySpec, facets: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]: ...
+
     def matches_request(self, request: LLMAnalysisRequest) -> bool: ...
 
     def project_query_facets(
@@ -120,6 +122,9 @@ class GenericSocMemoryProfile:
         profile_version="2",
         feature_schema_version="soc.memory_features.generic.v2",
     )
+
+    def explain_scope_facets(self, spec: SocMemoryApplicabilitySpec, facets: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
+        return {}
 
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
         return True

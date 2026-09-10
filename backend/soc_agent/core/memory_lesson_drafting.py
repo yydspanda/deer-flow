@@ -43,6 +43,7 @@ class SocMemoryLessonDraftService:
         reviewer_verdict: Verdict,
         reviewer_context: str | None = None,
         promoted_facet_keys: list[str] | None = None,
+        promoted_facet_values: dict[str, list[str]] | None = None,
         context: ServiceRequestContext | None = None,
     ) -> SocMemoryBusinessLessonDraft:
         """Generate a non-persisted draft without changing candidate state."""
@@ -67,6 +68,7 @@ class SocMemoryLessonDraftService:
             draft_applicability = promote_memory_applicability_facets(
                 candidate.applicability,
                 promoted_facet_keys or [],
+                promoted_facet_values,
             )
         except ValueError as exc:
             raise SocServiceConflictError(str(exc)) from exc
@@ -76,6 +78,7 @@ class SocMemoryLessonDraftService:
                 candidate_id,
                 reviewer_verdict=reviewer_verdict,
                 promoted_facet_keys=promoted_facet_keys,
+                promoted_facet_values=promoted_facet_values,
             )
             metadata["governance_comparison"] = comparison.model_dump(mode="json")
         draft_candidate = candidate.model_copy(update={"applicability": draft_applicability, "metadata": metadata})
