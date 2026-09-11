@@ -9,7 +9,7 @@
 - **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。新交付同时把 PingAn DeerFlow chat 固定为 buffered non-streaming，并将模型网关与 Runtime 并发统一为 `3`；SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
 - **Next Gate:** 部署 buffered chat / `3 + 3` 并发配置，验证普通聊天不再发送 `stream=true`、三条不同告警可同时研判；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-10`
+- **Last Updated:** `2026-09-11`
 
 ## Current Constraints / 当前约束
 
@@ -19,7 +19,7 @@
 | Persistence | 生产/准生产目标为 PostgreSQL；当前 DEV/仿真使用独立 SOC SQLite |
 | LLM control | Runtime 掌握固定控制流；LLM 处理 bounded analysis；Policy/approval/service 掌握动作权限 |
 | Real integration | 外网 mock/fixture 只证明流程可达；真实门禁必须以 PingAn DEV 的 `mocked=false` 证据关闭 |
-| Upstream baseline | `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c`；2026-08-26 测量为 ahead `261` / behind `0` |
+| Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
 

@@ -3,10 +3,12 @@
 import asyncio
 import concurrent.futures
 import logging
+import threading
 import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from langchain.tools import InjectedToolCallId, tool
@@ -73,6 +75,74 @@ _explicit_app_config: ContextVar[Any | None] = ContextVar(
     "deerflow_explicit_subagent_app_config",
     default=None,
 )
+
+
+def _record_middleware_on_parent_loop(journal: Any, kwargs: dict[str, Any]) -> None:
+    """Run one subagent middleware-journal append on the journal owner's loop."""
+    try:
+        journal.record_middleware(**kwargs)
+    except Exception:
+        logger.warning("Failed to record subagent middleware event", exc_info=True)
+
+
+class _ParentLoopMiddlewareRecorderProxy:
+    """Forward narrowly scoped subagent middleware events to the parent loop.
+
+    ``RunJournal`` owns parent-loop tasks and may wrap an event store backed by
+    a loop-bound SQL pool. Subagents execute on a persistent isolated loop, so
+    the journal object itself must never be called there.
+    """
+
+    def __init__(self, journal: Any, loop: asyncio.AbstractEventLoop) -> None:
+        self._journal = journal
+        self._loop = loop
+        self._state_lock = threading.Lock()
+        self._closed = False
+        self._claimed_tool_promotions: set[str] = set()
+
+    def claim_tool_promotions(self, tool_names: list[str]) -> list[str]:
+        """Atomically deduplicate promotions within this one child execution."""
+        candidates = sorted(set(tool_names))
+        with self._state_lock:
+            if self._closed:
+                return []
+            claimed = [name for name in candidates if name not in self._claimed_tool_promotions]
+            self._claimed_tool_promotions.update(claimed)
+        return claimed
+
+    def record_middleware(self, **kwargs: Any) -> None:
+        with self._state_lock:
+            if self._closed or self._loop.is_closed():
+                logger.debug("Dropping subagent middleware event after parent loop shutdown")
+                return
+            try:
+                self._loop.call_soon_threadsafe(
+                    _record_middleware_on_parent_loop,
+                    self._journal,
+                    dict(kwargs),
+                )
+            except RuntimeError:
+                # The loop may close between is_closed() and scheduling.
+                logger.debug("Dropping subagent middleware event after parent loop shutdown")
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the task-tool boundary has fenced new child events."""
+        with self._state_lock:
+            return self._closed
+
+    async def aclose(self) -> None:
+        """Fence late child events and drain every append accepted before it."""
+        if asyncio.get_running_loop() is not self._loop:
+            logger.warning("Cannot drain subagent middleware recorder from a non-owner loop")
+            return
+        with self._state_lock:
+            self._closed = True
+        if self._loop.is_closed():
+            return
+        # record_middleware holds _state_lock through call_soon_threadsafe, so
+        # all accepted callbacks are already ahead of this continuation.
+        await asyncio.sleep(0)
 
 
 def _is_subagent_terminal(result: Any) -> bool:
@@ -662,6 +732,18 @@ async def task_tool(
       every criterion that cannot be checked deterministically is marked
       UNVERIFIED — never silently passed. A `holds` leaf is execution evidence,
       not a guarantee that the deliverable is correct.
+    - `completed` means execution ended, not task acceptance. Read each criterion
+      and retain useful work. For `does not hold`, inspect the reason and repair
+      or recheck only the unmet condition, reusing unaffected outputs.
+      `UNVERIFIED` is missing evidence, not a failed condition: verify load-bearing
+      criteria against actual artifacts or primary evidence; when confirmation
+      is unavailable, preserve uncertainty. Handle both kinds in mixed results.
+    - Reuse outputs with `holds` checks while spot-checking load-bearing claims
+      beyond their scope. Without a checklist, inspect the self-report's handles.
+      Any further delegation must name the missing condition and cover only
+      remaining work. Do not repeat an unchanged attempt or restart the whole
+      task. Stay within the remaining delegation and execution budget; when
+      exhausted, deliver confirmed results with explicit gaps and uncertainty.
 
     Args:
         prompt: The task description for the subagent. Be specific and clear about what needs to be done.
@@ -724,6 +806,8 @@ async def task_tool(
     # Extract parent context from runtime
     sandbox_state = None
     thread_data = None
+    uploaded_files = None
+    upload_state_available = False
     thread_id = None
     parent_model = None
     trace_id = None
@@ -732,6 +816,15 @@ async def task_tool(
     if runtime is not None:
         sandbox_state = runtime.state.get("sandbox")
         thread_data = runtime.state.get("thread_data")
+        parent_uploaded_files = runtime.state.get("uploaded_files")
+        if isinstance(parent_uploaded_files, list) and all(
+            isinstance(entry, dict) and isinstance(entry.get("filename"), str) and bool(entry["filename"]) and Path(entry["filename"]).name == entry["filename"] for entry in parent_uploaded_files
+        ):
+            # Only a complete, validated boundary can safely exclude same-run
+            # files. SubagentExecutor snapshots it synchronously before work
+            # crosses to the isolated event loop.
+            uploaded_files = parent_uploaded_files
+            upload_state_available = True
         thread_id = runtime.context.get("thread_id") if runtime.context else None
         if thread_id is None:
             thread_id = runtime.config.get("configurable", {}).get("thread_id")
@@ -794,15 +887,16 @@ async def task_tool(
         resolved_app_config = get_app_config()
     effective_model = resolve_subagent_model_name(config, parent_model, app_config=resolved_app_config)
 
-    # Subagents should not have subagent tools enabled (prevent recursive nesting).
-    # Subagents also must not get list_uploaded_files — they have an independent
-    # ThreadState where runtime.state["uploaded_files"] is absent, so the
-    # current-run file exclusion would not work.
+    # Subagents should not have subagent tools enabled (prevent recursive
+    # nesting). Ordinary task subagents receive a snapshot of the parent's
+    # current-run uploads below, so historical upload discovery is safe when
+    # that state channel is present. Non-standard callers without the channel
+    # remain fail-closed instead of misclassifying current uploads as history.
     available_tools_kwargs = {
         "model_name": effective_model,
         "groups": parent_tool_groups,
         "subagent_enabled": False,
-        "include_upload_tool": False,
+        "include_upload_tool": upload_state_available,
     }
     if resolved_app_config is not None:
         available_tools_kwargs["app_config"] = resolved_app_config
@@ -815,6 +909,7 @@ async def task_tool(
         "parent_model": parent_model,
         "sandbox_state": sandbox_state,
         "thread_data": thread_data,
+        "uploaded_files": uploaded_files,
         "thread_id": thread_id,
         "trace_id": trace_id,
         "user_id": user_id,
@@ -834,6 +929,18 @@ async def task_tool(
         # system-channel authority over framework instructions.
         "acceptance_criteria": acceptance_criteria,
     }
+    middleware_recorder = None
+    parent_journal = parent_context.get("__run_journal")
+    if parent_journal is not None:
+        # The task tool runs on the parent run's loop. Pass only a proxy across
+        # the isolated-subagent boundary so middleware persistence is delivered
+        # on the loop that owns the RunJournal and its event store.
+        middleware_recorder = _ParentLoopMiddlewareRecorderProxy(
+            parent_journal,
+            asyncio.get_running_loop(),
+        )
+        executor_kwargs["loop_detection_recorder"] = middleware_recorder
+        executor_kwargs["tool_promotion_recorder"] = middleware_recorder
     if resolved_app_config is not None:
         executor_kwargs["app_config"] = resolved_app_config
     if run_extensions is not None:
@@ -1161,3 +1268,6 @@ async def task_tool(
             # must end as an interrupted run, not a failed tool call.
             raise asyncio.CancelledError
         raise
+    finally:
+        if middleware_recorder is not None:
+            await middleware_recorder.aclose()

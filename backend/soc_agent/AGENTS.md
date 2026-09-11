@@ -248,6 +248,10 @@ file for SOC code. The authoritative product and engineering documents are:
 - SOC Lead Agent reuses DeerFlow's `lead_agent`, middleware, Skill, MCP, and subagent
   mechanisms. `backend/soc_agent/lead_agent.py` is an adapter/configuration boundary, not
   a second agent framework.
+- Upstream sync must preserve the server-owned review-thread binding and message
+  provenance filters alongside upstream project metadata protection. Embedded graph
+  reuse must include effective user identity as well as the selected profile's skills
+  and middleware configuration.
 - Specialist agents use `subagents.custom_agents` and the native `task` tool. They return
   analysis/advice to the controller and do not independently close alerts, mutate Memory,
   or execute response actions.

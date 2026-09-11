@@ -23,7 +23,7 @@ import mimetypes
 import os
 import shutil
 import uuid
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -121,6 +121,19 @@ def _validated_embedded_runtime_context(value: Any) -> dict[str, Any]:
     return copied
 
 
+def _stream_with_sandbox_lease_cleanup(items: Iterator[Any], context: dict[str, Any]) -> Iterator[Any]:
+    """Fence an embedded graph iterator with execution-lease cleanup."""
+    try:
+        yield from items
+    finally:
+        try:
+            from deerflow.sandbox.lease import release_sandbox_execution_lease
+
+            release_sandbox_execution_lease(context)
+        except Exception:
+            logger.warning("Failed to release embedded sandbox execution lease", exc_info=True)
+
+
 def _run_async_from_sync(coro):
     """Run an async helper from this synchronous client API."""
     try:
@@ -142,7 +155,7 @@ class StreamEvent:
     """A single event from the streaming agent response.
 
     Event types align with the LangGraph SSE protocol:
-        - ``"values"``: Full state snapshot (title, messages, artifacts).
+        - ``"values"``: State snapshot (title, messages, artifacts, summary_text).
         - ``"messages-tuple"``: Per-message update (AI text, tool calls, tool results).
         - ``"end"``: Stream finished.
 
@@ -295,6 +308,8 @@ class DeerFlowClient:
         if context is not None:
             cfg.update(context)
 
+        # Graph assembly and agent profiles are scoped to the effective caller,
+        # independently of whether authorization enforcement is enabled.
         effective_user_id = cfg.get("user_id") or get_effective_user_id()
         agent_config = load_agent_config(self._agent_name, user_id=effective_user_id) if self._agent_name else None
         available_skills = self._available_skills
@@ -329,6 +344,7 @@ class DeerFlowClient:
             agent_middleware_paths,
             self._checkpoint_channel_mode,
             self._checkpoint_snapshot_frequency,
+            effective_user_id,
             authorization_identity,
         )
 
@@ -874,7 +890,7 @@ class DeerFlowClient:
 
         Yields:
             StreamEvent with one of:
-            - type="values"          data={"title": str|None, "messages": [...], "artifacts": [...]}
+            - type="values"          data={"title": str|None, "messages": [...], "artifacts": [...], "summary_text": str|None}
             - type="custom"          data={...}
             - type="messages-tuple"  data={"type": "ai", "content": <delta>, "id": str}
             - type="messages-tuple"  data={"type": "ai", "content": <delta>, "id": str, "usage_metadata": {...}}
@@ -927,12 +943,11 @@ class DeerFlowClient:
         configurable = config.get("configurable") or {}
         deerflow_trace_id = ensure_trace_id()
         effective_user_id = context.get("user_id") or get_effective_user_id()
-        if self._app_config.authorization.enabled:
-            # Match the existing user-scoped storage/tracing identity when an
-            # embedded caller relies on CurrentUser instead of an explicit
-            # user_id override. Layer 1, Layer 2, and the agent cache must see
-            # the same actor.
-            context["user_id"] = effective_user_id
+        # Materialize the storage owner in runtime context in every auth mode.
+        # ContextVars normally propagate, but this explicit channel also
+        # survives worker/isolated-loop boundaries and matches the identity
+        # used by prompt assembly and the agent cache.
+        context["user_id"] = effective_user_id
         inject_langfuse_metadata(
             config,
             thread_id=thread_id,
@@ -1002,12 +1017,13 @@ class DeerFlowClient:
             sent.update(delta)
             return delta
 
-        for item in self._agent.stream(
+        agent_items = self._agent.stream(
             state,
             config=config,
             context=context,
             stream_mode=["values", "messages", "custom"],
-        ):
+        )
+        for item in _stream_with_sandbox_lease_cleanup(agent_items, context):
             if isinstance(item, tuple) and len(item) == 2:
                 mode, chunk = item
                 mode = str(mode)
@@ -1124,6 +1140,7 @@ class DeerFlowClient:
                 type="values",
                 data={
                     "title": chunk.get("title"),
+                    "summary_text": chunk.get("summary_text"),
                     "messages": [self._serialize_message(m) for m in messages],
                     "artifacts": chunk.get("artifacts", []),
                 },

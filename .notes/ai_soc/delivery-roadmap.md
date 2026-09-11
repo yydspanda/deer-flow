@@ -255,7 +255,7 @@ PI-05B 的可复跑命令和 artifact 生成顺序见
 
 | ID | Work / 工作 | Status / 状态 | Gate / 门槛 |
 |---|---|---|---|
-| `UP-SYNC` | Recurring upstream synchronization / 周期性上游同步 | **Recurring; latest Done 2026-08-26**: 已合并 `upstream/main@788a890bd022689ef293e6bbfa2c12988173db6c` | 每周测量 ahead/behind；behind 超过 10 个提交时 CI 告警并要求同步或记录显式兼容决策；合并冲突必须保留上游通用层与 SOC 增量层边界 |
+| `UP-SYNC` | Recurring upstream synchronization / 周期性上游同步 | **Recurring; latest Done 2026-09-11**: 已合并 `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`，补齐 `105` 个上游提交 | 每周测量 ahead/behind；behind 超过 10 个提交时 CI 告警并要求同步或记录显式兼容决策；合并冲突必须保留上游通用层与 SOC 增量层边界 |
 | `PI-06` | Progress and experiment governance / 进度与实验治理 | **Done 2026-08-26** | 活动文件不超过 240 行、只有一个当前 Stage/task、近期记录 task 均存在于 Roadmap、实验记录具备完整可复现 manifest、历史按月归档 |
 
 ### PI Gate / 生产集成门禁
