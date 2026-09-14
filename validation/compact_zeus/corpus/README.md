@@ -6,6 +6,9 @@ canonical 验证语料，并生成 Zeus raw-log 上下文压缩报告。
 - `build_alert_validation_corpus.py`：生成 212 条 canonical corpus 与 manifest，验证 ID、
   lineage、payload hash、Normalizer 与 LLM projection 契约。
 - `build_dams_labeled_dataset.py`：流式合并 DAMS 告警/运营标签与现有 210 条 PKL，
+  默认递归读取 `datas/source/dams_exports/` 内所有已解压批次，按 CSV 表头识别告警或标签；
+  未识别的 CSV 会明确报错，不会静默跳过。`--exports-root` 可指定其他批次根目录，
+  旧的 `--alerts-dir` / `--labels-dir` 保留为显式目录覆盖。
   按 `updated_date` 选择每个 `alert_id` 的最新记录；无标签告警仍完整保留，只有
   标签而没有告警正文的记录只进入 manifest，不伪造 payload。输出按 Normalizer
   解析出的时区化事件时间升序排列，并生成相邻的轻量 Workbench 索引。
@@ -32,6 +35,23 @@ backend/.venv/bin/python -m pytest -q validation/compact_zeus/corpus
 由索引锁定；页面点击运行时只读取目标告警，不把 1.2GB PKL 全部载入 Gateway 内存。
 manifest 记录每个输入文件的 SHA-256、重复行选择、标签命中、孤立标签和三个输出文件
 的摘要。
+
+2026-09-13 已合并新一批 5 个 DAMS 导出包：4,343 → 15,286 条独立告警，
+13,133 条带运营标签，2,153 条无标签仍保留。原有 4,343 条所有字段均未变化。
+本次备份、差异报告和命令见 Git 忽略的 `data/audit/corpus-expansion-20260913/`
+（相对于 `validation/compact_zeus/`）；不生成或清空业务 Memory。
+
+扩充批次时先在独立目录构建，检查新增 ID、旧告警和标签保留、时间顺序以及索引回读，
+通过后成套替换 PKL、manifest、index 和 payload SQLite。不要只替换 PKL，也不要删除
+SOC 研判/Memory 数据库。原始 ZIP 与 CSV 留在本地，密码不得进入 Git。运行中的 Gateway
+缓存了语料索引，换数据后需要重启以重新加载；无需重新调用模型。
+
+```bash
+backend/.venv/bin/python validation/compact_zeus/corpus/build_dams_labeled_dataset.py \
+  --exports-root datas/source/dams_exports \
+  --output validation/compact_zeus/data/audit/corpus-expansion/staging/full_alert_dams_labeled_merged.pkl \
+  --manifest validation/compact_zeus/data/audit/corpus-expansion/staging/full_alert_dams_labeled_merged.manifest.json
+```
 
 Workbench index v3 同时冻结当前 `PingAnSocMemoryProfile` 身份和聚合窗口。PingAn Profile
 v7 使用 30 天 fixed UTC window，并按目标网络服务、CVE 和规范化攻击行为细分模式；Profile

@@ -47,6 +47,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Results separate resolved questions, necessary investigation, optional enrichment and future
 > reassessment triggers. Original analysis remains available for audit. The corpus workbench shows
 > the Memory actually read/cited by a run separately from the experience saved by its cohort.
+> In `告警演练`, each alert exposes `查看同组` to open its complete server-defined group,
+> with `返回原筛选` restoring the previous search and page. The group picker searches rule
+> names/codes and behavior keywords, including singleton groups and groups without fingerprints.
 > A browser-driven local lifecycle is available for the reviewed 14-alert
 > `GalaxyLab_T1003-SAM-Dumping` cohort. For a trusted shared demonstration, run
 > `./scripts/soc-memory-dev.sh demo-start`, then open

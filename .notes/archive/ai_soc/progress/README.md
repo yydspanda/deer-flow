@@ -6,7 +6,7 @@
 
 | Month | Records | Notes |
 |---|---:|---|
-| [2026-09](2026-09.md) | 8 | Upstream synchronization; Memory governance, readable scope and Chinese operator output |
+| [2026-09](2026-09.md) | 10 | Corpus expansion and group navigation; upstream synchronization; Memory governance, readable scope and Chinese operator output |
 | [2026-08](2026-08.md) | 92 | Legacy records migrated by `PI-06` |
 | [2026-07](2026-07.md) | 172 | Legacy records migrated by `PI-06` |
 | [2026-06](2026-06.md) | 25 | Legacy records migrated by `PI-06` |

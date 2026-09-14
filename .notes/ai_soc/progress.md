@@ -9,7 +9,7 @@
 - **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。新交付同时把 PingAn DeerFlow chat 固定为 buffered non-streaming，并将模型网关与 Runtime 并发统一为 `3`；SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
 - **Next Gate:** 部署 buffered chat / `3 + 3` 并发配置，验证普通聊天不再发送 `stream=true`、三条不同告警可同时研判；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-11`
+- **Last Updated:** `2026-09-13`
 
 ## Current Constraints / 当前约束
 
@@ -23,7 +23,7 @@
 
 ## Recent Completion Records / 近期完成记录
 
-09-10 运营中文输出及规则 Hash 可选条件去重已归档至 [2026-09](../archive/ai_soc/progress/2026-09.md)：共享语言约束、固定说明只读转中文；重复规则实体不再提供收窄选项，保留通用索引、查询、评分及历史记录；未重跑 `2456233`。
+09-13 语料扩充 4,343 → 15,286 条及旧记录完整性校验、09-10 运营中文输出及规则 Hash 可选条件去重已归档至 [2026-09](../archive/ai_soc/progress/2026-09.md)；本次未修改 Runtime/Memory 或调用模型，内网执行指针不变。
 ### 2026-09-08 — Explain decision lineage and concrete handling progress
 
 - **Task:** `PI-04C`

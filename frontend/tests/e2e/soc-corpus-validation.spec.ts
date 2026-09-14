@@ -752,6 +752,153 @@ function corpusStart(alertId: string) {
   };
 }
 
+test("opens the searched alert's complete group and restores original filters without running alerts", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const current = corpusState();
+  current.alerts.push({
+    ...corpusState(true).alerts[0]!,
+    alert_id: "1984427",
+    source_index: 3,
+    sequence_number: 4,
+  });
+  const initialFilters = {
+    search: "1984426",
+    readiness: "candidate_window",
+    comparison: "not_run",
+    sourceType: "edr",
+    groupId: "all",
+    unprocessedOnly: true,
+  };
+  await page.addInitScript((snapshot) => {
+    sessionStorage.setItem(
+      "soc.corpus-validation.filters.v1",
+      JSON.stringify(snapshot),
+    );
+  }, initialFilters);
+  let writes = 0;
+  let detailCalls = 0;
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (route.request().method() !== "GET") writes++;
+    if (url.endsWith("/execution")) detailCalls++;
+    await route.fulfill({
+      json: url.endsWith("/activity")
+        ? corpusActivity()
+        : corpusStateForRequest(current, url),
+    });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(1);
+  await page
+    .locator('[data-alert-id="1984426"]')
+    .getByRole("button", { name: /查看同组/ })
+    .click();
+  await expect(page.getByLabel("当前行为模式组")).toContainText("14 条");
+  await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(2);
+  await expect(page.getByLabel("仅显示未运行告警")).not.toBeChecked();
+  await expect(page.locator("#corpus-search")).toHaveValue("");
+  await page.getByRole("button", { name: "返回原筛选" }).click();
+  await expect(page.locator("#corpus-search")).toHaveValue("1984426");
+  await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(1);
+  await expect(page.getByLabel("仅显示未运行告警")).toBeChecked();
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(sessionStorage.getItem("soc.corpus-validation.filters.v1")!),
+    ),
+  ).toEqual(initialFilters);
+  expect(writes).toBe(0);
+  expect(detailCalls).toBe(0);
+});
+
+test("searches same-rule groups by behavior and includes singleton groups without fingerprints", async ({
+  page,
+}, testInfo) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const current = corpusState();
+  current.groups.push({
+    ...current.groups[0]!,
+    group_id: "CG-WEAK",
+    rule_code: "RPAADM_WEAK",
+    detection_key: "ptp-nids:rule_code:rpaadm_weak",
+    rule_name: "Weak single alert",
+    behavior_fingerprint: "",
+    behavior_components: [],
+    decision_eligible: false,
+    alert_count: 1,
+  });
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    await route.fulfill({
+      json: route.request().url().endsWith("/activity")
+        ? corpusActivity()
+        : corpusStateForRequest(current, route.request().url()),
+    });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByLabel("行为模式组", { exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "查找行为模式组" });
+  const search = dialog.getByRole("combobox", { name: "搜索分组" });
+  await search.fill("rpaadm_002010");
+  await expect(dialog.getByRole("option")).toHaveCount(2);
+  await search.fill("rpaadm_002010 sip/5060");
+  await expect(dialog.getByRole("option")).toHaveCount(1);
+  await page.screenshot({
+    path: testInfo.outputPath("group-picker-desktop.png"),
+  });
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByLabel("当前行为模式组")).toContainText("SIP/5060");
+  await expect(page.locator('[data-alert-id="2480991"]')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("行为模式组", { exact: true }).click();
+  await search.fill("does-not-exist");
+  await expect(dialog.getByText("未找到匹配的分组")).toBeVisible();
+  await search.fill("cg-weak");
+  await expect(dialog.getByRole("option")).toHaveCount(1);
+  await page.screenshot({
+    path: testInfo.outputPath("group-picker-mobile.png"),
+  });
+  const bounds = await dialog.boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  await dialog.getByRole("option").click();
+  await expect(page.getByLabel("当前行为模式组")).toContainText("1 条");
+  await expect(page.locator('[data-alert-id="1965449"]')).toBeVisible();
+});
+
+test("returns from a small group to the original paginated results", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const current = corpusState();
+  current.alerts = Array.from({ length: 22 }, (_, index) => ({
+    ...current.alerts[index < 20 ? 0 : 2]!,
+    alert_id: String(3000000 + index),
+    sequence_number: index + 1,
+  }));
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    await route.fulfill({
+      json: route.request().url().endsWith("/activity")
+        ? corpusActivity()
+        : corpusStateForRequest(current, route.request().url()),
+    });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(page.locator('[data-alert-id="3000020"]')).toBeVisible();
+  await page
+    .locator('[data-alert-id="3000020"]')
+    .getByRole("button", { name: /查看同组/ })
+    .click();
+  await expect(page.getByText("第 1/1 页", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "返回原筛选" }).click();
+  await expect(page.getByText("第 2/2 页", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-alert-id="3000020"]')).toBeVisible();
+  await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(2);
+});
+
 test("runs distinct alerts concurrently without enabling a duplicate click", async ({
   page,
 }) => {
@@ -936,7 +1083,11 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(page.getByText("选择一条告警查看运行结果")).toBeVisible();
   expect(auditCalls).toBe(0);
   expect(executionCalls).toBe(0);
-  await page.locator('[data-alert-id="1984426"]').click();
+  await page
+    .locator('[data-alert-id="1984426"]')
+    .getByText("1984426", { exact: true })
+    .click();
+  await page.getByText("历史处置对比（DEV 评测）", { exact: true }).click();
   await expect(page.getByText("Runtime 运行后揭示")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "历史经验如何参与研判" }),
@@ -957,7 +1108,7 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(
     page.getByRole("heading", { name: "Alert 1984426" }),
   ).toBeVisible();
-  await page.getByLabel("行为模式组").click();
+  await page.getByLabel("行为模式组", { exact: true }).click();
   await expect(
     page.getByRole("option", {
       name: /GalaxyLab_T1003-SAM-Dumping.*组 GALAXY.*14 条/,

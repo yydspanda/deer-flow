@@ -22,6 +22,11 @@ sensitive, gitignored evidence and must never become application imports.
   `backend/.venv/bin/python validation/compact_zeus/corpus/build_alert_validation_corpus.py`.
   Generated data is grouped under gitignored `validation/compact_zeus/data/` by corpus,
   audit, review, compaction, and exploration purpose.
+- The full labeled DAMS corpus uses `corpus/build_dams_labeled_dataset.py` under
+  `validation/compact_zeus/`. It discovers all extracted batches under
+  `datas/source/dams_exports/` by CSV header; unknown schemas fail explicitly.
+  Stage expanded PKL/index/payload-store outputs separately, verify old-row retention
+  and chronology, then replace the complete artifact set without resetting SOC Memory.
 - `./scripts/soc-runtime-validation.sh checkpoint-d` covers deterministic D0-D6.
   D7/D10 are explicit-cost live boundaries; D8 Grounding and D9 Decision are
   deterministic; D11 is full-corpus deterministic compatibility/reexecution stability.

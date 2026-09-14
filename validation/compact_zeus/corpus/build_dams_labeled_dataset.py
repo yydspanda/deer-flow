@@ -30,6 +30,7 @@ from validation.compact_zeus.shared.restricted_dataframe_pickle import (  # noqa
 )
 
 DATASET_SCHEMA_VERSION = "soc.validation.dams_labeled_dataset.v2"
+DEFAULT_EXPORTS_ROOT = ROOT / "datas/source/dams_exports"
 DEFAULT_ALERTS_DIR = (
     ROOT / "datas/source/dams_exports/EOA_EXP2026081800142/order_20260818160830348"
 )
@@ -752,26 +753,62 @@ def _csv_files(directory: Path) -> list[Path]:
     return files
 
 
+def discover_export_files(root: Path) -> tuple[list[Path], list[Path]]:
+    """Classify every extracted batch by its CSV contract, not export filenames."""
+    if not root.is_dir():
+        raise ValueError(f"DAMS exports directory does not exist: {root}")
+    alerts: list[Path] = []
+    labels: list[Path] = []
+    for path in sorted(root.rglob("*.csv")):
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            columns = set(next(csv.reader(handle), []))
+        is_alert = ALERT_REQUIRED_COLUMNS.issubset(columns)
+        is_label = LABEL_REQUIRED_COLUMNS.issubset(columns)
+        if is_alert == is_label:
+            raise ValueError(f"{path}: unrecognized DAMS CSV schema: {sorted(columns)}")
+        (alerts if is_alert else labels).append(path)
+    if not alerts:
+        raise ValueError(f"no DAMS alert CSV files found in {root}")
+    return alerts, labels
+
+
+def resolve_input_files(args: argparse.Namespace) -> tuple[list[Path], list[Path]]:
+    if args.alerts_dir is not None or args.labels_dir is not None:
+        return (
+            _csv_files(args.alerts_dir or DEFAULT_ALERTS_DIR),
+            _csv_files(args.labels_dir or DEFAULT_LABELS_DIR),
+        )
+    return discover_export_files(args.exports_root)
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--alerts-dir", type=Path, default=DEFAULT_ALERTS_DIR)
-    parser.add_argument("--labels-dir", type=Path, default=DEFAULT_LABELS_DIR)
+    parser.add_argument("--exports-root", type=Path, default=DEFAULT_EXPORTS_ROOT)
+    parser.add_argument("--alerts-dir", type=Path, default=None)
+    parser.add_argument("--labels-dir", type=Path, default=None)
     parser.add_argument("--base-pickle", type=Path, default=DEFAULT_BASE_PICKLE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument(
         "--workbench-index",
         type=Path,
         default=None,
         help="compact DEV workbench index; defaults beside --output",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.manifest is None:
+        args.manifest = args.output.with_suffix(".manifest.json")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    alert_files = _csv_files(args.alerts_dir)
-    label_files = _csv_files(args.labels_dir)
+    alert_files, label_files = resolve_input_files(args)
+    print(
+        f"Building from {len(alert_files)} alert CSVs and {len(label_files)} label CSVs...",
+        file=sys.stderr,
+        flush=True,
+    )
     base_frame = load_dataframe_pickle(args.base_pickle)
     dataset, report = build_dataset(
         alert_files=alert_files,
@@ -779,12 +816,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         base_frame=base_frame,
         base_source_ref=_relative_path(args.base_pickle),
     )
+    print(
+        f"Writing and verifying {len(dataset)} alerts...", file=sys.stderr, flush=True
+    )
     write_dataset_atomic(dataset, args.output)
+    del dataset
     from soc_agent.demo.corpus_workbench import (
         build_corpus_workbench_index,
         corpus_workbench_payload_store_path,
     )
 
+    print("Building Workbench index and payload store...", file=sys.stderr, flush=True)
     workbench_index = build_corpus_workbench_index(
         args.output,
         output_path=args.workbench_index,

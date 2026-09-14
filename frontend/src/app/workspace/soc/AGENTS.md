@@ -220,6 +220,11 @@ Runtime decisions, construct Memory, or infer action authority.
   and repeat those filters locally. When a processed alert creates a
   Pattern Candidate, keep the current page visible and render a persistent review link;
   the prominent safety band must only project server-returned Effective Decision fields.
+- Alert-to-group navigation uses the server's `group_id`, clears conflicting alert/search/
+  status filters to show the complete group, and offers return to the prior filter/page.
+  Group search uses only the supplied group catalog (including singletons and missing
+  fingerprints); keep rendered options bounded without truncating the searchable catalog.
+  Navigation must not start analysis or open an alert's execution detail implicitly.
 - The corpus execution monitor polls only the selected active alert's lightweight
   execution endpoint. Render the server projection of persisted Runtime steps, provider
   journal, durations, bounded counts, decision, and Pattern write; do not estimate phase

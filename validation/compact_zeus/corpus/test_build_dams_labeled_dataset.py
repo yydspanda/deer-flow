@@ -11,6 +11,9 @@ import pytest
 from validation.compact_zeus.corpus.build_dams_labeled_dataset import (
     DATASET_SCHEMA_VERSION,
     build_dataset,
+    discover_export_files,
+    parse_args,
+    resolve_input_files,
     write_dataset_atomic,
 )
 from validation.compact_zeus.shared.restricted_dataframe_pickle import (
@@ -377,3 +380,78 @@ def test_workbench_index_preserves_canonical_order_without_payloads(
     assert (
         _load_payload_from_store(payload_store, cases["1"])["alert"]["alertId"] == "1"
     )
+
+
+def test_discovers_all_batches_by_header_and_merges_latest_independently(tmp_path):
+    old = tmp_path / "old" / "alerts.csv"
+    new = tmp_path / "new" / "nested" / "alerts.csv"
+    labels = tmp_path / "labels" / "labels.csv"
+    _write_csv(
+        old,
+        ALERT_COLUMNS,
+        [
+            _alert_row(1, marker="old", updated_date="2026-08-01 01:00:00"),
+            _alert_row(2, marker="unlabeled", updated_date="2026-08-01 01:00:00"),
+        ],
+    )
+    _write_csv(
+        new,
+        ALERT_COLUMNS,
+        [
+            _alert_row(1, marker="new", updated_date="2026-08-02 01:00:00"),
+            _alert_row(4, marker="additional", updated_date="2026-08-02 01:00:00"),
+        ],
+    )
+    _write_csv(
+        labels,
+        LABEL_COLUMNS,
+        [
+            _label_row(
+                1, verdict="忽略", status="0", updated_date="2026-08-03 01:00:00"
+            ),
+        ],
+    )
+    alert_files, label_files = discover_export_files(tmp_path)
+    assert set(alert_files) == {old, new}
+    assert label_files == [labels]
+    args = parse_args(["--exports-root", str(tmp_path)])
+    assert resolve_input_files(args) == (alert_files, label_files)
+
+    dataset, report = build_dataset(
+        alert_files=alert_files,
+        label_files=label_files,
+        base_frame=_base_frame(),
+        base_source_ref="base.pkl",
+    )
+    assert dataset["alert_id"].tolist() == [1, 2, 3, 4]
+    assert dataset.iloc[0]["alert_full_data"]["alert_data"] == _payload(1, marker="new")
+    assert report["output"]["unlabeled_rows"] == 3
+    assert report["alerts"]["duplicate_alert_id_count"] == 1
+
+
+def test_discovery_rejects_unknown_csv_instead_of_silently_dropping_it(tmp_path):
+    _write_csv(tmp_path / "unknown.csv", ["alert_id", "something_new"], [])
+    with pytest.raises(ValueError, match="unrecognized DAMS CSV schema"):
+        discover_export_files(tmp_path)
+
+
+def test_discovery_accepts_exports_without_labels_but_requires_alerts(tmp_path):
+    with pytest.raises(ValueError, match="no DAMS alert CSV"):
+        discover_export_files(tmp_path)
+    _write_csv(tmp_path / "alerts.csv", ALERT_COLUMNS, [])
+    assert discover_export_files(tmp_path) == ([tmp_path / "alerts.csv"], [])
+
+
+def test_explicit_directories_still_override_automatic_discovery(tmp_path):
+    alerts = tmp_path / "alerts"
+    labels = tmp_path / "labels"
+    _write_csv(alerts / "a.csv", ALERT_COLUMNS, [])
+    _write_csv(labels / "l.csv", LABEL_COLUMNS, [])
+    args = parse_args(["--alerts-dir", str(alerts), "--labels-dir", str(labels)])
+    assert resolve_input_files(args) == ([alerts / "a.csv"], [labels / "l.csv"])
+
+
+def test_custom_output_keeps_default_manifest_in_staging_directory(tmp_path):
+    output = tmp_path / "staging" / "expanded.pkl"
+    args = parse_args(["--output", str(output)])
+    assert args.manifest == output.with_suffix(".manifest.json")

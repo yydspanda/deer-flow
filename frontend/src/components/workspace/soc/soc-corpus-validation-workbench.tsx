@@ -3,6 +3,7 @@
 import {
   ActivityIcon,
   AlertTriangleIcon,
+  ArrowLeftIcon,
   ArrowRightIcon,
   BrainCircuitIcon,
   CheckCircle2Icon,
@@ -15,6 +16,7 @@ import {
   FileSearchIcon,
   FilterIcon,
   LoaderCircleIcon,
+  ListFilterIcon,
   PlayIcon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -49,6 +51,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
+import { SocCorpusGroupPicker } from "@/components/workspace/soc/soc-corpus-group-picker";
 import { SocDecisionLineageTable } from "@/components/workspace/soc/soc-decision-lineage-table";
 import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
 import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
@@ -1034,6 +1037,10 @@ export function SocCorpusValidationWorkbench() {
   const [comparison, setComparison] = useState<ComparisonFilter>("all");
   const [sourceType, setSourceType] = useState("all");
   const [groupId, setGroupId] = useState("all");
+  const [groupOrigin, setGroupOrigin] = useState<
+    (CorpusFilterSnapshot & { page: number }) | null
+  >(null);
+  const restoredPage = useRef<number | null>(null);
   const [unprocessedOnly, setUnprocessedOnly] = useState(true);
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [focusAlertId, setFocusAlertId] = useState<string | null>(null);
@@ -1287,14 +1294,16 @@ export function SocCorpusValidationWorkbench() {
   ]);
 
   useEffect(() => {
-    setPage(0);
+    setPage(restoredPage.current ?? 0);
+    restoredPage.current = null;
     setFocusAlertId(null);
   }, [comparison, groupId, readiness, search, sourceType, unprocessedOnly]);
 
   useEffect(() => {
+    if (query.isPlaceholderData || deferredSearch !== search.trim()) return;
     if (page < pageCount) return;
     setPage(Math.max(0, pageCount - 1));
-  }, [page, pageCount]);
+  }, [deferredSearch, page, pageCount, query.isPlaceholderData, search]);
 
   useEffect(() => {
     if (!filtersHydrated || !state) return;
@@ -1416,6 +1425,7 @@ export function SocCorpusValidationWorkbench() {
 
   const handleSelectDemoTarget = (target: SocLeadershipDemoTarget) => {
     if (!target.actual_group_id || target.availability !== "ready") return;
+    setGroupOrigin(null);
     setSearch("");
     setReadiness("all");
     setComparison("all");
@@ -1425,6 +1435,58 @@ export function SocCorpusValidationWorkbench() {
     setSelectedAlertId(target.primary_alert_id);
     setPage(0);
   };
+
+  const handleOpenGroup = (nextGroupId: string) => {
+    if (nextGroupId === "all") {
+      setGroupId("all");
+      setGroupOrigin(null);
+      return;
+    }
+    setGroupOrigin(
+      (current) =>
+        current ?? {
+          search,
+          readiness,
+          comparison,
+          sourceType,
+          groupId,
+          unprocessedOnly,
+          page,
+        },
+    );
+    setSearch("");
+    setReadiness("all");
+    setComparison("all");
+    setSourceType("all");
+    setUnprocessedOnly(false);
+    setGroupId(nextGroupId);
+    setSelectedAlertId(null);
+    setPage(0);
+  };
+
+  const handleReturnFromGroup = () => {
+    if (!groupOrigin) return;
+    const filtersChanged =
+      search !== groupOrigin.search ||
+      readiness !== groupOrigin.readiness ||
+      comparison !== groupOrigin.comparison ||
+      sourceType !== groupOrigin.sourceType ||
+      groupId !== groupOrigin.groupId ||
+      unprocessedOnly !== groupOrigin.unprocessedOnly;
+    restoredPage.current = filtersChanged ? groupOrigin.page : null;
+    setSearch(groupOrigin.search);
+    setReadiness(groupOrigin.readiness);
+    setComparison(groupOrigin.comparison);
+    setSourceType(groupOrigin.sourceType);
+    setGroupId(groupOrigin.groupId);
+    setUnprocessedOnly(groupOrigin.unprocessedOnly);
+    setPage(groupOrigin.page);
+    setSelectedAlertId(null);
+    setGroupOrigin(null);
+  };
+  const selectedGroup = state?.groups.find(
+    (group) => group.group_id === groupId,
+  );
 
   if (query.isLoading && !state) {
     return (
@@ -1642,34 +1704,18 @@ export function SocCorpusValidationWorkbench() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="min-w-64 flex-1">
+            <div className="min-w-0 grow basis-64">
               <label
                 htmlFor="corpus-group-filter"
                 className="mb-1.5 block text-xs font-medium"
               >
                 行为模式组
               </label>
-              <Select
+              <SocCorpusGroupPicker
+                groups={state.groups}
                 value={groupId}
-                onValueChange={(value) => {
-                  setGroupId(value);
-                  if (value !== "all") setReadiness("all");
-                }}
-              >
-                <SelectTrigger id="corpus-group-filter" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部行为模式组</SelectItem>
-                  {state.groups
-                    .filter((group) => group.alert_count >= 2)
-                    .map((group) => (
-                      <SelectItem key={group.group_id} value={group.group_id}>
-                        {formatCorpusGroupOption(group)}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+                onValueChange={handleOpenGroup}
+              />
             </div>
             <label className="flex h-9 items-center gap-2 border px-3 text-sm">
               <Switch
@@ -1690,12 +1736,34 @@ export function SocCorpusValidationWorkbench() {
                 setComparison("all");
                 setSourceType("all");
                 setGroupId("all");
+                setGroupOrigin(null);
                 setUnprocessedOnly(true);
               }}
             >
               <RotateCcwIcon className="size-4" />
             </Button>
           </div>
+          {selectedGroup && (
+            <div
+              className="mt-3 flex flex-wrap items-center gap-3 border-l-2 border-sky-600 bg-sky-50 px-3 py-2 text-sm"
+              aria-label="当前行为模式组"
+            >
+              <ListFilterIcon className="size-4 shrink-0 text-sky-700" />
+              <span className="min-w-0 flex-1 basis-48 break-words">
+                {formatCorpusGroupOption(selectedGroup)}
+              </span>
+              {groupOrigin && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleReturnFromGroup}
+                >
+                  <ArrowLeftIcon className="size-4" />
+                  返回原筛选
+                </Button>
+              )}
+            </div>
+          )}
           <div className="text-muted-foreground mt-3 flex flex-wrap items-center gap-2 text-xs">
             <FilterIcon className="size-3.5" />
             <span>{state.alert_page.total} 条命中筛选</span>
@@ -1775,6 +1843,18 @@ export function SocCorpusValidationWorkbench() {
                         <p className="text-muted-foreground mt-1 truncate font-mono text-xs">
                           {alert.rule_code ?? alert.detection_key ?? "-"}
                         </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mt-2 h-7 text-xs"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleOpenGroup(alert.group_id);
+                          }}
+                        >
+                          <ListFilterIcon className="size-3.5" />
+                          查看同组 · {alert.group_alert_count} 条
+                        </Button>
                       </td>
                       <td className="px-4 py-3">
                         <Badge

@@ -10,6 +10,7 @@
 | 项目阶段汇报 | [`project-brief.md`](project-brief.md) | [`reporting-faq.md`](reporting-faq.md) |
 | 现场能力演示 | [`capability-demo-runbook.md`](capability-demo-runbook.md) | Web `SOC 运营 -> 语料验证 -> 场景导览` |
 | 架构/研发评审 | [`technical-solution.md`](technical-solution.md) | [`reporting-faq.md`](reporting-faq.md) |
+| 解释 OCSF 路线复盘、`message-first` 与前期投入的实际价值 | [`ocsf-route-retrospective-and-decision-report.md`](ocsf-route-retrospective-and-decision-report.md) | [`technical-solution.md`](technical-solution.md) |
 | 核对“哪些已经真实接通” | [`project-brief.md`](project-brief.md) 的当前成熟度 | [`technical-solution.md`](technical-solution.md) 的演示边界 |
 
 ## 汇报口径规则

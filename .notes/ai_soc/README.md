@@ -41,6 +41,7 @@ Web 只保留一个 **经验中心**：默认打开 **已确认经验**，可切
 | 核对代码、方案、生命周期、工程契约和 Mock 台账是否一致 | `audits/alpha-consistency-audit.md` | `audits/alpha-journey-inventory.md` |
 | 查看唯一完整性矩阵、P0/P1 阻塞项和冻结实施顺序 | `audits/alpha-completeness-matrix.md` | `delivery-roadmap.md` 的 Stage 3 |
 | 准备当前能力演示、技术介绍、话术和答疑 | `reporting/README.md` | `reporting/capability-demo-runbook.md` |
+| 向管理或技术评审解释 OCSF 路线复盘、`message-first` 与前期投入的实际价值 | `reporting/ocsf-route-retrospective-and-decision-report.md` | `reporting/technical-solution.md` |
 | 追溯早期单告警 Boss Demo 验收 | `boss-demo-v0.1-runbook.md` | `delivery-roadmap.md` 的 Stage 1 Gate |
 | 重跑 APT/EDR/HIDS Alpha 一键验收并审阅版本化报告 | `alpha-acceptance-runbook.md` | `audits/alpha-completeness-matrix.md` 的 `AC-23/24/49` |
 | 准备 Alpha Gate 评审、部署/回滚和 Stage 4 交接 | `alpha-readiness-package.md` | 本地 `backend/.deer-flow/soc-alpha-readiness/alpha-readiness-report.json` |
@@ -99,6 +100,7 @@ ai_soc/
 │   ├── README.md                       # 当前汇报材料入口与真实性口径
 │   ├── capability-demo-runbook.md      # 4,343 条语料的能力演示路线与现场话术
 │   ├── project-brief.md                 # 一页介绍、成熟度、八页汇报结构与确认事项
+│   ├── ocsf-route-retrospective-and-decision-report.md # OCSF 路线复盘、message-first 与架构决策
 │   ├── technical-solution.md           # Runtime/Agent/Memory/Decision 技术方案
 │   └── reporting-faq.md                # 常见追问与建议回答
 ├── audits/
