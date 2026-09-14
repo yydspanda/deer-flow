@@ -57,6 +57,7 @@ Web 只保留一个 **经验中心**：默认打开 **已确认经验**，可切
 | 开始下一刀开发 | `progress.md` | `.notes/reference-index/soc-agent-engineering-contracts.md` |
 | 理解一条预警从进入到复核的完整过程 | `alert-lifecycle-flow.md` | `soc-agent-solution.md` 的服务章节 |
 | 排查 message 新结构、字段遗漏、决策置信度和复核原因 | `soc-agent-solution.md` 的 Normalizer / Confidence 章节 | `.notes/reference-index/soc-agent-engineering-contracts.md` 的对应契约 |
+| 审阅原文残留检查、LLM 事实补充、Memory/索引兼容与归一化运维职责（拟议，未实现） | `architecture/normalization-assistance-design.md` | `delivery-roadmap.md` 的 `PI-03E` |
 | 查看平安经验如何进入系统 | `capabilities/pingan/onboarding.md` | `capabilities/pingan/capability-cards.md` |
 | 拆分平安历史 prompt / 经验 / 工具 | `capabilities/pingan/knowledge-decomposition.md` | `memory/memory-tracking.md` |
 | 审阅旧方向 Prompt 如何迁成 `S/A/C/M/T/Policy`，以及 Runtime 如何裁决 attacker/victim | `capabilities/pingan/network-direction-knowledge-migration.md` | `soc-agent-solution.md` Section 5.6 |
@@ -95,7 +96,8 @@ ai_soc/
 ├── progress.md                        # 唯一当前指针和最多 10 条近期完成记录
 ├── alert-lifecycle-flow.md            # 当前端到端流程图谱
 ├── architecture/
-│   └── runtime-and-agent-architecture.md # SOC Runtime、Agent Graph、DeerFlow/Codex 对照与分享材料
+│   ├── runtime-and-agent-architecture.md # SOC Runtime、Agent Graph、DeerFlow/Codex 对照与分享材料
+│   └── normalization-assistance-design.md # 拟议：覆盖检查、模型事实补充与运维收敛
 ├── reporting/
 │   ├── README.md                       # 当前汇报材料入口与真实性口径
 │   ├── capability-demo-runbook.md      # 4,343 条语料的能力演示路线与现场话术
