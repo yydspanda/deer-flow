@@ -35,7 +35,7 @@ _PARENT_ID_ALIASES = ("ppid",)
 _PARENT_PATH_ALIASES = ("ppath",)
 _PARENT_COMMAND_ALIASES = ("pcmd",)
 _PARENT_USER_ALIASES = ("puname",)
-_TREE_ALIASES = ("process_tree", "event_content")
+_TREE_ALIASES = ("process_tree", "detail.process_tree", "event_content")
 _FILE_EVENT_TYPES = frozenset(
     {
         "backdoor_diagnose",

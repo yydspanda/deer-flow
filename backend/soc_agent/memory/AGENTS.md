@@ -83,6 +83,10 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   ephemeral source ports remain occurrence/entity context. Any component-policy change
   requires a feature-schema/Profile bump, fail-closed old records, and a pattern-facet
   projection that stays within the 20-group signature contract.
+  PingAn normalization `apply` selects the opt-in Profile 8 / v6 semantic observation
+  features; `off/shadow` use Profile 7 / v5. The shared Memory kernel does not parse
+  detector vendor labels or create semantic facts. Keep old records/indexes untouched;
+  a rollout needs separate real-sample feature validation and explicit index handling.
 - Retrieval policy v2 runs exact-facet and text lanes over the complete eligible corpus,
   merges bounded candidates, and requires a Memory-type-specific strong anchor.
   Source/environment/category alone cannot admit a detection lesson or benign Pattern;

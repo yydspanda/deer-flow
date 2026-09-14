@@ -204,6 +204,7 @@ function corpusState(processed = false, replayed = false) {
   return {
     schema_version: "soc.corpus_dev_workbench.v4",
     safety: {
+      normalization_review_mode: "off",
       environment: "dev",
       database_backend: "sqlite",
       database_file: "soc-memory-dev.sqlite",
@@ -751,6 +752,111 @@ function corpusStart(alertId: string) {
     active_execution: corpusActivity([alertId]).executions[0],
   };
 }
+
+test("shows semantic review JSON without a dedicated comparison view", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(90_000);
+  mockLangGraphAPI(page, { threads: [] });
+  const current = corpusState(true);
+  const audit = corpusAudit();
+  const reviewArtifact = {
+    sequence: 4,
+    artifact_id: "semantic-normalization-review",
+    file_name: "03b-semantic-review.json",
+    phase: "semantic_review",
+    title: "语义核对记录",
+    description: "仅对比，未用于本次研判或经验匹配",
+    status: "available",
+    source: "persisted_run",
+    metrics: {},
+    review_guide: [],
+    payload: {
+      request: { source_text: 'file="D:\\tools\\yak.exe"' },
+      result: { mode: "shadow" },
+    },
+    normalization_review: {
+      mode: "shadow",
+      status: "shadow",
+      status_label: "核对完成",
+      effect_label: "仅对比，未用于本次研判或经验匹配",
+      after_label: "模型建议",
+      model_name: "synthetic-browser-fixture",
+      total_tokens: 123,
+      duration_ms: 4500,
+      source_count: 1,
+      changes: [
+        {
+          target: "entities.file.observations[0]",
+          label: "文件",
+          reason: "检测文件独立于运行进程。",
+          fields: [
+            {
+              field: "file_path",
+              label: "文件路径",
+              before: null,
+              after: "D:\\tools\\yak.exe",
+            },
+          ],
+          source_id: "L0",
+          source_path: "alert.hitLog[0].zeusRawLogs[0].message",
+          source_quote: 'file="D:\\tools\\yak.exe"',
+        },
+      ],
+      issues: [],
+      coverage_notes: [],
+    },
+  };
+  let postCalls = 0;
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    if (route.request().method() === "POST") postCalls += 1;
+    if (route.request().url().endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    if (route.request().url().endsWith("/audit"))
+      return route.fulfill({
+        json: { ...audit, artifacts: [...audit.artifacts, reviewArtifact] },
+      });
+    if (route.request().url().endsWith("/execution"))
+      return route.fulfill({ json: corpusExecution(true) });
+    return route.fulfill({
+      json: corpusStateForRequest(
+        {
+          ...current,
+          safety: { ...current.safety, normalization_review_mode: "shadow" },
+        },
+        route.request().url(),
+      ),
+    });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await expect(page.getByText("语义核对 · 仅对比，未用于研判")).toBeVisible({
+    timeout: 60_000,
+  });
+  await page.getByLabel("仅显示未运行告警").uncheck();
+  await page.getByRole("button", { name: "查看 Alert 1984426 结果" }).click();
+  await page.getByRole("button", { name: "打开完整审计" }).click();
+  await page.getByRole("button", { name: /语义核对记录/ }).click();
+  const comparison = page.getByRole("region", { name: "语义核对前后对比" });
+  await expect(comparison).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "前后对比" })).toHaveCount(0);
+  const jsonSearch = page.getByLabel("搜索 JSON");
+  await expect(jsonSearch).toBeVisible();
+  await jsonSearch.fill("source_text");
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await jsonSearch.scrollIntoViewIfNeeded();
+    await expect(jsonSearch).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`semantic-review-${width}.png`),
+    });
+  }
+  expect(postCalls).toBe(0);
+});
 
 test("opens the searched alert's complete group and restores original filters without running alerts", async ({
   page,

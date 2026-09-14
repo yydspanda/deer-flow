@@ -51,6 +51,7 @@ from soc_agent.demo.leadership_guide import (
     SocLeadershipDemoGuide,
     build_soc_leadership_demo_guide,
 )
+from soc_agent.demo.normalization_review import NormalizationReviewView, build_normalization_review_view
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm import SocLLMSettings
 from soc_agent.normalizers import normalize_alert_payload
@@ -252,6 +253,7 @@ class SocCorpusWorkbenchSafety(BaseModel):
         "deterministic_and_llm",
     ] = "disabled"
     software_path_fast_policy: bool = False
+    normalization_review_mode: Literal["off", "shadow", "apply"] = "off"
     external_action_execution: Literal[False] = False
     memory_scope: str = CORPUS_WORKBENCH_ENVIRONMENT
     pattern_window_days: float = Field(
@@ -378,6 +380,7 @@ class SocCorpusWorkbenchAuditArtifact(BaseModel):
     metrics: dict[str, str | int | float | bool] = Field(default_factory=dict)
     review_guide: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
+    normalization_review: NormalizationReviewView | None = None
 
 
 class SocCorpusWorkbenchAuditBundle(BaseModel):
@@ -642,6 +645,7 @@ class SocCorpusWorkbenchService:
             "deterministic_and_llm",
         ] = "disabled",
         software_path_fast_policy: bool = False,
+        normalization_review_mode: Literal["off", "shadow", "apply"] = "off",
     ) -> None:
         self._repository = repository
         self._analysis_service = analysis_service
@@ -651,6 +655,7 @@ class SocCorpusWorkbenchService:
         self._database_file = database_file
         self._tenant_policy = tenant_policy
         self._software_path_fast_policy = software_path_fast_policy
+        self._normalization_review_mode = normalization_review_mode
         self._source_sha256 = _sha256_file(self._source_path)
         self._index_path = index_path.expanduser().resolve() if index_path is not None else self._source_path.with_suffix(".workbench-index.json")
         self._cases = _load_cases(
@@ -781,6 +786,7 @@ class SocCorpusWorkbenchService:
                 database_file=self._database_file,
                 tenant_policy=self._tenant_policy,
                 software_path_fast_policy=self._software_path_fast_policy,
+                normalization_review_mode=self._normalization_review_mode,
             ),
             source=SocCorpusWorkbenchSource(
                 file_name=self._source_path.name,
@@ -1576,6 +1582,7 @@ class SocCorpusWorkbenchService:
 
 _EXECUTION_PHASES: tuple[tuple[str, str], ...] = (
     ("normalize", "来源适配与标准化 / Adapter & Normalize"),
+    ("semantic_review", "语义核对"),
     ("facts", "实体与事实 / Entities & Facts"),
     ("context", "上下文与 Skills / Context & Skills"),
     ("reasoning", "模型研判 / LLM Analysis"),
@@ -1586,6 +1593,9 @@ _EXECUTION_PHASES: tuple[tuple[str, str], ...] = (
 
 _EXECUTION_STEP_PHASE = {
     "normalize": "normalize",
+    "build_normalization_input": "semantic_review",
+    "normalization_assist": "semantic_review",
+    "apply_normalization": "semantic_review",
     "entity_extract": "facts",
     "fact_reconstruct": "facts",
     "build_analysis_input": "context",
@@ -1604,6 +1614,9 @@ _EXECUTION_STEP_PHASE = {
 
 _EXECUTION_STEP_LABELS = {
     "normalize": "厂商数据转通用告警",
+    "build_normalization_input": "准备原文与已有对象",
+    "normalization_assist": "模型核对对象与检测事实",
+    "apply_normalization": "记录差异与采用情况",
     "entity_extract": "实体提取",
     "fact_reconstruct": "事实与角色重建",
     "build_analysis_input": "构建有界模型输入",
@@ -1944,6 +1957,26 @@ def _audit_bundle(
             },
         ),
     ]
+    review = build_normalization_review_view(run)
+    if review is not None:
+        artifacts.insert(
+            3,
+            _audit_artifact(
+                sequence=4,
+                artifact_id="semantic-normalization-review",
+                file_name="03b-semantic-review.json",
+                phase="semantic_review",
+                title="语义核对记录",
+                description=review.effect_label,
+                status="unavailable" if review.status in {"failed", "skipped"} else "partial" if review.status == "partial" else "available",
+                source="persisted_run",
+                metrics={},
+                review_guide=[],
+                normalization_review=review,
+                payload={"request": _audit_json(run.normalization_assist_request), "result": _audit_json(run.normalization_assistance)},
+            ),
+        )
+        artifacts = [artifact.model_copy(update={"sequence": index}) for index, artifact in enumerate(artifacts, 1)]
     return SocCorpusWorkbenchAuditBundle(
         alert_id=run.alert_id,
         run_id=run.run_id,
@@ -2124,6 +2157,8 @@ def _execution_view(
     phases: list[SocCorpusWorkbenchExecutionPhase] = []
     for phase_key, phase_label in _EXECUTION_PHASES:
         phase_steps = [item for item in projected_steps if _step_phase(item.step_name) == phase_key]
+        if phase_key == "semantic_review" and not phase_steps and not (run and run.normalization_assist_request):
+            continue
         phase_status = _phase_status(
             phase_key,
             phase_steps,
@@ -2264,11 +2299,16 @@ def _phase_summary(
     if status == "pending":
         return "等待上游阶段完成"
     if status == "running":
+        if phase == "semantic_review":
+            return "模型正在核对原始日志中的对象、检测与已有整理结果"
         if phase == "reasoning":
             return "模型 Provider 正在处理有界证据与受治理上下文"
         if phase == "memory":
             return "Runtime 已完成，正在写入重复模式观察"
         return "阶段正在执行"
+    if phase == "semantic_review" and run is not None and run.normalization_assistance is not None:
+        review = build_normalization_review_view(run)
+        return f"{review.status_label}：{len(review.changes)} 项对象/字段调整。{review.effect_label}。"
     if status == "failed":
         return run.failure.message if run is not None and run.failure is not None else "阶段执行失败"
     if status == "skipped":
@@ -2301,7 +2341,12 @@ def _phase_metrics(
     if run is None:
         return {}
     metrics: dict[str, str | int | float | bool] = {}
-    if phase == "normalize" and run.normalization_report is not None:
+    if phase == "semantic_review" and run.normalization_assistance is not None:
+        review = build_normalization_review_view(run)
+        metrics.update({"model": review.model_name, "review_changes": len(review.changes), "review_sources": review.source_count})
+        if review.total_tokens is not None:
+            metrics["total_tokens"] = review.total_tokens
+    elif phase == "normalize" and run.normalization_report is not None:
         report = run.normalization_report
         metrics.update(
             {

@@ -37,6 +37,39 @@ file for SOC code. The authoritative product and engineering documents are:
 
 ## Runtime Contract
 
+- Optional normalization review is a routine pre-entity node, not gated by parser warnings,
+  baselines or missing fingerprints. The rollout flag is default-off; once enabled, every
+  supported nonempty selected primary source is reviewed. `NormalizationReviewer` uses a
+  distinct `NormalizationAssistRequest` and provider purpose. Persist before invocation;
+  reuse only matching saved recovery results, without charging cached usage again. Explicit
+  replay may run a new measurement. Prompt v4 proposes objects, bound detector events and
+  supplementary facts. Merge into existing canonical observations, not a parallel alert.
+  Selected supplementary sources use independent L* IDs within eight sources/48k characters;
+  catalog and source omissions, deduplication and truncation remain visible. Item-level errors
+  must not erase valid sibling facts. Existing O* references allow sparse corrections without
+  asking the model to copy unchanged fields. Preserve existing IDs/relations and unchanged
+  provenance. Event-to-object links cannot cross source IDs; unbound hashes remain supplementary
+  facts. File hashes must not move to new paths. `model_input_status=present` checks the exact
+  canonical value in the model projection, while matching use remains `not_assessed` until
+  a consumer-specific check exists. The post-run maintenance queue is not the trigger;
+  its planned quality-inspection replacement must distinguish solved input defects from
+  consumer gaps without creating daily analyst maintenance tasks.
+  Isolate preparation, reviewer and merge faults as well as provider/output failures:
+  keep the Adapter snapshot and continue primary analysis, retaining unapplied proposals
+  separately. Journal persistence failure still aborts before invocation; primary model
+  failure is not masked by this auxiliary fallback.
+  `SOC_NORMALIZATION_REFERENCE_VALIDATION_ENABLED` defaults false for new reviews: skip
+  exact/unique quote and value-in-quote checks only. Keep supported targets, field types,
+  source membership and object ownership checks. Freeze the flag in request/config hashes;
+  old requests without it retain strict semantics. Unchecked changes use null offsets,
+  `reference_validation_status=not_checked` and `#semantic-unverified` provenance. Never
+  present a model-provided excerpt as an independently located source span.
+  Malformed optional arrays are isolated; valid sibling arrays remain usable. Invalid JSON,
+  length stops and provider failures retain stage/error codes and reported usage, never a
+  fabricated successful review. Proposal before/after snapshots are deep copies: parent and
+  nested updates must not mutate previous journal entries. Empty source strings remain in
+  canonical/audit records but do not create nonempty-only scalar provenance entries.
+
 - Alert admission means the configured upstream detector matched. The Runtime still
   decides scenario, direction, semantic roles, attempt/effect/impact stage, verdict, and
   recommendation. Missing optional enrichment alone must not erase the detector hit or
@@ -48,6 +81,10 @@ file for SOC code. The authoritative product and engineering documents are:
   from canonical typed observations and stable catalogs: current evidence `E-*`, Skill
   `S-*`, adapter semantics `A-*`, confirmed Memory `M-*`, governed context `C-*`, and
   tool evidence `T-*`.
+- `ParsedRawMessageEvidence.syntax_coverage` is optional, backward-readable syntax audit,
+  not canonical/fingerprint coverage. Offsets are half-open Unicode character intervals
+  in the original message. Do not inject field-offset inventories into LLM evidence or
+  infer that a historical record without this observation was checked and complete.
 - Process fragments may share a canonical `event_scope_id`, but consumers may combine
   them only through the same normalized process name plus the same non-null PID. An alert
   boundary or shared event scope alone does not permit inventing one process chain from

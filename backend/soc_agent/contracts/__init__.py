@@ -195,6 +195,14 @@ from soc_agent.contracts.model_output import (
     AnalysisModelCoreOutputV4,
 )
 from soc_agent.contracts.mutations import SocMutationAuditRecord, SocMutationOperation
+from soc_agent.contracts.normalization import (
+    ContextObservationRef,
+    DetectionObservationRef,
+    NormalizationObservationChange,
+    NormalizationReviewOutput,
+    NormalizationSource,
+    SupplementaryFactRef,
+)
 from soc_agent.contracts.operations import (
     SocOperationsAvailability,
     SocOperationsKafkaSnapshot,
@@ -378,8 +386,11 @@ from soc_agent.contracts.schemas import (
     MemoryAdmissionDecision,
     MemoryAdmissionReasonCode,
     MemoryAdmissionStatus,
+    MessageFieldSpan,
     MessageSchemaObservation,
     MessageSchemaStatus,
+    MessageSyntaxCoverage,
+    MessageTextSpan,
     NestedJsonRepairObservation,
     NestedJsonRepairStatus,
     NetworkBoundaryDirection,
@@ -387,10 +398,13 @@ from soc_agent.contracts.schemas import (
     NetworkDirectionAssessmentStatus,
     NetworkEntityRef,
     NetworkObservationRef,
+    NormalizationAssistRequest,
+    NormalizationAssistResult,
     NormalizationBaselineAcceptCommand,
     NormalizationBaselineStatus,
     NormalizationDriftReport,
     NormalizationDriftSample,
+    NormalizationFactChange,
     NormalizationInspectionResult,
     NormalizationMaintenanceIssue,
     NormalizationMaintenanceIssueStatus,
@@ -623,6 +637,15 @@ from soc_agent.contracts.tenant_policy import (
 )
 
 __all__ = [
+    "ContextObservationRef",
+    "DetectionObservationRef",
+    "NormalizationObservationChange",
+    "NormalizationReviewOutput",
+    "NormalizationSource",
+    "SupplementaryFactRef",
+    "NormalizationAssistRequest",
+    "NormalizationAssistResult",
+    "NormalizationFactChange",
     "ACTIVE_PROCESSING_JOB_STATUSES",
     "CallbackAttemptOutcome",
     "CallbackOutboxStatus",
@@ -891,6 +914,9 @@ __all__ = [
     "PipelineStepStatus",
     "PipelineStepTrace",
     "ParsedRawMessageEvidence",
+    "MessageTextSpan",
+    "MessageFieldSpan",
+    "MessageSyntaxCoverage",
     "ProcessEntityRef",
     "ProcessNodeRef",
     "ProcessObservationRef",

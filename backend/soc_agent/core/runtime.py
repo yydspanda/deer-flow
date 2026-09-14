@@ -27,6 +27,7 @@ from soc_agent.contracts import (
     FactReconstructionResult,
     LLMAnalysisRequest,
     MessageSchemaStatus,
+    NormalizationAssistResult,
     NormalizationInspectionResult,
     NormalizationReport,
     PipelineStepStatus,
@@ -40,6 +41,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.decision_policy import SocDecisionPolicy
 from soc_agent.core.validator import validate_analysis_result
+from soc_agent.llm.normalization import apply_normalization_changes
 from soc_agent.llm.role_verifier import unavailable_role_verification
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
 from soc_agent.pipeline.analysis_context import (
@@ -58,6 +60,7 @@ from soc_agent.protocols import (
     AnalysisRequestEnricher,
     DecisionPolicy,
     LLMAnalyzer,
+    NormalizationReviewer,
     RoleAdjudicationVerifier,
 )
 from soc_agent.utils.hashing import stable_hash
@@ -121,6 +124,8 @@ def analyze_alert(
     *,
     analyzer: LLMAnalyzer | None = None,
     role_verifier: RoleAdjudicationVerifier | None = None,
+    normalization_reviewer: NormalizationReviewer | None = None,
+    normalization_reuse: AnalysisRun | None = None,
     decision_policy: DecisionPolicy | None = None,
     before_provider: AnalysisBeforeProviderHook | None = None,
     analysis_request_enricher: AnalysisRequestEnricher | None = None,
@@ -134,7 +139,7 @@ def analyze_alert(
     run = AnalysisRun(
         alert_id="unknown",
         status=AnalysisRunStatus.RUNNING,
-        pipeline_version=(SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION if role_verifier is not None else SOC_RUNTIME_PIPELINE_VERSION),
+        pipeline_version=("soc-runtime-v9-normalization" if normalization_reviewer is not None else SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION if role_verifier is not None else SOC_RUNTIME_PIPELINE_VERSION),
         model_name=analysis_node.model_name,
         prompt_version=analysis_node.prompt_version,
         input_payload=input_payload,
@@ -146,6 +151,10 @@ def analyze_alert(
         run.alert_id = alert.alert_id
         run.normalized_alert = alert
         run.normalization_report = _normalization_report(alert)
+        if normalization_reviewer is not None:
+            alert = _apply_semantic_review(run, alert, normalization_reviewer, before_provider=before_provider, previous=normalization_reuse)
+            run.normalized_alert = alert
+            run.normalization_report = _normalization_report(alert)
         entities = _run_step(run, "entity_extract", alert, extract_entities)
         run.entities = entities
         run.extraction_report = _extraction_report(entities)
@@ -179,6 +188,19 @@ def analyze_alert(
             ),
         )
         run.llm_analysis_request = analysis_request
+        if run.normalization_assistance is not None and run.normalization_assistance.mode == "apply":
+            # Check the actual structured model projection, not raw retention or model self-assessment.
+            from soc_agent.pipeline.analysis_context import project_analysis_context
+
+            projected = project_analysis_context(analysis_request)
+            for change in run.normalization_assistance.changes:
+                _, section, key = change.target.split(".")
+                value = projected.get("canonical_entities", {}).get(section, {}).get(key)
+                change.model_input_status = "present" if value == change.after else "not_verified"
+            from soc_agent.normalizers.semantic_observations import observation_projection_present
+
+            for change in run.normalization_assistance.observation_changes:
+                change.model_input_status = "present" if observation_projection_present(projected, change) else "not_verified"
         if before_provider is not None:
             try:
                 before_provider(
@@ -446,6 +468,63 @@ def _normalize_alert(
     return normalize_alert_payload(payload)
 
 
+def _apply_semantic_review(run: AnalysisRun, alert: AlertInput, reviewer: NormalizationReviewer, *, before_provider: AnalysisBeforeProviderHook | None, previous: AnalysisRun | None) -> AlertInput:
+    request = None
+    stage = "build_normalization_input"
+    try:
+        request = _run_step(run, stage, alert, reviewer.prepare)
+        run.normalization_assist_request = request
+        cached = previous.normalization_assistance if previous is not None else None
+        reuse = cached is not None and cached.status not in {"failed", "skipped"} and cached.request_hash == stable_hash(request.model_dump(mode="json"))
+        if before_provider is not None and request.skip_reason is None and not reuse:
+            try:
+                before_provider(
+                    run,
+                    request,
+                    AnalysisProviderInvocation(step_name="normalization_assist", purpose=AnalysisProviderPurpose.NORMALIZATION_ASSIST, model_name=reviewer.model_name, prompt_version=reviewer.prompt_version, optional=True),
+                )
+            except Exception as exc:
+                raise SocRuntimeLifecycleError("failed to persist normalization request journal before provider invocation") from exc
+        stage = "normalization_assist"
+        if reuse:
+            report = cached.model_copy(deep=True)
+            report.metadata = {"reused_from_run_id": previous.run_id, "usage": {}, "provider_call_count": 0}
+            report = _run_step(run, stage, request, lambda _: report)
+        else:
+            report = _run_step(run, stage, request, lambda _: reviewer.review(alert, request))
+        run.normalization_assistance = report
+        if report.status == "failed":
+            run.steps[-1].status = PipelineStepStatus.FAILED
+            run.steps[-1].error = report.issues[0] if report.issues else "语义核对失败。"
+        elif report.status == "skipped":
+            run.steps[-1].status = PipelineStepStatus.SKIPPED
+        stage = "apply_normalization"
+        return _run_step(run, stage, report, lambda _: apply_normalization_changes(alert, request, report))
+    except SocRuntimeLifecycleError:
+        # No provider may run without its durable invocation journal.
+        raise
+    except Exception as exc:  # noqa: BLE001 - isolate the entire auxiliary stage, not only HTTP errors
+        report = run.normalization_assistance or NormalizationAssistResult(
+            status="failed",
+            mode=reviewer.mode,
+            request_hash=stable_hash(request.model_dump(mode="json") if request is not None else alert.model_dump(mode="json")),
+            model_name=reviewer.model_name,
+            prompt_version=reviewer.prompt_version,
+        )
+        issue = f"日志语义核对的 {stage} 未完成：{type(exc).__name__}；保留 Adapter 结果继续研判。"
+        metadata = {**report.metadata, "failure_stage": stage, "failure_kind": "internal_error", "failure_retryable": False, "error_type": type(exc).__name__}
+        metadata.setdefault("provider_call_count", 1 if stage == "normalization_assist" else 0)
+        if report.changes:
+            metadata["unapplied_changes"] = [change.model_dump(mode="json", exclude={"canonical_status", "model_input_status", "matching_status"}) for change in report.changes]
+        if report.observation_changes:
+            metadata["unapplied_observation_changes"] = [change.model_dump(mode="json", exclude={"canonical_status", "model_input_status"}) for change in report.observation_changes]
+        run.normalization_assistance = report.model_copy(update={"status": "failed", "changes": [], "observation_changes": [], "issues": [issue], "metadata": metadata})
+        run.steps[-1].status = PipelineStepStatus.FAILED
+        run.steps[-1].error = issue
+        run.steps[-1].metadata.update({"failure_kind": "internal_error", "failure_retryable": False, "normalization_status": "failed", "fallback": "adapter"})
+        return alert
+
+
 def _normalization_report(alert: AlertInput) -> NormalizationReport:
     normalized_fields = _present_canonical_fields(alert)
     missing_fields = [field for field in _required_canonical_fields(alert.source.source_type) if field not in normalized_fields]
@@ -584,6 +663,9 @@ def _run_step[T](
 
     if isinstance(output, ExtractedEntities):
         trace.warnings.extend(output.warnings)
+    if isinstance(output, NormalizationAssistResult):
+        trace.metadata.update({"model_name": output.model_name, "prompt_version": output.prompt_version, "normalization_status": output.status, "change_count": len(output.changes), **output.metadata})
+        trace.warnings.extend(output.issues)
     if isinstance(output, FactReconstructionResult):
         trace.warnings.extend(output.warnings)
     if isinstance(output, LLMAnalysisRequest):
@@ -745,6 +827,8 @@ def _classify_runtime_failure(exc: Exception, *, step_name: str) -> RuntimeFailu
 
 def _safe_error_message(exc: Exception, *, step_name: str) -> str:
     error_type = type(exc).__name__
+    if step_name in {"build_normalization_input", "normalization_assist", "apply_normalization"}:
+        return f"{error_type} during optional semantic review ({step_name})"
     if step_name == "analyze_llm" and not hasattr(exc, "stage"):
         return f"{error_type} while invoking configured SOC analyzer"
     if step_name == "verify_roles_llm" and not hasattr(exc, "stage"):

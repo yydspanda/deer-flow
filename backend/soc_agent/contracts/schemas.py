@@ -14,6 +14,7 @@ from soc_agent.contracts.authorization import AuthorizationFactRef, Authorizatio
 from soc_agent.contracts.common import ActorContext, EntrySurface
 from soc_agent.contracts.enrichment import SocEnrichmentPlan
 from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
+from soc_agent.contracts.normalization import ContextObservationRef, DetectionObservationRef, NormalizationObservationChange, NormalizationSource, SupplementaryFactRef
 from soc_agent.contracts.role_verification import (
     RoleAdjudicationVerificationResult,
     RoleVerificationTriggerDecision,
@@ -273,6 +274,7 @@ class AnalysisProviderPurpose(StrEnum):
     """Stable purpose of one bounded model-provider invocation."""
 
     PRIMARY_ANALYSIS = "primary_analysis"
+    NORMALIZATION_ASSIST = "normalization_assist"
     PRIMARY_ANALYSIS_RETRY = "primary_analysis_retry"
     PRIMARY_ANALYSIS_SECTION_REPAIR = "primary_analysis_section_repair"
     ROLE_VERIFICATION = "role_verification"
@@ -2723,6 +2725,8 @@ class NetworkObservationRef(BaseModel):
     dst_port: int | None = None
     protocol: str | None = None
     application_protocol: str | None = None
+    domain: str | None = None
+    url: str | None = None
     direction: str | None = None
     community_id: str | None = None
     flow_id: str | int | None = None
@@ -2925,6 +2929,9 @@ class AlertEntitySet(BaseModel):
     http: HttpEntityRef = Field(default_factory=HttpEntityRef)
     email: EmailEntityRef | None = None
     threat: ThreatEntityRef = Field(default_factory=ThreatEntityRef)
+    detections: list[DetectionObservationRef] = Field(default_factory=list, max_length=40)
+    context_observations: list[ContextObservationRef] = Field(default_factory=list, max_length=40)
+    supplementary_facts: list[SupplementaryFactRef] = Field(default_factory=list, max_length=40)
 
 
 class EvidenceItem(BaseModel):
@@ -3200,6 +3207,45 @@ class NestedJsonRepairObservation(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class MessageTextSpan(BaseModel):
+    """Half-open character interval in the preserved source message, not UTF-8 bytes."""
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def check_interval(self) -> MessageTextSpan:
+        if self.end < self.start:
+            raise ValueError("message span ends before its start")
+        return self
+
+
+class MessageFieldSpan(MessageTextSpan):
+    field_name: str = Field(min_length=1)
+    value_start: int = Field(ge=0)
+    value_end: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def check_value_interval(self) -> MessageFieldSpan:
+        if not self.start <= self.value_start <= self.value_end <= self.end:
+            raise ValueError("field value span must be inside the field span")
+        return self
+
+
+class MessageSyntaxCoverage(BaseModel):
+    """Syntax consumption only; does not certify semantic mapping or fingerprint coverage."""
+
+    schema_version: Literal["soc.message_syntax_coverage.v1"] = "soc.message_syntax_coverage.v1"
+    offset_unit: Literal["unicode_codepoint"] = "unicode_codepoint"
+    complete: bool
+    field_spans: list[MessageFieldSpan] = Field(default_factory=list)
+    prefix_span: MessageTextSpan | None = None
+    unconsumed_spans: list[MessageTextSpan] = Field(default_factory=list)
+    duplicate_fields: list[str] = Field(default_factory=list)
+    conflicting_fields: list[str] = Field(default_factory=list)
+    recovered_fields: list[str] = Field(default_factory=list)
+
+
 class ParsedRawMessageEvidence(BaseModel):
     """Deterministic parser output derived from one preserved raw message."""
 
@@ -3213,6 +3259,7 @@ class ParsedRawMessageEvidence(BaseModel):
     decoded_fields: dict[str, Any] = Field(default_factory=dict)
     repaired_fields: dict[str, Any] = Field(default_factory=dict)
     repair_observations: list[NestedJsonRepairObservation] = Field(default_factory=list)
+    syntax_coverage: MessageSyntaxCoverage | None = None
     header: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
@@ -3838,6 +3885,67 @@ class AlertInput(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     extensions: dict[str, Any] = Field(default_factory=dict)
     raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class NormalizationAssistRequest(BaseModel):
+    """Frozen, source-selected semantic review input, not an analysis request."""
+
+    schema_version: Literal["soc.normalization_assist_request.v1"] = "soc.normalization_assist_request.v1"
+    alert_id: str
+    source: AlertSourceRef
+    detection: DetectionRuleRef
+    source_path: str | None = None
+    source_layer: EvidenceLayer = EvidenceLayer.RAW_STRUCTURED
+    source_trust: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+    source_text: str = Field(default="", max_length=48_000)
+    adapter_entities: AlertEntitySet = Field(default_factory=AlertEntitySet)
+    source_semantics: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
+    scope: Literal["selected_primary_evidence", "selected_evidence_sources"] = "selected_primary_evidence"
+    omitted_source_paths: list[str] = Field(default_factory=list, max_length=200)
+    omitted_source_count: int = Field(default=0, ge=0)
+    omitted_draft_paths: list[str] = Field(default_factory=list, max_length=40)
+    omitted_object_paths: list[str] = Field(default_factory=list, max_length=200)
+    omitted_object_count: int = Field(default=0, ge=0)
+    deduplicated_source_count: int = Field(default=0, ge=0)
+    omitted_semantic_count: int = Field(default=0, ge=0)
+    skip_reason: str | None = None
+    input_truncated: bool = False
+    encoded_span_count: int = Field(default=0, ge=0)
+    configuration_hash: str
+    # Historical requests without this field used strict source checks.
+    reference_validation_enabled: bool = True
+    adapter_snapshot_hash: str = ""
+    sources: list[NormalizationSource] = Field(default_factory=list, max_length=8)
+    object_catalog: dict[str, dict] = Field(default_factory=dict, max_length=40)
+
+
+class NormalizationFactChange(BaseModel):
+    target: str
+    before: str | int | list[str] | None = None
+    after: str | int | list[str]
+    source_quote: str
+    source_start: int | None = Field(default=None, ge=0)
+    source_end: int | None = Field(default=None, ge=0)
+    reference_validation_status: Literal["verified", "not_checked"] = "verified"
+    offset_basis: Literal["review_source_text"] = "review_source_text"
+    reason: str
+    canonical_status: Literal["applied", "shadow"] = "applied"
+    model_input_status: Literal["present", "not_verified", "not_assessed"] = "not_assessed"
+    matching_status: Literal["not_assessed"] = "not_assessed"
+
+
+class NormalizationAssistResult(BaseModel):
+    schema_version: Literal["soc.normalization_assist_result.v1"] = "soc.normalization_assist_result.v1"
+    status: Literal["skipped", "unchanged", "applied", "shadow", "partial", "failed"]
+    mode: Literal["shadow", "apply"]
+    request_hash: str
+    model_name: str
+    prompt_version: str
+    changes: list[NormalizationFactChange] = Field(default_factory=list, max_length=40)
+    observation_changes: list[NormalizationObservationChange] = Field(default_factory=list, max_length=120)
+    reviewed_fact_count: int = Field(default=0, ge=0)
+    issues: list[str] = Field(default_factory=list, max_length=40)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class EntityMention(BaseModel):
@@ -5120,6 +5228,8 @@ class AnalysisRun(BaseModel):
     total_duration_ms: int | None = Field(default=None, ge=0)
     steps: list[PipelineStepTrace] = Field(default_factory=list)
     normalized_alert: AlertInput | None = None
+    normalization_assist_request: NormalizationAssistRequest | None = None
+    normalization_assistance: NormalizationAssistResult | None = None
     entities: ExtractedEntities | None = None
     normalization_report: NormalizationReport | None = None
     normalization_monitoring_result: NormalizationMonitoringResult | None = None

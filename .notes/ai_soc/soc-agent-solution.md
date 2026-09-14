@@ -648,6 +648,15 @@ The system must handle vendor differences without turning the core schema into a
 
 Schema drift workflow / 结构漂移流程：
 
+2026-09-14：下列为已有 maintenance 行为，不再作为模型事实补充的前置条件。
+新主线为 Adapter → 每条有效主证据的 LLM 核对 → 标准事实 → 现有消费者。
+在线节点、请求 journal、结果留痕已接入，发布开关默认 off。v2 在现有实体观察中合并
+进程/文件/网络/HTTP，增加主机/账号/容器观察、关联对象的检测事件及补充事实；多消息
+按独立来源核对并记录预算省略。PingAn 指纹消费使用独立 Profile 8 / v6，旧 Memory 不迁移。
+类型与消费者的离线接入通过不等于真实模型质量或 32 组已修复。适配质量检查将复用本次 Run 的差异与消费结果，供负责人按需审阅，
+不是运营每日维护任务。实施与验收以
+[`normalization-assistance-design.md`](architecture/normalization-assistance-design.md) 为准。
+
 1. Offline onboarding still uses `soc normalize drift` and `--schema-baseline` to compare a reviewed
    sample corpus before deployment.
 2. An engineer accepts production baselines with `soc normalize baseline-accept` or

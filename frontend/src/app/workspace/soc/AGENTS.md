@@ -296,6 +296,11 @@ Runtime decisions, construct Memory, or infer action authority.
 - In DEV Runtime traces, name the first phase `来源适配与标准化 / Adapter & Normalize`:
   the active tenant/vendor Adapter parses and projects source data into the canonical SOC
   contract; the label must not imply generic field cleanup only or hard-code PingAn.
+- The optional semantic-review phase follows Adapter normalization. Keep the server-owned
+  phase status and full request/result in the existing JSON audit viewer; do not add a separate
+  before/after comparison component. Shadow proposals are observation-only,
+  failed review means the Adapter path continues, and legacy runs without a saved review must
+  not gain a fabricated phase or result. Viewing the audit never invokes a model or applies changes.
 - Fixed GalaxyLab remains a DEV-only validation route and must not be linked from Memory
   Center or global operational navigation. Memory Center contains only production-facing
   Pattern, Candidate, Memory, and Profile governance. Pattern counts are absolute

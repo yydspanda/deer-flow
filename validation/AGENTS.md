@@ -15,8 +15,46 @@ sensitive, gitignored evidence and must never become application imports.
 - Live LLM/provider runs require explicit confirmation and must preserve model/config,
   prompt, parser, Grounding, timing, token, mock/live, and data-source provenance.
   Structural success is not model accuracy without independent labels.
+- The isolated `compact_zeus/audits/normalization_assistance_trial.py` spike may compare
+  one message's extracted facts through production canonical consumers. It is not an
+  online normalization service: never write its experimental facts to operational
+  Memory/index stores or present its small target whitelist as complete source coverage.
+  Check provider truncation before JSON parsing. Wire-level reasoning diagnostics must
+  distinguish requested thinking settings from returned fields; offline SDK tests do
+  not prove remote provider behavior. Do not print credentials or reasoning text.
+  Its `--max-tokens` option is an explicit per-experiment output budget, not a global
+  SOC default. Record exact controls and never escalate the budget or retry silently.
+- `normalization_assistance_consumers.py` is the associated offline consumer audit.
+  Frozen model answers and literal source-field test controls must be labeled separately;
+  controls do not measure LLM extraction quality. A shared fingerprint with different
+  detector labels reveals feature blindness, not an observed incorrect Memory decision.
+  File/path variation alone may be valid generalization. Never turn audit controls into
+  production mappings or modify the live Profile/index/Memory to make a test pass.
+- `quoted_kv_parser_audit.py` compares the frozen v2 matcher with current production
+  parsing and bounded evidence for at most 20 selected messages. It is read-only and
+  makes no model or Memory calls. The older spike's KV inspection remains explicitly
+  a v2 baseline; current syntax coverage comes from the production parser, not validation.
 
 ## Canonical Workflows
+
+- `normalization_workbench_review.py` submits up to ten explicitly approved alerts to
+  the loopback DEV Workbench in shadow mode. These are real operational DEV runs;
+  the frozen supplements are applied only in a separate offline consumer comparison.
+  Read complete persisted requests for hash checks, not the null-pruned Web DTO. Wait
+  for the new run ID and released execution lease, not a previous completed trace.
+  `--collect-only` never resubmits. Distinguish Profile-only changes from model additions,
+  use the complete model projection for field visibility, and do not claim apply-mode
+  decision accuracy or silently migrate Memory/index groups.
+
+- `normalization_runtime_review.py` exercises the production semantic-review node on one
+  explicitly selected real alert. `--confirm-live` permits one review call, not automatic
+  output-budget escalation. Downstream analysis is deliberately stubbed to verify wiring;
+  its verdict is not quality evidence. Save request/result/timing and source hashes in a new
+  protected directory, with no operational Memory/index writes. Provider `length` remains
+  a failed review even when the existing Runtime path can finish.
+  Export the current review output JSON Schema beside the prompt. Record opt-in PingAn
+  feature facets separately; structural presence is not fingerprint quality or evidence
+  that an operational Memory was retrieved. Include merger/contract/consumer hashes.
 
 - Build the corpus with
   `backend/.venv/bin/python validation/compact_zeus/corpus/build_alert_validation_corpus.py`.

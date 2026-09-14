@@ -1135,7 +1135,7 @@ def _process_observations(parsed_messages: list[ParsedRawMessageEvidence]) -> li
         tree_text = (
             _first_str(
                 fields,
-                ("process_tree", "detail_process_tree", "event_content", "finding__desc", "str_desc"),
+                ("process_tree", "detail.process_tree", "detail_process_tree", "event_content", "finding__desc", "str_desc"),
             )
             or ""
         )

@@ -199,6 +199,38 @@ For network alerts, Runtime keeps observed source/destination separate from sema
 attacker/victim roles. Reviewed adapters may explicitly declare session initiator/responder
 semantics; reverse-connection role coherence is then checked deterministically before the LLM,
 while contradictory source claims remain visible for review.
+PingAn quoted-KV parsing preserves nested command quotes and records optional
+`syntax_coverage` under `extensions.parsed_raw_messages` for on-demand source inspection.
+It distinguishes consumed fields, unconsumed character ranges and duplicate values;
+syntax completeness does not imply complete entity mapping or Memory fingerprints.
+The audit does not add model calls, and its character-offset inventory is not sent to the LLM.
+An opt-in semantic review runs before entity extraction through the shared SOC analysis service:
+`SOC_NORMALIZATION_ASSIST_MODE=shadow|apply` requires `SOC_ANALYZER_MODE=llm`. Within its
+supported scope it reviews every nonempty selected primary input, not only parser errors.
+The rollout default remains `off`; local DEV may explicitly enable `shadow` for observation. Prompt v4 returns
+typed objects, detector events bound to those objects, and supplementary facts. Existing process,
+file, network and HTTP observations are reused; host/account/container observations are additive.
+Selected supplementary messages have separate source IDs within an eight-source/48k-character
+budget. Omitted and truncated input is recorded, not treated as fully reviewed. Hashes stay bound
+to their declared object; detector names/types/IDs are separate from file hashes.
+`AnalysisRun.normalization_assist_request` and `normalization_assistance` retain input, changes,
+unresolved items, usage and consumer checks. Recovery reuses a saved result only when request
+and configuration match. `SOC_NORMALIZATION_REFERENCE_VALIDATION_ENABLED=false` (default) accepts
+model-organized values without exact/unique quote matching; source membership, field types and
+object ownership checks remain. Such changes record `reference_validation_status=not_checked`
+and null offsets. Set the flag to `true` to restore strict quote/value checks; verified offsets
+refer to the frozen review text, not raw bytes. Failure preserves
+the existing usable path. PingAn `apply` selects Profile 8 / feature schema v6; `off/shadow` keep
+Profile 7 / v5. Do not silently rebuild groups or migrate old Memory when enabling it.
+Malformed optional output sections no longer discard valid sibling sections. Error stage/code,
+provider usage and response digest distinguish transport, JSON and proposal failures. Frozen
+parent/child changes remain independent; source empty strings are retained without invalid
+scalar provenance. These checks are separate from model risk reasoning and action authority.
+The corpus workbench retains the semantic-review trace phase and full frozen JSON under
+**打开完整审计 -> 语义核对记录**. The dedicated before/after comparison view has been removed.
+Shadow suggestions are explicitly not used in analysis or Memory; old runs do not acquire
+fabricated review results. Feature quality and operational inspection cleanup remain separate gates;
+see the [design](../.notes/ai_soc/architecture/normalization-assistance-design.md).
 Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition proposals,
 and append-only evaluation outcomes are available; production response side effects
 remain disabled without a reviewed Automation Policy or human grant plus a real adapter.

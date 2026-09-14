@@ -13,9 +13,10 @@ from typing import Any, Protocol
 
 from json_repair import loads as repair_json_loads
 
-from soc_agent.contracts import NestedJsonRepairObservation, NestedJsonRepairStatus, ParsedRawMessageEvidence
+from soc_agent.contracts import MessageFieldSpan, MessageSyntaxCoverage, MessageTextSpan, NestedJsonRepairObservation, NestedJsonRepairStatus, ParsedRawMessageEvidence
 
-_QUOTED_KV_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)="((?:[^"\\]|\\.)*)"')
+_QUOTED_KV_START_RE = re.compile(r'(?<![^\s,])([A-Za-z_][A-Za-z0-9_.]*)="')
+_PROGRAM_PREFIX_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*(?:\[\d+\])?:?\s+")
 _COMMA_KV_START_RE = re.compile(r"(?:^|,)([A-Za-z_][A-Za-z0-9_]*)=")
 _SYSLOG_HEADER_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T[^ ]+)\s+"
@@ -119,15 +120,32 @@ class PingAnJsonObjectMessageParser:
 
 class PingAnQuotedKvMessageParser:
     parser_name = "pingan_quoted_kv"
-    parser_version = "v2"
+    parser_version = "v4"
 
     def parse(self, message: str, *, source_path: str) -> ParsedRawMessageEvidence | None:
-        matches = _QUOTED_KV_RE.findall(message)
-        if len(matches) < 2:
+        body, _ = _strip_bracketed_prefix(message)
+        comma_start = _COMMA_KV_START_RE.match(body)
+        if comma_start and body[comma_start.end() : comma_start.end() + 1] != '"' and len(_COMMA_KV_START_RE.findall(body)) >= 2:
             return None
-        fields = {key: html.unescape(value) for key, value in matches}
+        starts = list(_QUOTED_KV_START_RE.finditer(message))
+        if len(starts) < 2:
+            return None
         header_match = _SYSLOG_HEADER_RE.match(message)
         header = header_match.groupdict() if header_match is not None else {}
+        prefix_end = header_match.end() if header_match is not None else 0
+        if not prefix_end:
+            program = _PROGRAM_PREFIX_RE.fullmatch(message[: starts[0].start()])
+            if program is not None:
+                prefix_end = program.end()
+                header = {"prefix": program.group().strip()}
+        fields, coverage = _scan_quoted_kv(message, starts, prefix_end=prefix_end)
+        if len(coverage.field_spans) < 2:
+            return None
+        warnings = []
+        if coverage.unconsumed_spans:
+            warnings.append(f"quoted KV unconsumed spans: {len(coverage.unconsumed_spans)}")
+        if coverage.conflicting_fields:
+            warnings.append("quoted KV conflicting duplicate fields: " + ", ".join(coverage.conflicting_fields))
         return _result(
             message,
             source_path=source_path,
@@ -135,7 +153,100 @@ class PingAnQuotedKvMessageParser:
             parser_version=self.parser_version,
             fields=fields,
             header=header,
+            syntax_coverage=coverage,
+            parser_warnings=warnings,
         )
+
+
+def _next_unescaped_quote(message: str, start: int, stop: int) -> int | None:
+    while start < stop:
+        if message[start] == "\\":
+            start += 2
+        elif message[start] == '"':
+            return start
+        else:
+            start += 1
+    return None
+
+
+def _kv_boundary(message: str, position: int) -> bool:
+    return position == len(message) or message[position].isspace() or message[position] == ","
+
+
+def _nested_quoted_value_end(message: str, start: int, stop: int) -> int | None:
+    # One outer close after balanced literal quote pairs, before the next field.
+    count, last = 0, None
+    position = start
+    while (quote := _next_unescaped_quote(message, position, stop)) is not None:
+        count += 1
+        last = quote
+        position = quote + 1
+    if count < 3 or count % 2 != 1 or last is None:
+        return None
+    if any(not _kv_boundary(message, pos) for pos in range(last + 1, stop)):
+        return None
+    return last
+
+
+def _scan_quoted_kv(message: str, starts: list[re.Match[str]], *, prefix_end: int) -> tuple[dict[str, str], MessageSyntaxCoverage]:
+    fields: dict[str, str] = {}
+    occurrences: dict[str, set[str]] = {}
+    duplicates: set[str] = set()
+    recovered: set[str] = set()
+    spans: list[MessageFieldSpan] = []
+    consumed_end = prefix_end
+    for index, match in enumerate(starts):
+        if match.start() < consumed_end:
+            continue
+        # Never recover across a possible next field. Ambiguous text stays in raw.
+        limit = starts[index + 1].start() if index + 1 < len(starts) else len(message)
+        value_start = match.end()
+        value_end = _next_unescaped_quote(message, value_start, limit)
+        if value_end is None:
+            continue
+        was_recovered = False
+        if value_end == value_start and not _kv_boundary(message, value_end + 1):
+            outer_end = _nested_quoted_value_end(message, value_start, limit)
+            if outer_end is None:
+                continue
+            value_end = outer_end
+            was_recovered = True
+        if not _kv_boundary(message, value_end + 1):
+            continue
+        name = match.group(1)
+        value = html.unescape(message[value_start:value_end])
+        if name in occurrences:
+            duplicates.add(name)
+        occurrences.setdefault(name, set()).add(value)
+        fields[name] = value
+        if was_recovered:
+            recovered.add(name)
+        consumed_end = value_end + 1
+        spans.append(MessageFieldSpan(start=match.start(), end=consumed_end, field_name=name, value_start=value_start, value_end=value_end))
+
+    conflicts = sorted(name for name, values in occurrences.items() if len(values) > 1)
+    for name in conflicts:
+        del fields[name]
+    residuals = []
+    cursor = prefix_end
+    for start, end in [(span.start, span.end) for span in spans] + [(len(message), len(message))]:
+        left, right = cursor, start
+        while left < right and _kv_boundary(message, left):
+            left += 1
+        while right > left and _kv_boundary(message, right - 1):
+            right -= 1
+        if left < right:
+            residuals.append(MessageTextSpan(start=left, end=right))
+        cursor = end
+    return fields, MessageSyntaxCoverage(
+        complete=not residuals and not conflicts,
+        field_spans=spans,
+        prefix_span=MessageTextSpan(start=0, end=prefix_end) if prefix_end else None,
+        unconsumed_spans=residuals,
+        duplicate_fields=sorted(duplicates),
+        conflicting_fields=conflicts,
+        recovered_fields=sorted(recovered),
+    )
 
 
 class PingAnCommaKvMessageParser:
@@ -224,6 +335,8 @@ def _result(
     parser_version: str,
     fields: Mapping[str, object],
     header: Mapping[str, object],
+    syntax_coverage: MessageSyntaxCoverage | None = None,
+    parser_warnings: Sequence[str] = (),
 ) -> ParsedRawMessageEvidence:
     normalized_fields = dict(fields)
     decoded_fields, repaired_fields, repair_observations, warnings = _decode_nested_fields(normalized_fields)
@@ -237,8 +350,9 @@ def _result(
         decoded_fields=decoded_fields,
         repaired_fields=repaired_fields,
         repair_observations=repair_observations,
+        syntax_coverage=syntax_coverage,
         header=dict(header),
-        warnings=warnings,
+        warnings=[*parser_warnings, *warnings],
     )
 
 

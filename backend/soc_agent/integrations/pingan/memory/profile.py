@@ -67,6 +67,11 @@ class PingAnSocMemoryProfile:
         aggregation_window_seconds=30 * 24 * 60 * 60,
     )
 
+    def __init__(self, *, semantic_features: bool = False) -> None:
+        self.semantic_features = semantic_features
+        if semantic_features:
+            self.identity = SocMemoryProfileIdentity(profile_id="pingan.soc", profile_version="8", feature_schema_version="pingan.soc.memory_features.v6", aggregation_window_seconds=30 * 24 * 60 * 60)
+
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
         integration = (request.source.integration_name or "").strip().casefold()
         return integration == "pingan_legacy_alert_platform"
@@ -81,6 +86,7 @@ class PingAnSocMemoryProfile:
         return _project_pingan_facets(
             memory_facets_from_analysis_request(request),
             request=request,
+            semantic_features=self.semantic_features,
         )
 
     def project_run_facets(
@@ -93,6 +99,7 @@ class PingAnSocMemoryProfile:
         return _project_pingan_facets(
             memory_facets_from_analysis_run(run),
             request=request,
+            semantic_features=self.semantic_features,
         )
 
     def build_pattern_signature(
@@ -499,6 +506,7 @@ def _project_pingan_facets(
     facets: dict[str, list[str]],
     *,
     request: LLMAnalysisRequest,
+    semantic_features: bool = False,
 ) -> dict[str, list[str]]:
     projected = {key: list(values) for key, values in facets.items()}
     signature = _detection_signature(request)
@@ -507,6 +515,15 @@ def _project_pingan_facets(
 
     base_components = list(projected.get("behavior_component", []))
     tenant_components, tenant_core_components = _pingan_canonical_behavior_components(request)
+    semantic_strong = []
+    if semantic_features:
+        from soc_agent.integrations.pingan.memory.semantic_features import SEMANTIC_PREFIXES, semantic_behavior_components, valid_component
+
+        base_components = [c for c in base_components if valid_component(c)]
+        projected["behavior_component"] = list(base_components)
+        semantic_core, semantic_strong = semantic_behavior_components(request)
+        tenant_components.extend(semantic_core)
+        tenant_core_components.extend(semantic_core)
     for family in _pingan_attack_behavior_families(request, projected):
         _add_facet(projected, "attack_behavior_family", family)
         _append_component(tenant_components, f"attack_family:{family}")
@@ -523,7 +540,7 @@ def _project_pingan_facets(
         projected["behavior_fingerprint"] = [
             stable_hash(
                 {
-                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v5",
+                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v6" if semantic_features else "pingan.soc.memory_behavior_fingerprint.v5",
                     "components": fingerprint_components,
                 }
             )
@@ -531,8 +548,8 @@ def _project_pingan_facets(
     else:
         projected.pop("behavior_fingerprint", None)
 
-    strong_components = [value for value in components if _is_strong_behavior_component(value)]
-    weak_components = [value for value in components if not _is_strong_behavior_component(value)]
+    strong_components = [value for value in components if (value in semantic_strong if semantic_features and value.startswith(SEMANTIC_PREFIXES) else _is_strong_behavior_component(value))]
+    weak_components = [value for value in components if value not in strong_components]
     for component in strong_components:
         _add_facet(projected, "behavior_component_strong", component)
     for component in weak_components:

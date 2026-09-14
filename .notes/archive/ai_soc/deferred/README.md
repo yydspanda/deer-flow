@@ -16,6 +16,7 @@ fast policy 均已从本索引移除。真实 provider/基础设施/rollout 等 
 | [Correlation label corpus expansion](correlation-label-corpus-expansion.md) | `PI-03` | 有获批脱敏 pair、分析师 reviewer 和版本化标签流程 | 先建立 immutable manifest + reviewer/rationale/provenance/supersede contract，再扩 corpus 和跑 scorer replay diff |
 | [DB memory to Wiki/OKF projection](wiki-okf-memory-projection.md) | `PI-03` 之后 | DB 生命周期和检索价值已被真实使用验证，且分析师提出明确协作需求 | 先做 DB -> versioned read-only export；Wiki 编辑只能回流 proposal，不允许直接改变 active memory |
 | [Adaptive normalization and parser evolution](adaptive-normalization-parser-evolution.md) | `PI-03` 或独立治理切片 | `PI-01E`/5000+ 批跑产生可重复 drift cohort，并有 owner、review/replay/rollback 流程 | 先实现按 tenant/source/parser/fingerprint 聚合的 cohort report + candidate bundle；不自动生成或上线 parser |
+| [PingAn 钓鱼邮件旧流程兼容](../../../ai_soc/architecture/normalization-assistance-design.md#137-钓鱼邮件信赖上游检出最后兼容旧流程) | `PI-03E` 本轮其他适配工作后最后处理 | 其他类型适配完成并重新排入执行队列 | 信赖上游 ML + LLM 检出，对照 active_inhibition_processing 及配套工具兼容；当前不做邮件补抽取/新指纹 |
 | [Asset/business context for Memory applicability](asset-business-context-memory-applicability.md) | `PI-03` Memory precision 优化 | 获得稳定 CMDB/资产标签契约、canonical taxonomy 和能证明资产维度影响结论的人工样本 | 增加版本化 `AssetBusinessContext`，由 Adapter/Provider 投影 canonical facets，并先做 shadow replay diff |
 | [SOC Agent investigation from analysis gaps](soc-agent-investigation-from-analysis-gaps.md) | SOC Lead Agent 动态调查阶段 | 开始实现 selected-case Agent 调查闭环，并准备冻结类型化调查任务、触发策略和可用能力清单 | 将 `analysis.evidence_gaps` 与 `analysis.manual_checks` 投影为只读调查输入，先实现不调用 Provider 的 typed task planning replay |
 

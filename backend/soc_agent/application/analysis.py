@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 
+from deerflow.config import get_app_config
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.automation import load_soc_automation_policy
 from soc_agent.contracts import MemoryPatternDataClass
@@ -30,6 +32,7 @@ from soc_agent.llm import (
     build_configured_analysis_nodes,
     build_configured_chat_client,
 )
+from soc_agent.llm.normalization import JsonLLMNormalizationReviewer
 from soc_agent.memory import ConfirmedMemoryAnalysisRequestEnricher
 from soc_agent.protocols import (
     PostAnalysisObserver,
@@ -41,6 +44,7 @@ from soc_agent.tenant_policy import (
     StaticTenantPolicyResolver,
     load_tenant_disposition_policies,
 )
+from soc_agent.utils.hashing import stable_hash
 
 
 def build_soc_analysis_service(
@@ -80,13 +84,31 @@ def build_soc_analysis_service(
         repository,
         memory_environment=resolved_environment,
     )
-    analyzer, role_verifier = build_configured_analysis_nodes(
-        settings=resolved_settings,
-    )
+    assist_mode = os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower()
+    if assist_mode not in {"off", "shadow", "apply"}:
+        raise ValueError("SOC_NORMALIZATION_ASSIST_MODE must be off, shadow or apply")
+    reviewer = None
+    if assist_mode != "off":
+        if resolved_settings.mode != "llm":
+            raise ValueError("SOC_NORMALIZATION_ASSIST_MODE requires SOC_ANALYZER_MODE=llm")
+        config = get_app_config()
+        client, model_name = build_configured_chat_client(settings=resolved_settings, app_config=config)
+        analyzer, role_verifier = build_configured_analysis_nodes(settings=resolved_settings, app_config=config, client=client)
+        reviewer = JsonLLMNormalizationReviewer(
+            client=client,
+            model_name=model_name,
+            mode=assist_mode,
+            configuration_hash=stable_hash({"config": config.model_dump(mode="json"), "settings": asdict(resolved_settings)}),
+            sensitive_evidence_mode=resolved_settings.sensitive_evidence_mode,
+            reference_validation_enabled=_strict_env_bool("SOC_NORMALIZATION_REFERENCE_VALIDATION_ENABLED", default=False),
+        )
+    else:
+        analyzer, role_verifier = build_configured_analysis_nodes(settings=resolved_settings)
     return SocAnalysisService(
         runtime=DeterministicAnalysisRuntime(
             analyzer=analyzer,
             role_verifier=role_verifier,
+            normalization_reviewer=reviewer,
             analysis_request_enricher=analysis_request_enricher,
             sensitive_evidence_mode=resolved_settings.sensitive_evidence_mode,
         ),

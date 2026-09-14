@@ -98,7 +98,7 @@ def test_plan_only_is_read_only_and_exposes_fixed_cohort(
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["runtime_live_model_call_count"] == 10
-    assert output["model_name"] == "globalai-deepseek-v4-flash-0731"
+    assert output["model_name"] == "globalai-deepseek-v4.1-flash"
     assert output["thinking_enabled_requested"] is False
     assert output["role_verifier_enabled"] is True
     assert output["role_verifier_model_name"] == "globalai-deepseek-v4-pro"

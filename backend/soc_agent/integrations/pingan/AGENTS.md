@@ -20,6 +20,26 @@ generic `soc_agent` code.
 - Encoded/binary-like values are compacted to typed length/hash placeholders only in the
   bounded LLM projection. Raw input is unchanged. Encoding compaction alone is not an
   evidence gap.
+- Quoted-KV parser v4 retains exact field/value spans and unconsumed text spans. It may
+  preserve balanced, unescaped inner quotes in a double-opening quoted value, but never
+  recover across a possible next field. Conflicting duplicate keys have no selected
+  scalar value; every occurrence remains traceable to raw. Identical duplicates and
+  successful quote recovery are audit facts, not automatic degradation or review.
+  This syntax check does not map new vendor aliases or prove Memory feature coverage.
+  Preserve full dotted keys (`detail.process_tree`), with explicit adapter aliases for
+  consumers. A predominantly comma-KV record remains owned by the comma parser; quoted
+  commands within it must not cause a two-field partial parse to replace the full record.
+- Optional Runtime semantic review runs for every selected nonempty input in its enabled
+  scope, not only parser failures. PingAn continues to own evidence selection and field
+  semantics; no model call belongs in a parser or the offline index. The generic v2 kernel
+  merges typed observations and source-bound detector events into the same AlertInput.
+  PingAn semantic feature consumption is Profile 8 / v6 only in `apply`; `off/shadow`
+  retain Profile 7 / v5. Detector category/name plus the detected file can differentiate
+  events sharing a parent process; hashes, IPs and user-specific directories are not these
+  new feature anchors. Do not claim full coverage or migrate old Memory automatically.
+  The rollout remains off until real consumer/group compatibility is verified. Inspection is an
+  on-demand read of per-run facts, not an analyst maintenance prerequisite. Phishing-email
+  specialization remains deferred by user decision; trust the upstream ML/LLM detection.
 - Adapters emit generic role claims, scenario signals, typed observations, source-field
   semantics, trust, and provenance. Do not infer attacker/victim globally from aliases
   such as `sip`, `source_ip`, `dst_addr`, or `str_attack_ip`.

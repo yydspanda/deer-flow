@@ -1593,6 +1593,26 @@ normalizers/hids.py
 
 ### Normalization maintenance / 归一化维护约束
 
+2026-09-14 补充：常规语义核对以
+[`normalization-assistance-design.md`](../ai_soc/architecture/normalization-assistance-design.md) 为准。
+旧 maintenance API 仍兼容，但不是调用门槛。核对在实体/指纹/Memory 前，启用后对范围内
+每条有效主证据调用。`NormalizationAssistRequest/Result.v1` 随 Run 保存，使用独立 provider purpose；
+失败可保留主研判，但不能写成功 journal。恢复仅在请求与配置 Hash 一致时复用已保存结果。
+Prompt v2 的 objects/events/additional_facts 通过通用合并器回到既有 AlertInput 观察；检测
+标签与文件哈希分开，事件绑定同源对象。无法确定归属的哈希/统计值保留为可引用补充事实。
+现有 v1 Run 请求/结果按可选字段扩展，旧九字段回答保持可读；不混用两种输出格式。
+对象修订只变更有引用支撑的属性，保留未变更字段来源；准备/调用/合并失败保留原 Adapter。
+多来源预算、未核对范围、差异和实际模型投影保存到 Run。PingAn apply 才选择 Profile 8 / v6，
+off/shadow 保持 Profile 7 / v5；不自动重建分组、改写旧经验或宣称真实匹配精度通过。
+下列旧问题生成仍是当前 maintenance 实现；按需质量检查的降噪及只读 UI 尚未完成。
+
+2026-09-15：Prompt v4 明确对象归属、检测器编号与补充事实边界，接受层按区块隔离格式错误，
+不让一个可选数组抹掉其他有效对象。无效 JSON/length/网络失败保留 failure_stage/error_code、
+用量和可用的回答摘要哈希，不拼造缺失结果。父对象与子观察的 before/after 必须独立冻结，
+合入不修改提议日志；真实快照变化仍拒绝。原文空字符串保留在标准观察和审核记录，不创建
+违反非空约束的标量 provenance。外网 V4.1 六例只证明 shadow 调用及离线消费；不是自动
+迁移 Profile、匹配精度或 apply 模式研判准确率验收。
+
 - `NormalizationSchemaBaseline` 是人工批准、版本化、可 supersede 的生产基线；scope 至少包含 tenant、
   source system、adapter、parser name/version。首次观察不能自动成为 accepted baseline。
 - 只有 `soc_engineer` / `soc_admin` 可接受基线。接受新版本必须 supersede 同 scope 旧 active baseline，

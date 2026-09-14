@@ -32,6 +32,8 @@ from soc_agent.contracts import (
     MemoryPatternLineageStatsPage,
     MemoryPatternObservation,
     MemoryPatternSourceType,
+    NormalizationAssistRequest,
+    NormalizationAssistResult,
     NormalizationBaselineStatus,
     NormalizationMaintenanceIssue,
     NormalizationMaintenanceIssueStatus,
@@ -233,8 +235,18 @@ class ProcessingJobRepository(Protocol):
     ) -> list[SocCallbackAttemptRecord]: ...
 
 
+class NormalizationReviewer(Protocol):
+    model_name: str
+    prompt_version: str
+    mode: str
+
+    def prepare(self, alert: AlertInput) -> NormalizationAssistRequest: ...
+
+    def review(self, alert: AlertInput, request: NormalizationAssistRequest) -> NormalizationAssistResult: ...
+
+
 AnalysisBeforeProviderHook = Callable[
-    [AnalysisRun, LLMAnalysisRequest, AnalysisProviderInvocation],
+    [AnalysisRun, LLMAnalysisRequest | NormalizationAssistRequest, AnalysisProviderInvocation],
     None,
 ]
 AnalysisRequestEnricher = Callable[[LLMAnalysisRequest], LLMAnalysisRequest]

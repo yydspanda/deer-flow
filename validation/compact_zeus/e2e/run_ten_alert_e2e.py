@@ -53,7 +53,7 @@ DEFAULT_SOURCE = (
     ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 )
 DEFAULT_OUTPUT_ROOT = BACKEND_ROOT / ".deer-flow/soc-validation/e2e-ten-current"
-DEFAULT_PRIMARY_MODEL = "globalai-deepseek-v4-flash-0731"
+DEFAULT_PRIMARY_MODEL = "globalai-deepseek-v4.1-flash"
 DEFAULT_ROLE_VERIFIER_MODEL = "globalai-deepseek-v4-pro"
 RUNTIME_BATCH_RUNNER = (
     ROOT / "validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py"

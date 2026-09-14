@@ -83,6 +83,7 @@ def get_soc_corpus_workbench_service(
                 database_file=runtime.database_file.name,
                 tenant_policy=runtime.tenant_policy,
                 software_path_fast_policy=runtime.software_path_fast_policy,
+                normalization_review_mode=os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower(),
             )
         except (OSError, ValueError, SocCorpusWorkbenchError) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

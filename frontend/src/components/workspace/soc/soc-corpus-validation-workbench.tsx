@@ -377,6 +377,8 @@ const EXECUTION_STATUS_LABELS: Record<
 };
 
 const EXECUTION_METRIC_LABELS: Record<string, string> = {
+  review_changes: "对象 / 字段调整",
+  review_sources: "核对来源",
   adapter: "Adapter",
   canonical_fields: "通用字段",
   missing_fields: "缺失字段",
@@ -1586,6 +1588,14 @@ export function SocCorpusValidationWorkbench() {
             </span>
             <span>可任意选择 · 可重新运行</span>
             <span>企业安全能力接口 · 关闭/模拟</span>
+            <span className="font-medium text-sky-800">
+              语义核对 ·{" "}
+              {state.safety.normalization_review_mode === "shadow"
+                ? "仅对比，未用于研判"
+                : state.safety.normalization_review_mode === "apply"
+                  ? "用于后续研判"
+                  : "未开启"}
+            </span>
             <span>
               企业专属策略 ·{" "}
               {formatSocDevPolicyLabel({

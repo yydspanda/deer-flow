@@ -365,7 +365,7 @@ Agent 负责发现和解释，不能因为“说得合理”就获得动作权�
 | --- | :---: | :---: | :---: | :---: |
 | Vendor envelope validation / 厂商输入校验 | ✅ |  |  |  |
 | Adapter selection and raw preservation / Adapter 与原文保存 | ✅ |  |  |  |
-| Canonical normalization / 标准化 | ✅ | 辅助发现新 Schema，不逐条控制 |  | 确认 Adapter 变更 |
+| Canonical normalization / 标准化 | ✅ | 启用后逐条语义核对与补充；Runtime 验证合并，不在线改代码 |  | 确认 Adapter 变更 |
 | Evidence provenance and field trust / 证据来源与字段可信 | ✅ | 可解释冲突 | 可进一步调查 | 人工裁决可追加 |
 | Entity/fact extraction / 实体与事实提取 | ✅ code-first | ✅ 处理模糊语义 | 可补充调查线索 | 可纠正 |
 | Scenario, role, effect, impact / 场景、角色、效果、影响 | 固定输入/输出契约 | ✅ 主研判 | ✅ 复杂案件再调查 | 最终确认 |

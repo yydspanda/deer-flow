@@ -274,6 +274,14 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
             role=f"{observation.relation}_md5",
             evidence_path=f"{observation_path}.md5",
         )
+    for index, observation in enumerate(alert.entities.context_observations):
+        base = f"entities.context_observations[{index}].attributes"
+        for attribute, kind in (("host_name", EntityKind.HOST), ("ip_address", EntityKind.IP), ("username", EntityKind.USER), ("um_account", EntityKind.USER)):
+            _add_mention(mentions, kind, observation.attributes.get(attribute), role="observed_" + attribute, evidence_path=base + "." + attribute)
+    for index, observation in enumerate(alert.entities.network.observations):
+        base = f"entities.network.observations[{index}]"
+        for attribute, kind in (("source_ip", EntityKind.IP), ("destination_ip", EntityKind.IP), ("domain", EntityKind.DOMAIN), ("url", EntityKind.URL)):
+            _add_mention(mentions, kind, getattr(observation, attribute), role="observed_" + attribute, evidence_path=base + "." + attribute)
     _add_mention(
         mentions,
         EntityKind.RULE_CODE,

@@ -1574,6 +1574,7 @@ export interface SocCorpusWorkbenchState {
     external_action_execution: false;
     memory_scope: string;
     pattern_window_days: number;
+    normalization_review_mode?: "off" | "shadow" | "apply";
     execution_mode: "interactive_exploration";
     chronology_enforced: false;
     rerun_enabled: true;

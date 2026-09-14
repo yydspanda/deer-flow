@@ -46,6 +46,7 @@ from soc_agent.contracts import (
     MemoryPatternDataClass,
     MemoryPatternSourceType,
     MessageSchemaStatus,
+    NormalizationAssistRequest,
     NormalizationDriftReport,
     NormalizationDriftSample,
     NormalizationInspectionResult,
@@ -179,6 +180,7 @@ from soc_agent.protocols import (
     MemoryPatternObserver,
     MemoryRecordRepository,
     NormalizationMaintenanceMonitor,
+    NormalizationReviewer,
     PostAnalysisObserver,
     ReviewQueueRepository,
     RoleAdjudicationVerifier,
@@ -229,12 +231,14 @@ class DeterministicAnalysisRuntime:
         *,
         analyzer: LLMAnalyzer | None = None,
         role_verifier: RoleAdjudicationVerifier | None = None,
+        normalization_reviewer: NormalizationReviewer | None = None,
         decision_policy: DecisionPolicy | None = None,
         analysis_request_enricher: AnalysisRequestEnricher | None = None,
         sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
     ) -> None:
         self._analyzer = analyzer
         self._role_verifier = role_verifier
+        self._normalization_reviewer = normalization_reviewer
         self._decision_policy = decision_policy
         self._analysis_request_enricher = analysis_request_enricher
         self._sensitive_evidence_mode = sensitive_evidence_mode
@@ -244,6 +248,7 @@ class DeterministicAnalysisRuntime:
             payload,
             analyzer=self._analyzer,
             role_verifier=self._role_verifier,
+            normalization_reviewer=self._normalization_reviewer,
             decision_policy=self._decision_policy,
             analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
@@ -259,6 +264,20 @@ class DeterministicAnalysisRuntime:
             payload,
             analyzer=self._analyzer,
             role_verifier=self._role_verifier,
+            normalization_reviewer=self._normalization_reviewer,
+            decision_policy=self._decision_policy,
+            before_provider=before_provider,
+            analysis_request_enricher=self._analysis_request_enricher,
+            sensitive_evidence_mode=self._sensitive_evidence_mode,
+        )
+
+    def analyze_journaled_with_reuse(self, payload: Mapping[str, Any], *, before_provider: AnalysisBeforeProviderHook, previous_run: AnalysisRun) -> AnalysisRun:
+        return analyze_alert(
+            payload,
+            analyzer=self._analyzer,
+            role_verifier=self._role_verifier,
+            normalization_reviewer=self._normalization_reviewer,
+            normalization_reuse=previous_run,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
             analysis_request_enricher=self._analysis_request_enricher,
@@ -409,6 +428,7 @@ class SocAnalysisService:
             previous.input_payload,
             context=recovery_context,
             replay_of_run_id=previous.run_id,
+            normalization_reuse=previous,
         )
         refreshed = self._repository.get_run(previous.run_id) or previous
         if refreshed.request_journal is not None:
@@ -425,6 +445,7 @@ class SocAnalysisService:
         *,
         context: ServiceRequestContext,
         replay_of_run_id: str | None = None,
+        normalization_reuse: AnalysisRun | None = None,
     ) -> AnalysisRun:
         audit_action = AuditAction.REPLAY if replay_of_run_id else AuditAction.ANALYSIS
         self._emit(
@@ -449,6 +470,7 @@ class SocAnalysisService:
             context=context,
             action=audit_action,
             replay_of_run_id=replay_of_run_id,
+            normalization_reuse=normalization_reuse,
         )
         run.replay_of_run_id = replay_of_run_id
         _finalize_request_journal(run)
@@ -520,6 +542,7 @@ class SocAnalysisService:
         context: ServiceRequestContext,
         action: AuditAction,
         replay_of_run_id: str | None,
+        normalization_reuse: AnalysisRun | None = None,
     ) -> AnalysisRun:
         analyze_journaled = getattr(self._runtime, "analyze_journaled", None)
         if self._repository is None or not callable(analyze_journaled):
@@ -527,7 +550,7 @@ class SocAnalysisService:
 
         def persist_before_provider(
             run: AnalysisRun,
-            request: LLMAnalysisRequest,
+            request: LLMAnalysisRequest | NormalizationAssistRequest,
             invocation: AnalysisProviderInvocation,
         ) -> None:
             run.replay_of_run_id = replay_of_run_id
@@ -542,6 +565,9 @@ class SocAnalysisService:
             _set_active_request_journal(run, journal)
             self._repository.save_run(run.model_copy(deep=True))
 
+        analyze_with_reuse = getattr(self._runtime, "analyze_journaled_with_reuse", None)
+        if normalization_reuse is not None and callable(analyze_with_reuse):
+            return analyze_with_reuse(payload, before_provider=persist_before_provider, previous_run=normalization_reuse)
         return analyze_journaled(payload, before_provider=persist_before_provider)
 
     def _find_existing_idempotent_run(self, context: ServiceRequestContext, *, action: AuditAction) -> AnalysisRun | None:
@@ -6512,7 +6538,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 def _request_journal_from_analysis_request(
     run: AnalysisRun,
-    request: LLMAnalysisRequest,
+    request: LLMAnalysisRequest | NormalizationAssistRequest,
     *,
     context: ServiceRequestContext,
     action: AuditAction,
@@ -6536,9 +6562,9 @@ def _request_journal_from_analysis_request(
         provider_purpose=invocation.purpose,
         parser_version=invocation.parser_version,
         optional_provider=invocation.optional,
-        primary_evidence_present=request.primary_evidence is not None,
-        supplementary_evidence_count=len(request.supplementary_evidence),
-        selected_skills=[item.skill_name for item in request.skill_context.selected_skills],
+        primary_evidence_present=bool(request.source_text) if isinstance(request, NormalizationAssistRequest) else request.primary_evidence is not None,
+        supplementary_evidence_count=0 if isinstance(request, NormalizationAssistRequest) else len(request.supplementary_evidence),
+        selected_skills=[] if isinstance(request, NormalizationAssistRequest) else [item.skill_name for item in request.skill_context.selected_skills],
     )
 
 
@@ -6594,15 +6620,7 @@ def _complete_active_request_journal(run: AnalysisRun) -> None:
     journal = run.request_journal
     if journal is None or journal.status is not AnalysisRequestJournalStatus.RUNNING:
         return
-    _set_active_request_journal(
-        run,
-        journal.model_copy(
-            update={
-                "status": AnalysisRequestJournalStatus.COMPLETED,
-                "finalized_at": _utc_now(),
-            }
-        ),
-    )
+    _finalize_request_journal(run)
 
 
 def _set_active_request_journal(
