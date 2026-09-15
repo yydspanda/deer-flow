@@ -28,7 +28,7 @@ def build_memory_scope_view(
         covered = [value for value in values if value.casefold() in implied.get(key, set())]
         independent = [value for value in values if value not in covered]
         # Similarity keys must stay optional: promotion would remove the fallback gate.
-        if key in spec.context_only_similarity_facet_keys:
+        if key in spec.context_only_similarity_facet_keys or key in {"behavior_component_core", "behavior_component_strong", "behavior_component_weak"}:
             kind = "similarity"
             independent = values
         else:

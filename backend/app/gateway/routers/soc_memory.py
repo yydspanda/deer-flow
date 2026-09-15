@@ -136,6 +136,7 @@ class MemoryGovernancePreviewRequest(BaseModel):
     reviewer_verdict: Verdict | None = None
     promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
     promoted_facet_values: dict[str, list[str]] = Field(default_factory=dict, max_length=20)
+    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=40)
 
 
 class MemoryCandidateReviewRequest(BaseModel):
@@ -178,6 +179,7 @@ class MemoryBusinessLessonDraftRequest(BaseModel):
     reviewer_context: str | None = Field(default=None, max_length=4000)
     promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
     promoted_facet_values: dict[str, list[str]] = Field(default_factory=dict, max_length=20)
+    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=40)
 
     @field_validator("promoted_facet_keys")
     @classmethod
@@ -278,6 +280,7 @@ def get_soc_memory_lesson_draft_service(
         candidate_repository=repository,
         drafter=build_configured_memory_lesson_drafter(),
         governance_service=get_soc_memory_service(request),
+        profile_registry=build_soc_memory_profile_registry(),
     )
     request.app.state.soc_memory_lesson_draft_service = service
     return service
@@ -445,7 +448,9 @@ def promote_run_to_memory_candidate(
 @router.post("/candidates/{candidate_id}/governance-preview", response_model=MemoryGovernancePreview)
 def preview_memory_candidate_governance(candidate_id: str, payload: MemoryGovernancePreviewRequest, service: MemoryServiceDep) -> MemoryGovernancePreview:
     try:
-        return service.preview_candidate_governance(candidate_id, reviewer_verdict=payload.reviewer_verdict, promoted_facet_keys=payload.promoted_facet_keys, promoted_facet_values=payload.promoted_facet_values)
+        return service.preview_candidate_governance(
+            candidate_id, reviewer_verdict=payload.reviewer_verdict, promoted_facet_keys=payload.promoted_facet_keys, promoted_facet_values=payload.promoted_facet_values, selected_behavior_components=payload.selected_behavior_components
+        )
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
@@ -549,6 +554,7 @@ def draft_memory_business_lesson(
             reviewer_context=payload.reviewer_context,
             promoted_facet_keys=payload.promoted_facet_keys,
             promoted_facet_values=payload.promoted_facet_values,
+            selected_behavior_components=payload.selected_behavior_components,
             context=soc_service_context_from_request(
                 request,
                 include_soc_roles=True,

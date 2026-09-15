@@ -22,7 +22,7 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
-
+09-15 `PI-03E` Memory 适用条件改造：固定范围只读、核心行为全展开默认全选；v3 按审核选择逐项匹配，不再强制来源完整 hash 相同，去重排序不受顺序影响。额外限制只收窄直接复用，源/目标 AND，参考经验仍可影响模型判断；旧 Memory/索引不迁移。167 项后端、7 项组件、3 项浏览器测试及两个真实候选四次只读检查通过；六个范围变体是模拟，无真实模型/业务写入，不代表准确率提升。见[方案与剩余工作](architecture/memory-applicability-design.md)及月度归档，内网指针不变。
 09-15 `PI-03E` 外网默认切 GlobalAI V4.1 Flash、关闭 thinking、24576输出预算，内网不改。三条旧失败与三条已有强指纹样本真实 Web 完成；修复后1984510单独复跑，七次核对无超时/整份拒绝。离线合入最新六份建议后，121/121记录进入完整模型投影，前三条弱特征变强，原组件无删除。发现并修复空字符串 provenance 与父/子对象快照污染；Prompt v4、可选区块隔离及错误分类，123项回归通过。1984510对象归属修正仍被隔离、检测器编号/重复元数据及指纹稳定性待审；Base六条仍可疑，不宣称降噪提升。网页仍shadow，未迁移Memory/索引。原五条失败实验、旧快照192→191差异、32组全面验收、maintenance降噪、邮件尾项均保留。详见[月度归档](../archive/ai_soc/progress/2026-09.md)与[方案§18](architecture/normalization-assistance-design.md#18-v41-六例复验与合入可靠性2026-09-15)，内网指针不变。
 ### 2026-09-08 — Explain decision lineage and concrete handling progress
 

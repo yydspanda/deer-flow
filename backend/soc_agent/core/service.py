@@ -153,6 +153,7 @@ from soc_agent.memory import (
     render_memory_business_lesson,
     resolve_memory_business_lesson,
 )
+from soc_agent.memory.behavior_scope import required_directive_keys, select_memory_behavior_components
 from soc_agent.memory.governance import assessed_verdict, governed_records, preview_governance, scope_identity, scope_relation, validity_overlaps
 from soc_agent.memory.lessons import promote_memory_applicability_facets
 from soc_agent.memory.scoring import (
@@ -2118,10 +2119,13 @@ class SocMemoryService:
             _transaction_active=True,
         )
 
-    def preview_candidate_governance(self, candidate_id: str, *, reviewer_verdict: Verdict | None = None, promoted_facet_keys: list[str] | None = None, promoted_facet_values: dict[str, list[str]] | None = None) -> MemoryGovernancePreview:
+    def preview_candidate_governance(
+        self, candidate_id: str, *, reviewer_verdict: Verdict | None = None, promoted_facet_keys: list[str] | None = None, promoted_facet_values: dict[str, list[str]] | None = None, selected_behavior_components: list[str] | None = None
+    ) -> MemoryGovernancePreview:
         candidate = self.get_candidate(candidate_id)
         if candidate.applicability is not None:
             candidate = candidate.model_copy(update={"applicability": promote_memory_applicability_facets(candidate.applicability, promoted_facet_keys or [], promoted_facet_values)})
+            candidate = candidate.model_copy(update={"applicability": select_memory_behavior_components(candidate.applicability, candidate.facets, selected_behavior_components, registry=self._profile_registry)})
         if self._record_repository is None:
             raise SocServiceNotImplementedError("Memory comparison requires a MemoryRecordRepository")
         used_ids: set[str] = set()
@@ -2770,6 +2774,7 @@ class SocMemoryService:
             _validate_memory_record_applicability(
                 candidate,
                 command.record_applicability,
+                registry=self._profile_registry,
             )
             effective_command = _materialize_memory_review_directive(
                 candidate,
@@ -3621,6 +3626,8 @@ class SocMemoryService:
                 query,
                 matched_facets,
             )
+            if applicability_report.selected_behavior_components and not applicability_report.missing_behavior_components:
+                matched_facets = {**matched_facets, "behavior_component": applicability_report.matched_behavior_components}
             query_profile_id = query.metadata.get("memory_profile_id")
             profile = self._profile_registry.get(query_profile_id) if isinstance(query_profile_id, str) else None
             profile_conflicts = (
@@ -3631,7 +3638,7 @@ class SocMemoryService:
                 if profile is not None
                 else []
             )
-            if profile_conflicts:
+            if profile_conflicts and not (record.applicability is not None and record.applicability.selected_behavior_components is not None and applicability_report.status is SocMemoryApplicabilityStatus.APPLICABLE):
                 skipped_not_applicable += 1
                 continue
             exact_or_legacy = applicability_report.status in {
@@ -3860,7 +3867,7 @@ def _validate_memory_decision_directive(
     applicability = command.record_applicability or candidate.applicability
     if applicability is None:
         raise SocServiceError("memory decision directive requires a typed applicability contract")
-    omitted_required = sorted(set(applicability.required_facets) - set(directive.required_facet_keys))
+    omitted_required = sorted(set(required_directive_keys(applicability)) - set(directive.required_facet_keys))
     if omitted_required:
         raise SocServiceError("memory decision directive must retain every reviewed required facet: " + ", ".join(omitted_required))
 
@@ -3881,7 +3888,7 @@ def _materialize_memory_review_directive(
         effect=SocMemoryDecisionEffect.OVERRIDE,
         target_verdict=command.confirmed_verdict,
         review_effect=(SocMemoryReviewEffect.CLEAR if command.clear_review_on_match else SocMemoryReviewEffect.PRESERVE),
-        required_facet_keys=sorted(applicability.required_facets),
+        required_facet_keys=required_directive_keys(applicability),
         rationale=command.reason,
     )
     return command.model_copy(update={"decision_directive": directive})
@@ -3890,6 +3897,8 @@ def _materialize_memory_review_directive(
 def _validate_memory_record_applicability(
     candidate: SocMemoryCandidate,
     reviewed: SocMemoryApplicabilitySpec | None,
+    *,
+    registry: SocMemoryProfileRegistry | None = None,
 ) -> None:
     if reviewed is None:
         return
@@ -3911,6 +3920,34 @@ def _validate_memory_record_applicability(
     base_optional = _normalized_applicability_values(base.optional_facets)
     reviewed_required = _normalized_applicability_values(reviewed.required_facets)
     reviewed_optional = _normalized_applicability_values(reviewed.optional_facets)
+    if reviewed.policy_version in {"soc.memory_applicability_policy.v2", "soc.memory_applicability_policy.v3"}:
+        preserved = (
+            "context_only_required_facet_keys",
+            "context_only_missing_facet_keys",
+            "context_only_similarity_facet_keys",
+            "minimum_optional_matches",
+            "minimum_strong_anchor_matches",
+        )
+        if reviewed_required != base_required or reviewed_optional != base_optional or any(getattr(reviewed, key) != getattr(base, key) for key in preserved):
+            raise SocServiceError("reuse-only review must preserve candidate base and reference scope")
+    if reviewed.selected_behavior_components is not None:
+        try:
+            select_memory_behavior_components(base, candidate.facets, reviewed.selected_behavior_components, registry=registry or SocMemoryProfileRegistry())
+        except ValueError as exc:
+            raise SocServiceError(str(exc)) from exc
+    elif base.selected_behavior_components is not None:
+        raise SocServiceError("record_applicability cannot silently remove reviewed behavior selection")
+    previous_conditions = {item.condition_key: item for item in base.reuse_conditions}
+    reviewed_conditions = {item.condition_key: item for item in reviewed.reuse_conditions}
+    if not set(previous_conditions) <= set(reviewed_conditions):
+        raise SocServiceError("record_applicability cannot remove saved reuse conditions")
+    for key, item in reviewed_conditions.items():
+        previous = previous_conditions.get(key)
+        allowed = {v.casefold() for v in previous.values} if previous else base_optional.get(item.facet_key)
+        if allowed is None or not {v.casefold() for v in item.values} <= allowed:
+            raise SocServiceError("record_applicability reuse conditions must narrow candidate values")
+        if not previous and (item.facet_key in base.context_only_similarity_facet_keys or item.facet_key in {"behavior_component_core", "behavior_component_weak", "behavior_component_strong"}):
+            raise SocServiceError("internal behavior aliases cannot be promoted to reuse conditions")
     missing_required_keys = sorted(set(base_required) - set(reviewed_required))
     if missing_required_keys:
         raise SocServiceError("record_applicability cannot remove candidate required facets: " + ", ".join(missing_required_keys))

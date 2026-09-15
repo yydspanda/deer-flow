@@ -214,7 +214,7 @@ test.describe("SOC review workbench", () => {
       candidateSection.getByText("3. 选择未来用途", { exact: true }),
     ).toBeVisible();
     await expect(
-      candidateSection.getByText("仅供研判参考，不改判", { exact: true }),
+      candidateSection.getByText("仅供研判参考", { exact: true }).first(),
     ).toBeVisible();
     await candidateSection
       .getByRole("switch", { name: "允许精确匹配时参与最终结论" })

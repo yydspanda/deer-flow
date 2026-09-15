@@ -568,7 +568,18 @@ export interface SocMemoryApplicabilitySpec {
   context_only_required_facet_keys: string[];
   context_only_missing_facet_keys: string[];
   context_only_similarity_facet_keys: string[];
-  policy_version: "soc.memory_applicability_policy.v1";
+  reuse_conditions?: SocMemoryReuseCondition[];
+  selected_behavior_components?: string[] | null;
+  policy_version:
+    | "soc.memory_applicability_policy.v1"
+    | "soc.memory_applicability_policy.v2"
+    | "soc.memory_applicability_policy.v3";
+}
+
+export interface SocMemoryReuseCondition {
+  facet_key: string;
+  value_prefix?: string | null;
+  values: string[];
 }
 
 export interface SocMemoryApplicabilityReport {
@@ -580,6 +591,11 @@ export interface SocMemoryApplicabilityReport {
   matched_required_facets: Record<string, string[]>;
   missing_required_facet_keys: string[];
   matched_optional_facets: Record<string, string[]>;
+  matched_reuse_conditions?: Record<string, string[]>;
+  missing_reuse_conditions?: SocMemoryReuseCondition[];
+  selected_behavior_components?: string[];
+  matched_behavior_components?: string[];
+  missing_behavior_components?: string[];
   excluded_facet_hits: Record<string, string[]>;
   matched_strong_anchor_count: number;
   context_only_allowed: boolean;
@@ -682,6 +698,7 @@ export interface SocMemoryBusinessLessonDraftRequest {
   reviewer_context?: string | null;
   promoted_facet_keys?: string[];
   promoted_facet_values?: Record<string, string[]>;
+  selected_behavior_components?: string[] | null;
 }
 
 export type SocMemoryRevisionIssueType =

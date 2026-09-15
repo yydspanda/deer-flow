@@ -185,6 +185,32 @@ const fixture = {
   },
 };
 
+fixture.applicability.optional_facets = {
+  ...fixture.applicability.optional_facets,
+  ...{
+    behavior_component_core: [...fixture.facets.behavior_component],
+    behavior_component_weak: ["network_service:http/8080"],
+    role_entity: ["source:10.0.0.1", "destination:10.0.0.2"],
+  },
+};
+fixture.scope_view.options.push(
+  {
+    key: "behavior_component_core",
+    values: [...fixture.facets.behavior_component],
+    kind: "similarity",
+  },
+  {
+    key: "behavior_component_weak",
+    values: ["network_service:http/8080"],
+    kind: "similarity",
+  },
+  {
+    key: "role_entity",
+    values: ["source:10.0.0.1", "destination:10.0.0.2"],
+    kind: "additional",
+  },
+);
+
 for (const width of [1440, 390]) {
   test(`readable candidate scope and meaningful narrowing at ${width}px`, async ({
     page,
@@ -206,31 +232,50 @@ for (const width of [1440, 390]) {
       scope.getByText("RPAADM_000558", { exact: true }),
     ).toBeVisible();
     await expect(
-      scope.getByText("目标服务：http/8080", { exact: true }),
+      scope.getByText("http/8080", { exact: true }).first(),
     ).toBeVisible();
     await expect(
       scope.getByText("告警演练数据", { exact: true }),
     ).toBeVisible();
     await expect(scope.locator("pre")).not.toBeVisible();
+    const core = scope.locator("[data-memory-scope-behavior]");
+    await expect(core.locator("details")).toHaveCount(0);
+    await expect(core.getByRole("checkbox")).toHaveCount(5);
+    for (const box of await core.getByRole("checkbox").all())
+      await expect(box).toBeChecked();
+    await core
+      .getByRole("checkbox", { name: "要求核心行为 协议 http", exact: true })
+      .uncheck();
+    const selectedBehavior =
+      fixture.scope_view.required_details.behavior_fingerprint.behavior_component.filter(
+        (v) => v !== "protocol:http",
+      );
     await expect(
-      scope.getByText("可选匹配条件", { exact: true }),
+      scope.getByText("增加直接复用限制", { exact: true }),
     ).toBeVisible();
-    await expect(scope.getByRole("checkbox")).toHaveCount(3);
+    await scope.getByText("增加直接复用限制", { exact: true }).click();
+    await expect(
+      scope.locator("[data-memory-scope-options]").getByRole("checkbox"),
+    ).toHaveCount(5);
     await expect(
       scope.locator("[data-memory-scope-options]"),
     ).not.toContainText("规则内部标识");
     const checkbox = scope.getByRole("checkbox", {
-      name: "增加匹配条件 来源类型 网络检测与响应（NDR）",
+      name: "限制直接复用 来源类型 网络检测与响应（NDR）",
     });
     await checkbox.check();
-    await expect(scope.getByText("已增加", { exact: true })).toHaveCount(1);
+    await expect(
+      scope.getByRole("button", { name: "移除来源类型限制" }),
+    ).toBeVisible();
     await checkbox.uncheck();
-    await expect(scope.getByText("已增加", { exact: true })).toHaveCount(0);
+    await expect(
+      scope.getByRole("button", { name: "移除来源类型限制" }),
+    ).toHaveCount(0);
     await expect(
       scope.getByText("网络检测与响应（NDR）", { exact: true }),
     ).toBeVisible();
     const asset = scope.getByRole("checkbox", {
-      name: "增加匹配条件 关联实体 资产组：未知资产组",
+      name: "限制直接复用 资产组 未知资产组",
     });
     await asset.check();
     await scope
@@ -241,9 +286,43 @@ for (const width of [1440, 390]) {
     );
     await expect(scope.locator("pre")).toContainText("asset:未知资产组");
     const audited = JSON.parse(await scope.locator("pre").innerText());
-    expect(audited.required_facets.entity).toEqual(["asset:未知资产组"]);
-    expect(audited.optional_facets.entity).toBeUndefined();
-    expect(audited.context_only_required_facet_keys).toContain("entity");
+    expect(audited.required_facets).toEqual(
+      fixture.applicability.required_facets,
+    );
+    expect(audited.optional_facets).toEqual(
+      fixture.applicability.optional_facets,
+    );
+    expect(audited.context_only_required_facet_keys).toEqual(
+      fixture.applicability.context_only_required_facet_keys,
+    );
+    expect(audited.reuse_conditions).toEqual([
+      {
+        facet_key: "entity",
+        value_prefix: "asset",
+        values: ["asset:未知资产组"],
+      },
+    ]);
+    expect(audited.selected_behavior_components).toEqual(selectedBehavior);
+    expect(audited.policy_version).toBe("soc.memory_applicability_policy.v3");
+    await scope
+      .getByRole("checkbox", { name: "限制直接复用 来源 IP 10.0.0.1" })
+      .check();
+    await scope
+      .getByRole("checkbox", { name: "限制直接复用 目标 IP 10.0.0.2" })
+      .check();
+    const split = JSON.parse(await scope.locator("pre").innerText());
+    expect(split.reuse_conditions).toContainEqual({
+      facet_key: "role_entity",
+      value_prefix: "source",
+      values: ["source:10.0.0.1"],
+    });
+    expect(split.reuse_conditions).toContainEqual({
+      facet_key: "role_entity",
+      value_prefix: "destination",
+      values: ["destination:10.0.0.2"],
+    });
+    await scope.getByRole("button", { name: "移除来源 IP限制" }).click();
+    await scope.getByRole("button", { name: "移除目标 IP限制" }).click();
     await asset.uncheck();
     await asset.check();
     await scope
@@ -272,6 +351,7 @@ for (const width of [1440, 390]) {
       "source_type",
     ]);
     const payload = (await request).postDataJSON();
+    expect(payload.selected_behavior_components).toEqual(selectedBehavior);
     expect(payload.promoted_facet_values).toEqual({
       entity: ["asset:未知资产组"],
       source_type: ["ndr"],
@@ -283,10 +363,24 @@ for (const width of [1440, 390]) {
       .getByRole("button", { name: "确认并启用经验", exact: true })
       .click();
     const reviewed = (await reviewRequest).postDataJSON().record_applicability;
-    expect(reviewed.required_facets.entity).toEqual(["asset:未知资产组"]);
-    expect(reviewed.required_facets.source_type).toEqual(["ndr"]);
-    expect(reviewed.optional_facets.entity).toBeUndefined();
-    expect(reviewed.context_only_required_facet_keys).toContain("entity");
+    expect(reviewed.selected_behavior_components).toEqual(selectedBehavior);
+    expect(reviewed.required_facets).toEqual(
+      fixture.applicability.required_facets,
+    );
+    expect(reviewed.optional_facets).toEqual(
+      fixture.applicability.optional_facets,
+    );
+    expect(reviewed.context_only_required_facet_keys).toEqual(
+      fixture.applicability.context_only_required_facet_keys,
+    );
+    expect(reviewed.reuse_conditions).toEqual([
+      {
+        facet_key: "entity",
+        value_prefix: "asset",
+        values: ["asset:未知资产组"],
+      },
+      { facet_key: "source_type", value_prefix: null, values: ["ndr"] },
+    ]);
   });
 }
 
@@ -317,17 +411,16 @@ test("confirmed record uses the same scope without editable restrictions", async
   );
   await page.goto("/workspace/soc/memory/records/MEM-ALPHA-001");
   const scope = page.getByRole("region", { name: "经验适用范围" });
+  await expect(scope.getByText("拒绝服务", { exact: true })).toBeVisible();
+  await expect(scope.getByRole("checkbox")).toHaveCount(5);
+  for (const box of await scope.getByRole("checkbox").all())
+    await expect(box).toBeDisabled();
   await expect(
-    scope.getByText("攻击类型：拒绝服务", { exact: true }),
-  ).toBeVisible();
-  await expect(scope.getByRole("checkbox")).toHaveCount(0);
-  await expect(
-    scope.getByText("网络检测与响应（NDR）", { exact: true }),
+    scope.getByText("未额外限定 IP、主机或账号。", { exact: true }),
   ).toBeVisible();
   await expect(
-    scope.getByText("资产组：未知资产组", { exact: true }),
-  ).toBeVisible();
-  await expect(scope.getByText("未增加为限制", { exact: true })).toBeVisible();
+    scope.getByText("增加直接复用限制", { exact: true }),
+  ).toHaveCount(0);
   await expect(scope.locator("pre")).not.toBeVisible();
   await expect(
     page.getByText(

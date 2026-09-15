@@ -139,7 +139,7 @@ def _select_memory_reasoning_context(
         required = scopes[item.context_ref]
         relevant = [other for other in exact if any(required.get(key, set()) & scopes[other.context_ref].get(key, set()) for key in scope_keys)]
         verdicts = {other.memory_comparison.reviewed_verdict for other in relevant}
-        preferred = [other for other in relevant if scopes[other.context_ref].get("behavior_fingerprint")]
+        preferred = [other for other in relevant if scopes[other.context_ref].get("behavior_fingerprint") or other.memory_comparison.selected_behavior_components]
         if not preferred or len(verdicts) != 1 or not verdicts <= definite or comparison.reviewed_verdict in verdicts:
             selected.append(item)
             continue
@@ -340,8 +340,14 @@ def _memory_context_comparison(
         reviewed_verdict=match.record.reviewed_verdict,
         decision_directive_applicable=directive_applicable,
         shared_facets=shared,
+        selected_behavior_components=[v[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for v in (report.selected_behavior_components if report else [])[:40]],
+        missing_behavior_components=[v[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for v in (report.missing_behavior_components if report else [])[:40]],
         current_only_facets=current_only,
         memory_only_facets=memory_only,
+        missing_reuse_conditions=[
+            item.model_copy(update={"values": [value[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for value in item.values[:_MAX_MODEL_COMPARISON_VALUES]]})
+            for item in (report.missing_reuse_conditions[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else [])
+        ],
         matched_required_facets=(_bounded_facets(report.matched_required_facets) if report is not None else {}),
         missing_required_facet_keys=(report.missing_required_facet_keys[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else []),
         excluded_facet_hits=(_bounded_facets(report.excluded_facet_hits) if report is not None else {}),

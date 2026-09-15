@@ -165,10 +165,10 @@ def test_memory_lesson_drafter_builds_high_quality_askbob_draft_without_persiste
         "必须匹配「行为指纹（behavior_fingerprint）」：reverse-shell-askbob",
         "必须匹配「检测键（detection_key）」：pingan:ndr:reverse-shell",
         "必须匹配「运行环境（environment）」：生产环境（prd）",
-        "必须匹配「服务地址（service_uri）」：paic.com.cn/pws/askbob-gpt",
+        "仅直接复用结论时：必须匹配「服务地址（service_uri）」：paic.com.cn/pws/askbob-gpt",
     ]
     assert draft.lesson.invalidation_conditions[:2] == [
-        "任一系统必需匹配条件与当前告警不一致时，该经验失效。",
+        "直接复用条件不满足时，不直接沿用结论；符合相关经验检索条件时，仍可比较差异后供模型参考。",
         "当前告警出现与已审核业务结论冲突的新证据或攻击影响时，必须重新研判。",
     ]
     assert draft.reviewer_verdict is Verdict.FALSE_POSITIVE
@@ -276,7 +276,7 @@ def test_memory_lesson_drafter_drops_only_empty_unknown_top_level_field() -> Non
     assert draft.provenance.repair_applied is True
     assert draft.provenance.repair_actions == ["drop_empty_unknown_field:generalization_boundaries_text"]
     assert draft.lesson.invalidation_conditions == [
-        "任一系统必需匹配条件与当前告警不一致时，该经验失效。",
+        "直接复用条件不满足时，不直接沿用结论；符合相关经验检索条件时，仍可比较差异后供模型参考。",
         "当前告警出现与已审核业务结论冲突的新证据或攻击影响时，必须重新研判。",
     ]
 

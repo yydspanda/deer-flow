@@ -913,6 +913,12 @@ SOC memory tracking 约束：
 - Pattern candidate 必须携带 profile-owned `SocMemoryApplicabilitySpec`。它包含 profile/version/feature-schema
   identity 以及 exact required/optional/excluded facets；query 只能由 composition root 选择同一 profile，调用方
   不得通过请求参数选择 profile。Applicability 与 ranking 独立，非 `applicable` 结果不能触发 typed directive。
+- Applicability policy v3 可以保存非空 `selected_behavior_components`，只能从已注册 Profile 核验的
+  原指纹成分选择，归一化后去重排序。直接复用要求所选行为逐项全部满足，不再要求来源完整 hash
+  相等；原 hash 保留用于 lineage/分组，`null` 保持旧匹配。固定范围、Profile、排除条件和有效期不变。
+  起草、预览、确认、检索及治理范围比较必须消费同一选择。冲突检查不能用不同原 hash 把已重叠的
+  选择范围认作互斥；正向行为选择不同也不自动证明范围互斥。`reuse_conditions` 只收窄直接复用，
+  同语义条件多值 OR、不同条件及源/目标角色 AND，不改变已有参考召回门槛。
 - `soc_memory_pattern_observations` 是 observation store，migration 为
   `0021_memory_pattern_observations`；它不是 confirmed memory 表。`soc memory patterns list|replay` 只能调用
   `SocMemoryPatternService` 做只读 inspection/recomputation，replay 固定

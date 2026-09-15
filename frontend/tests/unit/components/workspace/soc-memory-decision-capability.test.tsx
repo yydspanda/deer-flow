@@ -21,7 +21,7 @@ describe("SocMemoryDecisionCapability", () => {
     expect(html).toContain('data-memory-use-mode="reference_only"');
     expect(html).toContain('data-memory-use-primary="true"');
     expect(html).toContain("仅供研判参考");
-    expect(html).toContain("不会直接改变最终结论");
+    expect(html).toContain("不会由程序直接套用历史结论");
   });
 
   test("keeps exact conclusion reuse visually distinct", () => {

@@ -10,6 +10,7 @@ from soc_agent.memory.profiles import SocMemoryProfileRegistry
 from soc_agent.memory.scope_view import build_memory_scope_view
 from soc_agent.memory.scoring import evaluate_memory_applicability, score_memory_record
 from soc_agent.pipeline.extractor import extract_entities
+from soc_agent.utils.hashing import stable_hash
 
 
 def sample():
@@ -107,6 +108,26 @@ def test_core_components_explain_hash_without_claiming_supplementary_values():
     option = next(option for option in project(spec, facets).options if option.key == "behavior_component")
     assert option.kind == "additional"
     assert option.values == ["process:extra.exe"]
+
+
+def test_core_and_weak_aliases_are_not_offered_as_duplicate_editable_limits():
+    spec, facets = sample()
+    for key in ("behavior_component_core", "behavior_component_weak"):
+        facets[key] = list(facets["behavior_component"])
+        spec.optional_facets[key] = list(facets[key])
+    view = project(spec, facets)
+    assert [option.key for option in view.options if option.kind == "additional"] == ["source_type", "entity"]
+
+
+def test_semantic_feature_profile_verifies_its_own_fingerprint_version():
+    spec, facets = sample()
+    profile = PingAnSocMemoryProfile(semantic_features=True)
+    spec.profile_version = profile.identity.profile_version
+    spec.feature_schema_version = profile.identity.feature_schema_version
+    spec.required_facets["behavior_fingerprint"] = [stable_hash({"schema_version": "pingan.soc.memory_behavior_fingerprint.v6", "components": sorted(facets["behavior_component"])})]
+    view = build_memory_scope_view(spec, facets, registry=SocMemoryProfileRegistry([profile]))
+    assert view.required_details["behavior_fingerprint"]["behavior_component"] == sorted(facets["behavior_component"])
+    assert not view.unresolved_fingerprint_keys
 
 
 def test_rule_entity_hash_is_the_existing_detection_identity_not_new_information():

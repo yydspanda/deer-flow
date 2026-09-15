@@ -8,7 +8,9 @@ from soc_agent.contracts import (
     SocMemoryCandidateStatus,
     Verdict,
 )
+from soc_agent.memory.behavior_scope import select_memory_behavior_components
 from soc_agent.memory.lessons import promote_memory_applicability_facets
+from soc_agent.memory.profiles import SocMemoryProfileRegistry
 from soc_agent.protocols import MemoryBusinessLessonDrafter, MemoryCandidateRepository
 
 from .access_control import SOC_MEMORY_REVIEWER_ROLES, require_actor_roles
@@ -31,10 +33,12 @@ class SocMemoryLessonDraftService:
         candidate_repository: MemoryCandidateRepository,
         drafter: MemoryBusinessLessonDrafter,
         governance_service: SocMemoryService | None = None,
+        profile_registry: SocMemoryProfileRegistry | None = None,
     ) -> None:
         self._candidate_repository = candidate_repository
         self._drafter = drafter
         self._governance_service = governance_service
+        self._profile_registry = profile_registry or SocMemoryProfileRegistry()
 
     def draft_business_lesson(
         self,
@@ -44,6 +48,7 @@ class SocMemoryLessonDraftService:
         reviewer_context: str | None = None,
         promoted_facet_keys: list[str] | None = None,
         promoted_facet_values: dict[str, list[str]] | None = None,
+        selected_behavior_components: list[str] | None = None,
         context: ServiceRequestContext | None = None,
     ) -> SocMemoryBusinessLessonDraft:
         """Generate a non-persisted draft without changing candidate state."""
@@ -70,6 +75,7 @@ class SocMemoryLessonDraftService:
                 promoted_facet_keys or [],
                 promoted_facet_values,
             )
+            draft_applicability = select_memory_behavior_components(draft_applicability, candidate.facets, selected_behavior_components, registry=self._profile_registry)
         except ValueError as exc:
             raise SocServiceConflictError(str(exc)) from exc
         metadata = {key: value for key, value in candidate.metadata.items() if key != "governance_comparison"}
@@ -79,6 +85,7 @@ class SocMemoryLessonDraftService:
                 reviewer_verdict=reviewer_verdict,
                 promoted_facet_keys=promoted_facet_keys,
                 promoted_facet_values=promoted_facet_values,
+                selected_behavior_components=selected_behavior_components,
             )
             metadata["governance_comparison"] = comparison.model_dump(mode="json")
         draft_candidate = candidate.model_copy(update={"applicability": draft_applicability, "metadata": metadata})

@@ -85,7 +85,7 @@ export function memoryFutureUseStateCopy(
       return {
         label: "仅供研判参考",
         detail:
-          "新告警匹配后可将它作为历史经验交给模型，但不会直接改变最终结论。",
+          "模型结合经验和当前告警重新判断，可以采纳经验结论，但不会由程序直接套用历史结论。",
         tone: "reference",
       };
   }
@@ -137,7 +137,7 @@ export function memoryRunUsageCopy(
   }
   return {
     label: "仅作研判参考",
-    detail: `本次参考 ${referencedCount} 条相似经验，但没有直接改变最终结论。`,
+    detail: `本次向模型提供 ${referencedCount} 条相似经验，由模型结合当前告警判断，未由程序直接套用历史结论。`,
     tone: "reference",
   };
 }
@@ -147,7 +147,7 @@ export function memoryAvailabilityCopy(retrievalEnabled: boolean) {
     ? {
         label: "已开放给新告警",
         detail:
-          "新告警可以找到这条经验；只有完整满足审核范围时，已审核结论才可能参与最终判断。",
+          "新告警可召回这条经验供模型研判；满足复用条件且允许直接复用时，系统自动沿用审核结论。",
       }
     : {
         label: "暂停用于新告警",
@@ -166,6 +166,6 @@ export function memoryDecisionCapabilityCopy(hasDecisionDirective: boolean) {
     : {
         label: "仅供研判参考",
         detail:
-          "这条经验可以帮助模型理解当前告警，但不会直接改变最终结论或授权外部动作。",
+          "模型结合经验和当前告警重新判断，可以采纳经验结论，但不会由程序直接套用历史结论。",
       };
 }

@@ -156,6 +156,10 @@ def evaluate_memory_anchor_gate(
 
     allowed_keys = memory_strong_anchor_keys(record.memory_type)
     anchors = {key: values for key, values in matched_facets.items() if key in allowed_keys and values}
+    selected = record.applicability.selected_behavior_components if record.applicability else None
+    query_facets = normalize_memory_facets(query.facets)
+    if selected and set(selected) <= query_facets.get("behavior_component_core", query_facets.get("behavior_component", set())):
+        anchors["behavior_component"] = list(selected)
     if not anchors:
         return False, [f"anchor_gate:missing_for_{record.memory_type.value}"], {}
     reasons = [f"anchor:{key}={','.join(values[:3])}" for key, values in sorted(anchors.items())]
@@ -169,12 +173,22 @@ def evaluate_memory_applicability(
 ) -> SocMemoryApplicabilityReport:
     """Evaluate the reviewer-owned exact scope independently of ranking."""
 
-    spec = record.applicability
+    return evaluate_memory_scope(record.applicability, record.memory_type, query, matched_facets)
+
+
+def evaluate_memory_scope(
+    spec: SocMemoryApplicabilitySpec | None,
+    memory_type: SocMemoryCandidateType,
+    query: SocMemoryQuery,
+    matched_facets: dict[str, list[str]],
+) -> SocMemoryApplicabilityReport:
+    """Pure scope evaluation shared by retrieval and offline draft inspection."""
+
     if spec is None:
         return SocMemoryApplicabilityReport(
             status=SocMemoryApplicabilityStatus.LEGACY_ANCHOR_ONLY,
             policy_version="soc.memory_applicability_policy.legacy",
-            matched_strong_anchor_count=len(set(matched_facets) & memory_strong_anchor_keys(record.memory_type)),
+            matched_strong_anchor_count=len(set(matched_facets) & memory_strong_anchor_keys(memory_type)),
             reason_codes=["legacy_record_without_typed_applicability"],
         )
 
@@ -195,9 +209,31 @@ def evaluate_memory_applicability(
     query_facets = normalize_memory_facets(query.facets)
     matched_required = _facet_overlaps(spec.required_facets, query_facets)
     missing_required = sorted(set(spec.required_facets) - set(matched_required))
+    original_matched_required = dict(matched_required)
+    original_missing_required = list(missing_required)
+    selected_behavior = set(spec.selected_behavior_components or [])
+    current_behavior = query_facets.get("behavior_component_core", query_facets.get("behavior_component", set()))
+    missing_behavior = sorted(selected_behavior - current_behavior)
+    if spec.selected_behavior_components is not None:
+        matched_required.pop("behavior_fingerprint", None)
+        missing_required = [key for key in missing_required if key != "behavior_fingerprint"]
+        if missing_behavior:
+            missing_required.append("behavior_component")
+        else:
+            matched_required["behavior_component"] = sorted(selected_behavior)
     matched_optional = _facet_overlaps(spec.optional_facets, query_facets)
+    matched_reuse = {}
+    missing_reuse = []
+    for condition in spec.reuse_conditions:
+        overlap = sorted({v.casefold() for v in condition.values} & query_facets.get(condition.facet_key, set()))
+        if overlap:
+            matched_reuse[condition.condition_key] = overlap
+        else:
+            missing_reuse.append(condition)
     excluded_hits = _facet_overlaps(spec.excluded_facets, query_facets)
-    matched_strong_count = len(set(memory_strong_anchor_keys(record.memory_type)) & (set(matched_required) | set(matched_optional)))
+    matched_strong_count = len(set(memory_strong_anchor_keys(memory_type)) & (set(matched_required) | set(matched_optional)))
+    if selected_behavior and not missing_behavior:
+        matched_strong_count += 1  # Selected, reviewed behavior replaces the fingerprint anchor.
     reason_codes = list(profile_reasons)
     if missing_required:
         reason_codes.append("required_facets_missing")
@@ -208,14 +244,27 @@ def evaluate_memory_applicability(
     if matched_strong_count < spec.minimum_strong_anchor_matches:
         reason_codes.append("strong_anchor_threshold_not_met")
 
+    base_exact = not reason_codes
+    if missing_reuse:
+        reason_codes.append("exact_reuse_condition_not_met")
+
     context_only_allowed = _context_only_applicability_satisfied(
         spec,
-        matched_required=matched_required,
-        missing_required=missing_required,
+        matched_required=original_matched_required,
+        missing_required=original_missing_required,
         matched_optional=matched_optional,
         profile_reasons=profile_reasons,
         excluded_hits=excluded_hits,
     )
+    # Exact base evidence is also sufficient context when only a reuse limit fails.
+    context_only_allowed = context_only_allowed or bool(base_exact and missing_reuse)
+    if selected_behavior and missing_behavior and not profile_reasons and not excluded_hits:
+        # A matching stored fingerprint is historical context, not proof that every
+        # newly selected component exists in the current typed projection.
+        original_strong_count = len(set(memory_strong_anchor_keys(memory_type)) & (set(original_matched_required) | set(matched_optional)))
+        context_only_allowed = context_only_allowed or (not original_missing_required and len(matched_optional) >= spec.minimum_optional_matches and original_strong_count >= spec.minimum_strong_anchor_matches)
+    if base_exact and not missing_reuse:
+        context_only_allowed = False
     if context_only_allowed:
         reason_codes.append("context_only_similarity_satisfied")
 
@@ -234,6 +283,11 @@ def evaluate_memory_applicability(
         matched_required_facets=matched_required,
         missing_required_facet_keys=missing_required,
         matched_optional_facets=matched_optional,
+        matched_reuse_conditions=matched_reuse,
+        missing_reuse_conditions=missing_reuse,
+        selected_behavior_components=sorted(selected_behavior),
+        matched_behavior_components=sorted(selected_behavior & current_behavior),
+        missing_behavior_components=missing_behavior,
         excluded_facet_hits=excluded_hits,
         matched_strong_anchor_count=matched_strong_count,
         context_only_allowed=context_only_allowed,
@@ -322,6 +376,7 @@ def _metadata_text(query: SocMemoryQuery, key: str) -> str | None:
 __all__ = [
     "evaluate_memory_anchor_gate",
     "evaluate_memory_applicability",
+    "evaluate_memory_scope",
     "memory_facet_weight",
     "memory_strong_anchor_keys",
     "normalize_memory_facets",

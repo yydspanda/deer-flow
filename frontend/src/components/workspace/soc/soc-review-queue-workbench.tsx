@@ -105,6 +105,7 @@ import type {
   SocUnifiedInvestigationView,
   SocVerdict,
 } from "@/core/soc";
+import { withMemoryReuseConditions } from "@/core/soc/memory-reuse-scope";
 import { cn } from "@/lib/utils";
 
 import { SocMemoryGovernancePanel } from "./soc-memory-governance-panel";
@@ -285,6 +286,7 @@ interface MemoryCandidateReviewDraft {
   applyToFutureMatches: boolean;
   confirmedVerdict: SocVerdict | null;
   promotedFacetValues: Record<string, string[]>;
+  selectedBehaviorComponents: string[] | null;
   lessonDetectionScenario: string;
   lessonObservedEvent: string;
   lessonConclusion: string;
@@ -299,13 +301,18 @@ interface MemoryCandidateReviewDraft {
 }
 
 function defaultMemoryCandidateReviewDraft(
-  _candidate: SocMemoryCandidate,
+  candidate: SocMemoryCandidate,
 ): MemoryCandidateReviewDraft {
   return {
     businessContext: "",
     applyToFutureMatches: false,
     confirmedVerdict: null,
     promotedFacetValues: {},
+    selectedBehaviorComponents:
+      candidate.applicability?.selected_behavior_components ??
+      candidate.scope_view?.required_details.behavior_fingerprint
+        ?.behavior_component ??
+      null,
     lessonDetectionScenario: "",
     lessonObservedEvent: "",
     lessonConclusion: "",
@@ -325,33 +332,17 @@ function reviewedMemoryApplicability(
   draft: MemoryCandidateReviewDraft,
 ): SocMemoryApplicabilitySpec | undefined {
   const base = candidate.applicability;
-  if (!base || Object.keys(draft.promotedFacetValues).length === 0)
+  if (
+    !base ||
+    (Object.keys(draft.promotedFacetValues).length === 0 &&
+      draft.selectedBehaviorComponents === null)
+  )
     return undefined;
-  const promoted = Object.keys(draft.promotedFacetValues).filter(
-    (key) => base.optional_facets[key] !== undefined,
+  return withMemoryReuseConditions(
+    base,
+    draft.promotedFacetValues,
+    draft.selectedBehaviorComponents,
   );
-  if (promoted.length === 0) return undefined;
-  const optionalFacets = Object.fromEntries(
-    Object.entries(base.optional_facets).filter(
-      ([key]) => !promoted.includes(key),
-    ),
-  );
-  return {
-    ...base,
-    required_facets: {
-      ...base.required_facets,
-      ...Object.fromEntries(
-        promoted.map((key) => [key, draft.promotedFacetValues[key]!]),
-      ),
-    },
-    optional_facets: optionalFacets,
-    context_only_required_facet_keys:
-      base.context_only_required_facet_keys.length > 0
-        ? Array.from(
-            new Set([...base.context_only_required_facet_keys, ...promoted]),
-          ).sort()
-        : [],
-  };
 }
 
 function reviewedLessonItems(value: string): string[] {
@@ -389,10 +380,26 @@ function reviewedMemoryBusinessLesson(
   );
   const handlingGuidance = reviewedLessonItems(draft.lessonHandlingGuidance);
   const applicabilityConditions = applicability
-    ? Object.entries(applicability.required_facets).map(([key, values]) =>
-        memoryApplicabilityCondition(key, values),
-      )
+    ? Object.entries(applicability.required_facets)
+        .filter(
+          ([key]) =>
+            !(
+              key === "behavior_fingerprint" &&
+              applicability.selected_behavior_components != null
+            ),
+        )
+        .map(([key, values]) => memoryApplicabilityCondition(key, values))
     : [];
+  if (applicability?.selected_behavior_components) {
+    applicabilityConditions.push(
+      `直接复用时，以下已审核核心行为必须逐项全部满足：${applicability.selected_behavior_components.join("；")}`,
+    );
+  }
+  for (const item of applicability?.reuse_conditions ?? []) {
+    applicabilityConditions.push(
+      `仅直接复用结论时：${memoryApplicabilityCondition(item.facet_key, item.values)}`,
+    );
+  }
   if (applicability?.minimum_optional_matches) {
     applicabilityConditions.push(
       `还必须至少匹配 ${applicability.minimum_optional_matches} 组经审核的可选条件。`,
@@ -2086,6 +2093,7 @@ function MemoryCandidateSection({
                     candidateId={candidate.candidate_id}
                     verdict={draft.confirmedVerdict}
                     promotedFacets={draft.promotedFacetValues}
+                    selectedBehavior={draft.selectedBehaviorComponents}
                     replacement={draft.replacement}
                     onReplace={(replacement) =>
                       onReviewDraftChange(candidate, { replacement })
@@ -2126,6 +2134,15 @@ function MemoryCandidateSection({
                     spec={applicability}
                     view={candidate.scope_view}
                     promoted={draft.promotedFacetValues}
+                    selectedBehavior={draft.selectedBehaviorComponents}
+                    onSelectBehavior={
+                      editable
+                        ? (selectedBehaviorComponents) =>
+                            onReviewDraftChange(candidate, {
+                              selectedBehaviorComponents,
+                            })
+                        : undefined
+                    }
                     disabled={busy || !editable}
                     onPromote={
                       editable
@@ -2405,7 +2422,9 @@ function MemoryCandidateSection({
                             3. 选择未来用途
                           </div>
                           <p className="text-muted-foreground mt-1 max-w-2xl text-xs leading-5">
-                            经验开放给新告警后，系统可以找到它；这里决定找到后是仅供模型参考，还是在全部必需条件精确匹配时复用已审核结论。
+                            {draft.applyToFutureMatches
+                              ? "满足已审核的复用条件时，系统自动沿用专家结论，并记录复用依据。"
+                              : "模型结合经验和当前告警重新判断，可以采纳经验中的结论，但不会由程序直接套用历史结论。"}
                           </p>
                         </div>
                         <label className="flex items-center gap-3 border bg-white px-3 py-2 text-xs font-medium dark:bg-zinc-950">
@@ -2424,7 +2443,7 @@ function MemoryCandidateSection({
                           <span>
                             {draft.applyToFutureMatches
                               ? "精确匹配时复用审核结论"
-                              : "仅供研判参考，不改判"}
+                              : "仅供研判参考"}
                           </span>
                         </label>
                       </div>
@@ -3479,7 +3498,9 @@ export function SocReviewQueueWorkbench({
         ...(current[candidate.candidate_id] ??
           defaultMemoryCandidateReviewDraft(candidate)),
         ...patch,
-        ...(patch.promotedFacetValues ? { replacement: null } : {}),
+        ...(patch.promotedFacetValues || patch.selectedBehaviorComponents
+          ? { replacement: null }
+          : {}),
       },
     }));
   };
@@ -3585,6 +3606,7 @@ export function SocReviewQueueWorkbench({
           reviewer_context: current.businessContext.trim() || null,
           promoted_facet_keys: Object.keys(current.promotedFacetValues),
           promoted_facet_values: current.promotedFacetValues,
+          selected_behavior_components: current.selectedBehaviorComponents,
         },
       });
       if (result.reviewer_verdict !== current.confirmedVerdict) {

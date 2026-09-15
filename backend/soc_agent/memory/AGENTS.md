@@ -63,9 +63,22 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   opaque fingerprints. Remove only redundant values, not entire mixed groups. Review may
   select a subset of an optional group's values via `promoted_facet_values`; drafting and
   governance preview share the narrowing helper, and confirmation validates the complete
-  narrowed contract. All selected groups become required for exact and context-only use;
-  values within a group remain OR. Similarity keys stay optional. Never widen the stored
-  candidate scope or silently change historical Memory records.
+  narrowed contract. New selections use applicability policy v2 `reuse_conditions`:
+  AND between conditions, OR within values; split entity/role prefixes (source AND destination).
+  These limits gate direct verdict reuse only; a missed limit must not block otherwise eligible
+  context-only reference. Base scope, tenant/profile/exclusions and saved legacy v1 restrictions
+  remain unchanged. Record scope identity, governance comparisons and model comparison metadata
+  include the new limits. Core/strong/weak aliases are not separate editable controls. Never silently
+  widen saved conditions or reinterpret old mixed-OR groups as AND.
+  Policy v3 `selected_behavior_components` is an explicit reviewer-selected subset of
+  Profile-verified fingerprint ingredients. All selected values must occur, independently
+  of order or duplicates. The original required fingerprint remains lineage only for v3;
+  directive keys, scope identity, overlap and model comparison use the selected behavior.
+  Null preserves legacy full-hash matching. Drafting, governance preview and confirmation
+  share the server validation; at least one verified behavior must remain. Fixed scope,
+  versions and exclusions cannot change. Exact reviewed v3 scopes take precedence over
+  Profile filters derived from now-unselected source behavior; reference-only retrieval
+  keeps the existing filters. Never silently activate or widen an existing record.
   A `rule:<16-hex>` entity is the shared hash of the canonical detection key,
   not an independent vendor rule ID. PingAn omits that duplicate optional value
   when constructing a scope with one required detector; verified old scope views
@@ -128,7 +141,8 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   cannot override the reviewer selection.
 - Runtime restores applicability from the candidate contract. The model cannot widen
   scope, invent facet values, persist the draft, enable retrieval, or approve the
-  candidate. Reviewers may only promote known optional facets to required.
+  candidate. Reviewers may select verified core behaviors and add known optional
+  reuse-only limits; generated prose cannot edit these typed conditions.
 - Human-facing applicability prose uses localized labels plus original facet keys/values;
   the typed applicability object remains authoritative. Legacy prose may be localized
   only at read time and must not be rewritten in storage.

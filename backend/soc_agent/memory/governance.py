@@ -14,6 +14,17 @@ def normalized_facets(values: dict[str, list[str]]) -> dict[str, list[str]]:
     return {key.casefold(): sorted({v.strip().casefold() for v in items}) for key, items in sorted(values.items())}
 
 
+def reuse_conditions(spec: SocMemoryApplicabilitySpec) -> dict[str, list[str]]:
+    return normalized_facets({item.condition_key: item.values for item in spec.reuse_conditions})
+
+
+def required_scope(spec: SocMemoryApplicabilitySpec) -> dict[str, list[str]]:
+    values = normalized_facets(spec.required_facets)
+    if spec.selected_behavior_components is not None:
+        values.pop("behavior_fingerprint", None)
+    return values
+
+
 def scope_identity(item: SocMemoryCandidate | SocMemoryCandidateCreateCommand) -> str | None:
     spec = item.applicability
     if spec is None or not spec.required_facets.get("behavior_fingerprint"):
@@ -23,11 +34,13 @@ def scope_identity(item: SocMemoryCandidate | SocMemoryCandidateCreateCommand) -
             "tenant_scope": item.tenant_scope,
             "tenant_id": item.tenant_id,
             "profile": [spec.profile_id, spec.profile_version, spec.feature_schema_version],
-            "required": normalized_facets(spec.required_facets),
+            "required": required_scope(spec),
+            **({"selected_behavior_components": sorted(set(spec.selected_behavior_components))} if spec.selected_behavior_components is not None else {}),
             "optional": normalized_facets(spec.optional_facets) if spec.minimum_optional_matches else {},
             "minimum_optional_matches": spec.minimum_optional_matches,
             "minimum_strong_anchor_matches": spec.minimum_strong_anchor_matches,
             "excluded": normalized_facets(spec.excluded_facets),
+            **({"reuse_conditions": reuse_conditions(spec)} if spec.reuse_conditions else {}),
             "data_class": item.metadata.get("data_class"),
         }
     )
@@ -38,7 +51,7 @@ def scope_relation(left: SocMemoryApplicabilitySpec | None, right: SocMemoryAppl
         return "unknown"
     if (left.profile_id, left.profile_version, left.feature_schema_version) != (right.profile_id, right.profile_version, right.feature_schema_version):
         return "disjoint"
-    a, b = normalized_facets(left.required_facets), normalized_facets(right.required_facets)
+    a, b = required_scope(left), required_scope(right)
     ax, bx = normalized_facets(left.excluded_facets), normalized_facets(right.excluded_facets)
     profile = registry.get(left.profile_id)
     # Only a Profile can promise a facet has one value per alert. Entity lists cannot.
@@ -49,7 +62,14 @@ def scope_relation(left: SocMemoryApplicabilitySpec | None, right: SocMemoryAppl
             return "disjoint"
         if key in exclusive and av and bv and not av & bv:
             return "disjoint"
-    if a == b and ax == bx and left.minimum_optional_matches == right.minimum_optional_matches and left.minimum_strong_anchor_matches == right.minimum_strong_anchor_matches:
+    if (
+        a == b
+        and ax == bx
+        and left.selected_behavior_components == right.selected_behavior_components
+        and reuse_conditions(left) == reuse_conditions(right)
+        and left.minimum_optional_matches == right.minimum_optional_matches
+        and left.minimum_strong_anchor_matches == right.minimum_strong_anchor_matches
+    ):
         if not left.minimum_optional_matches or normalized_facets(left.optional_facets) == normalized_facets(right.optional_facets):
             return "same"
     return "overlap"
@@ -89,11 +109,18 @@ def preview_governance(candidate: SocMemoryCandidate, records: list[SocMemoryRec
             continue
         verdict = assessed_verdict(record)
         conclusion_relation = "undetermined" if reviewer_verdict in {None, Verdict.UNKNOWN, Verdict.SUSPICIOUS} or verdict in {None, Verdict.UNKNOWN, Verdict.SUSPICIOUS} else "agrees" if verdict == reviewer_verdict else "differs"
-        a = candidate.applicability.required_facets if candidate.applicability else {}
-        b = record.applicability.required_facets if record.applicability else {}
+        a = required_scope(candidate.applicability) if candidate.applicability else {}
+        b = required_scope(record.applicability) if record.applicability else {}
+        if candidate.applicability and candidate.applicability.selected_behavior_components is not None:
+            a["selected_behavior_components"] = candidate.applicability.selected_behavior_components
+        if record.applicability and record.applicability.selected_behavior_components is not None:
+            b["selected_behavior_components"] = record.applicability.selected_behavior_components
         differences = [
             MemoryScopeDifference(facet=key, candidate_values=a.get(key, []), memory_values=b.get(key, [])) for key in sorted(set(a) | set(b)) if normalized_facets({key: a.get(key, [])}) != normalized_facets({key: b.get(key, [])})
         ]
+        ac = reuse_conditions(candidate.applicability) if candidate.applicability else {}
+        bc = reuse_conditions(record.applicability) if record.applicability else {}
+        differences.extend(MemoryScopeDifference(facet=f"reuse:{key}", candidate_values=ac.get(key, []), memory_values=bc.get(key, [])) for key in sorted(set(ac) | set(bc)) if ac.get(key) != bc.get(key))
         related.append(
             RelatedGovernedMemory(
                 memory_id=record.memory_id,

@@ -65,6 +65,12 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > before the held-out alert is unlocked. After generation, the candidate view keeps all six final Business Lesson
 > sections visible: conclusion, rationale, boundaries, invalidation conditions, and handling
 > guidance, while clearly separating machine-derived applicability from analyst-owned facts.
+> Memory review keeps rule/source/data scope read-only and displays every core behavior as a
+> default-selected checkbox. Reviewers may remove a behavior from direct reuse; the backend matches
+> all selected behaviors without requiring the original full fingerprint. Hashes remain in technical
+> details for grouping/audit, with order-independent normalization. Additional IP/host/account limits narrow direct
+> verdict reuse, without blocking otherwise eligible reference Memory. Source and destination limits
+> are separate AND conditions. Existing reviewed legacy scopes keep their original semantics.
 > Confirmed Memory keeps temporary pause/reopen under `管理使用状态`; the terminal
 > `废止这条经验` action requires an explicit audited reason and disables both reference and
 > decision reuse without deleting historical evidence.

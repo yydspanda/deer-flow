@@ -3,6 +3,26 @@
 This directory contains offline, replay-stable validation for memory admission
 and retrieval. It does not call an LLM or an internal PingAn service.
 
+`validate_memory_reuse_scope.py` opens the operational candidate store read-only and
+copies one network candidate into four simulated source/destination/service variants.
+It exercises the production scope matcher, not Top-K ranking, model verdicts, or activation.
+No candidate is confirmed or edited. The protected output file must not already exist.
+Add `--behavior-selection` to also compare all selected core behaviors against an explicit
+SIP/5060 deselection, with a query that has a different full fingerprint. It checks selection
+order/duplicate invariance and the production policy v3 matcher. These are simulated scope
+variants, not measured model precision or live Memory publication.
+
+```bash
+backend/.venv/bin/python validation/compact_zeus/memory/validate_memory_reuse_scope.py \
+  --database backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite \
+  --candidate-id MC-19AAC4B26DFB \
+  --output backend/.deer-flow/soc-validation/memory-reuse-scope-20260915/comparison.json
+```
+
+The selected-behavior run is saved separately under
+`backend/.deer-flow/soc-validation/memory-behavior-selection-20260915/` with actual candidate
+desktop/mobile read-only screenshots. It does not overwrite the earlier v2 experiment.
+
 `validate_memory_context_precedence.py` reads an exported DEV audit and Memory
 inventory, replays production retrieval/projection in an in-memory repository, and
 compares reference-only against a simulated opposite exact lesson, with and without

@@ -914,6 +914,7 @@ export async function previewSocMemoryGovernance(
     reviewer_verdict: SocVerdict | null;
     promoted_facet_keys: string[];
     promoted_facet_values?: Record<string, string[]>;
+    selected_behavior_components?: string[] | null;
   },
   context?: SocRequestContext,
 ): Promise<SocMemoryGovernancePreview> {

@@ -7,6 +7,7 @@ from soc_agent.contracts import (
     SocMemoryBusinessLesson,
     SocMemoryCandidateReviewCommand,
 )
+from soc_agent.contracts.schemas import SocMemoryReuseCondition
 
 _MEMORY_FACET_LABELS = {
     "attack_behavior_family": "攻击行为类型",
@@ -57,7 +58,11 @@ def memory_lesson_applicability_conditions(
 ) -> list[str]:
     """Render the machine-owned applicability scope for a human lesson."""
 
-    conditions = [_memory_applicability_condition(key, values) for key, values in sorted(applicability.required_facets.items())]
+    conditions = [_memory_applicability_condition(key, values) for key, values in sorted(applicability.required_facets.items()) if not (key == "behavior_fingerprint" and applicability.selected_behavior_components is not None)]
+    if applicability.selected_behavior_components is not None:
+        conditions.append("直接复用时，以下已审核核心行为必须逐项全部满足：" + "；".join(applicability.selected_behavior_components))
+    for item in applicability.reuse_conditions:
+        conditions.append("仅直接复用结论时：" + _memory_applicability_condition(item.facet_key, item.values))
     if applicability.minimum_optional_matches:
         conditions.append(f"还必须至少匹配 {applicability.minimum_optional_matches} 组经审核的可选条件。")
     return conditions
@@ -69,7 +74,7 @@ def memory_lesson_invalidation_conditions(
     """Add deterministic invalidation floors before model-authored details."""
 
     baseline = [
-        "任一系统必需匹配条件与当前告警不一致时，该经验失效。",
+        "直接复用条件不满足时，不直接沿用结论；符合相关经验检索条件时，仍可比较差异后供模型参考。",
         "当前告警出现与已审核业务结论冲突的新证据或攻击影响时，必须重新研判。",
     ]
     normalized = [" ".join(str(value).split()) for value in model_conditions if str(value).strip()]
@@ -98,7 +103,7 @@ def promote_memory_applicability_facets(
     promoted_facet_keys: list[str],
     promoted_facet_values: dict[str, list[str]] | None = None,
 ) -> SocMemoryApplicabilitySpec:
-    """Deterministically narrow candidate scope using reviewed optional facets."""
+    """Add exact-reuse limits without changing the scope of model reference."""
 
     selected = promoted_facet_values or {}
     promoted = list(dict.fromkeys([*(str(key).strip() for key in promoted_facet_keys if str(key).strip()), *selected]))
@@ -107,6 +112,8 @@ def promote_memory_applicability_facets(
         raise ValueError("promoted memory facets are not candidate optional facets: " + ", ".join(unknown))
     if set(promoted) & set(applicability.context_only_similarity_facet_keys):
         raise ValueError("context-only similarity facets must remain optional")
+    if set(promoted) & {"behavior_component_core", "behavior_component_strong", "behavior_component_weak"}:
+        raise ValueError("internal behavior aliases are not editable business limits")
     if not promoted:
         return applicability
     narrowed = {}
@@ -116,22 +123,23 @@ def promote_memory_applicability_facets(
         if not values or not set(values) <= set(allowed):
             raise ValueError(f"promoted memory facet {key} must select candidate optional values")
         narrowed[key] = values
-    required = {
-        **applicability.required_facets,
-        **narrowed,
-    }
-    optional = {key: values for key, values in applicability.optional_facets.items() if key not in promoted}
-    if applicability.minimum_optional_matches > len(optional):
-        raise ValueError("promoted memory facets leave too few optional groups for the reviewed threshold")
-    context_required = list(applicability.context_only_required_facet_keys)
-    if context_required or applicability.context_only_missing_facet_keys or applicability.context_only_similarity_facet_keys:
-        context_required = sorted({*context_required, *promoted})
+    conditions = {item.condition_key: item for item in applicability.reuse_conditions}
+    for key, values in narrowed.items():
+        groups: dict[str | None, list[str]] = {}
+        for value in values:
+            prefix = value.partition(":")[0].casefold() if key in {"entity", "role_entity", "behavior_component"} else None
+            groups.setdefault(prefix, []).append(value)
+        for prefix, items in groups.items():
+            condition = SocMemoryReuseCondition(facet_key=key, value_prefix=prefix, values=items)
+            previous = conditions.get(condition.condition_key)
+            if previous and not {v.casefold() for v in condition.values} <= {v.casefold() for v in previous.values}:
+                raise ValueError("reuse conditions cannot widen a saved candidate limit")
+            conditions[condition.condition_key] = condition
     return SocMemoryApplicabilitySpec.model_validate(
         {
             **applicability.model_dump(),
-            "required_facets": required,
-            "optional_facets": optional,
-            "context_only_required_facet_keys": context_required,
+            "reuse_conditions": [conditions[key] for key in sorted(conditions)],
+            "policy_version": "soc.memory_applicability_policy.v3" if applicability.selected_behavior_components is not None else "soc.memory_applicability_policy.v2",
         }
     )
 

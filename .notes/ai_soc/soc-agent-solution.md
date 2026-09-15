@@ -2002,6 +2002,13 @@ Candidate 审核先比较已有经验：同范围一致结论补充/修订，不
 模型可疑或企业转交不自动推翻旧经验。具体交互、冲突边界与验收入口见
 [新旧经验治理](memory/pingan-soc-memory-design.md#审核时怎样处理新旧经验--governance-comparison)。
 
+适用条件区分固定范围、逐项选择的核心行为和直接复用附加条件。Policy v3 的审核选择通过
+`selected_behavior_components` 保存，所选行为全部命中即可满足行为范围，不再要求来源完整
+指纹相等；原指纹仍用于分组和审计，旧 Memory 不自动迁移。附加 IP/主机条件只收窄直接复用，
+不阻断原本合格的参考召回；参考经验可以影响模型判断，但不由程序直接套用结论。
+前端、起草、治理预览、确认、检索和冲突检查共用同一契约，详见
+[Memory 适用条件设计](architecture/memory-applicability-design.md)第 6.4 节。
+
 ```mermaid
 flowchart TD
     S1["📝 Source<br/>correction / accepted conclusion / reviewed finding / repeated pattern / explicit run promotion"] --> A{"🚦 MemoryAdmissionService<br/>human signal + reason + reusable anchor"}

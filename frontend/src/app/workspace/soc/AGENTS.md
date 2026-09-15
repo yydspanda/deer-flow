@@ -5,6 +5,14 @@ SOC pages are thin operational clients for server-owned contracts. Read the root
 `src/core/soc`; React must not query persistence, parse vendor payloads, calculate
 Runtime decisions, construct Memory, or infer action authority.
 
+Memory review keeps fixed scope read-only and all core behaviors visible as individual
+checkboxes (new draft: all checked; revision: restore saved selection). Submit the same
+`selected_behavior_components` to lesson drafting, governance preview and the reviewed
+applicability. Do not compute hashes or match scores in React. At least one core behavior
+remains selected; clearing a behavior is an explicit scope change, not an exclusion.
+Additional conditions gate direct reuse only. Reference copy must explain that a model
+can adopt a reviewed lesson, while the program does not directly copy its historical verdict.
+
 ## API And Navigation
 
 - Candidate governance comparison is server-owned. Show the old business conclusion,
@@ -137,32 +145,36 @@ Runtime decisions, construct Memory, or infer action authority.
   requires explicit overwrite confirmation, keeps the current draft until success, and
   disables editing, verdict/scope changes and confirmation while generation is in flight.
   Optional business facts remain human input; never fill them from the selected verdict.
-  Applicability is server-derived;
-  the browser may only promote known optional facets to required and must submit the
-  complete narrowed contract. It cannot widen scope, persist the draft automatically,
-  enable retrieval, or infer directive eligibility.
+  Applicability is server-derived. The browser may select a nonempty subset of verified core
+  behaviors and add known optional values as direct-reuse limits; it submits the complete
+  reviewed contract. It cannot change fixed scope, persist the draft automatically, enable
+  retrieval, or infer directive eligibility. Removing a core behavior widens only that reviewed
+  direct-use requirement and must pass the same governance/confirmation checks.
 - Candidate applicability controls must distinguish server-locked required facets from
-  reviewer-selectable optional narrowing. Selecting an optional facet adds it to the
-  required set; clearing it removes only that reviewer-added restriction. Arbitrary
+  reviewer-selectable core behavior and optional narrowing. Extra selections go into `reuse_conditions`,
+  not required/optional/context facet groups; clearing removes only unsaved extra limits. Arbitrary
   facet keys or values require a tenant Memory Profile change, not a browser input.
 - Candidate and record details share `SocMemoryScope`. Only server-verified `scope_view`
   may explain fingerprint contents or classify redundant narrowing options. Do not hash,
   parse tenant detection identities, or infer applicability in React. Keep raw contracts
   and original Lesson applicability prose in collapsed audit; unknown projections retain
-  explicit unresolved fingerprint labels. Show required conditions and independent optional
-  values directly, including unselected options on read-only detail. Remove only verified
+  explicit unresolved fingerprint labels. Show business rule/behavior rows once, with every verified
+  core component visible; only raw hashes and technical metadata collapse. Unselected extra limits are offered under an add control
+  only while reviewing, not in read-only detail. Remove only verified
   redundant values, never an entire mixed group. Review sends `promoted_facet_values` to
   drafting/preview and the same narrowed `record_applicability` to confirmation. Multiple
-  selected values within one group remain OR; different groups remain AND. Similarity keys
-  stay optional. Never mutate persisted scope on read or invent arbitrary keys/values.
+  selected extra values within one semantic group remain OR; source and destination are separate AND
+  groups even when stored under role_entity. Limits affect direct verdict reuse only, not otherwise
+  eligible reference recall. Saved v1 shared scope limits retain their meaning and are marked.
+  Similarity/core/strong/weak aliases stay internal. Never mutate scope on read or invent values.
 - Retrieval activation sends current record version, reason, idempotency key, and
   validity/review settings. Refresh server state after mutation. Render context-only
   matches separately from applicable decision directives.
 - Candidate confirmation must present retrieval and decision use as separate concepts:
   retrieval controls whether a record can be found, while the explicit future-match
   choice controls whether an exact typed match may participate in the effective verdict.
-  Default the latter to “仅供模型参考，不改判”; never imply that enabling retrieval grants
-  a directive.
+  Default the latter to “仅供研判参考”; explain that the model may adopt the lesson in its judgment,
+  but the program does not directly copy its verdict. Never imply that enabling retrieval grants a directive.
 - Manual run promotion calls the governed `/api/soc/memory/runs/{run_id}/promote`
   mutation after an explicit confirmation. The optional note only highlights material
   for the later reviewer; it is not an admission or authority field. The mutation creates

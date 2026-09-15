@@ -26,6 +26,7 @@ export function SocMemoryGovernancePanel({
   candidateId,
   verdict,
   promotedFacets,
+  selectedBehavior,
   replacement,
   onReplace,
   facetLabel,
@@ -33,6 +34,7 @@ export function SocMemoryGovernancePanel({
   candidateId: string;
   verdict: SocVerdict | null;
   promotedFacets: Record<string, string[]>;
+  selectedBehavior?: string[] | null;
   replacement: { memoryId: string; version: number } | null;
   onReplace: (value: { memoryId: string; version: number } | null) => void;
   facetLabel: (key: string) => string;
@@ -41,6 +43,7 @@ export function SocMemoryGovernancePanel({
     candidateId,
     verdict,
     promotedFacets,
+    selectedBehavior,
   );
   useEffect(() => {
     if (!data || !replacement) return;
