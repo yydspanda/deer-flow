@@ -105,8 +105,8 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 告警研判结果 | Alert Result | `SocAlertResult` | 以 `run_id` 为身份的主读模型；每条持久化 Run 都可查看，不依赖人工任务 |
 | 人工关注级别 | Human Attention Level | `SocAlertAttentionLevel` | 区分结论可用、可见提示和真正需人工介入，不等同于模型置信度 |
 | 决策审计 | Decision Audit | `DecisionAuditRecord` | analyze/replay/correct 的判定沿革和证据策略摘要，不替代完整 run |
-| 基础研判 | Base Detection Decision | `AnalysisRun.decision` | 固定 Runtime 对当前告警形成的不可变基础判断 |
-| 租户策略判断 | Tenant Policy Decision | `TenantPolicyDecision` | 完整 Runtime/Memory 之后的独立运营判断；确定性规则优先，可选 bounded Policy Skill |
+| 基础研判 | Base Detection Decision | `AnalysisRun.decision` | 模型分支的基础判断；直接处理时 Base 标记 skipped，不虚构初判 |
+| 租户策略判断 | Tenant Policy Decision | `TenantPolicyDecision` | 确定性规则前置并可直接处理；依赖模型的条件/Policy Skill 留在正常研判分支 |
 | 有效研判 | Effective Decision | `SocDecisionTransitionRecord.after` + `effective_disposition` | 汇总 Base、Memory、Tenant Policy 后的当前有效技术判断、复核要求与运营处置 |
 | 决策迁移 | Decision Transition | `SocDecisionTransitionRecord` | 追加保存 Base/Memory/Tenant/Effective 四阶段、before/after、contributors 与 hash |
 | 处理结论 | Operator Case Outcome | `SocCaseOutcomeView` | 从既有决策链确定性投影忽略/转交、依据和必要下一步；安全判断、进度及阶段记录默认折叠，不产生新结论 |
@@ -341,6 +341,14 @@ Important behavior:
 | `SocMainOrchestratorService` | Read-only PingAn eval/demo orchestration for analysis/correlation/selected actions/domain report | Not wired as a second live Runtime; typed `CorrelationResult` bridge; no direct repository/tool/high-risk side effects |
 
 ### 5.3 Runtime Pipeline / 固定运行时
+
+默认入口先做企业确定性规则检查，再做精确审核 Memory 的直接复用检查。
+早期企业明确忽略/转交则跳过所有模型；否则保留可选语义核对并复查规则，精确 Memory 命中
+则跳过主研判/角色复核。`analysis=None` 加 `direct_resolution` 是有效完成结果，不生成假的 Base
+或置信度，仍走原持久化、有效决策、反馈和回传出口。完整适用条件、相反指令、模型依赖策略
+的优先级和回退开关见 [直接处理设计](architecture/direct-resolution-design.md)。
+
+下面是两者均未直接处理时的模型分支；context-only 经验仍可参与其主模型判断。
 
 ```mermaid
 flowchart TD

@@ -31,6 +31,7 @@ from soc_agent.prompts.memory_lesson import (
 )
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 from soc_agent.utils.hashing import stable_hash
+from soc_agent.utils.model_json import model_json
 
 MEMORY_LESSON_DRAFTER_ID = "bounded-memory-business-lesson-drafter"
 MAX_MEMORY_LESSON_RESPONSE_CHARS = 40_000
@@ -366,10 +367,8 @@ def _build_output_repair_messages(
         },
         {
             "role": "user",
-            "content": json.dumps(
+            "content": model_json(
                 repair_request,
-                ensure_ascii=False,
-                indent=2,
                 sort_keys=True,
                 default=str,
             ),

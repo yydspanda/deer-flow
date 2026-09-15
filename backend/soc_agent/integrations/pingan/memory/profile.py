@@ -72,6 +72,12 @@ class PingAnSocMemoryProfile:
         if semantic_features:
             self.identity = SocMemoryProfileIdentity(profile_id="pingan.soc", profile_version="8", feature_schema_version="pingan.soc.memory_features.v6", aggregation_window_seconds=30 * 24 * 60 * 60)
 
+    @classmethod
+    def for_run(cls, run: AnalysisRun) -> PingAnSocMemoryProfile:
+        """Read historical features using the run's saved mode, not today's rollout."""
+        report = run.normalization_assistance
+        return cls(semantic_features=report is not None and report.mode == "apply")
+
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
         integration = (request.source.integration_name or "").strip().casefold()
         return integration == "pingan_legacy_alert_platform"

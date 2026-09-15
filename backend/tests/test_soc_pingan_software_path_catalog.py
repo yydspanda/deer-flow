@@ -207,6 +207,7 @@ def test_mcp_returns_structured_investigation_only_result(tmp_path: Path) -> Non
 
     assert response is not None
     structured = response["result"]["structuredContent"]
+    assert response["result"]["content"][0]["text"] == json.dumps(structured, ensure_ascii=False, separators=(",", ":"))
     assert structured["matched"] is True
     assert structured["candidate_only"] is True
     assert structured["allowlist"] is False

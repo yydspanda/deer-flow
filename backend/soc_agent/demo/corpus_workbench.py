@@ -119,7 +119,7 @@ CorpusExecutionPhaseStatus = Literal[
     "failed",
     "skipped",
 ]
-CorpusAuditArtifactStatus = Literal["available", "partial", "unavailable"]
+CorpusAuditArtifactStatus = Literal["available", "partial", "unavailable", "skipped"]
 CorpusAuditArtifactSource = Literal[
     "persisted_run",
     "persisted_downstream",
@@ -475,7 +475,7 @@ class SocCorpusWorkbenchDecisionStage(BaseModel):
     stage: str
     status: str
     verdict: str
-    confidence: float
+    confidence: float | None
     needs_review: bool
     suggested_action: str
     disposition: str | None = None
@@ -626,6 +626,32 @@ class SocCorpusWorkbenchStartResult(BaseModel):
     active_execution: SocCorpusWorkbenchActiveExecution
 
 
+def _matches_corpus_run(run: AnalysisRun, case: _CorpusCase) -> bool:
+    request = run.llm_analysis_request
+    if request is None or run.input_hash != case.payload_hash:
+        return False
+    if request.environment is not None:
+        return request.environment == CORPUS_WORKBENCH_ENVIRONMENT
+    # Early policy-only runs omitted request scope; use their frozen server snapshot,
+    # never today's policy config or an unscoped alert payload, to recover display.
+    resolution = run.direct_resolution
+    return resolution is not None and resolution.source_kind == "tenant_policy" and (resolution.policy_snapshot or {}).get("environment") == CORPUS_WORKBENCH_ENVIRONMENT
+
+
+def _observation_matches_run(observation: Any, run: AnalysisRun | None) -> bool:
+    if run is None or run.llm_analysis_request is None or run.direct_resolution is not None:
+        return False
+    profile = PingAnSocMemoryProfile.for_run(run)
+    identity = profile.identity
+    if observation.profile_id != identity.profile_id or observation.profile_version != identity.profile_version or observation.feature_schema_version != identity.feature_schema_version:
+        return False
+    try:
+        signature = profile.build_pattern_signature(run, facets=profile.project_run_facets(run))
+    except ValueError:
+        return False
+    return observation.signature.dimension == signature.dimension and observation.signature.value == signature.value
+
+
 class SocCorpusWorkbenchService:
     """Run arbitrary server-owned corpus alerts through official SOC services."""
 
@@ -749,7 +775,8 @@ class SocCorpusWorkbenchService:
                 normalized_search,
             ):
                 continue
-            if readiness is not None and case.readiness != readiness:
+            projected_readiness = alert_cache[case.alert_id].readiness if case.alert_id in alert_cache else case.readiness
+            if readiness is not None and projected_readiness != readiness and case.alert_id != focus_alert_id:
                 continue
             if source_type is not None and case.source_type != source_type:
                 continue
@@ -757,7 +784,9 @@ class SocCorpusWorkbenchService:
                 continue
             if unprocessed_only and case.alert_id != focus_alert_id and case.alert_id in context.observations_by_alert and case.alert_id not in context.active_executions:
                 continue
-            if comparison == "labeled":
+            if comparison is not None and case.alert_id == focus_alert_id:
+                pass
+            elif comparison == "labeled":
                 if not case.operational_label_available:
                     continue
             elif comparison is not None:
@@ -837,8 +866,8 @@ class SocCorpusWorkbenchService:
         exclude_active_alert_id: str | None = None,
     ) -> _CorpusProjectionContext:
         active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
-        observations_by_alert = self._observations_by_alert()
         runs_by_alert = self._runs_by_alert()
+        observations_by_alert = self._observations_by_alert(runs_by_alert)
         queues_by_run = {
             item.run_id: item
             for item in self._repository.list_review_items(
@@ -1155,23 +1184,20 @@ class SocCorpusWorkbenchService:
                 context=request_context,
             )
 
-        if run.status is not AnalysisRunStatus.FAILED:
-            if execution_mode == "rerun" and current.observation_id is not None:
-                observation_id = current.observation_id
-                pattern_observation_reused = True
-                idempotent = True
-            else:
-                aggregation = self._pattern_service.observe_run(
-                    run,
-                    source_type=MemoryPatternSourceType.BATCH_ALERT,
-                    transport_ref=(f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:v1"),
-                    environment=CORPUS_WORKBENCH_ENVIRONMENT,
-                    data_class=MemoryPatternDataClass.OPERATIONAL,
-                    context=request_context,
-                )
-                observation_id = aggregation.observation.observation_id
-                pattern_observation_reused = aggregation.idempotent
-                idempotent = aggregation.idempotent
+        if run.status is not AnalysisRunStatus.FAILED and run.direct_resolution is None:
+            # Replays may acquire new semantic features. The Pattern service deduplicates
+            # the same alert within the same signature; never pin a new run to old facets.
+            aggregation = self._pattern_service.observe_run(
+                run,
+                source_type=MemoryPatternSourceType.BATCH_ALERT,
+                transport_ref=f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:run:{run.run_id}",
+                environment=CORPUS_WORKBENCH_ENVIRONMENT,
+                data_class=MemoryPatternDataClass.OPERATIONAL,
+                context=request_context,
+            )
+            observation_id = aggregation.observation.observation_id
+            pattern_observation_reused = aggregation.idempotent
+            idempotent = aggregation.idempotent
 
         return SocCorpusWorkbenchProcessResult(
             alert_id=alert_id,
@@ -1194,7 +1220,6 @@ class SocCorpusWorkbenchService:
         if case is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id!r} is not part of the configured DEV corpus")
         run = self._run_for_case(case)
-        identity = PingAnSocMemoryProfile.identity
         observations = self._repository.list_memory_pattern_observations(
             tenant_id=CORPUS_WORKBENCH_TENANT,
             environment=CORPUS_WORKBENCH_ENVIRONMENT,
@@ -1203,7 +1228,7 @@ class SocCorpusWorkbenchService:
             alert_id=alert_id,
             limit=100,
         )
-        matching_observations = [item for item in observations if item.profile_id == identity.profile_id and item.profile_version == identity.profile_version and item.feature_schema_version == identity.feature_schema_version]
+        matching_observations = [item for item in observations if _observation_matches_run(item, run)]
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         candidate = self._repository.find_memory_candidate_by_source_id(f"memory_pattern:{observation.aggregation_key}") if observation is not None else None
@@ -1232,7 +1257,6 @@ class SocCorpusWorkbenchService:
         if run is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id} has no persisted Runtime run to audit")
 
-        identity = PingAnSocMemoryProfile.identity
         observations = self._repository.list_memory_pattern_observations(
             tenant_id=CORPUS_WORKBENCH_TENANT,
             environment=CORPUS_WORKBENCH_ENVIRONMENT,
@@ -1241,7 +1265,7 @@ class SocCorpusWorkbenchService:
             alert_id=alert_id,
             limit=100,
         )
-        matching_observations = [item for item in observations if item.profile_id == identity.profile_id and item.profile_version == identity.profile_version and item.feature_schema_version == identity.feature_schema_version]
+        matching_observations = [item for item in observations if _observation_matches_run(item, run)]
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         pattern_source_id = f"memory_pattern:{observation.aggregation_key}" if observation is not None else None
@@ -1282,8 +1306,7 @@ class SocCorpusWorkbenchService:
             case.alert_id,
             limit=20,
         ):
-            request = run.llm_analysis_request
-            if run.input_hash == case.payload_hash and request is not None and request.environment == CORPUS_WORKBENCH_ENVIRONMENT:
+            if _matches_corpus_run(run, case):
                 return run
         return None
 
@@ -1313,7 +1336,7 @@ class SocCorpusWorkbenchService:
         return payload
 
     def _analysis_idempotency_key(self, alert_id: str) -> str:
-        identity = PingAnSocMemoryProfile.identity
+        identity = PingAnSocMemoryProfile(semantic_features=self._normalization_review_mode == "apply").identity
         generation = stable_hash(
             {
                 "workbench_version": CORPUS_WORKBENCH_VERSION,
@@ -1340,8 +1363,7 @@ class SocCorpusWorkbenchService:
         )[:24]
         return f"soc-corpus-dev-rerun:{alert_id}:{request_hash}"
 
-    def _observations_by_alert(self) -> dict[str, Any]:
-        identity = PingAnSocMemoryProfile.identity
+    def _observations_by_alert(self, runs_by_alert: Mapping[str, AnalysisRun]) -> dict[str, Any]:
         observations = self._repository.list_memory_pattern_observations(
             tenant_id=CORPUS_WORKBENCH_TENANT,
             environment=CORPUS_WORKBENCH_ENVIRONMENT,
@@ -1352,7 +1374,7 @@ class SocCorpusWorkbenchService:
         selected: dict[str, Any] = {}
         for item in observations:
             alert_id = item.source.alert_id
-            if alert_id not in self._cases or item.profile_id != identity.profile_id or item.profile_version != identity.profile_version or item.feature_schema_version != identity.feature_schema_version:
+            if alert_id not in self._cases or not _observation_matches_run(item, runs_by_alert.get(alert_id)):
                 continue
             previous = selected.get(alert_id)
             if previous is None or item.created_at > previous.created_at:
@@ -1363,8 +1385,7 @@ class SocCorpusWorkbenchService:
         selected: dict[str, AnalysisRun] = {}
         for run in self._repository.list_runs(limit=10_000):
             case = self._cases.get(run.alert_id)
-            request = run.llm_analysis_request
-            if case is None or run.input_hash != case.payload_hash or request is None or request.environment != CORPUS_WORKBENCH_ENVIRONMENT:
+            if case is None or not _matches_corpus_run(run, case):
                 continue
             previous = selected.get(run.alert_id)
             if previous is None or run.started_at > previous.started_at:
@@ -1449,7 +1470,7 @@ class SocCorpusWorkbenchService:
             workflow_state = "running"
         elif run is not None and run.status is AnalysisRunStatus.FAILED:
             workflow_state = "failed"
-        elif observation is not None:
+        elif observation is not None or (run is not None and run.direct_resolution is not None):
             workflow_state = "completed"
         elif run is not None:
             workflow_state = "analysis_only"
@@ -1469,7 +1490,7 @@ class SocCorpusWorkbenchService:
             )
             effective_disposition = effective_stage.disposition_after if effective_stage is not None else None
         base_projection, base_basis = _project_operational_outcome(
-            decision=decision,
+            decision=decision if run is not None and run.direct_resolution is None else None,
             disposition=None,
         )
         effective_projection, effective_basis = _project_operational_outcome(
@@ -1489,6 +1510,25 @@ class SocCorpusWorkbenchService:
         if operator_outcome is not None:
             effective_projection = operator_outcome.recommended_handling
             effective_basis = operator_outcome.recommended_handling_basis
+        runtime_facets = (
+            PingAnSocMemoryProfile.for_run(run).project_run_facets(run) if run is not None and run.llm_analysis_request is not None and run.normalization_assistance is not None and run.normalization_assistance.mode == "apply" else None
+        )
+        feature_case = case
+        feature_readiness = case.readiness
+        if runtime_facets is not None:
+            fingerprint = next(iter(runtime_facets.get("behavior_fingerprint", [])), None)
+            strength = next(iter(runtime_facets.get("behavior_strength", [])), None)
+            feature_case = replace(
+                case,
+                behavior_fingerprint=fingerprint,
+                behavior_components=tuple(runtime_facets.get("behavior_component", [])),
+                behavior_strength=strength,
+                decision_eligible=bool(fingerprint and strength == "strong" and (not runtime_facets.get("detection_key") or runtime_facets.get("detection_signature"))),
+            )
+            # The raw group may split after review. Only actual matching observations
+            # can establish repeated support for the new signature.
+            support_count = max(replay.support_count if replay is not None else 0, 1)
+            feature_readiness = _case_readiness(feature_case, group_alert_count=support_count, window_alert_count=support_count)
         return SocCorpusWorkbenchAlert(
             alert_id=case.alert_id,
             source_index=case.source_index,
@@ -1506,11 +1546,11 @@ class SocCorpusWorkbenchService:
             endpoint=case.endpoint,
             host_name=case.host_name,
             process_names=list(case.process_names),
-            behavior_fingerprint=case.behavior_fingerprint,
-            behavior_components=list(case.behavior_components),
-            behavior_strength=case.behavior_strength,
-            decision_eligible=case.decision_eligible,
-            readiness=case.readiness,
+            behavior_fingerprint=feature_case.behavior_fingerprint,
+            behavior_components=list(feature_case.behavior_components),
+            behavior_strength=feature_case.behavior_strength,
+            decision_eligible=feature_case.decision_eligible,
+            readiness=feature_readiness,
             group_id=case.group_id,
             group_alert_count=case.group_alert_count,
             window_alert_count=case.window_alert_count,
@@ -1529,7 +1569,7 @@ class SocCorpusWorkbenchService:
             output_quality=(run.analysis_output_quality.status.value if run is not None and run.analysis_output_quality is not None else None),
             failure_kind=(failure.kind.value if failure is not None else None),
             failure_message=(failure.message if failure is not None else None),
-            base_verdict=(decision.verdict.value if decision is not None else None),
+            base_verdict=(decision.verdict.value if decision is not None and run.direct_resolution is None else None),
             base_confidence=(decision.confidence if decision is not None else None),
             base_needs_review=(decision.needs_review if decision is not None else None),
             effective_verdict=(effective.verdict.value if effective is not None else None),
@@ -1568,7 +1608,7 @@ class SocCorpusWorkbenchService:
             base_label_comparison=_compare_operational_label(
                 case,
                 projection=base_projection,
-                decision_available=decision is not None,
+                decision_available=decision is not None and run.direct_resolution is None,
             ),
             effective_label_comparison=_compare_operational_label(
                 case,
@@ -1592,6 +1632,10 @@ _EXECUTION_PHASES: tuple[tuple[str, str], ...] = (
 )
 
 _EXECUTION_STEP_PHASE = {
+    "prepare_policy_input": "facts",
+    "direct_policy": "decision",
+    "direct_policy_after_normalization": "decision",
+    "direct_memory": "decision",
     "normalize": "normalize",
     "build_normalization_input": "semantic_review",
     "normalization_assist": "semantic_review",
@@ -1613,6 +1657,10 @@ _EXECUTION_STEP_PHASE = {
 }
 
 _EXECUTION_STEP_LABELS = {
+    "prepare_policy_input": "准备企业策略事实",
+    "direct_policy": "优先检查企业处置策略",
+    "direct_policy_after_normalization": "补充事实后检查企业策略",
+    "direct_memory": "检查审核经验能否直接复用",
     "normalize": "厂商数据转通用告警",
     "build_normalization_input": "准备原文与已有对象",
     "normalization_assist": "模型核对对象与检测事实",
@@ -1846,13 +1894,13 @@ def _audit_bundle(
             artifact_id="model-analysis-output",
             file_name="07-model-analysis-output.json",
             phase="reasoning",
-            title="模型研判输出 / Model Analysis Output",
+            title="主模型未调用 / Direct Resolution" if run.direct_resolution is not None else "模型研判输出 / Model Analysis Output",
             description="展示主模型结构化结论、推理链引用、场景、方向、角色和建议，以及 Provider 调用审计元数据。",
-            status="available" if analysis is not None else "unavailable",
+            status="available" if analysis is not None or run.direct_resolution is not None else "unavailable",
             source="persisted_run",
             metrics={
                 "verdict": (_enum_value(analysis.verdict) if analysis else "unavailable"),
-                "confidence": analysis.confidence if analysis else 0.0,
+                **({"confidence": analysis.confidence} if analysis is not None else {}),
                 "reasoning_items": len(analysis.reasoning) if analysis else 0,
                 "scenarios": len(analysis.scenario_assessments) if analysis else 0,
                 "provider_attempts": len(run.provider_request_journals),
@@ -1863,6 +1911,7 @@ def _audit_bundle(
             ],
             payload={
                 "analysis": _audit_json(analysis),
+                "direct_resolution": _audit_json(run.direct_resolution),
                 "request_journal": _audit_json(run.request_journal),
                 "provider_request_journals": _audit_json(run.provider_request_journals),
             },
@@ -1907,7 +1956,7 @@ def _audit_bundle(
             source="persisted_downstream",
             metrics={
                 "verdict": (_enum_value(run.decision.verdict) if run.decision else "unavailable"),
-                "confidence": run.decision.confidence if run.decision else 0.0,
+                **({"confidence": run.decision.confidence} if run.decision is not None and run.decision.confidence is not None else {}),
                 "needs_review": run.decision.needs_review if run.decision else False,
                 "review_items": len(review_items),
                 "decision_transitions": len(decision_transitions),
@@ -1957,6 +2006,16 @@ def _audit_bundle(
             },
         ),
     ]
+    if run.direct_resolution is not None:
+        for artifact in artifacts:
+            if artifact.phase in {"context", "reasoning", "validation"}:
+                artifact.status = "skipped"
+                artifact.description = _phase_summary(artifact.phase, "skipped", run=run, observation=observation, replay=replay)
+                artifact.metrics = _phase_metrics(artifact.phase, run=run, observation=observation, replay=replay, candidate=None)
+            elif artifact.phase == "decision":
+                artifact.description = _phase_summary("decision", "success", run=run, observation=observation, replay=replay)
+                artifact.metrics = _direct_decision_metrics(run)
+                artifact.payload["direct_resolution"] = _audit_json(run.direct_resolution)
     review = build_normalization_review_view(run)
     if review is not None:
         artifacts.insert(
@@ -1968,12 +2027,31 @@ def _audit_bundle(
                 phase="semantic_review",
                 title="语义核对记录",
                 description=review.effect_label,
-                status="unavailable" if review.status in {"failed", "skipped"} else "partial" if review.status == "partial" else "available",
+                # A completed review can retain notes without being an execution failure.
+                status="unavailable" if review.status in {"failed", "skipped"} else "available",
                 source="persisted_run",
                 metrics={},
                 review_guide=[],
                 normalization_review=review,
                 payload={"request": _audit_json(run.normalization_assist_request), "result": _audit_json(run.normalization_assistance)},
+            ),
+        )
+        artifacts = [artifact.model_copy(update={"sequence": index}) for index, artifact in enumerate(artifacts, 1)]
+    elif run.direct_resolution is not None and run.direct_resolution.source_kind == "tenant_policy":
+        artifacts.insert(
+            3,
+            _audit_artifact(
+                sequence=4,
+                artifact_id="semantic-normalization-review",
+                file_name="03b-semantic-review.json",
+                phase="semantic_review",
+                title="语义核对（已跳过）",
+                description=_phase_summary("semantic_review", "skipped", run=run, observation=None, replay=None),
+                status="skipped",
+                source="persisted_run",
+                metrics={},
+                review_guide=[],
+                payload={"request": None, "result": None, "skip_source": _audit_json(run.direct_resolution)},
             ),
         )
         artifacts = [artifact.model_copy(update={"sequence": index}) for index, artifact in enumerate(artifacts, 1)]
@@ -1999,6 +2077,9 @@ def _audit_model_visible_context(
     request: LLMAnalysisRequest | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Rebuild model-visible context without presenting old builders as exact."""
+
+    if run.direct_resolution is not None:
+        return None, {"status": "not_invoked", "exact": False, "note": "本次直接处理，未向主模型发送研判上下文。"}
 
     if request is None:
         return None, {
@@ -2106,7 +2187,7 @@ def _execution_view(
         status = "running"
     elif run.status is AnalysisRunStatus.FAILED:
         status = "failed"
-    elif observation is None:
+    elif observation is None and run.direct_resolution is None:
         status = "analysis_complete"
     else:
         status = "completed"
@@ -2135,7 +2216,9 @@ def _execution_view(
         )
 
     pattern_status: CorpusExecutionPhaseStatus
-    if observation is not None:
+    if run is not None and run.direct_resolution is not None:
+        pattern_status = "skipped"
+    elif observation is not None:
         pattern_status = "success"
     elif run is not None and run.status is AnalysisRunStatus.FAILED:
         pattern_status = "skipped"
@@ -2148,16 +2231,16 @@ def _execution_view(
             step_name="pattern_observation",
             label=_step_label("pattern_observation"),
             status=pattern_status,
-            started_at=(observation.created_at.isoformat() if observation is not None else None),
-            ended_at=(observation.created_at.isoformat() if observation is not None else None),
-            duration_ms=0 if observation is not None else None,
+            started_at=(observation.created_at.isoformat() if pattern_status == "success" else None),
+            ended_at=(observation.created_at.isoformat() if pattern_status == "success" else None),
+            duration_ms=0 if pattern_status in {"success", "skipped"} else None,
         )
     )
 
     phases: list[SocCorpusWorkbenchExecutionPhase] = []
     for phase_key, phase_label in _EXECUTION_PHASES:
         phase_steps = [item for item in projected_steps if _step_phase(item.step_name) == phase_key]
-        if phase_key == "semantic_review" and not phase_steps and not (run and run.normalization_assist_request):
+        if phase_key == "semantic_review" and not phase_steps and not (run and (run.normalization_assist_request or run.normalization_assistance or (run.direct_resolution and run.direct_resolution.source_kind == "tenant_policy"))):
             continue
         phase_status = _phase_status(
             phase_key,
@@ -2273,6 +2356,8 @@ def _phase_status(
     execution_status: CorpusExecutionStatus,
 ) -> CorpusExecutionPhaseStatus:
     statuses = {item.status for item in steps}
+    if phase == "memory" and run is not None and run.direct_resolution is not None:
+        return "skipped"
     if "failed" in statuses:
         return "failed"
     if "running" in statuses:
@@ -2296,6 +2381,19 @@ def _phase_summary(
     observation: Any | None,
     replay: Any | None,
 ) -> str:
+    if run is not None and run.direct_resolution is not None:
+        policy_direct = run.direct_resolution.source_kind == "tenant_policy"
+        if phase == "memory":
+            return "企业规则已确定处置，本次未检索或复用 Memory，也不累计为新的经验确认样本。" if policy_direct else "已记录审核经验的直接复用；不把复用结果累计为独立确认样本。"
+        if phase == "decision":
+            if policy_direct:
+                metrics = _direct_decision_metrics(run)
+                return f"命中企业规则「{metrics['matched_rule']}」，直接{metrics['disposition']}；未调用主模型。"
+            return "精确匹配审核经验，直接沿用结论。"
+        if status == "skipped":
+            if phase == "semantic_review":
+                return "企业规则已根据标准化字段确定处置，已跳过语义核对；本次未进行 Memory 匹配。"
+            return "企业规则已确定处置，本阶段已跳过。" if policy_direct else "已精确匹配审核经验，本阶段已跳过。"
     if status == "pending":
         return "等待上游阶段完成"
     if status == "running":
@@ -2330,6 +2428,30 @@ def _phase_summary(
     return f"已写入 Observation；当前固定窗口累计 {support} 条"
 
 
+def _direct_decision_metrics(run: AnalysisRun) -> dict[str, str | int | float | bool]:
+    direct = run.direct_resolution
+    if direct is None:
+        return {}
+    metrics: dict[str, str | int | float | bool] = {
+        "processing_path": "企业规则直接处理" if direct.source_kind == "tenant_policy" else "审核经验直接复用",
+        "model": "未调用主模型",
+    }
+    if direct.disposition is not None:
+        metrics["disposition"] = {"escalated": "转交", "ignored": "忽略", "suppressed": "抑制"}.get(direct.disposition.value, direct.disposition.value)
+    if direct.source_kind == "tenant_policy":
+        selected = next((item for item in direct.policy_snapshot.get("rule_evaluations", []) if isinstance(item, Mapping) and item.get("rule_id") == direct.selected_rule_id), {})
+        metrics["matched_rule"] = selected.get("rule_name") or direct.selected_rule_id or direct.source_id
+        if run.llm_analysis_request is not None and any(item.get("condition") == "rule_code" and item.get("matched") for item in selected.get("conditions", []) if isinstance(item, Mapping)):
+            if code := run.llm_analysis_request.detection.rule_code:
+                metrics["rule_code"] = code
+    else:
+        metrics["memory_id"] = direct.source_id
+        metrics["verdict"] = direct.decision.verdict.value
+        if direct.decision.confidence is not None:
+            metrics["confidence"] = direct.decision.confidence
+    return metrics
+
+
 def _phase_metrics(
     phase: str,
     *,
@@ -2340,6 +2462,13 @@ def _phase_metrics(
 ) -> dict[str, str | int | float | bool]:
     if run is None:
         return {}
+    if run.direct_resolution is not None:
+        if phase == "decision":
+            return _direct_decision_metrics(run)
+        if phase in {"context", "validation", "memory"}:
+            return {}
+        if phase == "reasoning":
+            return {"model": "未调用主模型"}
     metrics: dict[str, str | int | float | bool] = {}
     if phase == "semantic_review" and run.normalization_assistance is not None:
         review = build_normalization_review_view(run)
@@ -2417,7 +2546,8 @@ def _phase_metrics(
         metrics.update(
             {
                 "verdict": run.decision.verdict.value,
-                "confidence": round(run.decision.confidence, 4),
+                **({"confidence": round(run.decision.confidence, 4)} if run.decision.confidence is not None else {}),
+                "processing_path": run.direct_resolution.source_kind if run.direct_resolution is not None else "model_analysis",
                 "needs_review": run.decision.needs_review,
                 "evidence_state": run.decision.evidence_state.value,
             }
@@ -3088,12 +3218,13 @@ def _readiness(
     alerts: list[SocCorpusWorkbenchAlert],
 ) -> SocCorpusWorkbenchReadiness:
     cases = list(cases)
+    current_features = {item.alert_id: item for item in alerts}
     recurrent_groups = {item.group_id for item in cases if item.group_alert_count >= 2}
     candidate_windows = {item.window_id for item in cases if item.decision_eligible and item.window_alert_count >= 5}
     return SocCorpusWorkbenchReadiness(
         total_alert_count=len(cases),
-        fingerprint_coverage_count=sum(item.behavior_fingerprint is not None for item in cases),
-        decision_eligible_alert_count=sum(item.decision_eligible for item in cases),
+        fingerprint_coverage_count=sum(current_features.get(item.alert_id, item).behavior_fingerprint is not None for item in cases),
+        decision_eligible_alert_count=sum(current_features.get(item.alert_id, item).decision_eligible for item in cases),
         recurrent_group_count=len(recurrent_groups),
         recurrent_alert_count=sum(item.group_alert_count >= 2 for item in cases),
         candidate_window_group_count=len(candidate_windows),

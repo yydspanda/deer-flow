@@ -108,6 +108,15 @@ from soc_agent.contracts import (
     TenantPolicySignalResolution,
     Verdict,
 )
+from soc_agent.contracts.schemas import SocDirectResolution
+
+
+class DirectResolutionResolver(Protocol):
+    """Operator-governed resolution before the primary analyzer."""
+
+    def resolve_policy(self, run: AnalysisRun) -> SocDirectResolution | None: ...
+
+    def resolve_memory(self, run: AnalysisRun) -> SocDirectResolution | None: ...
 
 
 class AlertNormalizer(Protocol):

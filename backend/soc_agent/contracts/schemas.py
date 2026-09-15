@@ -1085,7 +1085,7 @@ class SocDetectionTruthSnapshot(BaseModel):
     schema_version: Literal["soc.detection_truth_snapshot.v1"] = "soc.detection_truth_snapshot.v1"
     verdict: Verdict
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    source: Literal["decision", "analysis"]
+    source: Literal["decision", "analysis", "not_evaluated"]
     decision_policy_version: str | None = Field(default=None, min_length=1, max_length=128)
     latest_correction_id: str | None = Field(default=None, min_length=1, max_length=64)
 
@@ -4688,7 +4688,7 @@ class AnalysisResult(BaseModel):
 
 class Decision(BaseModel):
     verdict: Verdict
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     confidence_source: DecisionConfidenceSource = DecisionConfidenceSource.UNKNOWN
     confidence_is_calibrated: bool = False
     calibrated_probability: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -5268,6 +5268,37 @@ class AnalysisRunRecoveryCommand(BaseModel):
     stale_after_seconds: int = Field(default=300, ge=0, le=86400)
 
 
+class SocDirectResolution(BaseModel):
+    """Reviewed result adopted without invoking the primary analyzer."""
+
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["soc.direct_resolution.v1"] = "soc.direct_resolution.v1"
+    source_kind: Literal["tenant_policy", "memory"]
+    source_id: str = Field(min_length=1, max_length=512)
+    source_version: str = Field(min_length=1, max_length=128)
+    source_hash: str = Field(min_length=1, max_length=128)
+    decision: Decision
+    disposition: SocOperationalDisposition | None = None
+    summary: str = Field(min_length=1, max_length=4000)
+    selected_rule_id: str | None = None
+    memory_refs: list[str] = Field(default_factory=list, max_length=100)
+    matched_conditions: dict[str, Any] = Field(default_factory=dict)
+    # The policy schema depends on this module; validate the frozen snapshot lazily.
+    policy_snapshot: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> SocDirectResolution:
+        if self.source_kind == "tenant_policy":
+            from soc_agent.contracts.tenant_policy import TenantPolicyDecision
+
+            policy = TenantPolicyDecision.model_validate(self.policy_snapshot)
+            if policy.policy_hash != self.source_hash or policy.selected_rule_id != self.selected_rule_id or policy.recommended_disposition != self.disposition or not policy.auto_apply_allowed:
+                raise ValueError("direct policy must preserve its enforced decision snapshot")
+        elif not self.memory_refs or self.policy_snapshot is not None:
+            raise ValueError("direct Memory requires frozen references, not a policy snapshot")
+        return self
+
+
 class AnalysisRun(BaseModel):
     run_id: str = Field(default_factory=lambda: f"RUN-{uuid4().hex[:12].upper()}")
     alert_id: str
@@ -5292,6 +5323,8 @@ class AnalysisRun(BaseModel):
     fact_reconstruction: FactReconstructionResult | None = None
     llm_analysis_request: LLMAnalysisRequest | None = None
     analysis: AnalysisResult | None = None
+    direct_resolution: SocDirectResolution | None = None
+    direct_memory_conflicted: bool = False
     analysis_output_quality: AnalysisOutputQuality | None = None
     analysis_evidence_grounding: AnalysisEvidenceGroundingReport | None = None
     analysis_materiality: AnalysisMaterialityReport | None = None

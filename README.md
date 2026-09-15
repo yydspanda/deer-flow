@@ -34,6 +34,15 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Alert results present one handling conclusion, **忽略 / 转交**, with its reason and necessary next steps.
 > Security judgment, confidence, execution progress and decision lineage remain available in collapsed
 > details. Actual failures and material conflicts stay visible; they are not hidden as successful handling.
+> Enabled enterprise rules now run first: a deterministic ignore/transfer match skips model analysis.
+> Otherwise an exact approved Memory override can directly supply the reviewed conclusion; similar
+> Memory remains model context. Results identify the source and skipped model steps without invented
+> confidence. Direct results retain the workbench scope and appear in both the alert list and
+> execution trace; early policy-only results can be displayed from their frozen scope without rerunning.
+> Direct enterprise handling names the matched rule and disposition. Semantic review stays visible
+> as a gray skipped phase when bypassed; audit reads retain the skip reason without inventing a model result.
+> See the [direct-resolution design](.notes/ai_soc/architecture/direct-resolution-design.md)
+> for precedence, audit and the `SOC_DIRECT_RESOLUTION_ENABLED=false` rollback switch.
 > A tenant policy that does not select a disposition preserves existing Runtime/Memory advice;
 > a request for operational review is not automatically a critical evidence gap. The Web and ZEUS
 > result adapter share this handling classification, and a recommendation never proves execution.
@@ -50,6 +59,7 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > In `告警演练`, each alert exposes `查看同组` to open its complete server-defined group,
 > with `返回原筛选` restoring the previous search and page. The group picker searches rule
 > names/codes and behavior keywords, including singleton groups and groups without fingerprints.
+> The rehearsal defaults to all alerts; enable `仅未运行` to filter out completed runs.
 > A browser-driven local lifecycle is available for the reviewed 14-alert
 > `GalaxyLab_T1003-SAM-Dumping` cohort. For a trusted shared demonstration, run
 > `./scripts/soc-memory-dev.sh demo-start`, then open
@@ -60,7 +70,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > enabled, while real external action execution remains disabled. The alert rehearsal permits up
 > to three different alert IDs to run concurrently by default; the server rejects a duplicate active
 > alert without a second model call. Override the bounded demo capacity with
-> `SOC_DEV_LLM_MAX_CONCURRENCY`, not by removing admission control. The first five alerts build a Pattern Candidate; candidate review,
+> `SOC_DEV_LLM_MAX_CONCURRENCY`, not by removing admission control.
+> The execution trace's terminal status refreshes the final row even when an activity poll
+> missed the task; reruns are distinguished from their previous completed results.
+> The first five alerts build a Pattern Candidate; candidate review,
 > Business Lesson drafting, and retrieval activation continue through the `SOC 复核 > 候选经验` view
 > before the held-out alert is unlocked. After generation, the candidate view keeps all six final Business Lesson
 > sections visible: conclusion, rationale, boundaries, invalidation conditions, and handling
@@ -74,9 +87,17 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Confirmed Memory keeps temporary pause/reopen under `管理使用状态`; the terminal
 > `废止这条经验` action requires an explicit audited reason and disables both reference and
 > decision reuse without deleting historical evidence.
-> This workbench scopes displayed runs and Pattern progress to the active Memory Profile generation. A
-> profile/schema upgrade therefore starts a fresh validation sequence without deleting historical
-> runs or observations, and Pattern idempotency remains stable only within that profile contract. This
+> Semantic review supports `SOC_NORMALIZATION_ASSIST_MODE=off|shadow|apply`. In `apply`, accepted
+> supplements feed the standard alert, analysis input, and Memory conditions. The workbench reads
+> each saved run's review mode and matching signature; old shadow reports remain observation-only.
+> Completed semantic reviews show a checkmark and the adopted supplement count. Review notes
+> remain expandable; the original report and failure details remain available in audit JSON.
+> SOC model-bound JSON uses compact serialization for analysis, semantic review, role verification,
+> Business Lesson drafting, tenant advice and repair requests. No facts or string whitespace are
+> removed; audit exports/UI formatting and the upstream DeerFlow framework remain unchanged.
+> The offline group index is a navigation aid, while completed runs use their actual behavior facets.
+> Profile upgrades do not migrate reviewed Memory or delete history. Pattern idempotency remains
+> stable within each profile/signature contract. This
 > page renders each behavior component as an independently wrapping label and keeps model status on a
 > separate row, so long fingerprints or relay model names cannot overlap validation controls. The
 > acceptance-only Docker overlay runs Next.js dev with

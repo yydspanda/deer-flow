@@ -94,9 +94,9 @@ def test_memory_lesson_prompt_uses_bounded_sources_and_tail_contract() -> None:
     assert any(item.source_kind == "reviewer_verdict" and item.value == "false_positive" for item in prompt.source_catalog)
     assert "Do not output applicability_conditions" in prompt.system
     assert prompt.user.rstrip().endswith("</final_checklist>")
-    assert '"schema_version": "soc.memory_business_lesson_model_output.v3"' in (prompt.user)
-    assert '"additionalProperties": false' in prompt.user
-    assert '"required": [' in prompt.user
+    assert '"schema_version":"soc.memory_business_lesson_model_output.v3"' in (prompt.user)
+    assert '"additionalProperties":false' in prompt.user
+    assert '"required":[' in prompt.user
 
 
 def test_memory_lesson_drafter_builds_high_quality_askbob_draft_without_persistence() -> None:

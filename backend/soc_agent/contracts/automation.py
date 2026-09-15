@@ -59,6 +59,7 @@ class SocDecisionStageKind(StrEnum):
 
 
 class SocDecisionStageStatus(StrEnum):
+    SKIPPED = "skipped"
     OBSERVED = "observed"
     DISABLED = "disabled"
     NO_INPUT = "no_input"
@@ -126,7 +127,8 @@ class SocDecisionSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     verdict: Verdict
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    evaluated: bool = True
     evidence_state: DecisionEvidenceState
     suggested_action: str = Field(min_length=1, max_length=1000)
     needs_review: bool

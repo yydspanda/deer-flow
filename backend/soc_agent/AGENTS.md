@@ -22,6 +22,13 @@ file for SOC code. The authoritative product and engineering documents are:
 - Runtime owns the deterministic control flow. LLM nodes perform bounded reasoning and
   may suggest only whitelisted routes; they do not own loops, persistence, authority,
   retries, or state transitions.
+- SOC model-bound structured JSON uses `utils/model_json.py:model_json` (UTF-8 text,
+  compact separators). Apply it to contexts, schemas, examples and repair requests;
+  never strip whitespace inside raw logs, commands, strings or invalid model output.
+  Keep storage/audit formatting, business hashes and provider signing independent.
+  Prompt wire-format changes bump Prompt versions, not Memory/profile/schema versions.
+  Lead/sub-agent SOC context already uses compact JSON; preserve that boundary without
+  modifying upstream DeerFlow formatting. `test_soc_compact_model_json.py` pins this.
 - Operator prose is Simplified Chinese, including nested explanations, actions, checks,
   policy advice and repair-generated text. Reuse `prompts/operator_language.py`; preserve
   JSON keys, enums, references and raw technical values. Known system templates may be
@@ -37,12 +44,36 @@ file for SOC code. The authoritative product and engineering documents are:
 
 ## Runtime Contract
 
+- The composition root enables policy-first direct resolution by default
+  (`SOC_DIRECT_RESOLUTION_ENABLED=false` restores the full analysis path). After canonical
+  normalization, enforced deterministic tenant rules may choose handling before any LLM.
+  Otherwise preserve configured semantic review, rebuild facts and recheck policy, then
+  evaluate the complete eligible exact Memory override inventory, not prompt Top-K.
+  Unavailable model-dependent higher-priority conditions defer rather than allow a lower
+  rule or Memory to bypass policy. Similar/reinforce-only/contradictory Memory stays on
+  the normal analyzer path; an inventory conflict remains visible after bounded retrieval.
+- A successful direct run has `analysis=None`, frozen `direct_resolution` provenance,
+  nullable confidence and explicit skipped model steps; it is neither a stub nor failed.
+  Base lineage is skipped/unevaluated, not a fabricated model verdict. Common persistence,
+  tenant/automation observers, correction, external callback and action authority still
+  apply. Do not call a Policy Skill to rejudge direct Memory or count direct use as a new
+  independent Pattern observation. Preserve actual normalization-provider usage if run.
+  Bind the server-owned request environment before policy prechecks, not only during
+  optional enrichment. Corpus list and trace reads share scope matching; legacy policy-only
+  runs with missing request scope may use their frozen policy snapshot scope, never a
+  current config or alert-field guess. Explicit foreign scopes remain excluded.
+  Read-only DEV projections retain a skipped semantic phase for early policy-only runs and
+  show the selected rule from the frozen policy evaluation, not today's configuration.
+  Audit availability includes `skipped`; null confidence remains null in the raw result
+  and is omitted from scalar metrics. Never relabel policy handling as Memory reuse or
+  reconstruct an unsent primary-model prompt as actual model input.
+
 - Optional normalization review is a routine pre-entity node, not gated by parser warnings,
   baselines or missing fingerprints. The rollout flag is default-off; once enabled, every
   supported nonempty selected primary source is reviewed. `NormalizationReviewer` uses a
   distinct `NormalizationAssistRequest` and provider purpose. Persist before invocation;
   reuse only matching saved recovery results, without charging cached usage again. Explicit
-  replay may run a new measurement. Prompt v4 proposes objects, bound detector events and
+  replay may run a new measurement. Prompt v5 proposes objects, bound detector events and
   supplementary facts. Merge into existing canonical observations, not a parallel alert.
   Selected supplementary sources use independent L* IDs within eight sources/48k characters;
   catalog and source omissions, deduplication and truncation remain visible. Item-level errors
@@ -54,6 +85,14 @@ file for SOC code. The authoritative product and engineering documents are:
   a consumer-specific check exists. The post-run maintenance queue is not the trigger;
   its planned quality-inspection replacement must distinguish solved input defects from
   consumer gaps without creating daily analyst maintenance tasks.
+  DEV run readers select the PingAn feature version from the saved review mode, not today's
+  rollout flag. In apply mode, display behavior facets from the actual canonical request.
+  Coverage/readiness labels and filters must use those same facets; repeated support comes
+  from actual matching observations, not all members of an old offline navigation group.
+  The corpus's explicitly focused result bypasses readiness and outcome-comparison filters
+  until focus is cleared; a successful semantic supplement must not hide its own completed row.
+  Reruns must ask Pattern aggregation to deduplicate the current signature; never reuse an
+  old observation solely because the alert ID matches. Reading history does not migrate it.
   Isolate preparation, reviewer and merge faults as well as provider/output failures:
   keep the Adapter snapshot and continue primary analysis, retaining unapplied proposals
   separately. Journal persistence failure still aborts before invocation; primary model
@@ -69,6 +108,10 @@ file for SOC code. The authoritative product and engineering documents are:
   fabricated successful review. Proposal before/after snapshots are deep copies: parent and
   nested updates must not mutate previous journal entries. Empty source strings remain in
   canonical/audit records but do not create nonempty-only scalar provenance entries.
+  DEV audit presentation separates review execution from notes: completed `partial` reports
+  remain readable completed artifacts with the actual adopted count, not a failed phase.
+  Keep all issues/coverage limits visible on expansion and raw report status unchanged;
+  failed/skipped reviews must never claim successful adoption.
 
 - Alert admission means the configured upstream detector matched. The Runtime still
   decides scenario, direction, semantic roles, attempt/effect/impact stage, verdict, and

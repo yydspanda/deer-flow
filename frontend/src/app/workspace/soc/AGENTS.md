@@ -49,6 +49,12 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 ## Alert Results And Human Intervention
 
+- Render server `processing_path=tenant_policy|memory` as direct handling with an explicit
+  "主模型未调用" explanation. These completed runs have no model result or confidence;
+  skipped Base means "未生成判断", never 0% or a failed run. Memory use `direct_reused`
+  means adoption, not a before/after model comparison. Old model runs keep their existing
+  projection; do not synthesize a direct source in React.
+
 - `/alerts` is the primary **告警研判** workspace and is keyed by `run_id`. It lists every
   persisted Runtime result, including usable, degraded, failed, and corrected runs. A
   `ReviewQueueItem` is optional and must never be required to open the alert result.
@@ -228,6 +234,8 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   operational outcomes rather than independent detection truth.
 - Corpus filter continuity may be retained in tab-scoped browser storage, but selected
   alert detail is page-local and must not be restored or auto-opened on navigation. The
+  unprocessed-only switch defaults off. Ignore its legacy saved default without clearing
+  other filters; preserve subsequent explicit choices across navigation and refresh. The
   list query is server-filtered and paginated; React must not fetch the complete corpus
   and repeat those filters locally. When a processed alert creates a
   Pattern Candidate, keep the current page visible and render a persistent review link;
@@ -249,6 +257,11 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   it does not contain the final analysis. Keep the alert visibly running, use
   `/activity` and `/execution` for progress, and refetch the authoritative page after the
   claim disappears rather than treating the mutation response as completion.
+  A fresh terminal execution also triggers one final page refresh if activity polling missed
+  the claim. Compare with the pre-submit Run ID so an old completed Run cannot finish a rerun.
+  Terminal status must not remain a local spinner merely because the row is absent or the
+  final list read fails. Keep the explicitly focused result through readiness/comparison changes
+  caused by processing; changing the user's filters clears that temporary focus.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
   The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,
   canonical normalization, bounded model context/output, validation, Decision, and
@@ -310,9 +323,23 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   contract; the label must not imply generic field cleanup only or hard-code PingAn.
 - The optional semantic-review phase follows Adapter normalization. Keep the server-owned
   phase status and full request/result in the existing JSON audit viewer; do not add a separate
-  before/after comparison component. Shadow proposals are observation-only,
-  failed review means the Adapter path continues, and legacy runs without a saved review must
-  not gain a fabricated phase or result. Viewing the audit never invokes a model or applies changes.
+  before/after comparison component. Completed reviews show a checkmark and the server's adopted count; notes and coverage
+  limits remain expandable. Raw `partial` is preserved in JSON and does not by itself mean
+  execution failed. Failed/skipped reviews retain their unavailable state and explanation.
+  Shadow proposals are observation-only,
+  failed review means the Adapter path continues. Early policy-only runs retain a gray skipped
+  semantic phase and audit entry with a server-owned skip reason, never a fabricated review result.
+  Unrelated legacy runs without a saved review keep their existing phase list.
+  Direct handling displays matched enterprise rule/disposition or the reused Memory separately;
+  the result-card source summary and trace use the same enterprise-rule terminology, with
+  ignore/transfer wording taken from server `recommended_handling`, never a fixed transfer label.
+  no unknown verdict/partial-evidence metrics masquerade as a failed model judgment.
+  Viewing the audit never invokes a model or applies changes.
+  Apply results feed the standard alert and downstream Memory conditions; render the server's
+  saved effect, not the current rollout flag over historical runs. Semantic matching components
+  (detected file, detector subject, process relation) have Chinese labels; preserve raw typed
+  values and the existing per-behavior checkboxes. Do not display arbitrary metadata as required
+  behavior merely because a model extracted it.
 - Fixed GalaxyLab remains a DEV-only validation route and must not be linked from Memory
   Center or global operational navigation. Memory Center contains only production-facing
   Pattern, Candidate, Memory, and Profile governance. Pattern counts are absolute

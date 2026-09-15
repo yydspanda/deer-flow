@@ -50,6 +50,7 @@ def evaluate_tenant_policy(
     policy_time: datetime | None = None,
     policy_time_source: TenantPolicyTimeSource | None = None,
     evaluated_at: datetime | None = None,
+    before_analysis: bool = False,
 ) -> TenantPolicyDecision:
     """Evaluate one persisted Runtime result without mutating it."""
 
@@ -77,7 +78,7 @@ def evaluate_tenant_policy(
     if policy.effective_until and effective_time >= _aware_utc(policy.effective_until):
         raise TenantPolicyNotApplicableError("tenant policy has expired")
 
-    detection_truth = _detection_truth_snapshot(run)
+    detection_truth = SocDetectionTruthSnapshot(verdict="unknown", source="not_evaluated") if before_analysis else _detection_truth_snapshot(run)
     resolved_signals = tuple(signal_resolutions)
     signal_hash = stable_hash([item.model_dump(mode="json") for item in resolved_signals]) if resolved_signals else None
     networks = tuple(ip_network(value, strict=False) for value in policy.internal_networks)
@@ -89,6 +90,7 @@ def evaluate_tenant_policy(
             internal_networks=networks,
             authorization_result=authorization_result,
             signal_resolutions=resolved_signals,
+            before_analysis=before_analysis,
         )
         for rule in policy.rules
         if rule.enabled
@@ -98,6 +100,8 @@ def evaluate_tenant_policy(
         key=lambda item: (item.priority, item.rule_id),
     )
     policy_hash = stable_hash(policy.model_dump(mode="json"))
+    if before_analysis and matched and any(item.deferred and (item.priority, item.rule_id) <= (matched[0].priority, matched[0].rule_id) for item in evaluations):
+        matched = []
     decision_key = stable_hash(
         {
             "run_id": run.run_id,
@@ -105,6 +109,7 @@ def evaluate_tenant_policy(
             "policy_version": policy.policy_version,
             "policy_hash": policy_hash,
             "policy_signal_hash": signal_hash,
+            **({"evaluation_phase": "before_analysis"} if before_analysis else {}),
         }
     )
     evaluator = ActorContext(
@@ -137,6 +142,7 @@ def evaluate_tenant_policy(
             policy_time=effective_time,
             policy_time_source=resolved_time_source,
             evaluation_status=TenantPolicyEvaluationStatus.MATCHED,
+            evaluation_phase="before_analysis" if before_analysis else "after_analysis",
             decision_source=TenantPolicyDecisionSource.DETERMINISTIC_RULE,
             selected_rule_id=selected.rule_id,
             rule_evaluations=evaluations,
@@ -181,7 +187,8 @@ def evaluate_tenant_policy(
         policy_reviewed_at=policy.reviewed_at,
         policy_time=effective_time,
         policy_time_source=resolved_time_source,
-        evaluation_status=TenantPolicyEvaluationStatus.NO_MATCH,
+        evaluation_status=TenantPolicyEvaluationStatus.DEFERRED if any(item.deferred for item in evaluations) else TenantPolicyEvaluationStatus.NO_MATCH,
+        evaluation_phase="before_analysis" if before_analysis else "after_analysis",
         decision_source=TenantPolicyDecisionSource.NO_MATCH,
         rule_evaluations=evaluations,
         policy_signal_hash=signal_hash,
@@ -290,6 +297,7 @@ def _evaluate_rule(
     internal_networks: tuple,
     authorization_result: AuthorizationMatchResult | None,
     signal_resolutions: Sequence[TenantPolicySignalResolution],
+    before_analysis: bool = False,
 ) -> TenantPolicyRuleEvaluation:
     request = run.llm_analysis_request
     assert request is not None
@@ -498,11 +506,18 @@ def _evaluate_rule(
                 )
             )
 
+    if before_analysis:
+        for condition in conditions:
+            if condition.condition in {"detection_verdict", "scenario_key"}:
+                condition.available = False
+                condition.matched = False
+    deferred = any(not item.available for item in conditions) and all(item.matched for item in conditions if item.available)
     return TenantPolicyRuleEvaluation(
         rule_id=rule.rule_id,
         rule_name=rule.name,
         priority=rule.priority,
         matched=all(item.matched for item in conditions),
+        deferred=deferred,
         conditions=conditions,
     )
 

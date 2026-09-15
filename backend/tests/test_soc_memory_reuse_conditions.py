@@ -13,7 +13,7 @@ from soc_agent.memory import InMemoryMemoryCandidateRepository
 from soc_agent.memory.governance import scope_relation
 from soc_agent.memory.lessons import promote_memory_applicability_facets
 from soc_agent.memory.profiles import SocMemoryProfileRegistry
-from soc_agent.memory.retrieval import _memory_context_item
+from soc_agent.memory.retrieval import memory_context_item
 from soc_agent.memory.scoring import evaluate_memory_applicability
 
 
@@ -94,13 +94,13 @@ def test_real_retrieval_path_retains_reference_and_projects_the_unmet_limit(fing
     )
     result = service.find_relevant_records(query)
     assert result.returned_context_only_count == 1
-    item = _memory_context_item(result.matches[0], query_facets=query.facets, retrieval_policy_version=query.policy_version)
+    item = memory_context_item(result.matches[0], query_facets=query.facets, retrieval_policy_version=query.policy_version)
     assert item.memory_comparison.use_mode.value == "context_only"
     assert not item.memory_comparison.decision_directive_applicable
     assert item.memory_comparison.missing_reuse_conditions[0].values == ["ip:10.0.0.1"]
     query.facets = facets
     exact = service.find_relevant_records(query)
-    item = _memory_context_item(exact.matches[0], query_facets=query.facets, retrieval_policy_version=query.policy_version)
+    item = memory_context_item(exact.matches[0], query_facets=query.facets, retrieval_policy_version=query.policy_version)
     assert item.memory_comparison.decision_directive_applicable
 
 

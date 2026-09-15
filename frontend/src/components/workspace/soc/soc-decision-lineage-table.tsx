@@ -7,6 +7,7 @@ const STAGES = {
   effective: "最终采用结果",
 };
 const STATUSES: Record<string, string> = {
+  skipped: "未执行",
   observed: "已记录",
   disabled: "未启用",
   no_input: "无可用输入",
@@ -91,9 +92,13 @@ export function SocDecisionLineageTable({
                 ) : null}
               </td>
               <td className="px-4 py-3">
-                {VERDICTS[stage.verdict] ?? stage.verdict}
+                {stage.status === "skipped"
+                  ? "未生成判断"
+                  : (VERDICTS[stage.verdict] ?? stage.verdict)}
                 <div className="text-muted-foreground mt-1 tabular-nums">
-                  {Math.round(stage.confidence * 100)}%
+                  {stage.confidence == null
+                    ? "未调用模型，不计置信度"
+                    : `${Math.round(stage.confidence * 100)}%`}
                 </div>
               </td>
               <td className="px-4 py-3 whitespace-nowrap">

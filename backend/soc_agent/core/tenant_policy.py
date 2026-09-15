@@ -81,7 +81,11 @@ class SocTenantPolicyEvaluationService:
         run: AnalysisRun,
         *,
         context: ServiceRequestContext,
+        before_analysis: bool = False,
+        persist: bool = True,
     ) -> TenantPolicyDecision | None:
+        if not before_analysis and run.direct_resolution is not None and run.direct_resolution.policy_snapshot is not None:
+            return self._persist_decision(TenantPolicyDecision.model_validate(run.direct_resolution.policy_snapshot), context=context)
         request = run.llm_analysis_request
         inspection = inspect_alert_normalization(run.input_payload) if run.input_payload is not None else None
         policy_time, policy_time_source = _resolve_policy_time(
@@ -112,15 +116,21 @@ class SocTenantPolicyEvaluationService:
                 triggered_by=context.actor,
                 policy_time=policy_time,
                 policy_time_source=policy_time_source,
+                before_analysis=before_analysis,
             )
         except TenantPolicyNotApplicableError:
             return None
-        if decision.evaluation_status is TenantPolicyEvaluationStatus.NO_MATCH and self._advisor is not None:
+        if not before_analysis and run.direct_resolution is None and decision.evaluation_status is TenantPolicyEvaluationStatus.NO_MATCH and self._advisor is not None:
             decision = apply_tenant_policy_advisor_result(
                 decision,
                 self._advisor.advise(policy, run),
             )
 
+        if not persist:
+            return decision
+        return self._persist_decision(decision, context=context)
+
+    def _persist_decision(self, decision: TenantPolicyDecision, *, context: ServiceRequestContext) -> TenantPolicyDecision:
         existing = self._repository.find_tenant_policy_decision_by_key(decision.decision_key)
         if existing is not None:
             return existing

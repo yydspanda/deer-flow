@@ -7,6 +7,13 @@ generic `soc_agent` code.
 
 ## Input And Normalization
 
+- PingAn's governed deterministic policy evaluator supports pre-analysis evaluation on
+  canonical input. A concrete enforced ignore/transfer match may skip all models;
+  model-dependent conditions defer. Keep rule contents, environment mapping and priority
+  in this integration, never in the generic direct-resolution branch. The ZEUS result
+  mapper accepts `analysis=None` plus `direct_resolution` and returns the ordinary
+  handling result with its source; it must not invent attack analysis or a Base verdict.
+
 - `zeusRawLogs[].message` is parsed only here. When a parseable message exists it is the
   primary analysis source; outer ZEUS fields remain raw audit/provenance and may provide
   only explicitly reviewed metadata. If message is absent, use the reviewed structured
@@ -37,7 +44,9 @@ generic `soc_agent` code.
   retain Profile 7 / v5. Detector category/name plus the detected file can differentiate
   events sharing a parent process; hashes, IPs and user-specific directories are not these
   new feature anchors. Do not claim full coverage or migrate old Memory automatically.
-  The rollout remains off until real consumer/group compatibility is verified. Inspection is an
+  The deployment default remains off; external DEV explicitly opts into apply. Historical
+  readers use `PingAnSocMemoryProfile.for_run`, preserving each saved run's review mode.
+  Inspection is an
   on-demand read of per-run facts, not an analyst maintenance prerequisite. Phishing-email
   specialization remains deferred by user decision; trust the upstream ML/LLM detection.
 - Adapters emit generic role claims, scenario signals, typed observations, source-field
@@ -95,6 +104,9 @@ generic `soc_agent` code.
 - Every read-only provider result is an `InvestigationEvidence` record with provider
   mode, mock flag, freshness/hash, and `decision_impact=none`. It cannot directly change
   verdict, close review, write Memory, or execute response.
+- MCP text content for asset, TI, security-tag and software-path results uses compact
+  JSON and must decode to the unchanged `structuredContent`. This model-facing layout
+  rule does not apply to signed ZEUS/Agent Platform HTTP bodies or audit exports.
 
 ## Tenant Policy And External Lifecycle
 

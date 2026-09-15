@@ -71,6 +71,12 @@ const componentLabels: Record<string, string> = {
   http_method: "请求方法",
   account: "账号",
   service_uri: "服务地址",
+  detected_behavior: "检测行为与对象",
+  detected_file: "被检测文件",
+  target_port: "目标端口",
+  observed_process: "日志中的进程",
+  observed_process_edge: "父子进程关系",
+  web_detection_target: "Web 检测对象",
 };
 const entityLabels: Record<string, string> = {
   asset: "资产组",

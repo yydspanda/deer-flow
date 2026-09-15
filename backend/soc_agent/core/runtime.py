@@ -59,6 +59,7 @@ from soc_agent.protocols import (
     AnalysisBeforeProviderHook,
     AnalysisRequestEnricher,
     DecisionPolicy,
+    DirectResolutionResolver,
     LLMAnalyzer,
     NormalizationReviewer,
     RoleAdjudicationVerifier,
@@ -126,6 +127,7 @@ def analyze_alert(
     role_verifier: RoleAdjudicationVerifier | None = None,
     normalization_reviewer: NormalizationReviewer | None = None,
     normalization_reuse: AnalysisRun | None = None,
+    direct_resolution: DirectResolutionResolver | None = None,
     decision_policy: DecisionPolicy | None = None,
     before_provider: AnalysisBeforeProviderHook | None = None,
     analysis_request_enricher: AnalysisRequestEnricher | None = None,
@@ -139,7 +141,15 @@ def analyze_alert(
     run = AnalysisRun(
         alert_id="unknown",
         status=AnalysisRunStatus.RUNNING,
-        pipeline_version=("soc-runtime-v9-normalization" if normalization_reviewer is not None else SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION if role_verifier is not None else SOC_RUNTIME_PIPELINE_VERSION),
+        pipeline_version=(
+            "soc-runtime-v10-direct"
+            if direct_resolution is not None
+            else "soc-runtime-v9-normalization"
+            if normalization_reviewer is not None
+            else SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION
+            if role_verifier is not None
+            else SOC_RUNTIME_PIPELINE_VERSION
+        ),
         model_name=analysis_node.model_name,
         prompt_version=analysis_node.prompt_version,
         input_payload=input_payload,
@@ -151,6 +161,18 @@ def analyze_alert(
         run.alert_id = alert.alert_id
         run.normalized_alert = alert
         run.normalization_report = _normalization_report(alert)
+        if direct_resolution is not None:
+            # Canonical policy inputs need no semantic-review or analysis model.
+            def prepare_policy_input(_):
+                run.entities = extract_entities(alert)
+                run.extraction_report = _extraction_report(run.entities)
+                run.fact_reconstruction = reconstruct_facts(alert)
+                return build_llm_analysis_request(alert, run.entities, run.fact_reconstruction, sensitive_evidence_mode=sensitive_evidence_mode)
+
+            run.llm_analysis_request = _run_step(run, "prepare_policy_input", alert, prepare_policy_input)
+            resolution = _run_step(run, "direct_policy", run.llm_analysis_request, lambda _: direct_resolution.resolve_policy(run))
+            if resolution is not None:
+                return _finish_direct_run(run, resolution)
         if normalization_reviewer is not None:
             alert = _apply_semantic_review(run, alert, normalization_reviewer, before_provider=before_provider, previous=normalization_reuse)
             run.normalized_alert = alert
@@ -171,6 +193,13 @@ def analyze_alert(
                 sensitive_evidence_mode=sensitive_evidence_mode,
             ),
         )
+        run.llm_analysis_request = analysis_request
+        if direct_resolution is not None:
+            resolution = _run_step(run, "direct_policy_after_normalization", analysis_request, lambda _: direct_resolution.resolve_policy(run))
+            if resolution is None:
+                resolution = _run_step(run, "direct_memory", analysis_request, lambda _: direct_resolution.resolve_memory(run))
+            if resolution is not None:
+                return _finish_direct_run(run, resolution)
         skill_context = _run_step(
             run,
             "skill_context",
@@ -453,6 +482,22 @@ def analyze_alert(
         run.ended_at = _utc_now()
         run.total_duration_ms = _duration_ms(run.started_at, run.ended_at)
 
+    return run
+
+
+def _finish_direct_run(run, resolution):
+    run.direct_resolution = resolution
+    run.decision = resolution.decision
+    run.model_name = "not_invoked"
+    run.prompt_version = "not_invoked"
+    run.status = AnalysisRunStatus.SUCCESS
+    now = _utc_now()
+    for name in ("analyze_llm", "schema_validate", "evidence_grounding", "role_verification_gate", "analysis_materiality"):
+        run.steps.append(
+            PipelineStepTrace(
+                step_name=name, status=PipelineStepStatus.SKIPPED, started_at=now, ended_at=now, duration_ms=0, metadata={"reason": "governed_direct_resolution", "source_kind": resolution.source_kind, "provider_call_count": 0}
+            )
+        )
     return run
 
 

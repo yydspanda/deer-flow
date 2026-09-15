@@ -111,7 +111,7 @@ def test_real_review_retrieval_and_directive_do_not_require_old_fingerprint(serv
     from soc_agent.automation import InMemorySocAutomationRepository
     from soc_agent.contracts import ServiceRequestContext, Verdict
     from soc_agent.core.automation import SocAutomationService
-    from soc_agent.memory.retrieval import _memory_context_item
+    from soc_agent.memory.retrieval import memory_context_item
 
     service, repository = services
     item = candidate(service, 901, network_protocol="tcp")
@@ -135,7 +135,7 @@ def test_real_review_retrieval_and_directive_do_not_require_old_fingerprint(serv
     matches = service.find_relevant_records(query).matches
     assert len(matches) == 1
     assert matches[0].applicability_report.status.value == "applicable"
-    context_item = _memory_context_item(matches[0], query_facets=facets, retrieval_policy_version=query.policy_version)
+    context_item = memory_context_item(matches[0], query_facets=facets, retrieval_policy_version=query.policy_version)
     assert context_item.memory_comparison.decision_directive_applicable
     run = _runtime_run()
     run.llm_analysis_request.context_catalog = [context_item]

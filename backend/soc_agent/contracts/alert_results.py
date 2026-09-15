@@ -110,6 +110,7 @@ class SocCaseOutcomeView(BaseModel):
     """Single operator-facing answer derived from existing governed lineage."""
 
     schema_version: Literal["soc.case_outcome_view.v1"] = "soc.case_outcome_view.v1"
+    processing_path: Literal["model_analysis", "tenant_policy", "memory"] = "model_analysis"
     event_summary: str = Field(min_length=1, max_length=4000)
     security_verdict: Verdict | None = None
     base_verdict: Verdict | None = None

@@ -84,7 +84,9 @@ class PingAnLegacyResultMapper:
             "model_name": run.model_name,
             "soc_lineage": {
                 "run_id": run.run_id,
-                "base_verdict": base_verdict.value,
+                "base_verdict": base_verdict.value if run.direct_resolution is None else None,
+                "processing_path": run.direct_resolution.source_kind if run.direct_resolution is not None else "model_analysis",
+                "direct_resolution": run.direct_resolution.model_dump(mode="json") if run.direct_resolution is not None else None,
                 "effective_verdict": effective_verdict.value,
                 "decision_transition_id": (transition.transition_id if transition is not None else None),
                 "effective_disposition": (disposition.value if disposition is not None else None),
@@ -197,7 +199,7 @@ def _alert_title(run: AnalysisRun) -> str:
     if run.analysis is not None and run.analysis.summary.strip():
         return run.analysis.summary.strip()
     if run.normalized_alert is not None:
-        rule_name = run.normalized_alert.classification.rule_name
+        rule_name = run.normalized_alert.detection.rule_name
         if rule_name:
             return rule_name
     return "SOC 告警研判"

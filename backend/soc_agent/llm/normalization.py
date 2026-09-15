@@ -31,6 +31,7 @@ from soc_agent.pipeline.analysis_context import _resolve_path, _safe_string_fall
 from soc_agent.pipeline.encoded_context import compact_encoded_spans
 from soc_agent.prompts.normalization import NORMALIZATION_PROMPT_VERSION, NORMALIZATION_TARGETS, build_normalization_prompt
 from soc_agent.utils.hashing import stable_hash
+from soc_agent.utils.model_json import model_json
 
 
 class _Fact(BaseModel):
@@ -113,7 +114,7 @@ class JsonLLMNormalizationReviewer:
         if self.sensitive_evidence_mode is SensitiveEvidenceMode.REDACT:
             value = _safe_string_fallback(value) if isinstance(value, str) else _sanitize_value(value)
             request.adapter_entities = type(draft).model_validate(_sanitize_value(draft.model_dump(mode="json")))
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        text = value if isinstance(value, str) else model_json(value)
         text, spans = compact_encoded_spans(text)
         request.encoded_span_count = len(spans)
         request.input_truncated = len(text) > 48_000

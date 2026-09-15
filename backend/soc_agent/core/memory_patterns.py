@@ -745,6 +745,9 @@ class SocMemoryPatternPostAnalysisObserver:
         *,
         context: ServiceRequestContext,
     ) -> None:
+        if run.direct_resolution is not None:
+            # Reusing an answer is a usage event, not independent confirmation.
+            return
         observer_context = ServiceRequestContext(
             request_id=context.request_id,
             trace_id=context.trace_id,

@@ -1,11 +1,10 @@
 """Self-contained, sparse structured log review prompt."""
 
-import json
-
 from soc_agent.contracts import NormalizationAssistRequest
 from soc_agent.normalizers.semantic_observations import OBJECT_FIELDS
+from soc_agent.utils.model_json import model_json
 
-NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v4"
+NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v5"
 # Retained for reading the original scalar draft and v1 output compatibility.
 NORMALIZATION_TARGETS = (
     "entities.host.host_name",
@@ -137,4 +136,4 @@ def build_normalization_prompt(request: NormalizationAssistRequest) -> list[dict
             "属性值必须在引用中出现（允许忠实还原 JSON/HTML 转义）。重复引用需带零起始 quote_start；"
             "本要求替代前面的无需计算位置说明。</strict_reference_check>"
         )
-    return [{"role": "system", "content": system + "\n<examples>\n" + json.dumps(examples, ensure_ascii=False) + "\n</examples>"}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+    return [{"role": "system", "content": system + "\n<examples>\n" + model_json(examples) + "\n</examples>"}, {"role": "user", "content": model_json(payload)}]

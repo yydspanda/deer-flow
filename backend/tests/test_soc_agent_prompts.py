@@ -120,8 +120,8 @@ def test_analysis_prompt_keeps_long_context_before_tail_output_contract() -> Non
     assert context_start == 0
     assert context_end < task_start < example_start < contract_start < checklist_start
     assert prompt.user.rstrip().endswith("</final_checklist>")
-    assert json.dumps(prompt.response_schema, ensure_ascii=False, indent=2, sort_keys=True) in prompt.user
-    assert json.dumps(prompt.response_schema, ensure_ascii=False, indent=2, sort_keys=True) not in prompt.system
+    assert json.dumps(prompt.response_schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True) in prompt.user
+    assert json.dumps(prompt.response_schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True) not in prompt.system
     assert len(prompt.system) < 8_000
     assert "format_fragments" not in prompt.user
 
@@ -190,8 +190,8 @@ def test_analysis_prompt_exposes_context_only_memory_as_semantic_input_without_d
     assert memory_projection["memory_comparison"]["current_only_facets"] == {"entity": ["ip:10.0.0.21"]}
     assert "context_only forbids a deterministic Memory directive, not semantic use" in prompt.user
     assert "Never choose suspicious only because Memory is context-only" in prompt.user
-    assert '"case": "context_only_generalizes"' in prompt.user
-    assert '"case": "context_only_does_not_generalize"' in prompt.user
+    assert '"case":"context_only_generalizes"' in prompt.user
+    assert '"case":"context_only_does_not_generalize"' in prompt.user
 
 
 def test_analysis_prompt_uses_reviewed_outcome_for_exact_memory_context_example() -> None:
@@ -248,16 +248,16 @@ def test_analysis_prompt_balances_exact_true_positive_memory_example() -> None:
 
     assert prompt.example_id == "context_memory_true_positive"
     assert 'id="context_memory_true_positive"' in prompt.user
-    assert '"verdict": "true_positive"' in prompt.user
+    assert '"verdict":"true_positive"' in prompt.user
 
 
 def test_analysis_prompt_balances_false_positive_and_true_positive_without_memory() -> None:
     prompt = build_analysis_prompt(_analysis_request("missing_fields.json"))
 
-    assert '"case": "false_positive_without_memory"' in prompt.user
-    assert '"case": "true_positive_without_memory"' in prompt.user
+    assert '"case":"false_positive_without_memory"' in prompt.user
+    assert '"case":"true_positive_without_memory"' in prompt.user
     assert "suspicious is a supported positive judgment, not the default" in prompt.user
-    assert '"case": "true_positive_with_later_benign_disposition"' in prompt.user
+    assert '"case":"true_positive_with_later_benign_disposition"' in prompt.user
 
 
 def test_all_analysis_output_examples_pass_current_parser_contract() -> None:
@@ -369,7 +369,7 @@ def test_analysis_prompt_exposes_readable_model_coverage_without_audit_paths() -
     assert "schema_fingerprint" not in serialized
     assert "projected_field_paths" not in serialized
     assert "omitted_field_paths" not in serialized
-    assert '"content": {' in prompt.user
+    assert '"content":{' in prompt.user
 
 
 def test_analysis_prompt_handles_missing_evidence_policy() -> None:

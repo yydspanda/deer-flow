@@ -269,7 +269,7 @@ export async function getSocCorpusWorkbenchState(
   if (query.sourceType) params.set("source_type", query.sourceType);
   if (query.groupId) params.set("group_id", query.groupId);
   if (query.comparison) params.set("comparison", query.comparison);
-  params.set("unprocessed_only", String(query.unprocessedOnly ?? true));
+  params.set("unprocessed_only", String(query.unprocessedOnly ?? false));
   if (query.focusAlertId) {
     params.set("focus_alert_id", query.focusAlertId);
   }

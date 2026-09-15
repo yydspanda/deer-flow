@@ -17,6 +17,7 @@ def _utc_now() -> datetime:
 
 
 class SocMemoryUseEffect(StrEnum):
+    DIRECT_REUSED = "direct_reused"
     CONTEXT_ONLY = "context_only"
     REINFORCED = "reinforced"
     OVERRIDDEN = "overridden"
@@ -80,6 +81,7 @@ class SocMemoryUseRecord(BaseModel):
     matched_facets: dict[str, list[str]] = Field(default_factory=dict)
     applicability_report: SocMemoryApplicabilityReport
     base_verdict: Verdict
+    base_model_evaluated: bool = True
     effective_verdict: Verdict
     effect: SocMemoryUseEffect
     directive_applied: bool

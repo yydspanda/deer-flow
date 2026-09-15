@@ -92,7 +92,7 @@ _LABELS = {
 }
 _KINDS = {"process": "进程", "file": "文件", "network": "网络连接", "http": "HTTP", "host": "主机", "user": "账号", "detections": "检测事件", "context_observations": "上下文对象", "supplementary_facts": "补充事实"}
 _METADATA = {"observation_id", "evidence_path", "event_scope_id", "relation"}
-_STATUS = {"applied": "已采用", "shadow": "核对完成", "unchanged": "无需调整", "partial": "部分完成", "failed": "核对失败", "skipped": "未执行"}
+_STATUS = {"applied": "核对完成", "shadow": "核对完成", "unchanged": "无需调整", "partial": "核对完成", "failed": "核对失败", "skipped": "未执行"}
 
 
 def _leaves(value: Any, path: str = "") -> dict[str, Any]:
@@ -107,13 +107,16 @@ def build_normalization_review_view(run: AnalysisRun) -> NormalizationReviewView
     report = run.normalization_assistance
     if report is None:
         return None
-    effect = "仅对比，未用于本次研判或经验匹配" if report.mode == "shadow" else "已合入本次研判输入"
+    effect = "仅对比，未用于本次研判或经验匹配" if report.mode == "shadow" else "已合入标准告警，供后续研判与经验条件构建使用"
     if report.status == "failed":
         effect = "核对失败，沿用 Adapter 结果"
     elif report.status == "skipped":
         effect = "本次未执行语义核对"
     elif report.mode == "apply" and not report.changes and not report.observation_changes:
         effect = "未修改标准告警，沿用 Adapter 结果"
+    elif report.mode == "apply":
+        adopted = sum(change.canonical_status == "applied" for change in [*report.changes, *report.observation_changes])
+        effect = f"核对完成，已采用 {adopted} 项补充；供后续研判与经验条件构建使用"
     usage = report.metadata.get("usage", {})
     tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
     view = NormalizationReviewView(

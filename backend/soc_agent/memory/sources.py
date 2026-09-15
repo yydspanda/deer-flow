@@ -656,7 +656,8 @@ def _review_note_content(
         lines.append(f"Runtime summary: {run.analysis.summary}")
         lines.append(f"Runtime reason: {run.analysis.reason}")
     if run.decision is not None:
-        lines.append(f"Runtime verdict: {run.decision.verdict.value} ({run.decision.confidence:.2f})")
+        suffix = f" ({run.decision.confidence:.2f})" if run.decision.confidence is not None else ""
+        lines.append(f"Runtime verdict: {run.decision.verdict.value}{suffix}")
     return "\n".join(lines)
 
 
@@ -670,6 +671,10 @@ def _run_promotion_content(
     ]
     if command.note is not None:
         lines.append(f"Analyst note: {command.note}")
+    if run.direct_resolution is not None:
+        lines.extend(
+            [f"Direct handling source: {run.direct_resolution.source_kind}:{run.direct_resolution.source_id}", f"Reviewed handling basis: {run.direct_resolution.summary}", "No independent model judgment was generated in this run."]
+        )
     if run.analysis is not None:
         lines.append(f"Runtime summary: {run.analysis.summary}")
         lines.append(f"Runtime reason: {run.analysis.reason}")

@@ -53,6 +53,7 @@ class TenantPolicyReviewEffect(StrEnum):
 
 
 class TenantPolicyEvaluationStatus(StrEnum):
+    DEFERRED = "deferred"
     MATCHED = "matched"
     NO_MATCH = "no_match"
 
@@ -308,6 +309,8 @@ class TenantPolicyAdvice(TenantPolicyModel):
 
     @model_validator(mode="after")
     def validate_advice_effect(self) -> TenantPolicyAdvice:
+        if self.evaluation_status is TenantPolicyEvaluationStatus.DEFERRED:
+            raise ValueError("deferred is reserved for deterministic pre-analysis policy evaluation")
         if self.evaluation_status is TenantPolicyEvaluationStatus.MATCHED:
             if not self.evidence_refs:
                 raise ValueError("matched tenant policy advice requires evidence_refs")
@@ -437,6 +440,7 @@ class TenantDispositionPolicy(TenantPolicyModel):
 class TenantPolicyConditionEvaluation(TenantPolicyModel):
     condition: str = Field(min_length=1, max_length=128)
     matched: bool
+    available: bool = True
     evidence_paths: list[str] = Field(default_factory=list, max_length=50)
     detail: str = Field(min_length=1, max_length=1000)
 
@@ -446,6 +450,7 @@ class TenantPolicyRuleEvaluation(TenantPolicyModel):
     rule_name: str = Field(min_length=1, max_length=256)
     priority: int = Field(ge=0, le=10_000)
     matched: bool
+    deferred: bool = False
     conditions: list[TenantPolicyConditionEvaluation] = Field(min_length=1, max_length=20)
 
 
@@ -471,6 +476,7 @@ class TenantPolicyDecision(TenantPolicyModel):
     policy_time: datetime
     policy_time_source: TenantPolicyTimeSource
     evaluation_status: TenantPolicyEvaluationStatus
+    evaluation_phase: Literal["before_analysis", "after_analysis"] = "after_analysis"
     decision_source: TenantPolicyDecisionSource = TenantPolicyDecisionSource.DETERMINISTIC_RULE
     selected_rule_id: str | None = Field(default=None, min_length=1, max_length=128)
     rule_evaluations: list[TenantPolicyRuleEvaluation] = Field(default_factory=list, max_length=200)
@@ -513,7 +519,10 @@ class TenantPolicyDecision(TenantPolicyModel):
         if self.decision_source is not TenantPolicyDecisionSource.LLM_POLICY_SKILL and (self.advisor_provenance is not None or self.advisor_advice is not None):
             raise ValueError("non-advisor tenant decisions cannot carry advisor payloads")
         matched_ids = {item.rule_id for item in self.rule_evaluations if item.matched}
-        if self.evaluation_status is TenantPolicyEvaluationStatus.MATCHED:
+        if self.evaluation_status is TenantPolicyEvaluationStatus.DEFERRED:
+            if self.evaluation_phase != "before_analysis" or self.selected_rule_id is not None or not any(item.deferred for item in self.rule_evaluations):
+                raise ValueError("deferred policy evaluation requires unavailable pre-analysis conditions")
+        elif self.evaluation_status is TenantPolicyEvaluationStatus.MATCHED:
             if self.selected_rule_id is None or self.selected_rule_id not in matched_ids:
                 raise ValueError("matched tenant policy decision requires a selected matched rule")
         elif self.selected_rule_id is not None or matched_ids:
@@ -521,7 +530,7 @@ class TenantPolicyDecision(TenantPolicyModel):
         expected_shadow = self.policy_mode is TenantPolicyMode.SHADOW
         if self.shadow_only is not expected_shadow:
             raise ValueError("tenant policy decision shadow_only must match policy_mode")
-        if self.evaluation_status is TenantPolicyEvaluationStatus.NO_MATCH:
+        if self.evaluation_status in {TenantPolicyEvaluationStatus.NO_MATCH, TenantPolicyEvaluationStatus.DEFERRED}:
             if self.auto_apply_allowed or self.review_queue_impact != "none" or self.disposition_impact != "none":
                 raise ValueError("no-match tenant policy decision cannot carry an application effect")
         elif self.policy_mode is TenantPolicyMode.SHADOW:

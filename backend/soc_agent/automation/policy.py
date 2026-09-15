@@ -81,7 +81,7 @@ def select_automation_rule(
             continue
         if match.decision_policy_versions and decision.policy_version not in match.decision_policy_versions:
             continue
-        if match.minimum_confidence is not None and decision.confidence < match.minimum_confidence:
+        if match.minimum_confidence is not None and (decision.confidence is None or decision.confidence < match.minimum_confidence):
             continue
         if match.needs_review is not None and decision.needs_review is not match.needs_review:
             continue

@@ -142,7 +142,7 @@ class SocMemoryWorkbenchDecisionStage(BaseModel):
     stage: str
     status: str
     verdict: str
-    confidence: float
+    confidence: float | None
     needs_review: bool
     suggested_action: str
     disposition: str | None = None
@@ -300,6 +300,7 @@ class SocMemoryWorkbenchService:
             "deterministic_and_llm",
         ] = "disabled",
         software_path_fast_policy: bool = False,
+        normalization_review_mode: Literal["off", "shadow", "apply"] = "off",
     ) -> None:
         self._repository = repository
         self._analysis_service = analysis_service
@@ -309,6 +310,7 @@ class SocMemoryWorkbenchService:
         self._database_file = database_file
         self._tenant_policy = tenant_policy
         self._software_path_fast_policy = software_path_fast_policy
+        self._normalization_review_mode = normalization_review_mode
         self._source_sha256 = _sha256_file(self._source_path)
         self._cases = _load_cases(self._source_path)
         fingerprints = {item.behavior_fingerprint for item in self._cases.values()}
@@ -326,10 +328,17 @@ class SocMemoryWorkbenchService:
             source_type=MemoryPatternSourceType.BATCH_ALERT,
             limit=500,
         )
-        profile_identity = PingAnSocMemoryProfile.identity
-        observations = [item for item in observations if item.profile_id == profile_identity.profile_id and item.profile_version == profile_identity.profile_version and item.feature_schema_version == profile_identity.feature_schema_version]
+        known_profiles = [PingAnSocMemoryProfile().identity, PingAnSocMemoryProfile(semantic_features=True).identity]
+        observations = [item for item in observations if any(item.profile_id == p.profile_id and item.profile_version == p.profile_version and item.feature_schema_version == p.feature_schema_version for p in known_profiles)]
         observations_by_alert = {item.source.alert_id: item for item in observations if item.source.alert_id in self._cases}
         runs = self._runs_by_alert(observations_by_alert)
+        from soc_agent.demo.corpus_workbench import _observation_matches_run
+
+        observations_by_alert = {}
+        for item in observations:
+            alert_id = item.source.alert_id
+            if _observation_matches_run(item, runs.get(alert_id)) and (alert_id not in observations_by_alert or item.created_at > observations_by_alert[alert_id].created_at):
+                observations_by_alert[alert_id] = item
         queues_by_run = {
             item.run_id: item
             for item in self._repository.list_review_items(
@@ -350,6 +359,7 @@ class SocMemoryWorkbenchService:
         )
         progress = _progress(
             observations_by_alert=observations_by_alert,
+            directly_processed={alert_id for alert_id, run in runs.items() if run.direct_resolution is not None},
             candidate=candidate,
             record=record,
             replay_by_key=replay_by_key,
@@ -405,7 +415,7 @@ class SocMemoryWorkbenchService:
 
         before = self.get_state()
         current = next(item for item in before.alerts if item.alert_id == alert_id)
-        if current.observation_id is not None:
+        if current.workflow_state == "completed":
             return SocMemoryWorkbenchProcessResult(
                 alert_id=alert_id,
                 run_id=current.run_id,
@@ -422,7 +432,7 @@ class SocMemoryWorkbenchService:
             copy.deepcopy(case.payload),
             context=request_context,
         )
-        if run.status is AnalysisRunStatus.FAILED:
+        if run.status is AnalysisRunStatus.FAILED or run.direct_resolution is not None:
             state = self.get_state()
             return SocMemoryWorkbenchProcessResult(
                 alert_id=alert_id,
@@ -448,7 +458,7 @@ class SocMemoryWorkbenchService:
         )
 
     def _analysis_idempotency_key(self, alert_id: str) -> str:
-        identity = PingAnSocMemoryProfile.identity
+        identity = PingAnSocMemoryProfile(semantic_features=self._normalization_review_mode == "apply").identity
         generation = stable_hash(
             {
                 "workbench_version": MEMORY_WORKBENCH_VERSION,
@@ -531,7 +541,7 @@ class SocMemoryWorkbenchService:
                 for item in transition.stages
             ]
         workflow_state: Literal["locked", "ready", "analysis_only", "completed", "failed"]
-        if observation is not None:
+        if observation is not None or (run is not None and run.direct_resolution is not None):
             workflow_state = "completed"
         elif run is not None and run.status is AnalysisRunStatus.FAILED:
             workflow_state = "failed"
@@ -557,7 +567,7 @@ class SocMemoryWorkbenchService:
             prompt_version=(run.prompt_version if run is not None else None),
             total_duration_ms=(run.total_duration_ms if run is not None else None),
             output_quality=(run.analysis_output_quality.status.value if run is not None and run.analysis_output_quality is not None else None),
-            base_verdict=(decision.verdict.value if decision else None),
+            base_verdict=(decision.verdict.value if decision and run.direct_resolution is None else None),
             base_confidence=(decision.confidence if decision else None),
             base_needs_review=(decision.needs_review if decision else None),
             effective_verdict=(effective.verdict.value if effective is not None else None),
@@ -624,11 +634,13 @@ def _progress(
     candidate: SocMemoryCandidate | None,
     record: SocMemoryRecord | None,
     replay_by_key: Mapping[str, Any],
+    directly_processed: set[str] | None = None,
 ) -> SocMemoryWorkbenchProgress:
+    processed = set(observations_by_alert) | (directly_processed or set())
     construction = [item for item in _CASE_SPECS if item.phase == "construction"]
     construction_processed = sum(item.alert_id in observations_by_alert for item in construction)
     held_out = next(item for item in _CASE_SPECS if item.phase == "held_out")
-    held_out_processed = held_out.alert_id in observations_by_alert
+    held_out_processed = held_out.alert_id in processed
     decision_ready = bool(record is not None and record.retrieval_enabled and record.decision_directive is not None and record.business_lesson is not None)
     candidate_state: Literal[
         "collecting",
@@ -670,7 +682,7 @@ def _progress(
         "complete",
     ]
     next_construction = next(
-        (item for item in construction if item.alert_id not in observations_by_alert),
+        (item for item in construction if item.alert_id not in processed),
         None,
     )
     if next_construction is not None:
@@ -687,7 +699,7 @@ def _progress(
         next_action = "process_held_out"
     else:
         next_additional = next(
-            (item for item in _CASE_SPECS if item.phase == "additional" and item.alert_id not in observations_by_alert),
+            (item for item in _CASE_SPECS if item.phase == "additional" and item.alert_id not in processed),
             None,
         )
         if next_additional is None:
@@ -696,7 +708,7 @@ def _progress(
             next_alert_id = next_additional.alert_id
             next_action = "process_additional"
     return SocMemoryWorkbenchProgress(
-        processed_count=len(observations_by_alert),
+        processed_count=len(processed),
         construction_processed=construction_processed,
         candidate_state=candidate_state,
         memory_state=memory_state,

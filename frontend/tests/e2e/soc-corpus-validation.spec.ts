@@ -753,6 +753,117 @@ function corpusStart(alertId: string) {
   };
 }
 
+for (const legacyFilters of [false, true]) {
+  test(`shows all alerts by default and preserves manual filtering (legacy cache: ${legacyFilters})`, async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { threads: [] });
+    if (legacyFilters) {
+      await page.addInitScript(() => {
+        const key = "soc.corpus-validation.filters.v1";
+        if (!sessionStorage.getItem(key)) {
+          sessionStorage.setItem(
+            key,
+            JSON.stringify({ search: "1984426", unprocessedOnly: true }),
+          );
+        }
+      });
+    }
+    const current = corpusState(true);
+    await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+      const url = route.request().url();
+      await route.fulfill({
+        json: url.endsWith("/activity")
+          ? corpusActivity()
+          : corpusStateForRequest(current, url),
+      });
+    });
+    await page.goto("/workspace/soc/corpus-validation");
+    const toggle = page.getByLabel("仅显示未运行告警");
+    const completedRow = page.locator('tbody tr[data-alert-id="1984426"]');
+    await expect(toggle).not.toBeChecked();
+    await expect(completedRow).toBeVisible();
+    if (legacyFilters) {
+      await expect(page.locator("#corpus-search")).toHaveValue("1984426");
+    }
+    await toggle.check();
+    await expect(completedRow).toHaveCount(0);
+    await page.reload();
+    await expect(toggle).toBeChecked();
+    await expect(completedRow).toHaveCount(0);
+    await toggle.uncheck();
+    await expect(completedRow).toBeVisible();
+    await toggle.check();
+    await page.getByRole("button", { name: "重置筛选" }).click();
+    await expect(toggle).not.toBeChecked();
+    await expect(completedRow).toBeVisible();
+  });
+}
+
+test("completed semantic review shows a checkmark and expandable notes", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(90_000);
+  mockLangGraphAPI(page, { threads: [] });
+  const audit = corpusAudit();
+  const semantic = {
+    sequence: 4,
+    artifact_id: "semantic-normalization-review",
+    file_name: "03b-semantic-review.json",
+    phase: "semantic_review",
+    title: "语义核对记录",
+    description: "核对完成，已采用 24 项补充；供后续研判与经验条件构建使用",
+    status: "available",
+    source: "persisted_run",
+    metrics: {},
+    review_guide: [],
+    normalization_review: {
+      status_label: "核对完成",
+      issues: ["上游账号字段含义待解释。", "文件摘要归属有备注。"],
+      coverage_notes: [],
+    },
+    payload: { result: { status: "partial", mode: "apply" } },
+  };
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    if (url.endsWith("/audit"))
+      return route.fulfill({
+        json: { ...audit, artifacts: [...audit.artifacts, semantic] },
+      });
+    if (url.endsWith("/execution"))
+      return route.fulfill({ json: corpusExecution(true) });
+    return route.fulfill({
+      json: corpusStateForRequest(corpusState(true), url),
+    });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByRole("button", { name: "查看 Alert 1984426 结果" }).click();
+  await page.getByRole("button", { name: "打开完整审计" }).click();
+  const entry = page.getByRole("button", { name: /语义核对记录/ });
+  await entry.click();
+  await expect(entry.locator("svg.lucide-circle-check")).toHaveCount(1);
+  await expect(page.getByText("核对完成", { exact: true })).toBeVisible();
+  await expect(page.getByText(/核对完成，已采用 24 项补充/)).toBeVisible();
+  const note = page.getByText("上游账号字段含义待解释。", { exact: true });
+  await expect(note).not.toBeVisible();
+  await page.getByText("核对备注（2）", { exact: true }).click();
+  await expect(note).toBeVisible();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await note.scrollIntoViewIfNeeded();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`semantic-notes-${width}.png`),
+    });
+  }
+});
+
 test("shows semantic review JSON without a dedicated comparison view", async ({
   page,
 }, testInfo) => {
@@ -876,6 +987,7 @@ test("opens the searched alert's complete group and restores original filters wi
     sourceType: "edr",
     groupId: "all",
     unprocessedOnly: true,
+    unprocessedFilterVersion: 2,
   };
   await page.addInitScript((snapshot) => {
     sessionStorage.setItem(
@@ -1063,6 +1175,94 @@ test("runs distinct alerts concurrently without enabling a duplicate click", asy
   expect(processCalls).toBe(2);
 
   releaseRequests();
+});
+
+test("finishes from the execution trace when activity polling misses the claim", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  let finished = false;
+  let submitted = false;
+  let processCalls = 0;
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity")) {
+      await route.fulfill({ json: corpusActivity() });
+    } else if (url.endsWith("/execution")) {
+      await route.fulfill({ json: corpusExecution(finished) });
+    } else if (route.request().method() === "POST") {
+      submitted = true;
+      processCalls += 1;
+      await route.fulfill({ status: 202, json: corpusStart("1984426") });
+    } else {
+      await route.fulfill({
+        json: corpusStateForRequest(corpusState(finished), url),
+      });
+    }
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
+  await page.getByRole("button", { name: "运行", exact: true }).click();
+  await expect(
+    page.getByText("Alert 1984426 正在研判", { exact: true }),
+  ).toBeVisible();
+  expect(submitted).toBe(true);
+  await page.waitForTimeout(1_600);
+  finished = true;
+  await expect(
+    page.getByRole("button", { name: "查看 Alert 1984426 结果" }).last(),
+  ).toBeVisible({ timeout: 10_000 });
+  await expect(
+    page.getByText("Alert 1984426 正在研判", { exact: true }),
+  ).toHaveCount(0);
+  expect(processCalls).toBe(1);
+});
+
+test("does not treat a previous completed run as the rerun result", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  let finished = false;
+  let processCalls = 0;
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity")) {
+      await route.fulfill({ json: corpusActivity() });
+    } else if (url.endsWith("/execution")) {
+      await route.fulfill({
+        json: {
+          ...corpusExecution(true),
+          run_id: finished ? "RUN-NEW" : "RUN-CORPUS-1",
+        },
+      });
+    } else if (route.request().method() === "POST") {
+      processCalls += 1;
+      await route.fulfill({ status: 202, json: corpusStart("1984426") });
+    } else {
+      const state = corpusState(true);
+      if (finished) state.alerts[0]!.run_id = "RUN-NEW";
+      await route.fulfill({ json: corpusStateForRequest(state, url) });
+    }
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByLabel("仅显示未运行告警").uncheck();
+  await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
+  await page
+    .locator('[data-alert-id="1984426"]')
+    .getByRole("button", { name: /重新运行/ })
+    .click();
+  await expect(
+    page.getByText("Alert 1984426 正在研判", { exact: true }),
+  ).toBeVisible();
+  await page.waitForTimeout(1_600);
+  await expect(
+    page.getByText("Alert 1984426 正在研判", { exact: true }),
+  ).toBeVisible();
+  finished = true;
+  await expect(
+    page.getByRole("button", { name: "查看 Alert 1984426 结果" }).last(),
+  ).toBeVisible({ timeout: 10_000 });
+  expect(processCalls).toBe(1);
 });
 
 test("shows an alert claimed by another session and does not post it again", async ({
@@ -1413,6 +1613,180 @@ test("explains when tenant policy changes the operational action", async ({
   await expect(
     page.getByText("本次 转交 · 历史 转交", { exact: true }),
   ).toBeVisible();
+});
+
+test("direct resolution shows its source and skipped model on desktop and mobile", async ({
+  page,
+}, testInfo) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const state = corpusState(true);
+  Object.assign(state.alerts[0]!, {
+    model_name: "not_invoked",
+    base_verdict: null,
+    base_confidence: null,
+    effective_verdict: "unknown",
+    effective_confidence: null,
+    memory_contexts: [],
+    memory_directive_applied: false,
+    memory_effect: null,
+    base_operational_projection: null,
+    effective_operational_projection: "transfer",
+    operator_outcome: {
+      schema_version: "soc.case_outcome_view.v1",
+      processing_path: "tenant_policy",
+      event_summary: "模拟：命中已审核的企业转交规则。",
+      security_verdict: "unknown",
+      base_verdict: null,
+      confidence: null,
+      decision_usable: true,
+      decision_change: "unchanged",
+      operational_disposition: "escalated",
+      recommended_handling: "transfer",
+      handling_reason: "模拟：该检测规则按企业要求直接转交。",
+      handling_recommendation: "转交并记录处理结果。",
+      closure_status: "handling_pending",
+      closure_reason_codes: ["tenant_policy_handoff_pending"],
+      evidence_gap_impact: "none",
+      evidence_gaps: [],
+      blocked_capabilities: [],
+      next_steps: [],
+      basis: [],
+      contributions: [],
+      memory_context_count: 0,
+      memory_directive_applied: false,
+      tenant_policy_applied: true,
+    },
+    decision_stages: [
+      {
+        stage: "base",
+        status: "skipped",
+        verdict: "unknown",
+        confidence: null,
+        needs_review: false,
+        suggested_action: "主模型未调用。",
+        summary: "按企业规则直接处理。",
+      },
+    ],
+  });
+  const execution = corpusExecution(true);
+  const semantic = {
+    phase: "semantic_review",
+    label: "语义核对",
+    status: "skipped",
+    summary:
+      "企业规则已根据标准化字段确定处置，已跳过语义核对；本次未进行 Memory 匹配。",
+    metrics: {},
+    steps: [],
+    duration_ms: null,
+  };
+  const directExecution = {
+    ...execution,
+    model_name: "not_invoked",
+    provider_attempt_count: 0,
+    phases: [execution.phases[0], semantic, ...execution.phases.slice(1)].map(
+      (phase) => {
+        if (phase?.phase === "decision")
+          return {
+            ...phase,
+            summary:
+              "命中企业规则「平安明确规则码转交」，直接转交；未调用主模型。",
+            metrics: {
+              disposition: "转交",
+              rule_code: "RPAADM_000558",
+              processing_path: "企业规则直接处理",
+            },
+          };
+        if (
+          phase &&
+          ["context", "reasoning", "validation", "memory"].includes(phase.phase)
+        )
+          return {
+            ...phase,
+            status: "skipped",
+            steps: [],
+            metrics: {},
+            summary: "企业规则已确定处置，本阶段已跳过。",
+          };
+        return phase;
+      },
+    ),
+  };
+  const audit = corpusAudit();
+  const semanticArtifact = {
+    sequence: 4,
+    artifact_id: "semantic-normalization-review",
+    file_name: "03b-semantic-review.json",
+    phase: "semantic_review",
+    title: "语义核对（已跳过）",
+    description: semantic.summary,
+    status: "skipped",
+    source: "persisted_run",
+    metrics: {},
+    review_guide: [],
+    payload: { request: null, result: null },
+  };
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    if (url.endsWith("/audit"))
+      return route.fulfill({
+        json: { ...audit, artifacts: [...audit.artifacts, semanticArtifact] },
+      });
+    await route.fulfill({
+      json: route.request().url().endsWith("/execution")
+        ? directExecution
+        : corpusStateForRequest(state, route.request().url()),
+    });
+  });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto("/workspace/soc/corpus-validation");
+    const unprocessedOnly = page.getByRole("switch", {
+      name: "仅显示未运行告警",
+    });
+    if (await unprocessedOnly.isChecked()) await unprocessedOnly.click();
+    await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
+    await page.locator('[data-alert-id="1984426"]').click();
+    await expect(
+      page.getByText("命中企业规则 · 直接转交，未调用主模型"),
+    ).toBeVisible();
+    await page
+      .getByTestId("outcome-details")
+      .locator("summary")
+      .first()
+      .click();
+    await expect(
+      page.getByText("按企业规则直接确定处置，未进行模型风险研判"),
+    ).toBeVisible();
+    const trace = page.getByRole("region", { name: "SOC Runtime 运行轨迹" });
+    await expect(trace.getByText(semantic.summary)).toBeVisible();
+    await expect(trace.getByText("语义核对", { exact: true })).toHaveCount(2);
+    await expect(
+      trace.getByText(
+        "命中企业规则「平安明确规则码转交」，直接转交；未调用主模型。",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      trace.getByText("RPAADM_000558", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      trace.getByText(semantic.summary).locator("..").locator(".."),
+    ).toHaveClass(/text-muted-foreground/);
+    await page.getByRole("button", { name: "打开完整审计" }).click();
+    const entry = page.getByRole("button", { name: /语义核对（已跳过）/ });
+    await entry.click();
+    await expect(entry.locator("svg.lucide-skip-forward")).toHaveCount(1);
+    await expect(entry.locator("svg.lucide-triangle-alert")).toHaveCount(0);
+    await expect(
+      page.getByText("已跳过", { exact: true }).last(),
+    ).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath(`policy-skipped-${width}.png`),
+      fullPage: true,
+    });
+  }
 });
 
 test("opens a used Memory correction and creates a governed revision candidate", async ({

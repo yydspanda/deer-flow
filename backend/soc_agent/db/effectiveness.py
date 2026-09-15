@@ -546,9 +546,9 @@ class SqlAlchemySocEffectivenessRepository:
                 directive_high_trust += 1
                 if effective_verdict == final_verdict:
                     directive_correct += 1
-                if base_verdict != final_verdict and effective_verdict == final_verdict:
+                if payload.get("base_model_evaluated", True) and base_verdict != final_verdict and effective_verdict == final_verdict:
                     helpful += 1
-                if base_verdict == final_verdict and effective_verdict != final_verdict:
+                if payload.get("base_model_evaluated", True) and base_verdict == final_verdict and effective_verdict != final_verdict:
                     harmful += 1
                 if effective_verdict == _FALSE_POSITIVE and final_verdict == _TRUE_POSITIVE and applied_disposition_by_run.get(use.run_id) in _AUTO_IGNORE_DISPOSITIONS:
                     wrong_auto_ignore += 1

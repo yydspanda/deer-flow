@@ -36,6 +36,7 @@ import {
 import type { SocMemoryBusinessLesson, SocMemoryUseEffect } from "@/core/soc";
 
 const USE_EFFECT_LABELS: Record<SocMemoryUseEffect, string> = {
+  direct_reused: "直接复用结论（未调用主模型）",
   context_only: "仅作研判参考",
   reinforced: "支持原结论",
   overridden: "改变最终结论",
@@ -630,7 +631,10 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                           {USE_EFFECT_LABELS[use.effect]}
                         </Badge>
                         <div className="text-xs">
-                          {use.base_verdict} → {use.effective_verdict}
+                          {use.base_model_evaluated === false
+                            ? "直接采用"
+                            : `${use.base_verdict} →`}{" "}
+                          {use.effective_verdict}
                         </div>
                         <div className="text-muted-foreground text-xs md:text-right">
                           {formatTime(use.created_at)}

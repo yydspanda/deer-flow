@@ -103,6 +103,12 @@ export function SocCaseOutcomePanel({
       blocking ||
       executionIssue ||
       outcome.recommended_handling !== "ignore");
+  const directHandling =
+    outcome.recommended_handling === "transfer"
+      ? "直接转交，"
+      : outcome.recommended_handling === "ignore"
+        ? "直接忽略，"
+        : "";
 
   return (
     <section className={cn("border", className)} aria-label="处理结论">
@@ -130,6 +136,15 @@ export function SocCaseOutcomePanel({
             处理依据
           </h4>
           <p className="mt-2 text-sm leading-7 break-words">{reason}</p>
+          {outcome.processing_path &&
+          outcome.processing_path !== "model_analysis" ? (
+            <p className="mt-3 flex items-center gap-2 text-sm font-medium text-emerald-700">
+              <CheckCircle2Icon className="size-4 shrink-0" />
+              {outcome.processing_path === "tenant_policy"
+                ? `命中企业规则 · ${directHandling}未调用主模型`
+                : "精确匹配审核经验 · 直接复用结论，未调用主模型"}
+            </p>
+          ) : null}
           {support?.resolved_questions.length ? (
             <div className="mt-4 flex items-start gap-2">
               <CheckCircle2Icon className="mt-1 size-4 shrink-0 text-emerald-700" />
@@ -185,9 +200,11 @@ export function SocCaseOutcomePanel({
             <div>
               <dt className="text-muted-foreground">风险判断</dt>
               <dd className="mt-1">
-                {outcome.security_verdict
-                  ? VERDICTS[outcome.security_verdict]
-                  : "未形成判断"}
+                {outcome.processing_path === "tenant_policy"
+                  ? "按企业规则直接确定处置，未进行模型风险研判"
+                  : outcome.security_verdict
+                    ? VERDICTS[outcome.security_verdict]
+                    : "未形成判断"}
               </dd>
             </div>
             <div>

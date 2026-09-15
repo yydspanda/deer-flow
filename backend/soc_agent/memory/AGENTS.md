@@ -56,6 +56,17 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 
 ## Retrieval And Decision Use
 
+- Exact approved override directives may resolve a run before the primary analyzer, after
+  enterprise policy checks. `find_directive_records` evaluates enabled tenant-scoped
+  inventory without prompt Top-K/token limits and reuses normal validity, applicability
+  and selected-behavior gates. Opposite exact answers must survive downstream as a
+  conflict, not disappear when the later model context is bounded. Similar/context-only
+  and reinforce-only records cannot take this shortcut.
+- Persist direct use as `direct_reused`, with `base_model_evaluated=false`, frozen record
+  version/hash and matched conditions. It is usage, not a new independent model opinion,
+  Pattern support, helpful-vs-Base measurement or human confirmation. Existing explicit
+  correction/revision and manual promotion remain available; no automatic approval.
+
 - `scope_view.py` is a read-only detail projection. Registered Profiles may explain
   stored scope ingredients; only verified same-version expansions can hide redundant
   optional controls. HTTP detail DTOs add the view without changing stored records,
@@ -99,7 +110,11 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   PingAn normalization `apply` selects the opt-in Profile 8 / v6 semantic observation
   features; `off/shadow` use Profile 7 / v5. The shared Memory kernel does not parse
   detector vendor labels or create semantic facts. Keep old records/indexes untouched;
-  a rollout needs separate real-sample feature validation and explicit index handling.
+  the offline corpus index remains an Adapter-only navigation index, not an authority for
+  a completed run's Memory scope. Workbench readers use the run's saved review mode and
+  actual signature to select observations; new apply candidates use the actual v6 facets.
+  Replaying the same alert/signature does not increase support. New semantic signatures
+  must not be attached to old observations or silently widen reviewed Memory scopes.
 - Retrieval policy v2 runs exact-facet and text lanes over the complete eligible corpus,
   merges bounded candidates, and requires a Memory-type-specific strong anchor.
   Source/environment/category alone cannot admit a detection lesson or benign Pattern;

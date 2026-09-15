@@ -20,6 +20,7 @@ from soc_agent.contracts import (
     NormalizationSuggestionStatus,
 )
 from soc_agent.llm.analyzer import LLMChatClient
+from soc_agent.utils.model_json import model_json
 
 _ALLOWED_TARGET_PATHS = (
     "classification.category",
@@ -79,7 +80,7 @@ def build_normalization_suggestion_prompt(run: AnalysisRun) -> NormalizationSugg
             "Never invent source paths, never propose executable code, and never claim that a suggestion "
             "is approved or safe to auto-apply. Return one JSON object with a suggestions array."
         ),
-        user_prompt=json.dumps(
+        user_prompt=model_json(
             {
                 "task": "Map observed source field paths to the allowed vendor-neutral canonical targets.",
                 "output_schema": {
@@ -97,7 +98,6 @@ def build_normalization_suggestion_prompt(run: AnalysisRun) -> NormalizationSugg
                 "allowed_target_paths": list(_ALLOWED_TARGET_PATHS),
                 "known_coverage_gaps": [gap.model_dump(mode="json") for gap in coverage.high_value_gaps],
             },
-            ensure_ascii=False,
             sort_keys=True,
         ),
         observed_source_paths=source_paths,

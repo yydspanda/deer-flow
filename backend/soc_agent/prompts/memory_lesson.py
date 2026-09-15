@@ -12,8 +12,9 @@ from soc_agent.contracts import (
     SocMemoryLessonDraftSource,
     Verdict,
 )
+from soc_agent.utils.model_json import model_json
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v7"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v8"
 MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v3"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000
@@ -298,7 +299,7 @@ def _user_prompt(
     return "\n".join(
         [
             '<lesson_context trust="untrusted_candidate_data">',
-            _pretty(context),
+            model_json(context, sort_keys=True, default=str),
             "</lesson_context>",
             "",
             "<task>",
@@ -310,12 +311,12 @@ def _user_prompt(
             "",
             '<output_example trust="synthetic_format_only">',
             "Every EX-D-* alias and conclusion below is synthetic. Learn only the complete JSON shape; never copy its facts or aliases.",
-            _pretty(_OUTPUT_EXAMPLE),
+            model_json(_OUTPUT_EXAMPLE, sort_keys=True, default=str),
             "</output_example>",
             "",
             "<response_contract>",
             "Return exactly one JSON object satisfying this model-owned JSON Schema:",
-            _pretty(response_schema),
+            model_json(response_schema, sort_keys=True, default=str),
             "</response_contract>",
             "<final_checklist>",
             f"- schema_version is exactly {MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION}.",
@@ -371,7 +372,7 @@ def _build_source_catalog(
             {"memory_id": item["memory_id"], "version": item["version"], "reviewed_verdict": item["reviewed_verdict"], "scope_relation": item["scope_relation"], "conclusion": item["conclusion"][:1000]}
             for item in comparison.get("related_memories", [])[:3]
         ]
-        add("candidate", "existing_memory_comparison", json.dumps(compact, ensure_ascii=False, sort_keys=True))
+        add("candidate", "existing_memory_comparison", model_json(compact, sort_keys=True))
     add("cohort", "candidate_confidence_basis", f"{candidate.confidence:.4f}")
     cohort_quality = candidate.metadata.get("cohort_quality")
     if isinstance(cohort_quality, Mapping):
@@ -386,26 +387,22 @@ def _build_source_catalog(
         ):
             value = cohort_quality.get(key)
             if value is not None:
-                add("cohort", key, json.dumps(value, ensure_ascii=False, sort_keys=True))
+                add("cohort", key, model_json(value, sort_keys=True))
     for key, values in sorted(candidate.facets.items()):
         if values:
-            add("facet", key, json.dumps(values[:20], ensure_ascii=False))
+            add("facet", key, model_json(values[:20]))
     if candidate.applicability is not None:
         for key, values in sorted(candidate.applicability.required_facets.items()):
-            add("applicability", f"required:{key}", json.dumps(values, ensure_ascii=False))
+            add("applicability", f"required:{key}", model_json(values))
         for key, values in sorted(candidate.applicability.optional_facets.items()):
-            add("applicability", f"optional:{key}", json.dumps(values, ensure_ascii=False))
+            add("applicability", f"optional:{key}", model_json(values))
         for key, values in sorted(candidate.applicability.excluded_facets.items()):
-            add("applicability", f"excluded:{key}", json.dumps(values, ensure_ascii=False))
+            add("applicability", f"excluded:{key}", model_json(values))
     if candidate.evidence_refs:
-        add("lineage", "candidate_evidence_refs", json.dumps(candidate.evidence_refs[:40], ensure_ascii=False))
+        add("lineage", "candidate_evidence_refs", model_json(candidate.evidence_refs[:40]))
     if reviewer_context:
         add("reviewer_context", "analyst_draft_context", reviewer_context)
     return sources[:80]
-
-
-def _pretty(value: Mapping[str, Any]) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
 
 __all__ = [

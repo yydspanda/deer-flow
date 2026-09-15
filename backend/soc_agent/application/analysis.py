@@ -21,6 +21,7 @@ from soc_agent.core import (
     SocNormalizationMaintenanceService,
     SocTenantPolicyEvaluationService,
 )
+from soc_agent.core.direct_resolution import SocDirectResolutionService
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.integrations.pingan.knowledge import load_pingan_tenant_knowledge_profiles
 from soc_agent.knowledge import (
@@ -104,11 +105,21 @@ def build_soc_analysis_service(
         )
     else:
         analyzer, role_verifier = build_configured_analysis_nodes(settings=resolved_settings)
+    direct_resolution = None
+    if _strict_env_bool("SOC_DIRECT_RESOLUTION_ENABLED", default=True):
+        profiles = build_soc_memory_profile_registry()
+        direct_resolution = SocDirectResolutionService(
+            tenant_policy_service=next((observer for observer in post_analysis_observers if isinstance(observer, SocTenantPolicyEvaluationService)), None),
+            memory_service=SocMemoryService(record_repository=repository, profile_registry=profiles) if repository is not None else None,
+            profile_registry=profiles,
+            environment=resolved_environment,
+        )
     return SocAnalysisService(
         runtime=DeterministicAnalysisRuntime(
             analyzer=analyzer,
             role_verifier=role_verifier,
             normalization_reviewer=reviewer,
+            direct_resolution=direct_resolution,
             analysis_request_enricher=analysis_request_enricher,
             sensitive_evidence_mode=resolved_settings.sensitive_evidence_mode,
         ),

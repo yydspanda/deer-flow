@@ -101,7 +101,7 @@ class ConfirmedMemoryAnalysisRequestEnricher:
             return request.model_copy(update={"warnings": _dedupe_strings([*request.warnings, warning])})
 
         memory_items = [
-            _memory_context_item(
+            memory_context_item(
                 match,
                 query_facets=result.query.facets,
                 retrieval_policy_version=result.policy_version,
@@ -255,7 +255,7 @@ def _match_projection(match: SocMemoryMatch) -> dict[str, Any]:
     }
 
 
-def _memory_context_item(
+def memory_context_item(
     match: SocMemoryMatch,
     *,
     query_facets: dict[str, list[str]],

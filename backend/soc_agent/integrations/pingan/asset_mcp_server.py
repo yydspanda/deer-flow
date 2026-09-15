@@ -152,7 +152,7 @@ def _handle_message(
         return _success_response(
             request_id,
             {
-                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, separators=(",", ":"))}],
                 "structuredContent": result,
                 "isError": False,
             },

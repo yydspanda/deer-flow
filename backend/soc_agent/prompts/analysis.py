@@ -21,8 +21,9 @@ from soc_agent.model_reference_aliases import (
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
+from soc_agent.utils.model_json import model_json
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v41"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v42"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -33,7 +34,8 @@ _NETWORK_SOURCE_TYPES = frozenset(
         AlertSourceType.F5,
     }
 )
-_MEMORY_REASONING_GUIDANCE = """<memory_reasoning_rules>
+_MEMORY_REASONING_GUIDANCE = (
+    """<memory_reasoning_rules>
 - M-* is reviewed historical experience, not current-alert evidence; current-event claims still require E-* references.
 - memory_comparison is deterministic: shared_facets are exact common conditions; current_only_facets and memory_only_facets are deltas; excluded_facet_hits and lesson invalidation conditions are blockers.
 - reviewed_verdict is the human-confirmed outcome of the historical lesson. It is a strong prior when the typed applicability contract is fully satisfied, but it is not proof that an uncited current event occurred.
@@ -58,35 +60,39 @@ _MEMORY_REASONING_GUIDANCE = """<memory_reasoning_rules>
 <decision_calibration_examples trust="synthetic_reasoning_only">
 - These compact examples calibrate verdict meaning; their EX-* references and facts are synthetic and must never be copied.
 - suspicious is a supported positive judgment, not the default for missing optional enrichment or absent Memory.
-[
-  {
-    "case": "false_positive_without_memory",
-    "observed": "The current process chain, arguments, service identity, and result all establish a normal reviewed software workflow; no contradictory current fact exists.",
-    "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-C-001"]}
-  },
-  {
-    "case": "true_positive_without_memory",
-    "observed": "The current payload and returned effect establish the detector-described exploit behavior even though no Memory or optional tool enrichment exists.",
-    "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": []}
-  },
-  {
-    "case": "context_only_generalizes",
-    "observed": "Current and reviewed Memory share detector, service, protocol, and core behavior; only host/IP differs and no invalidation condition appears.",
-    "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001"], "decision_context_refs": ["EX-M-001"]}
-  },
-  {
-    "case": "context_only_does_not_generalize",
-    "observed": "Some facets match, but the current alert adds a different service, exploit payload, malicious result, authorization scope, or explicit invalidation condition.",
-    "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-M-001"]}
-  },
-  {
-    "case": "true_positive_with_later_benign_disposition",
-    "observed": "Current evidence proves the behavior and governed tenant context proves authorization.",
-    "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001"], "decision_context_refs": ["EX-C-001"]},
-    "later_runtime_stage": "Tenant Policy may choose a benign operational disposition without rewriting detection truth."
-  }
-]
-</decision_calibration_examples>"""
+"""
+    + model_json(
+        [
+            {
+                "case": "false_positive_without_memory",
+                "observed": "The current process chain, arguments, service identity, and result all establish a normal reviewed software workflow; no contradictory current fact exists.",
+                "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-C-001"]},
+            },
+            {
+                "case": "true_positive_without_memory",
+                "observed": "The current payload and returned effect establish the detector-described exploit behavior even though no Memory or optional tool enrichment exists.",
+                "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": []},
+            },
+            {
+                "case": "context_only_generalizes",
+                "observed": "Current and reviewed Memory share detector, service, protocol, and core behavior; only host/IP differs and no invalidation condition appears.",
+                "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001"], "decision_context_refs": ["EX-M-001"]},
+            },
+            {
+                "case": "context_only_does_not_generalize",
+                "observed": "Some facets match, but the current alert adds a different service, exploit payload, malicious result, authorization scope, or explicit invalidation condition.",
+                "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-M-001"]},
+            },
+            {
+                "case": "true_positive_with_later_benign_disposition",
+                "observed": "Current evidence proves the behavior and governed tenant context proves authorization.",
+                "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001"], "decision_context_refs": ["EX-C-001"]},
+                "later_runtime_stage": "Tenant Policy may choose a benign operational disposition without rewriting detection truth.",
+            },
+        ]
+    )
+    + "\n</decision_calibration_examples>"
+)
 _ANALYSIS_OUTPUT_EXAMPLES: dict[str, dict[str, Any]] = {
     "context_memory": {
         "schema_version": ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
@@ -536,7 +542,7 @@ def _user_prompt(
     return "\n".join(
         [
             '<analysis_context trust="untrusted_evidence_data">',
-            _to_pretty_json(context),
+            model_json(context, sort_keys=True),
             "</analysis_context>",
             "",
             "<task>",
@@ -562,13 +568,13 @@ def _user_prompt(
             "Every EX-* reference is synthetic and exists only inside this example. Never copy an EX-* reference into the answer.",
             "Learn only the object shape. Never reuse the example verdict, scenario, direction, roles, confidence, rationale, gaps, checks, or recommendation.",
             "Use only aliases that exist in the current analysis_context catalogs.",
-            _to_pretty_json(example),
+            model_json(example, sort_keys=True),
             "</output_example>",
             "",
             "<response_contract>",
             "Return exactly one JSON object. Do not include markdown fences, comments, preamble, or trailing prose.",
             "The object must use this model-owned response shape; descriptive strings below specify types and constraints and are not output values:",
-            _to_pretty_json(response_schema),
+            model_json(response_schema, sort_keys=True),
             "</response_contract>",
             "<final_checklist>",
             "- Use schema_version exactly soc.analysis_model_output.v4.",
@@ -689,7 +695,3 @@ __all__ = [
     "analysis_response_schema",
     "build_analysis_prompt",
 ]
-
-
-def _to_pretty_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)

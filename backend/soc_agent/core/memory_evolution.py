@@ -178,6 +178,9 @@ class SocMemoryEvolutionService:
                 continue
             contributor = contributor_by_ref.get(item.context_ref)
             effect = _use_effect(transition, contributor)
+            direct_use = run.direct_resolution is not None and item.context_ref in run.direct_resolution.memory_refs
+            if direct_use:
+                effect = SocMemoryUseEffect.DIRECT_REUSED
             applicability = _applicability_report(item.metadata)
             record = SocMemoryUseRecord(
                 idempotency_key=idempotency_key,
@@ -193,10 +196,11 @@ class SocMemoryEvolutionService:
                 retrieval_score=score,
                 matched_facets=_matched_facets(item.metadata),
                 applicability_report=applicability,
-                base_verdict=run.decision.verdict,
+                base_verdict=run.decision.verdict if run.direct_resolution is None else Verdict.UNKNOWN,
+                base_model_evaluated=run.direct_resolution is None,
                 effective_verdict=effective_verdict,
                 effect=effect,
-                directive_applied=contributor is not None,
+                directive_applied=direct_use or contributor is not None,
                 decision_transition_id=(transition.transition_id if transition is not None else None),
                 created_at=self._now(),
             )

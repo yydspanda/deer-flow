@@ -245,6 +245,7 @@ function readStoredFilters(): Partial<CorpusFilterSnapshot> | null {
         typeof parsed.sourceType === "string" ? parsed.sourceType : undefined,
       groupId: typeof parsed.groupId === "string" ? parsed.groupId : undefined,
       unprocessedOnly:
+        parsed.unprocessedFilterVersion === 2 &&
         typeof parsed.unprocessedOnly === "boolean"
           ? parsed.unprocessedOnly
           : undefined,
@@ -408,6 +409,11 @@ const EXECUTION_METRIC_LABELS: Record<string, string> = {
   role_verification: "角色复核",
   verdict: "结论",
   confidence: "置信度",
+  processing_path: "处理来源",
+  matched_rule: "命中规则",
+  rule_code: "规则编码",
+  disposition: "处置决定",
+  memory_id: "复用经验",
   needs_review: "需要复核",
   evidence_state: "证据状态",
   observation_id: "Observation",
@@ -491,9 +497,15 @@ function ExecutionMonitor({
       <div className="flex min-w-0 items-center gap-1 overflow-x-auto border-y bg-zinc-50 px-5 py-2 md:px-7">
         {execution.phases.map((phase, index) => (
           <div key={phase.phase} className="flex shrink-0 items-center gap-1">
-            <div className="flex items-center gap-1.5 px-2 py-1 text-xs">
+            <div
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1 text-xs",
+                phase.status === "skipped" && "text-muted-foreground",
+              )}
+            >
               {executionStatusIcon(phase.status)}
               <span>{phase.label}</span>
+              {phase.status === "skipped" ? <span>已跳过</span> : null}
             </div>
             {index + 1 < execution.phases.length ? (
               <ArrowRightIcon className="text-muted-foreground size-3.5" />
@@ -510,6 +522,7 @@ function ExecutionMonitor({
               "grid gap-3 px-5 py-3 md:grid-cols-[210px_minmax(0,1fr)_auto] md:px-7",
               phase.status === "running" && "bg-sky-50",
               phase.status === "failed" && "bg-red-50",
+              phase.status === "skipped" && "text-muted-foreground",
             )}
           >
             <div className="flex min-w-0 items-start gap-2">
@@ -518,8 +531,8 @@ function ExecutionMonitor({
               </span>
               <div className="min-w-0">
                 <p className="text-sm font-medium">{phase.label}</p>
-                <p className="text-muted-foreground mt-1 font-mono text-xs">
-                  {phase.phase}
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {phase.status === "skipped" ? "已跳过" : phase.phase}
                 </p>
               </div>
             </div>
@@ -1043,7 +1056,7 @@ export function SocCorpusValidationWorkbench() {
     (CorpusFilterSnapshot & { page: number }) | null
   >(null);
   const restoredPage = useRef<number | null>(null);
-  const [unprocessedOnly, setUnprocessedOnly] = useState(true);
+  const [unprocessedOnly, setUnprocessedOnly] = useState(false);
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [focusAlertId, setFocusAlertId] = useState<string | null>(null);
   const [runFeedbackByAlert, setRunFeedbackByAlert] = useState<
@@ -1056,6 +1069,7 @@ export function SocCorpusValidationWorkbench() {
   const [page, setPage] = useState(0);
   const detailRef = useRef<HTMLDivElement>(null);
   const completionNoticeRunIds = useRef(new Set<string>());
+  const terminalRefreshRunIds = useRef(new Set<string>());
   const deferredSearch = useDeferredValue(search.trim());
   const query = useSocCorpusWorkbench({
     search: deferredSearch || null,
@@ -1125,6 +1139,61 @@ export function SocCorpusValidationWorkbench() {
     previousActivityAlertKey.current = activityAlertKey;
     void query.refetch();
   }, [activityAlertKey, query]);
+
+  const refetchWorkbench = query.refetch;
+  useEffect(() => {
+    const execution = executionQuery.execution;
+    if (!execution?.run_id || !selectedAlertId) return;
+    const feedback = runFeedbackByAlert[selectedAlertId];
+    if (
+      execution.alert_id !== selectedAlertId ||
+      feedback?.status !== "running" ||
+      processingAlertIds.has(selectedAlertId) ||
+      !["completed", "failed"].includes(execution.status) ||
+      (execution.run_id === feedback.baselineRunId &&
+        feedback.baselineWorkflowState !== "analysis_only")
+    )
+      return;
+    const key = `${selectedAlertId}:${execution.run_id}:${execution.status}`;
+    if (terminalRefreshRunIds.current.has(key)) return;
+    terminalRefreshRunIds.current.add(key);
+    const finishWithoutRow = () => {
+      setRunFeedbackByAlert((current) => {
+        if (current[selectedAlertId] !== feedback) return current;
+        return {
+          ...current,
+          [selectedAlertId]: {
+            ...feedback,
+            status: execution.status === "failed" ? "failed" : "completed",
+            message:
+              execution.status === "failed"
+                ? "本次研判失败，可在运行轨迹中查看原因。"
+                : "本次研判已完成，可刷新列表查看结果。",
+          },
+        };
+      });
+    };
+    // Completion is authoritative even when an activity poll missed the short-lived
+    // claim. Fetch the final row once, without accepting an older rerun result.
+    void refetchWorkbench().then(({ data }) => {
+      const row = data?.alerts.find(
+        (item) => item.alert_id === selectedAlertId,
+      );
+      if (
+        row &&
+        row.run_id === execution.run_id &&
+        ["completed", "failed"].includes(row.workflow_state)
+      )
+        return;
+      finishWithoutRow();
+    }, finishWithoutRow);
+  }, [
+    executionQuery.execution,
+    processingAlertIds,
+    refetchWorkbench,
+    runFeedbackByAlert,
+    selectedAlertId,
+  ]);
 
   useEffect(() => {
     if (!state) return;
@@ -1214,7 +1283,7 @@ export function SocCorpusValidationWorkbench() {
     try {
       window.sessionStorage.setItem(
         FILTER_STORAGE_KEY,
-        JSON.stringify(snapshot),
+        JSON.stringify({ ...snapshot, unprocessedFilterVersion: 2 }),
       );
     } catch {
       // Navigation continuity is best-effort; the workbench remains usable.
@@ -1254,7 +1323,12 @@ export function SocCorpusValidationWorkbench() {
   const pageAlerts = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
     return (state?.alerts ?? [])
-      .filter((alert) => readiness === "all" || alert.readiness === readiness)
+      .filter(
+        (alert) =>
+          alert.alert_id === focusAlertId ||
+          readiness === "all" ||
+          alert.readiness === readiness,
+      )
       .filter(
         (alert) => sourceType === "all" || alert.source_type === sourceType,
       )
@@ -1266,6 +1340,7 @@ export function SocCorpusValidationWorkbench() {
           alert.alert_id === focusAlertId,
       )
       .filter((alert) => {
+        if (alert.alert_id === focusAlertId) return true;
         if (comparison === "all") return true;
         if (comparison === "labeled") {
           return alert.operational_label_available;
@@ -1338,6 +1413,9 @@ export function SocCorpusValidationWorkbench() {
       return;
     }
     setSelectedAlertId(alertId);
+    const baselineAlert =
+      state?.alerts.find((item) => item.alert_id === alertId) ??
+      state?.rehearsal_alerts.find((item) => item.alert_id === alertId);
     setProcessingAlertIds((current) => {
       const next = new Set(current);
       next.add(alertId);
@@ -1349,12 +1427,8 @@ export function SocCorpusValidationWorkbench() {
         alertId,
         status: "running",
         message: "正在执行归一化、模型研判、决策与经验匹配。",
-        baselineRunId:
-          state?.alerts.find((item) => item.alert_id === alertId)?.run_id ??
-          null,
-        baselineWorkflowState:
-          state?.alerts.find((item) => item.alert_id === alertId)
-            ?.workflow_state ?? "ready",
+        baselineRunId: baselineAlert?.run_id ?? null,
+        baselineWorkflowState: baselineAlert?.workflow_state ?? "ready",
       },
     }));
     try {
@@ -1747,7 +1821,7 @@ export function SocCorpusValidationWorkbench() {
                 setSourceType("all");
                 setGroupId("all");
                 setGroupOrigin(null);
-                setUnprocessedOnly(true);
+                setUnprocessedOnly(false);
               }}
             >
               <RotateCcwIcon className="size-4" />

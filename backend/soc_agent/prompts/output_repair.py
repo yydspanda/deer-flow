@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -14,10 +13,11 @@ from soc_agent.model_reference_aliases import (
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
+from soc_agent.utils.model_json import model_json
 
-ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v8"
-ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-section-output-repair-v2"
-ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-role-verification-output-repair-v3"
+ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v9"
+ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-section-output-repair-v3"
+ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-role-verification-output-repair-v4"
 MAX_OUTPUT_REPAIR_CANDIDATE_CHARS = 100_000
 MAX_OUTPUT_REPAIR_ERROR_CHARS = 4_000
 MAX_OUTPUT_REPAIR_CONTEXT_CHARS = 190_000
@@ -181,10 +181,8 @@ def _build_prompt(
     context: Mapping[str, Any],
     additional_rules: Sequence[str],
 ) -> OutputRepairPrompt:
-    encoded = json.dumps(
+    encoded = model_json(
         context,
-        ensure_ascii=False,
-        separators=(",", ":"),
         default=str,
     )
     if len(encoded) > MAX_OUTPUT_REPAIR_CONTEXT_CHARS:
@@ -208,7 +206,7 @@ def _build_prompt(
             "Do not quote or explain the validation error in the output.",
             "",
             "Bounded correction context:",
-            json.dumps(context, ensure_ascii=False, indent=2, default=str),
+            encoded,
         ]
     )
     return OutputRepairPrompt(
@@ -223,7 +221,7 @@ def _bounded_candidate(value: Any) -> str:
     if isinstance(value, str):
         text = value
     else:
-        text = json.dumps(value, ensure_ascii=False, default=str)
+        text = model_json(value, default=str)
     return text[:MAX_OUTPUT_REPAIR_CANDIDATE_CHARS]
 
 

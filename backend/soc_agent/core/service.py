@@ -172,6 +172,7 @@ from soc_agent.protocols import (
     AuthorizationEnrichmentRepository,
     DecisionAuditRepository,
     DecisionPolicy,
+    DirectResolutionResolver,
     InvestigationEvidenceRepository,
     LLMAnalyzer,
     MemoryCandidateRepository,
@@ -233,6 +234,7 @@ class DeterministicAnalysisRuntime:
         analyzer: LLMAnalyzer | None = None,
         role_verifier: RoleAdjudicationVerifier | None = None,
         normalization_reviewer: NormalizationReviewer | None = None,
+        direct_resolution: DirectResolutionResolver | None = None,
         decision_policy: DecisionPolicy | None = None,
         analysis_request_enricher: AnalysisRequestEnricher | None = None,
         sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
@@ -240,6 +242,7 @@ class DeterministicAnalysisRuntime:
         self._analyzer = analyzer
         self._role_verifier = role_verifier
         self._normalization_reviewer = normalization_reviewer
+        self._direct_resolution = direct_resolution
         self._decision_policy = decision_policy
         self._analysis_request_enricher = analysis_request_enricher
         self._sensitive_evidence_mode = sensitive_evidence_mode
@@ -250,6 +253,7 @@ class DeterministicAnalysisRuntime:
             analyzer=self._analyzer,
             role_verifier=self._role_verifier,
             normalization_reviewer=self._normalization_reviewer,
+            direct_resolution=self._direct_resolution,
             decision_policy=self._decision_policy,
             analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
@@ -266,6 +270,7 @@ class DeterministicAnalysisRuntime:
             analyzer=self._analyzer,
             role_verifier=self._role_verifier,
             normalization_reviewer=self._normalization_reviewer,
+            direct_resolution=self._direct_resolution,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
             analysis_request_enricher=self._analysis_request_enricher,
@@ -278,6 +283,7 @@ class DeterministicAnalysisRuntime:
             analyzer=self._analyzer,
             role_verifier=self._role_verifier,
             normalization_reviewer=self._normalization_reviewer,
+            direct_resolution=self._direct_resolution,
             normalization_reuse=previous_run,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
@@ -1657,7 +1663,7 @@ class SocReviewService:
             AnalysisRunStatus.ROLLED_BACK,
         }:
             raise SocServiceConflictError(f"run {command.run_id} is {run.status.value}; only a completed analysis can be promoted")
-        if run.analysis is None or run.decision is None:
+        if (run.analysis is None and run.direct_resolution is None) or run.decision is None:
             raise SocServiceConflictError(f"run {command.run_id} has no complete analysis decision to promote")
 
         memory_service = SocMemoryService(
@@ -3530,7 +3536,24 @@ class SocMemoryService:
             changed_at=now,
         )
 
+    def find_directive_records(self, query: SocMemoryQuery) -> SocMemoryRetrievalResult:
+        """Evaluate complete enabled inventory, not a prompt-budgeted shortlist."""
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("direct retrieval requires a MemoryRecordRepository")
+        records = []
+        offset = 0
+        while True:
+            page = self._record_repository.list_memory_records(status=SocMemoryRecordStatus.CONFIRMED, tenant_scope=query.tenant_scope, tenant_id=query.tenant_id, retrieval_enabled=True, limit=200, offset=offset)
+            records.extend(item for item in page if item.decision_directive is not None)
+            if len(page) < 200:
+                break
+            offset += len(page)
+        return self._retrieve_records(query, records=records, apply_budget=False)
+
     def find_relevant_records(self, query: SocMemoryQuery) -> SocMemoryRetrievalResult:
+        return self._retrieve_records(query)
+
+    def _retrieve_records(self, query: SocMemoryQuery, *, records: list[SocMemoryRecord] | None = None, apply_budget: bool = True) -> SocMemoryRetrievalResult:
         """Return retrieval-enabled confirmed memory records with scoring metadata."""
 
         if self._record_repository is None:
@@ -3541,7 +3564,9 @@ class SocMemoryService:
             "find_memory_candidate_records",
             None,
         )
-        if callable(find_candidates):
+        if records is not None:
+            candidate_records = records
+        elif callable(find_candidates):
             candidate_records = find_candidates(query)
         else:
             candidate_records = []
@@ -3681,9 +3706,9 @@ class SocMemoryService:
             ),
             reverse=True,
         ):
-            if len(selected_matches) >= query.limit:
+            if apply_budget and len(selected_matches) >= query.limit:
                 break
-            if token_total + match.token_estimate > query.max_tokens and selected_matches:
+            if apply_budget and token_total + match.token_estimate > query.max_tokens and selected_matches:
                 break
             selected_matches.append(match)
             token_total += match.token_estimate
@@ -6413,7 +6438,7 @@ def _alert_summary_from_run(run: AnalysisRun) -> AlertSummary:
         confidence_explanation=decision.confidence_explanation if decision is not None else None,
         needs_review=(decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW or failed_requires_review),
         review_reasons=(list(decision.review_reasons) if decision is not None else [DecisionReviewReason.ANALYSIS_FAILED] if failed_requires_review else []),
-        summary=(analysis.summary if analysis is not None else run.failure.message if run.failure is not None else None),
+        summary=(analysis.summary if analysis is not None else run.direct_resolution.summary if run.direct_resolution is not None else run.failure.message if run.failure is not None else None),
         recommended_action=decision.suggested_action if decision is not None else None,
         input_hash=run.input_hash,
         replay_of_run_id=run.replay_of_run_id,

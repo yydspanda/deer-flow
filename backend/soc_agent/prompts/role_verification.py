@@ -16,8 +16,9 @@ from soc_agent.contracts import (
     RoleVerificationClaim,
 )
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
+from soc_agent.utils.model_json import model_json
 
-ROLE_VERIFICATION_PROMPT_VERSION = "soc-role-verification-v5"
+ROLE_VERIFICATION_PROMPT_VERSION = "soc-role-verification-v6"
 MAX_ROLE_VERIFICATION_CONTEXT_CHARS = 80_000
 
 _CORE_ROLE_TYPES = {
@@ -135,7 +136,7 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Return JSON only without markdown or explanatory text outside the object.",
             OPERATOR_OUTPUT_LANGUAGE,
             "The JSON object must match this shape:",
-            json.dumps(response_schema, ensure_ascii=False, indent=2),
+            model_json(response_schema),
         ]
     )
 
@@ -151,10 +152,10 @@ def _user_prompt(
             "Return one claim_reviews item for every supplied RC-* claim and no others.",
             "",
             "Bounded verification context:",
-            json.dumps(context, ensure_ascii=False, indent=2, default=str),
+            model_json(context, default=str),
             "",
             "Required JSON response schema:",
-            json.dumps(response_schema, ensure_ascii=False, indent=2),
+            model_json(response_schema),
             OPERATOR_OUTPUT_LANGUAGE,
         ]
     )

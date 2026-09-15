@@ -243,6 +243,7 @@ export interface SocConclusionSupport {
 }
 
 export interface SocCaseOutcomeView {
+  processing_path?: "model_analysis" | "tenant_policy" | "memory";
   schema_version: "soc.case_outcome_view.v1";
   event_summary: string;
   security_verdict?: SocVerdict | null;
@@ -835,12 +836,14 @@ export interface SocMemoryRecordListResponse {
 }
 
 export type SocMemoryUseEffect =
+  | "direct_reused"
   | "context_only"
   | "reinforced"
   | "overridden"
   | "conflicted";
 
 export interface SocMemoryUseRecord {
+  base_model_evaluated?: boolean;
   schema_version: "soc.memory_use.v1";
   use_id: string;
   idempotency_key: string;
@@ -1120,7 +1123,7 @@ export interface SocMemoryWorkbenchDecisionStage {
   stage: "base" | "memory" | "tenant_policy" | "effective";
   status: string;
   verdict: SocVerdict;
-  confidence: number;
+  confidence: number | null;
   needs_review: boolean;
   suggested_action: string;
   disposition?: string | null;
@@ -1311,7 +1314,7 @@ export interface SocCorpusWorkbenchDecisionStage {
   stage: "base" | "memory" | "tenant_policy" | "effective";
   status: string;
   verdict: SocVerdict;
-  confidence: number;
+  confidence: number | null;
   needs_review: boolean;
   suggested_action: string;
   disposition?: string | null;
@@ -1377,6 +1380,7 @@ export interface SocCorpusWorkbenchExecution {
 export type SocCorpusWorkbenchAuditArtifactStatus =
   | "available"
   | "partial"
+  | "skipped"
   | "unavailable";
 
 export interface SocCorpusWorkbenchAuditArtifact {
@@ -1391,6 +1395,11 @@ export interface SocCorpusWorkbenchAuditArtifact {
   metrics: Record<string, string | number | boolean>;
   review_guide: string[];
   payload: Record<string, unknown>;
+  normalization_review?: {
+    status_label: string;
+    issues: string[];
+    coverage_notes: string[];
+  } | null;
 }
 
 export interface SocCorpusWorkbenchAuditBundle {

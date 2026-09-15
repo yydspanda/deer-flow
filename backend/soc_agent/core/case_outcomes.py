@@ -61,6 +61,7 @@ def project_soc_case_outcome(
     """
 
     analysis = run.analysis
+    direct = run.direct_resolution
     action_executions = tuple(item for item in action_executions if item.run_id == run.run_id and item.alert_id == run.alert_id)
     external_dispositions = tuple(item for item in external_dispositions if item.target_run_id == run.run_id or (item.target_run_id is None and item.target_alert_id == run.alert_id))
     base_decision = run.decision
@@ -68,18 +69,18 @@ def project_soc_case_outcome(
     transition_conflicted = bool(decision_transition is not None and decision_transition.transition_kind is SocDecisionTransitionKind.CONFLICTED)
     materiality = run.analysis_materiality
     blockers = handling_blockers(needs_review=base_decision.needs_review if base_decision else False, review_reasons=base_decision.review_reasons if base_decision else (), transition=decision_transition, materiality=materiality)
-    failed = bool(run.status is AnalysisRunStatus.FAILED or analysis is None or effective is None)
+    failed = bool(run.status is AnalysisRunStatus.FAILED or (analysis is None and direct is None) or effective is None)
     final_verdict = effective.verdict if effective is not None else None
-    decision_usable = bool(not failed and not blockers and final_verdict not in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW})
+    decision_usable = bool(not failed and not blockers and (direct is not None or final_verdict not in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW}))
     policy_review_only = policy_requires_follow_up(decision_transition)
     follow_up_required = bool(not failed and not decision_usable)
 
     decision_change, change_summary = _decision_change(decision_transition)
-    memory_applied = decision_change in {
+    memory_applied = (direct is not None and direct.source_kind == "memory") or decision_change in {
         SocCaseDecisionChange.MEMORY_REINFORCED,
         SocCaseDecisionChange.MEMORY_OVERRIDDEN,
     }
-    gaps = _evidence_gaps(run)
+    gaps = [] if direct is not None else _evidence_gaps(run)
     prior_analysis_gaps: list[str] = []
     # A governed directive replaces the Base decision, not missing source evidence.
     # Keep superseded Base prose in audit; never use prose to clear a material guard.
@@ -99,6 +100,9 @@ def project_soc_case_outcome(
         decision_transition=decision_transition,
         external_dispositions=external_dispositions,
     )
+    if direct is not None and external_basis is None and decision_transition is None:
+        operational_disposition = direct.disposition
+        policy_review_only = direct.source_kind == "tenant_policy" and direct.disposition is SocOperationalDisposition.ESCALATED
     # Keep historical plans in lineage, but do not present a blocked plan as adopted.
     if blockers and external_basis is None:
         operational_disposition = None
@@ -121,9 +125,9 @@ def project_soc_case_outcome(
         closure_reasons.extend(follow_up_reason_codes(run, conflicted=transition_conflicted, verdict=final_verdict, transition=decision_transition))
     progress_label, progress_detail = progress_text(closure_status, closure_reasons)
     memory_count = memory_context_count if memory_context_count is not None else _memory_context_count(run)
-    tenant_applied = _tenant_policy_applied(decision_transition)
+    tenant_applied = (direct is not None and direct.source_kind == "tenant_policy") or _tenant_policy_applied(decision_transition)
     event_summary = _bounded_text(
-        analysis.summary if analysis is not None else run.failure.message if run.failure is not None else "本次研判未形成可用结果。",
+        analysis.summary if analysis is not None else direct.summary if direct is not None else run.failure.message if run.failure is not None else "本次研判未形成可用结果。",
         limit=4000,
     )
     base_decision_reason = base_decision.reason if base_decision is not None else analysis.reason if analysis is not None else None
@@ -181,9 +185,10 @@ def project_soc_case_outcome(
     )
 
     return SocCaseOutcomeView(
+        processing_path=direct.source_kind if direct is not None else "model_analysis",
         event_summary=event_summary,
         security_verdict=final_verdict,
-        base_verdict=(base_decision.verdict if base_decision is not None else None),
+        base_verdict=(base_decision.verdict if base_decision is not None and direct is None else None),
         confidence=(effective.confidence if effective is not None else None),
         decision_usable=decision_usable,
         decision_reason=(_bounded_text(decision_reason, limit=8000) if decision_reason is not None else None),
@@ -382,7 +387,16 @@ def _outcome_basis(
     external_basis: SocExternalDispositionRecord | None,
 ) -> list[SocCaseOutcomeBasis]:
     items: list[SocCaseOutcomeBasis] = []
-    if run.decision is not None:
+    if run.direct_resolution is not None:
+        direct = run.direct_resolution
+        items.append(
+            SocCaseOutcomeBasis(
+                kind=SocCaseOutcomeBasisKind.TENANT_POLICY if direct.source_kind == "tenant_policy" else SocCaseOutcomeBasisKind.CONFIRMED_MEMORY,
+                summary=_bounded_text(direct.summary, limit=3000),
+                source_id=direct.policy_snapshot["decision_id"] if direct.policy_snapshot else direct.source_id,
+            )
+        )
+    elif run.decision is not None:
         items.append(
             SocCaseOutcomeBasis(
                 kind=SocCaseOutcomeBasisKind.CURRENT_ANALYSIS,

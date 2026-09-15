@@ -10,8 +10,9 @@ from typing import Any
 from soc_agent.contracts import AnalysisRun, TenantDispositionPolicy
 from soc_agent.pipeline.analysis_context import project_analysis_context
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
+from soc_agent.utils.model_json import model_json
 
-TENANT_POLICY_ADVISOR_PROMPT_VERSION = "soc-tenant-policy-advisor-v2"
+TENANT_POLICY_ADVISOR_PROMPT_VERSION = "soc-tenant-policy-advisor-v3"
 MAX_TENANT_POLICY_CONTEXT_CHARS = 200_000
 
 
@@ -85,7 +86,7 @@ def build_tenant_policy_advisor_prompt(
             "Return JSON only, with no markdown or text outside the JSON object.",
             OPERATOR_OUTPUT_LANGUAGE,
             "The response must match this schema:",
-            json.dumps(response_schema, ensure_ascii=False, indent=2),
+            model_json(response_schema),
         ]
     )
     user = "\n".join(
@@ -93,14 +94,14 @@ def build_tenant_policy_advisor_prompt(
             "Evaluate the tenant policy Skill against this completed bounded SOC run.",
             "Keep technical verdict and confidence unchanged. Select exact E-* and optional R-* references from the supplied catalogs/results.",
             "Bounded policy context:",
-            json.dumps(context, ensure_ascii=False, indent=2, default=str),
+            model_json(context, default=str),
             "<output_examples>",
             "Synthetic format examples only: transfer, ignore, and no-match. Select the outcome from the actual policy and evidence, not these examples.",
             "Never copy an EX-* reference into the answer. Do not copy example facts, checks, conclusions, or actions into an unrelated alert.",
-            json.dumps(policy_output_examples(), ensure_ascii=False, indent=2),
+            model_json(policy_output_examples()),
             "</output_examples>",
             "Required response schema:",
-            json.dumps(response_schema, ensure_ascii=False, indent=2),
+            model_json(response_schema),
             OPERATOR_OUTPUT_LANGUAGE,
         ]
     )

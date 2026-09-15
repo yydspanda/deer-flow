@@ -242,6 +242,7 @@ def test_mcp_returns_bounded_structured_result() -> None:
 
     assert response is not None
     structured = response["result"]["structuredContent"]
+    assert response["result"]["content"][0]["text"] == json.dumps(structured, ensure_ascii=False, separators=(",", ":"))
     assert structured["reputation_found"] is True
     assert structured["mocked"] is False
     assert structured["decision_impact"] == "none"

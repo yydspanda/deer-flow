@@ -4,6 +4,27 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SocDecisionLineageTable } from "@/components/workspace/soc/soc-decision-lineage-table";
 
 describe("SocDecisionLineageTable", () => {
+  test("a skipped Base is not shown as a zero-confidence judgment", () => {
+    const html = renderToStaticMarkup(
+      <SocDecisionLineageTable
+        stages={[
+          {
+            stage: "base",
+            status: "skipped",
+            verdict: "unknown",
+            confidence: null,
+            needs_review: false,
+            suggested_action: "主模型未调用。",
+            summary: "企业规则直接处理。",
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain("未生成判断");
+    expect(html).toContain("未调用模型，不计置信度");
+    expect(html).not.toContain("0%");
+    expect(html).not.toContain("暂无法判断");
+  });
   test("shows changed handling and review even when verdict and confidence are unchanged", () => {
     const html = renderToStaticMarkup(
       <SocDecisionLineageTable

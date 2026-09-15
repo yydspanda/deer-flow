@@ -9,6 +9,7 @@ import {
   ListTreeIcon,
   Minimize2Icon,
   RefreshCwIcon,
+  SkipForwardIcon,
   XCircleIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -29,6 +30,7 @@ const STATUS_LABELS: Record<SocCorpusWorkbenchAuditArtifactStatus, string> = {
   available: "完整",
   partial: "部分可用",
   unavailable: "不可用",
+  skipped: "已跳过",
 };
 
 const SocJsonCodeViewer = dynamic(
@@ -75,6 +77,11 @@ const METRIC_LABELS: Record<string, string> = {
   high_value_gaps: "高价值缺口",
   verdict: "结论",
   confidence: "置信度",
+  processing_path: "处理来源",
+  matched_rule: "命中规则",
+  rule_code: "规则编码",
+  disposition: "处置决定",
+  memory_id: "复用经验",
   reasoning_items: "推理项",
   scenarios: "场景",
   provider_attempts: "模型调用",
@@ -96,6 +103,9 @@ const METRIC_LABELS: Record<string, string> = {
 };
 
 function artifactStatusIcon(status: SocCorpusWorkbenchAuditArtifactStatus) {
+  if (status === "skipped") {
+    return <SkipForwardIcon className="size-4 text-zinc-500" />;
+  }
   if (status === "available") {
     return <CheckCircle2Icon className="size-4 text-emerald-600" />;
   }
@@ -207,6 +217,11 @@ function ArtifactDetail({
 }: {
   artifact: SocCorpusWorkbenchAuditArtifact;
 }) {
+  const review = artifact.normalization_review;
+  const reviewNotes = [
+    ...(review?.issues ?? []),
+    ...(review?.coverage_notes ?? []),
+  ];
   return (
     <article className="min-w-0">
       <header className="px-5 py-5 md:px-7">
@@ -216,13 +231,25 @@ function ArtifactDetail({
           </Badge>
           <h4 className="text-base font-semibold">{artifact.title}</h4>
           <Badge variant="outline" className={statusClass(artifact.status)}>
-            {STATUS_LABELS[artifact.status]}
+            {review?.status_label ?? STATUS_LABELS[artifact.status]}
           </Badge>
           <Badge variant="outline">{artifact.source}</Badge>
         </div>
         <p className="text-muted-foreground mt-2 max-w-4xl text-sm leading-6">
           {artifact.description}
         </p>
+        {reviewNotes.length > 0 ? (
+          <details key={artifact.artifact_id} className="mt-3 text-sm">
+            <summary className="w-fit cursor-pointer font-medium text-zinc-700 dark:text-zinc-300">
+              核对备注（{reviewNotes.length}）
+            </summary>
+            <ul className="text-muted-foreground mt-2 list-disc space-y-1 pl-5 leading-6 break-words">
+              {reviewNotes.map((note, index) => (
+                <li key={index}>{note}</li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
       </header>
 
       {Object.keys(artifact.metrics).length ? (

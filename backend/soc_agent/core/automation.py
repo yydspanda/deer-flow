@@ -60,6 +60,7 @@ from soc_agent.contracts import (
     TenantPolicyEvaluationStatus,
     TenantPolicyMode,
     TenantPolicyReviewEffect,
+    Verdict,
 )
 from soc_agent.core.handling import concrete_disposition, handling_blockers
 from soc_agent.protocols import (
@@ -160,6 +161,22 @@ class SocAutomationService:
             contributors=memory_contributors,
             summary=_memory_stage_summary(memory_kind, memory_contributors),
         )
+        initial = base
+        if run.direct_resolution is not None:
+            initial = base.model_copy(update={"verdict": Verdict.UNKNOWN, "confidence": None, "evaluated": False, "suggested_action": "主模型未调用。", "needs_review": False})
+            if run.direct_resolution.source_kind == "tenant_policy":
+                memory_after = initial
+            memory_stage = memory_stage.model_copy(
+                update={
+                    "status": SocDecisionStageStatus.APPLIED if run.direct_resolution.source_kind == "memory" else SocDecisionStageStatus.SKIPPED,
+                    "before": initial,
+                    "after": memory_after,
+                    "source_id": run.direct_resolution.source_id if run.direct_resolution.source_kind == "memory" else None,
+                    "source_version": run.direct_resolution.source_version if run.direct_resolution.source_kind == "memory" else None,
+                    "source_hash": run.direct_resolution.source_hash if run.direct_resolution.source_kind == "memory" else None,
+                    "summary": run.direct_resolution.summary[:2000] if run.direct_resolution.source_kind == "memory" else "企业策略已决定处置，未检索或复用 Memory。",
+                }
+            )
         tenant_outcome = self._tenant_policy_outcome(run, memory_after)
         # An explicit policy may allow review, but cannot clear a decision-level defect.
         decision_blockers = handling_blockers(needs_review=False, review_reasons=run.decision.review_reasons, materiality=run.analysis_materiality)
@@ -181,7 +198,7 @@ class SocAutomationService:
                 tenant_disposition=tenant_outcome.disposition,
             )
         effective_disposition = _effective_disposition(
-            tenant_outcome.disposition,
+            tenant_outcome.disposition or (run.direct_resolution.disposition if run.direct_resolution is not None else None),
             policy=self._policy,
             rule=selected_rule,
         )
@@ -207,10 +224,14 @@ class SocAutomationService:
         stages = [
             SocDecisionStageEvaluation(
                 stage=SocDecisionStageKind.BASE,
-                status=SocDecisionStageStatus.OBSERVED,
-                after=base,
+                status=SocDecisionStageStatus.SKIPPED if run.direct_resolution is not None else SocDecisionStageStatus.OBSERVED,
+                after=initial,
                 contributors=_base_contributors(run),
-                summary="Immutable Runtime decision after analysis of current evidence and retrieved context (including reviewed Memory when available), before governed directive and policy application.",
+                summary=(
+                    "已按受治理规则直接处理，主模型未调用，没有生成 Base 初判。"
+                    if run.direct_resolution is not None
+                    else "Immutable Runtime decision after analysis of current evidence and retrieved context (including reviewed Memory when available), before governed directive and policy application."
+                ),
             ),
             memory_stage,
             tenant_outcome.stage,
@@ -249,7 +270,7 @@ class SocAutomationService:
         decision_key = stable_hash(
             {
                 "run_id": run.run_id,
-                "before": base.model_dump(mode="json"),
+                "before": initial.model_dump(mode="json"),
                 "after": final_after.model_dump(mode="json"),
                 "effective_disposition": (effective_disposition.value if effective_disposition else None),
                 "stages": [stage.model_dump(mode="json") for stage in stages],
@@ -265,7 +286,7 @@ class SocAutomationService:
                 run_id=run.run_id,
                 alert_id=run.alert_id,
                 tenant_id=run.llm_analysis_request.tenant_id,
-                before=base,
+                before=initial,
                 after=final_after,
                 effective_disposition=effective_disposition,
                 transition_kind=transition_kind,
@@ -347,6 +368,23 @@ class SocAutomationService:
         SocDecisionTransitionKind,
         list[SocAutomationContributorRef],
     ]:
+        if run.direct_memory_conflicted:
+            return before.model_copy(update={"needs_review": True, "policy_version": EFFECTIVE_DECISION_POLICY_VERSION}), SocDecisionTransitionKind.CONFLICTED, []
+        if run.direct_resolution is not None:
+            direct = run.direct_resolution
+            contributors = [
+                SocAutomationContributorRef(
+                    kind=SocAutomationContributorKind.CONFIRMED_MEMORY,
+                    role=SocAutomationContributorRole.OVERRIDES,
+                    ref_id=item.context_ref,
+                    version=str(item.metadata["memory_version"]),
+                    content_hash=item.metadata["record_content_hash"],
+                    detail="精确匹配审核经验后直接复用，未调用主模型。",
+                )
+                for item in run.llm_analysis_request.context_catalog
+                if item.context_ref in direct.memory_refs
+            ]
+            return before, SocDecisionTransitionKind.UNCHANGED, contributors
         eligible = self._eligible_memory_directives(run, now=now)
         if not eligible:
             return before, SocDecisionTransitionKind.UNCHANGED, []
@@ -460,6 +498,37 @@ class SocAutomationService:
         run: AnalysisRun,
         before: SocDecisionSnapshot,
     ) -> _TenantPolicyOutcome:
+        if run.direct_resolution is not None and run.direct_resolution.policy_snapshot is not None:
+            decision = TenantPolicyDecision.model_validate(run.direct_resolution.policy_snapshot)
+            after = _decision_snapshot(run)
+            contributor = SocAutomationContributorRef(
+                kind=SocAutomationContributorKind.TENANT_POLICY,
+                role=SocAutomationContributorRole.OVERRIDES,
+                ref_id=decision.decision_id,
+                version=decision.policy_version,
+                content_hash=decision.policy_hash,
+                detail=decision.summary,
+            )
+            return _TenantPolicyOutcome(
+                after=after,
+                disposition=decision.recommended_disposition,
+                decision=decision,
+                contributors=[contributor],
+                stage=SocDecisionStageEvaluation(
+                    stage=SocDecisionStageKind.TENANT_POLICY,
+                    status=SocDecisionStageStatus.APPLIED,
+                    before=before,
+                    after=after,
+                    disposition_after=decision.recommended_disposition,
+                    source_id=decision.policy_id,
+                    source_version=decision.policy_version,
+                    source_hash=decision.policy_hash,
+                    source_decision_id=decision.decision_id,
+                    selected_rule_id=decision.selected_rule_id,
+                    contributors=[contributor],
+                    summary=decision.summary,
+                ),
+            )
         if not self._tenant_policy_application_enabled:
             return _TenantPolicyOutcome(
                 after=before,
@@ -949,6 +1018,8 @@ def _memory_record_is_active(
 
 
 def _base_contributors(run: AnalysisRun) -> list[SocAutomationContributorRef]:
+    if run.direct_resolution is not None:
+        return []
     contributors: list[SocAutomationContributorRef] = []
     if run.analysis is not None:
         contributors.extend(

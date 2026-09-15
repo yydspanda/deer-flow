@@ -61,6 +61,38 @@ function render(value: Partial<SocCaseOutcomeView> = {}) {
 }
 
 describe("SocCaseOutcomePanel", () => {
+  test("direct policy and Memory results name their authority instead of a failed model", () => {
+    const policy = render({
+      processing_path: "tenant_policy",
+      security_verdict: "unknown",
+      base_verdict: null,
+      confidence: null,
+    });
+    expect(policy.primary).toContain("命中企业规则 · 直接忽略，未调用主模型");
+    expect(policy.primary).not.toContain("企业策略直接处理");
+    expect(policy.html).toContain("未进行模型风险研判");
+    expect(policy.html).not.toContain("暂无法判断");
+    const memory = render({
+      processing_path: "memory",
+      base_verdict: null,
+      confidence: null,
+    });
+    expect(memory.primary).toContain("直接复用结论，未调用主模型");
+    expect(memory.primary).not.toContain("命中企业规则");
+  });
+  test("names the server-selected direct transfer without implying Memory reuse", () => {
+    const policy = render({
+      processing_path: "tenant_policy",
+      recommended_handling: "transfer",
+      operational_disposition: "escalated",
+      security_verdict: "unknown",
+      base_verdict: null,
+      confidence: null,
+    });
+    expect(policy.primary).toContain("命中企业规则 · 直接转交，未调用主模型");
+    expect(policy.primary).not.toContain("直接忽略");
+    expect(policy.primary).not.toContain("直接复用结论");
+  });
   test("has one handling conclusion and keeps technical verdict and progress collapsed", () => {
     const { html, primary } = render({
       progress_label: "已确定处置方案",
