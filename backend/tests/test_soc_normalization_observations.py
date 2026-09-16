@@ -43,6 +43,23 @@ def review(alert, output, *, mode="apply", reference_validation_enabled=True):
     return apply_normalization_changes(alert, request, report), report, request
 
 
+def test_typed_business_clue_merges_and_old_untyped_facts_remain_compatible():
+    text = "https://portal.example.test/apps/helpdesk count=2"
+    updated, report, _ = review(
+        source(text),
+        {
+            "additional_facts": [
+                {"name": "business_address", "value": "https://portal.example.test/apps/helpdesk", "meaning": "报文业务线索", "clue_type": "url", "source_quote": text},
+                {"name": "count", "value": 2, "meaning": "计数", "source_quote": text},
+            ]
+        },
+    )
+    assert report.status == "applied"
+    assert updated.entities.supplementary_facts[0].clue_type == "url"
+    assert updated.entities.supplementary_facts[1].clue_type is None
+    assert updated.entities.http.url is None
+
+
 @pytest.mark.parametrize("quote", ["explorer.exe", 'cmdline="explorer.exe"'])
 def test_reference_validation_defaults_off_without_inventing_offsets(quote):
     alert = source('proc_path="C:\\windows\\explorer.exe" cmdline="explorer.exe "')

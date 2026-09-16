@@ -34,7 +34,6 @@ MEMORY_RETRIEVAL_POLICY_V1 = "soc.memory_retrieval_policy.v1"
 MEMORY_RETRIEVAL_POLICY_V2 = "soc.memory_retrieval_policy.v2"
 _MAX_MODEL_COMPARISON_FACETS = 24
 _MAX_MODEL_COMPARISON_VALUES = 8
-_MAX_MODEL_COMPARISON_VALUE_CHARS = 256
 _MODEL_COMPARISON_FACET_PRIORITY = (
     "detection_key",
     "rule_code",
@@ -262,7 +261,7 @@ def memory_context_item(
     retrieval_policy_version: str,
 ) -> AnalysisContextCatalogItem:
     record = match.record
-    projected_summary = _bounded_memory_summary(record.summary, record.content)
+    projected_summary = _memory_summary(record.summary, record.content)
     applicability_status = match.applicability_report.status if match.applicability_report is not None else None
     context_only = bool(match.applicability_report is not None and (match.applicability_report.context_only_allowed or applicability_status is SocMemoryApplicabilityStatus.LEGACY_ANCHOR_ONLY))
     directive_applicable = bool(
@@ -275,7 +274,7 @@ def memory_context_item(
         directive_applicable=directive_applicable,
     )
     if context_only:
-        projected_summary = (f"[Context-only reviewed experience / 受治理相似经验：可在比较共同条件、差异和失效条件后参与 Base Decision；不可直接应用确定性 Memory Directive 或授权动作]\n{projected_summary}")[:4000]
+        projected_summary = f"[Context-only reviewed experience / 受治理相似经验：可在比较共同条件、差异和失效条件后参与 Base Decision；不可直接应用确定性 Memory Directive 或授权动作]\n{projected_summary}"
     projection_hash = stable_hash(
         {
             "memory_id": match.memory_id,
@@ -340,14 +339,11 @@ def _memory_context_comparison(
         reviewed_verdict=match.record.reviewed_verdict,
         decision_directive_applicable=directive_applicable,
         shared_facets=shared,
-        selected_behavior_components=[v[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for v in (report.selected_behavior_components if report else [])[:40]],
-        missing_behavior_components=[v[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for v in (report.missing_behavior_components if report else [])[:40]],
+        selected_behavior_components=(report.selected_behavior_components if report else [])[:40],
+        missing_behavior_components=(report.missing_behavior_components if report else [])[:40],
         current_only_facets=current_only,
         memory_only_facets=memory_only,
-        missing_reuse_conditions=[
-            item.model_copy(update={"values": [value[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for value in item.values[:_MAX_MODEL_COMPARISON_VALUES]]})
-            for item in (report.missing_reuse_conditions[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else [])
-        ],
+        missing_reuse_conditions=[item.model_copy(update={"values": item.values[:_MAX_MODEL_COMPARISON_VALUES]}) for item in (report.missing_reuse_conditions[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else [])],
         matched_required_facets=(_bounded_facets(report.matched_required_facets) if report is not None else {}),
         missing_required_facet_keys=(report.missing_required_facet_keys[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else []),
         excluded_facet_hits=(_bounded_facets(report.excluded_facet_hits) if report is not None else {}),
@@ -361,7 +357,7 @@ def _normalized_facets(facets: dict[str, list[str]]) -> dict[str, list[str]]:
         key = str(raw_key).strip()
         if not key:
             continue
-        values = sorted({str(value).strip()[:_MAX_MODEL_COMPARISON_VALUE_CHARS] for value in raw_values if str(value).strip()})
+        values = sorted({str(value).strip() for value in raw_values if str(value).strip()})
         if values:
             normalized[key] = values
     return normalized
@@ -386,11 +382,11 @@ def _bounded_facets(facets: dict[str, list[str]]) -> dict[str, list[str]]:
     return {key: normalized[key][:_MAX_MODEL_COMPARISON_VALUES] for key in _ordered_comparison_keys(set(normalized))}
 
 
-def _bounded_memory_summary(summary: str, content: str) -> str:
+def _memory_summary(summary: str, content: str) -> str:
     prefix = summary.strip()
     body = content.strip()
     combined = f"{prefix}\n{body}" if body and body != prefix else prefix
-    return combined[:4000]
+    return combined
 
 
 def _memory_text_terms(text: str | None) -> list[str]:

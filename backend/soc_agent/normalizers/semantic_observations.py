@@ -301,6 +301,8 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                 else:
                     _check_values([proposal.value], proposal.source_quote, reference_validation_enabled=request.reference_validation_enabled)
                     attrs = {"name": proposal.name, "value": proposal.value, "meaning": proposal.meaning, "subject_ref": subject(proposal.subject_ref, source) if proposal.subject_ref else None}
+                    if proposal.clue_type is not None:
+                        attrs["clue_type"] = proposal.clue_type
                     cls_out = SupplementaryFactRef
                 record = cls_out(observation_id="SEM-" + stable_hash([source.source_path, attrs])[:16], evidence_path=source.source_path + "#semantic", event_scope_id=source.source_path, **attrs)
                 records = working["entities"][target]

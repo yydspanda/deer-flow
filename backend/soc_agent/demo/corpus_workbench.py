@@ -917,12 +917,19 @@ class SocCorpusWorkbenchService:
         ):
             candidate_by_source.setdefault(item.source.source_id, item)
         manual_candidate_by_run: dict[str, Any] = {}
+        candidates_by_id: dict[str, Any] = {}
         for item in self._repository.list_memory_candidates(
             status=None,
             limit=10_000,
         ):
+            candidates_by_id[item.candidate_id] = item
             if item.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE and item.source.run_id is not None:
                 manual_candidate_by_run.setdefault(item.source.run_id, item)
+        for aggregation_key, replay in replay_by_key.items():
+            if replay.candidate_id is not None:
+                candidate = candidates_by_id.get(replay.candidate_id) or self._repository.get_memory_candidate(replay.candidate_id)
+                if candidate is not None:
+                    candidate_by_source[f"memory_pattern:{aggregation_key}"] = candidate
         record_by_candidate: dict[str, Any] = {}
         for item in self._repository.find_memory_records_by_candidate_ids(
             [item.candidate_id for item in candidate_by_source.values()],
@@ -1295,7 +1302,7 @@ class SocCorpusWorkbenchService:
         matching_observations = [item for item in observations if _observation_matches_run(item, run)]
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
-        candidate = self._repository.find_memory_candidate_by_source_id(f"memory_pattern:{observation.aggregation_key}") if observation is not None else None
+        candidate = self._repository.get_memory_candidate(replay.candidate_id) if replay is not None and replay.candidate_id is not None else None
         return _execution_view(
             alert_id=alert_id,
             run=run,
@@ -1333,7 +1340,10 @@ class SocCorpusWorkbenchService:
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         pattern_source_id = f"memory_pattern:{observation.aggregation_key}" if observation is not None else None
+        resolved_candidate = self._repository.get_memory_candidate(replay.candidate_id) if replay is not None and replay.candidate_id is not None else None
         candidates = [item for item in self._repository.list_memory_candidates(status=None, limit=10_000) if item.source.run_id == run.run_id or (pattern_source_id is not None and item.source.source_id == pattern_source_id)]
+        if resolved_candidate is not None and all(item.candidate_id != resolved_candidate.candidate_id for item in candidates):
+            candidates.append(resolved_candidate)
         memory_records = self._repository.find_memory_records_by_candidate_ids([item.candidate_id for item in candidates])
         review_items = [item for item in self._repository.list_review_items(status=None, limit=10_000) if item.run_id == run.run_id]
         summary = self._repository.get_alert_summary(run.run_id)
@@ -1350,7 +1360,7 @@ class SocCorpusWorkbenchService:
             run=run,
             observation=observation,
             replay=replay,
-            candidate=(candidates[0] if candidates else None),
+            candidate=resolved_candidate or (candidates[0] if candidates else None),
         )
         return _audit_bundle(
             run=run,
@@ -1366,13 +1376,12 @@ class SocCorpusWorkbenchService:
         )
 
     def _run_for_case(self, case: _CorpusCase) -> AnalysisRun | None:
-        for run in self._repository.list_runs_by_alert_id(
-            case.alert_id,
-            limit=20,
-        ):
-            if _matches_corpus_run(run, case):
-                return run
-        return None
+        # Recovery can update the parent last; use the same chronology as the list.
+        return max(
+            (run for run in self._repository.list_runs_by_alert_id(case.alert_id, limit=20) if _matches_corpus_run(run, case)),
+            key=lambda run: run.started_at,
+            default=None,
+        )
 
     def _payload_for_case(self, case: _CorpusCase) -> dict[str, Any]:
         if case.payload is not None:

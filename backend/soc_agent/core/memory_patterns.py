@@ -361,10 +361,7 @@ class SocMemoryPatternService:
         snapshot_ids = _candidate_observation_ids(candidate)
         snapshot_items = [item for item in observations if item.observation_id in set(snapshot_ids)]
         baseline_hash = _candidate_evidence_set_hash(candidate)
-        source_integrity_checked = candidate_coverage in {
-            "current_cohort",
-            "lineage_governance",
-        } and bool(snapshot_ids)
+        source_integrity_checked = candidate_coverage in {"current_cohort", "lineage_governance"} and _candidate_aggregation_key(candidate) == aggregation_key and bool(snapshot_ids)
         if source_integrity_checked:
             recomputed_hash = _evidence_set_hash(snapshot_items) if snapshot_ids and snapshot_items else None
             missing = sorted(set(snapshot_ids) - set(current_ids))
@@ -545,6 +542,11 @@ class SocMemoryPatternService:
             profile=profile,
             proposed_at=proposed_at,
         )
+        previous = self._candidate_repository.find_memory_candidate_by_idempotency_key(command.idempotency_key)
+        if previous is not None and previous.status is SocMemoryCandidateStatus.REJECTED:
+            # Do not reopen a rejected snapshot or let its global lesson key veto
+            # a later independent cohort. The current cohort still deduplicates.
+            command = command.model_copy(update={"idempotency_key": f"{command.idempotency_key}:cohort:{snapshot[0].aggregation_key}"})
         first = snapshot[0]
         context = ServiceRequestContext(
             actor=_candidate_actor_from_observation(first),
@@ -635,6 +637,8 @@ class SocMemoryPatternService:
             return None, "none"
         for candidate in find_by_lineage([lineage_key]):
             if candidate.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE and candidate.metadata.get("source") == "manual_run_promotion":
+                if candidate.status is SocMemoryCandidateStatus.REJECTED and _candidate_aggregation_key(candidate) != aggregation_key:
+                    continue
                 return candidate, "lineage_governance"
         return None, "none"
 
@@ -646,7 +650,16 @@ class SocMemoryPatternService:
         if self._candidate_repository is None:
             return None
         fingerprint = _lesson_fingerprint(observation, cohort_quality)
-        return self._candidate_repository.find_memory_candidate_by_idempotency_key(_candidate_idempotency_key(fingerprint))
+        candidate = self._candidate_repository.find_memory_candidate_by_idempotency_key(_candidate_idempotency_key(fingerprint))
+        if candidate is not None and candidate.status is not SocMemoryCandidateStatus.REJECTED:
+            return candidate
+        find_by_lineage = getattr(self._candidate_repository, "find_memory_candidates_by_lineage_keys", None)
+        if callable(find_by_lineage):
+            return next(
+                (item for item in find_by_lineage([observation.lineage_key]) if item.metadata.get("lesson_fingerprint") == fingerprint and item.status is not SocMemoryCandidateStatus.REJECTED),
+                None,
+            )
+        return None
 
     def _cohort(self, aggregation_key: str) -> list[MemoryPatternObservation]:
         observations = self._require_repository().list_memory_pattern_observations(

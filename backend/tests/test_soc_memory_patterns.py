@@ -229,7 +229,8 @@ def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
     assert replay.supersession_mode == "manual_only"
 
 
-def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate() -> None:
+@pytest.mark.parametrize("rejected", [False, True])
+def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate(rejected: bool) -> None:
     class _RunRepository:
         def __init__(self) -> None:
             self.runs: dict[str, AnalysisRun] = {}
@@ -293,6 +294,9 @@ def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate() -
             aggregation_key=second.observation.aggregation_key,
         )
     ]
+    if rejected:
+        manual_candidate = manual_candidate.model_copy(update={"status": SocMemoryCandidateStatus.REJECTED})
+        repository.save_memory_candidate(manual_candidate)
 
     third = _observe(
         pattern_service,
@@ -314,6 +318,25 @@ def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate() -
     assert replay.candidate_coverage == "lineage_governance"
     assert replay.candidate_snapshot_observation_ids == manual_candidate.metadata["observation_ids"]
     assert replay.added_observation_ids == [third.observation.observation_id]
+
+    later = []
+    for index in range(4, 7):
+        run = _run(index)
+        run.input_payload["event_time"] = (_START + timedelta(days=1, minutes=index)).isoformat()
+        later.append(_observe(pattern_service, run, transport_ref=f"batch:manual:later:{index}"))
+    final = later[-1]
+    if rejected:
+        assert final.candidate_created is True
+        assert final.candidate is not None
+        assert final.candidate.candidate_id != manual_candidate.candidate_id
+        assert final.candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+        assert repository.get_memory_candidate(manual_candidate.candidate_id).status is SocMemoryCandidateStatus.REJECTED
+    else:
+        assert final.candidate_created is False
+        assert final.candidate.candidate_id == manual_candidate.candidate_id
+        cross_window_replay = pattern_service.replay(final.observation.aggregation_key)
+        assert cross_window_replay.source_integrity_checked is False
+        assert cross_window_replay.source_integrity_passed is True
 
 
 def test_primary_scenario_generalizes_without_rule_code() -> None:
@@ -429,6 +452,38 @@ def test_equivalent_lesson_in_later_window_does_not_create_another_candidate() -
     assert replay.candidate_origin_aggregation_key == first_results[-1].observation.aggregation_key
     assert replay.source_integrity_checked is False
     assert replay.changed is False
+
+
+def test_rejected_automatic_lesson_only_suppresses_its_own_window() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository, threshold=2)
+    _observe(service, _run(1), transport_ref="batch:rejected:1")
+    first = _observe(service, _run(2), transport_ref="batch:rejected:2")
+    rejected = first.candidate.model_copy(update={"status": SocMemoryCandidateStatus.REJECTED})
+    repository.save_memory_candidate(rejected)
+    same = _observe(service, _run(3), transport_ref="batch:rejected:3")
+    assert same.candidate.candidate_id == rejected.candidate_id
+    assert same.candidate_created is False
+
+    def next_window(index, day):
+        run = _run(index)
+        run.input_payload["event_time"] = (_START + timedelta(days=day, minutes=index)).isoformat()
+        return _observe(service, run, transport_ref=f"batch:rejected:{index}")
+
+    next_window(4, 1)
+    new = next_window(5, 1)
+    assert new.candidate_created is True
+    assert new.candidate.candidate_id != rejected.candidate_id
+    assert new.candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    duplicate = next_window(5, 1)
+    assert duplicate.support_count == 2
+    assert duplicate.candidate.candidate_id == new.candidate.candidate_id
+    assert duplicate.candidate_created is False
+    next_window(6, 2)
+    later = next_window(7, 2)
+    assert later.candidate.candidate_id == new.candidate.candidate_id
+    assert later.candidate_created is False
+    assert len(repository.list_memory_candidates()) == 2
 
 
 def test_completed_run_without_analysis_is_not_a_memory_observation() -> None:

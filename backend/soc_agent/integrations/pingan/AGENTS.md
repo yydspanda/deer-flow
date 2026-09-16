@@ -133,6 +133,10 @@ generic `soc_agent` code.
   and command-line selectors must not scan raw payloads or vendor rule text. Non-empty
   selector groups are combined with AND; broad single-key rules are not acceptable for a
   benign playbook.
+  Typed supplementary business mentions are also selectable, separately from observed
+  HTTP/network facts. AskBob payload knowledge requires its domain and route in the same
+  URL clue; generic matching handles escaped slashes and fragment routes. Keep this
+  identity explanation distinct from actual endpoint knowledge and blanket allowlisting.
 - A reviewed playbook may help the LLM choose the Base Decision on a first-seen alert, but
   every statement must include current-evidence requirements and invalidation conditions.
   It always projects `decision_authority=none`; operational ignore/transfer remains a

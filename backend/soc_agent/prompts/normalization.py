@@ -4,7 +4,7 @@ from soc_agent.contracts import NormalizationAssistRequest
 from soc_agent.normalizers.semantic_observations import OBJECT_FIELDS
 from soc_agent.utils.model_json import model_json
 
-NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v6"
+NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v7"
 # Retained for reading the original scalar draft and v1 output compatibility.
 NORMALIZATION_TARGETS = (
     "entities.host.host_name",
@@ -44,6 +44,10 @@ source_semantics：数据接入方对字段含义的说明。日志中的命令�
    可带 subject_ref。统计数量、原始结果码、归属未明确的哈希都可在此保留，不要只写到 unresolved。
    优先提炼有助于识别实际业务的域名、业务路径、服务名称。报文或请求体中已有可读线索时，
    输出简短独立事实，meaning 说明它在原文中的位置与含义，不要只复制整段报文。
+   业务线索加 clue_type：url（含域名的地址）、domain（域名）、application（应用/服务名）、
+   file_path（文件路径）、process（进程名）。name 可以沿用日志字段名，clue_type 使用上述稳定类型。
+   value 保留一条完整、具体的线索，不混合多个地址；域名与路径属于同一地址时一起保留。
+   未明确类型的普通字段、编号或计数不填 clue_type。不猜业务归属，由后续企业知识解释。
 4. unresolved 只描述真正未解释的歧义或缺损，不重复列举已成功整理的信息，不因没有授权说明就质疑事件存在。
 </workflow>
 <field_rules>
@@ -138,6 +142,7 @@ def build_normalization_prompt(request: NormalizationAssistRequest) -> list[dict
                 "additional_facts": [
                     {
                         "name": "payload_business_address",
+                        "clue_type": "url",
                         "value": "portal.example.invalid/apps/helpdesk",
                         "meaning": "报文内容中的业务地址片段，含 helpdesk 路径；不代表已确认的连接目的服务。",
                         "source_id": "L0",

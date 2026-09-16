@@ -36,9 +36,15 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   fall back to generic facets merely because the action was initiated manually.
 - If that run already has a persisted `MemoryPatternObservation`, manual promotion must
   carry its exact Pattern lineage metadata and a frozen snapshot of the cohort visible
-  at promotion time. That manual candidate governs the whole exact Pattern lineage:
-  later observations remain reinforcement/replay evidence and automatic aggregation
-  must not create a second candidate for the same lineage. Reopening, revision, or
+  at promotion time. Pending or confirmed manual candidates govern the whole exact
+  Pattern lineage: later observations remain reinforcement/replay evidence and automatic
+  aggregation must not create a duplicate. Rejected candidates suppress only their own
+  aggregation window; a later independent window can qualify for a new pending candidate.
+  Never reopen the rejected snapshot automatically. Equivalent automatic lessons use the
+  same boundary, preserving idempotency within each window. Workbench list, execution,
+  and audit projections show the candidate actually resolved by Pattern replay, including
+  manual and cross-window candidates. Compare frozen evidence integrity only within its
+  origin window; a different window is reinforcement, not missing source evidence. Reopening, revision, or
   supersession remains an explicit human-governed transition. Memory Center may reconcile older manual
   candidates by exact `source.run_id` plus tenant/Profile/environment compatibility at
   read time. This projection must not rewrite storage, increase Pattern support, or use
@@ -55,6 +61,12 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   audited mutation with validity/review windows and optimistic version checks.
 
 ## Retrieval And Decision Use
+
+- Model-visible reviewed prose preserves the complete business lesson, including tail
+  boundaries and invalidation conditions. Compare full facet values before selecting
+  bounded comparison items; never compare truncated prefixes. Whole-record retrieval
+  budgets and final Prompt size checks still apply. Lesson drafting retains complete
+  selected source values and rejects an oversized source catalog rather than slicing it.
 
 - Exact approved override directives may resolve a run before the primary analyzer, after
   enterprise policy checks. `find_directive_records` evaluates enabled tenant-scoped

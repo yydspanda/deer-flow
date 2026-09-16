@@ -261,7 +261,7 @@ def test_skill_resolver_respects_available_skill_whitelist() -> None:
     assert resolution.available_agent_skills == [SOC_ALERT_TRIAGE_SKILL]
 
 
-def test_skill_context_compacts_selected_skill_metadata() -> None:
+def test_skill_context_preserves_complete_selected_methods() -> None:
     request = LLMAnalysisRequest(
         alert_id="ALT-EDR",
         source=AlertSourceRef(source_type=AlertSourceType.EDR),
@@ -274,12 +274,24 @@ def test_skill_context_compacts_selected_skill_metadata() -> None:
     endpoint_item = next(item for item in context.selected_skills if item.skill_name == SOC_ENDPOINT_TRIAGE_SKILL)
     assert len(endpoint_item.package_hash) == 64
     assert len(endpoint_item.guidance_hash) == 64
-    assert endpoint_item.guidance_source == "references/runtime-guidance.md"
+    assert "SKILL.md" in endpoint_item.guidance_source
+    assert "references/runtime-guidance.md" in endpoint_item.guidance_source
     assert endpoint_item.estimated_token_count <= endpoint_item.token_budget
-    assert endpoint_item.token_budget == 240
+    assert endpoint_item.estimated_token_count > 240
     assert "Trust that the configured endpoint detector hit occurred" in endpoint_item.guidance
-    assert context.total_token_budget == 240 * len(context.selected_skills)
+    assert "endpoint-scenario-playbooks.md" in endpoint_item.guidance_source
+    assert context.total_token_budget >= context.total_estimated_token_count
     assert context.total_estimated_token_count == sum(item.estimated_token_count for item in context.selected_skills)
+    assert not any("truncated" in note for note in context.notes)
+    from soc_agent.pipeline.analysis_context import project_analysis_context
+    from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
+
+    request.skill_context = context
+    projected = project_analysis_context(finalize_analysis_reference_catalogs(request))
+    for item in context.selected_skills:
+        rendered = next(x for x in projected["reference_catalogs"]["reasoning_context"] if x["label"] == item.skill_name)
+        assert rendered["summary"] == item.guidance
+    assert all("guidance" not in item for item in projected["skill_context"]["selected_skills"])
 
 
 def test_skill_resolver_accepts_canonical_alert_input() -> None:

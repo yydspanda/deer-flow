@@ -36,6 +36,21 @@ from soc_agent.memory import (
 from soc_agent.utils.hashing import stable_hash
 
 
+def test_memory_projection_keeps_tail_conditions_and_full_value_comparison():
+    from soc_agent.contracts import SocMemoryMatch
+    from soc_agent.memory.retrieval import memory_context_item
+
+    prefix = "x" * 300
+    record = _record("MEM-LONG", facets={"behavior_component": [prefix + "-safe"]})
+    record.content = "业务依据。" * 1000 + "失效条件：发现新的恶意执行时不得复用。"
+    match = SocMemoryMatch(memory_id=record.memory_id, version=record.version, record=record, score=10, token_estimate=2000, content_hash=record.content_hash, facets_hash=record.facets_hash)
+    item = memory_context_item(match, query_facets={"behavior_component": [prefix + "-malicious"]}, retrieval_policy_version="test")
+    assert item.summary.endswith("失效条件：发现新的恶意执行时不得复用。")
+    assert "behavior_component" not in item.memory_comparison.shared_facets
+    assert item.memory_comparison.current_only_facets["behavior_component"] == [prefix + "-malicious"]
+    assert item.memory_comparison.memory_only_facets["behavior_component"] == [prefix + "-safe"]
+
+
 def _request() -> LLMAnalysisRequest:
     return LLMAnalysisRequest(
         alert_id="ALT-RETRIEVAL-V2",

@@ -14,7 +14,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.utils.model_json import model_json
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v8"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v9"
 MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v3"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000
@@ -356,7 +356,7 @@ def _build_source_catalog(
                 source_ref=f"D-{len(sources) + 1:03d}",
                 source_kind=source_kind,
                 label=label,
-                value=rendered[:8000],
+                value=rendered,
             )
         )
 
@@ -369,7 +369,7 @@ def _build_source_catalog(
     if isinstance(comparison, Mapping):
         compact = {key: comparison.get(key) for key in ("recommendation", "explanation", "related_count")}
         compact["related_memories"] = [
-            {"memory_id": item["memory_id"], "version": item["version"], "reviewed_verdict": item["reviewed_verdict"], "scope_relation": item["scope_relation"], "conclusion": item["conclusion"][:1000]}
+            {"memory_id": item["memory_id"], "version": item["version"], "reviewed_verdict": item["reviewed_verdict"], "scope_relation": item["scope_relation"], "conclusion": item["conclusion"]}
             for item in comparison.get("related_memories", [])[:3]
         ]
         add("candidate", "existing_memory_comparison", model_json(compact, sort_keys=True))
@@ -402,7 +402,9 @@ def _build_source_catalog(
         add("lineage", "candidate_evidence_refs", model_json(candidate.evidence_refs[:40]))
     if reviewer_context:
         add("reviewer_context", "analyst_draft_context", reviewer_context)
-    return sources[:80]
+    if len(sources) > 80:
+        raise MemoryLessonDraftPromptSizeError("memory lesson source catalog exceeds 80 complete items")
+    return sources
 
 
 __all__ = [

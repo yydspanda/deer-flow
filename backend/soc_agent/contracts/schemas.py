@@ -721,7 +721,7 @@ class SocMemoryLessonDraftSource(BaseModel):
         "reviewer_context",
     ]
     label: str = Field(min_length=1, max_length=256)
-    value: str = Field(min_length=1, max_length=8000)
+    value: str = Field(min_length=1)
 
 
 class SocMemoryBusinessLessonDraftProvenance(BaseModel):
@@ -1542,9 +1542,9 @@ class SocSkillContextItem(BaseModel):
 
 
 class SocSkillContext(BaseModel):
-    """Bounded skill context derived from DeerFlow skill selection."""
+    """Whole selected methods; legacy budgets remain allocation metadata."""
 
-    schema_version: str = "soc.skill_context.v2"
+    schema_version: str = "soc.skill_context.v3"
     source: str = "soc_skill_package_projection"
     selected_skills: list[SocSkillContextItem] = Field(default_factory=list)
     total_token_budget: int = Field(default=0, ge=0)
@@ -3028,7 +3028,7 @@ class AnalysisContextCatalogItem(BaseModel):
     kind: AnalysisContextReferenceKind
     label: str = Field(min_length=1, max_length=256)
     source_id: str = Field(min_length=1, max_length=512)
-    summary: str = Field(min_length=1, max_length=4000)
+    summary: str = Field(min_length=1)
     content_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     memory_comparison: AnalysisMemoryContextComparison | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

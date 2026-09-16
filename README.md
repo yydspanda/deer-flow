@@ -24,6 +24,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > pending memory candidate. Granting a confirmed Memory authority over future verdicts additionally
 > requires a complete reviewed Business Lesson (conclusion, rationale, applicability, boundaries,
 > invalidation conditions, and handling guidance); a generic review note is audit metadata only.
+> Selected SOC Skill methods and reviewed Memory prose are sent intact, including their exceptions;
+> raw-log compression remains separate. Semantic review can classify source-bound business clues,
+> which select reviewed tenant knowledge without changing network destinations or granting action authority.
 > The ReviewQueue can generate an evidence-referenced AI draft once a quality-gated candidate exists and the
 > reviewer selects the final verdict; an optional one-line business fact improves tenant-specific quality. The six
 > generated sections are read-only by default, explicitly editable, non-persisted, and have no decision or action
@@ -89,6 +92,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > before the held-out alert is unlocked. After generation, the candidate view keeps all six final Business Lesson
 > sections visible: conclusion, rationale, boundaries, invalidation conditions, and handling
 > guidance, while clearly separating machine-derived applicability from analyst-owned facts.
+> Rejecting a candidate does not permanently suppress that behavior: a new independent
+> aggregation window may qualify for another review. Replays of the rejected window do not
+> duplicate it, and pending or confirmed lessons remain shared across qualifying windows.
 > Memory review keeps rule/source/data scope read-only and displays every core behavior as a
 > default-selected checkbox. Reviewers may remove a behavior from direct reuse; the backend matches
 > all selected behaviors without requiring the original full fingerprint. Hashes remain in technical

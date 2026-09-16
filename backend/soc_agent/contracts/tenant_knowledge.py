@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from soc_agent.contracts.normalization import BusinessClueType
+
 
 class TenantKnowledgeFactKind(StrEnum):
     """Stable classes for reviewed tenant knowledge; none grants action authority."""
@@ -99,6 +101,35 @@ class TenantFileObservationPattern(BaseModel):
         return self
 
 
+class TenantSupplementaryFactPattern(BaseModel):
+    """All constraints must match one source-bound business clue, never a join."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    clue_type: BusinessClueType
+    domain_suffixes: list[str] = Field(default_factory=list, max_length=30)
+    uri_prefixes: list[str] = Field(default_factory=list, max_length=30)
+    path_prefixes: list[str] = Field(default_factory=list, max_length=30)
+    values: list[str] = Field(default_factory=list, max_length=30)
+
+    @field_validator("domain_suffixes", "uri_prefixes", "path_prefixes", "values")
+    @classmethod
+    def normalize_values(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    @model_validator(mode="after")
+    def require_typed_constraint(self) -> TenantSupplementaryFactPattern:
+        if not any((self.domain_suffixes, self.uri_prefixes, self.path_prefixes, self.values)):
+            raise ValueError("business clue pattern needs a value constraint")
+        if self.domain_suffixes and self.clue_type not in {"url", "domain"}:
+            raise ValueError("domain constraints require url/domain clues")
+        if self.uri_prefixes and self.clue_type != "url":
+            raise ValueError("URI constraints require a url clue")
+        if self.path_prefixes and self.clue_type != "file_path":
+            raise ValueError("file path constraints require a file_path clue")
+        return self
+
+
 class TenantKnowledgeSelector(BaseModel):
     """Relevance selector. Non-empty selector groups are combined with AND."""
 
@@ -125,6 +156,7 @@ class TenantKnowledgeSelector(BaseModel):
     )
     account_patterns: list[str] = Field(default_factory=list, max_length=100)
     uri_prefixes: list[str] = Field(default_factory=list, max_length=100)
+    supplementary_fact_patterns: list[TenantSupplementaryFactPattern] = Field(default_factory=list, max_length=20)
 
     @field_validator(
         "exact_ips",
@@ -164,6 +196,7 @@ class TenantKnowledgeSelector(BaseModel):
     def require_selector(self) -> TenantKnowledgeSelector:
         if not any(
             (
+                self.supplementary_fact_patterns,
                 self.exact_ips,
                 self.cidrs,
                 self.domain_suffixes,

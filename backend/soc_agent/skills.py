@@ -44,7 +44,6 @@ SOC_SKILL_CONTEXT_SOURCE = "soc_skill_package_projection"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_PUBLIC_SKILL_ROOT = _REPO_ROOT / "skills" / "public"
-_RUNTIME_GUIDANCE_PATH = Path("references/runtime-guidance.md")
 _TOKEN_RE = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+|[^\s]")
 
 _SOURCE_SKILLS: dict[AlertSourceType, tuple[str, str]] = {
@@ -306,7 +305,7 @@ def build_soc_skill_context(
     public_skill_root: Path | None = None,
     token_budget_per_skill: int = SOC_SKILL_CONTEXT_TOKEN_BUDGET,
 ) -> SocSkillContext:
-    """Project reviewed, bounded guidance from selected DeerFlow skill packages."""
+    """Load whole selected methods; the legacy budget is an allocation hint only."""
 
     if token_budget_per_skill < 1:
         raise ValueError("token_budget_per_skill must be positive")
@@ -317,7 +316,6 @@ def build_soc_skill_context(
         projected = _project_skill_package(
             skill_root,
             recommendation.skill_name,
-            token_budget=token_budget_per_skill,
         )
         if projected is None:
             notes.append(f"valid skill package not found for {recommendation.skill_name}")
@@ -336,7 +334,7 @@ def build_soc_skill_context(
                 guidance_hash=guidance_hash,
                 package_hash=package_hash,
                 estimated_token_count=estimated_token_count,
-                token_budget=token_budget_per_skill,
+                token_budget=max(token_budget_per_skill, estimated_token_count),
             )
         )
     return SocSkillContext(
@@ -647,8 +645,6 @@ def _add_keyword_skill(
 def _project_skill_package(
     public_skill_root: Path,
     skill_name: str,
-    *,
-    token_budget: int,
 ) -> tuple[str, str, str, str, int, str | None] | None:
     from deerflow.skills.parser import parse_skill_file
     from deerflow.skills.types import SkillCategory
@@ -663,24 +659,27 @@ def _project_skill_package(
     if skill is None or skill.name != skill_name:
         return None
 
-    guidance_path = skill_dir / _RUNTIME_GUIDANCE_PATH
-    if guidance_path.is_file():
-        guidance = guidance_path.read_text(encoding="utf-8").strip()
-        guidance_source = _RUNTIME_GUIDANCE_PATH.as_posix()
-    else:
-        guidance = skill.description.strip()
-        guidance_source = "SKILL.md#description"
+    paths = [skill_path, *sorted((skill_dir / "references").rglob("*.md"))]
+    parts: list[str] = []
+    sources: list[str] = []
+    for path in paths:
+        if not path.resolve().is_relative_to(skill_dir.resolve()):
+            raise ValueError(f"skill reference escapes its package: {skill_name}")
+        content = path.read_text(encoding="utf-8").strip()
+        if content:
+            relative = path.relative_to(skill_dir).as_posix()
+            sources.append(relative)
+            parts.append(f"## {relative}\n\n{content}")
+    guidance = "\n\n".join(parts)
+    guidance_source = "; ".join(sources)
     if not guidance:
         return None
 
-    guidance, truncated = _bound_guidance(guidance, token_budget=token_budget)
     estimated_token_count = _estimate_token_count(guidance)
     package_hash = _skill_package_hash(skill_dir)
     if package_hash is None:
         return None
     projection_note = None
-    if truncated:
-        projection_note = f"runtime guidance truncated to {token_budget} estimated tokens for {skill_name}"
     return (
         guidance,
         guidance_source,
@@ -689,13 +688,6 @@ def _project_skill_package(
         estimated_token_count,
         projection_note,
     )
-
-
-def _bound_guidance(value: str, *, token_budget: int) -> tuple[str, bool]:
-    matches = list(_TOKEN_RE.finditer(value))
-    if len(matches) <= token_budget:
-        return value, False
-    return value[: matches[token_budget - 1].end()].rstrip(), True
 
 
 def _estimate_token_count(value: str) -> int:

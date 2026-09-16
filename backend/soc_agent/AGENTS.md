@@ -81,11 +81,14 @@ file for SOC code. The authoritative product and engineering documents are:
   supported nonempty selected primary source is reviewed. `NormalizationReviewer` uses a
   distinct `NormalizationAssistRequest` and provider purpose. Persist before invocation;
   reuse only matching saved recovery results, without charging cached usage again. Explicit
-  replay may run a new measurement. Prompt v6 proposes objects, bound detector events and
+  replay may run a new measurement. Prompt v7 proposes objects, bound detector events and
   supplementary facts. Merge into existing canonical observations, not a parallel alert.
   Readable business clues in packet content use existing supplementary facts, not assumed
   connection destinations or benign verdicts. Prompt examples keep cross-log facts under
   their respective L* sources; this does not introduce a new validation gate.
+  Optional `clue_type` classifies supplementary URL/domain/application/file-path/process
+  mentions for tenant knowledge selection; free-form `name` is never a matching API.
+  Old untyped facts remain readable but are not guessed into a typed knowledge match.
   Selected supplementary sources use independent L* IDs within eight sources/48k characters;
   catalog and source omissions, deduplication and truncation remain visible. Item-level errors
   must not erase valid sibling facts. Existing O* references allow sparse corrections without
@@ -172,6 +175,8 @@ file for SOC code. The authoritative product and engineering documents are:
   `AnalysisRun.steps`, provider request journals, and downstream write state. Keep the
   endpoint alert-scoped and lightweight; expose bounded metrics and sanitized errors,
   never raw prompts, evidence bodies, provider responses, or credentials.
+  Corpus list, execution and audit select the latest eligible run by `started_at`;
+  recovery updates to an older parent must not replace its newer completed child.
 - The explicitly gated corpus DEV workbench may expose a separate, on-demand,
   `soc_admin`-only audit bundle containing the persisted raw input, canonical alert,
   bounded model context, parsed model result, validation reports, Decision lineage, and
@@ -355,6 +360,11 @@ file for SOC code. The authoritative product and engineering documents are:
 - Runtime Skill routing is deterministic and bounded. Generic method belongs in `S-*`,
   adapter semantics in `A-*`, confirmed historical experience in `M-*`, tenant-static
   knowledge in `C-*`, and live provider results in `T-*`.
+  Skill Context v3 loads complete selected `SKILL.md` and package-local `references/*.md`
+  methods with hashes. Legacy token budgets are allocation metadata, not clipping limits.
+  Model projection sends the complete method once in S-*; Skill metadata points there.
+  S/A/M/C/T context prose and condition comparisons bypass raw-evidence string clipping.
+  Overall Prompt size guards still fail explicitly; never silently remove an exception.
 - Read-only provider results persist as `InvestigationEvidence` with provider/mode/mock
   provenance and `decision_impact=none`. Providers never directly change verdict, close
   ReviewQueue, confirm Memory, or authorize action.
@@ -375,6 +385,10 @@ file for SOC code. The authoritative product and engineering documents are:
 - Reviewed tenant-static knowledge is bounded, versioned, source-linked `C-*` context and
   has no direct decision authority. Dynamic authorization/exercise/maintenance facts use
   the governed-context lifecycle.
+  Supplementary clue selectors match all constraints on one typed fact, not free-form
+  names or a join of unrelated logs. URL fragment routes may identify an application,
+  but never rewrite canonical HTTP paths, network destinations or security roles.
+  Service identifiers and their meaning belong in tenant profiles, not generic code.
 - Process-chain Playbooks may use only canonical observations and explicit direct-parent
   fields. File relation/name/path constraints must match one `FileObservationRef`; never
   assemble a pattern by mixing process images, IOC artifacts, or action targets from a

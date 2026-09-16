@@ -122,7 +122,8 @@ def test_analysis_prompt_keeps_long_context_before_tail_output_contract() -> Non
     assert prompt.user.rstrip().endswith("</final_checklist>")
     assert json.dumps(prompt.response_schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True) in prompt.user
     assert json.dumps(prompt.response_schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True) not in prompt.system
-    assert len(prompt.system) < 8_000
+    assert "<business_context>" in prompt.system
+    assert len(prompt.system) < 9_000
     assert "format_fragments" not in prompt.user
 
 

@@ -316,6 +316,14 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
     bounded = _bound_projection(context)
     if not isinstance(bounded, dict):
         raise TypeError("analysis context projection must remain an object")
+    # Methods and reviewed conclusions are atomic; raw-evidence budgets must not
+    # cut off their exceptions or change the conditions compared by the model.
+    bounded["reference_catalogs"]["reasoning_context"] = context["reference_catalogs"]["reasoning_context"]
+    bounded["skill_context"] = request.skill_context.model_dump(mode="json", exclude_none=True)
+    if any(item.kind.value == "skill" for item in request.context_catalog):
+        for item in bounded["skill_context"]["selected_skills"]:
+            item.pop("guidance", None)
+        bounded["skill_context"]["guidance_projection"] = "reference_catalogs.reasoning_context:S-* (complete methods)"
     return bounded
 
 

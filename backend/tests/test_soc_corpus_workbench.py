@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import timedelta
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -563,8 +564,10 @@ def test_operational_projection_keeps_detection_and_disposition_separate() -> No
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+@pytest.mark.parametrize("candidate_source", [SocMemoryCandidateSourceType.REPEATED_PATTERN, SocMemoryCandidateSourceType.MANUAL_NOTE])
 def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
     tmp_path: Path,
+    candidate_source: SocMemoryCandidateSourceType,
 ) -> None:
     repository = _repository(tmp_path)
     pattern_service = SocMemoryPatternService(
@@ -620,6 +623,21 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
     assert memory_phase.status == "success"
     assert memory_phase.metrics["window_days"] == 30.0
 
+    if candidate_source is SocMemoryCandidateSourceType.MANUAL_NOTE:
+        observation = aggregation.observation
+        repository.save_memory_pattern_observation(
+            observation.model_copy(
+                update={
+                    "observation_id": "MPO-OLDER-SOURCE",
+                    "idempotency_key": "older-window-observation",
+                    "aggregation_key": "f" * 64,
+                    "window_start": observation.window_start - timedelta(days=30),
+                    "window_end": observation.window_end - timedelta(days=30),
+                    "source": observation.source.model_copy(update={"run_id": "RUN-OLDER-SOURCE", "alert_id": "OLDER-ALERT", "observed_at": observation.source.observed_at - timedelta(days=30)}),
+                }
+            )
+        )
+
     candidate = SocMemoryService(candidate_repository=repository).propose_candidate(
         SocMemoryCandidateCreateCommand(
             candidate_type=SocMemoryCandidateType.DETECTION_LESSON,
@@ -629,11 +647,12 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
             tenant_scope="pingan",
             tenant_id="pingan",
             source=SocMemoryCandidateSource(
-                source_type=SocMemoryCandidateSourceType.REPEATED_PATTERN,
-                source_id=f"memory_pattern:{aggregation.observation.aggregation_key}",
-                run_id=run.run_id,
-                alert_id=case.alert_id,
+                source_type=candidate_source,
+                source_id=f"memory_pattern:{aggregation.observation.aggregation_key}" if candidate_source is SocMemoryCandidateSourceType.REPEATED_PATTERN else "manual_run_promotion:older-window",
+                run_id=run.run_id if candidate_source is SocMemoryCandidateSourceType.REPEATED_PATTERN else "RUN-OLDER-SOURCE",
+                alert_id=case.alert_id if candidate_source is SocMemoryCandidateSourceType.REPEATED_PATTERN else "OLDER-ALERT",
             ),
+            metadata=({"source": "manual_run_promotion", "lineage_key": aggregation.observation.lineage_key, "aggregation_key": "f" * 64} if candidate_source is SocMemoryCandidateSourceType.MANUAL_NOTE else {}),
             evidence_refs=[f"run:{run.run_id}"],
             validity=SocMemoryCandidateValidity(notes="Regression coverage only."),
             idempotency_key=f"corpus-workbench-regression:{run.run_id}",
@@ -648,6 +667,9 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
 
     assert projected.candidate_id == candidate.candidate_id
     assert projected.candidate_status == candidate.status.value
+    execution = service.get_execution(case.alert_id)
+    memory_metrics = next(item.metrics for item in execution.phases if item.phase == "memory")
+    assert memory_metrics["candidate"] == candidate.candidate_id
 
     audit = service.get_audit_bundle(case.alert_id, context=context)
     assert audit.run_id == run.run_id
@@ -686,6 +708,21 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
     assert memory.payload["memory_candidates"][0]["candidate_id"] == candidate.candidate_id
     assert memory.payload["memory_context_exclusions"] == []
     assert memory.metrics["memory_comparisons_only"] == 0
+
+    # Recovery may update its parent after the newer run has finished.
+    older = run.model_copy(
+        deep=True,
+        update={
+            "run_id": "RUN-OLDER-INTERRUPTED",
+            "status": AnalysisRunStatus.INTERRUPTED,
+            "started_at": run.started_at - timedelta(seconds=1),
+        },
+    )
+    repository.save_run(older)
+    assert repository.list_runs_by_alert_id(case.alert_id)[0].run_id == older.run_id
+    assert service.get_execution(case.alert_id).run_id == run.run_id
+    assert service.get_audit_bundle(case.alert_id, context=context).run_id == run.run_id
+    assert service._runs_by_alert()[case.alert_id].run_id == run.run_id
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")

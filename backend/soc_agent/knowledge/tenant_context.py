@@ -19,6 +19,8 @@ from soc_agent.contracts import (
     TenantKnowledgeProfile,
     TenantProcessObservationPattern,
 )
+from soc_agent.contracts.normalization import SupplementaryFactRef
+from soc_agent.contracts.tenant_knowledge import TenantSupplementaryFactPattern
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -241,6 +243,7 @@ def _request_signals(request: LLMAnalysisRequest) -> dict[str, Any]:
         "uris": {_normalize_uri(value) for value in uris if _normalize_uri(value)},
         "text": "\n".join(str(value) for value in text_parts if value).casefold(),
         "source_type": request.source.source_type.value,
+        "supplementary_facts": request.canonical_entities.supplementary_facts,
     }
 
 
@@ -250,6 +253,15 @@ def _selector_matches(
 ) -> dict[str, list[str]] | None:
     selector = fact.selector
     matched: dict[str, list[str]] = {}
+    if selector.supplementary_fact_patterns:
+        values = [
+            f"{item.observation_id} at {item.evidence_path} (payload/business mention, {item.clue_type}): {item.value}"
+            for item in signals["supplementary_facts"]
+            if any(_supplementary_fact_matches(item, pattern) for pattern in selector.supplementary_fact_patterns)
+        ]
+        if not values:
+            return None
+        matched["supplementary_fact_patterns"] = values
     if selector.source_types:
         values = [signals["source_type"]] if signals["source_type"] in selector.source_types else []
         if not values:
@@ -496,7 +508,7 @@ def _fact_context_item(
         kind=AnalysisContextReferenceKind.GOVERNED_CONTEXT,
         label=fact.label,
         source_id=f"{profile.profile_id}@{profile.version}:{fact.fact_id}",
-        summary=f"{fact.statement}\nCurrent-alert match: {match_summary}"[:4000],
+        summary=f"{fact.statement}\nCurrent-alert match: {match_summary}",
         content_hash=projection_hash,
         metadata=metadata,
     )
@@ -507,6 +519,35 @@ def _normalize_ip(value: str) -> str:
         return str(ipaddress.ip_address(str(value).strip()))
     except ValueError:
         return ""
+
+
+def _supplementary_fact_matches(item: SupplementaryFactRef, pattern: TenantSupplementaryFactPattern) -> bool:
+    if item.clue_type != pattern.clue_type or not isinstance(item.value, str):
+        return False
+    value = item.value.strip()
+    domain = ""
+    uris: list[str] = []
+    if item.clue_type in {"url", "domain"}:
+        text = value.replace(r"\/", "/")
+        try:
+            parsed = urlsplit(text if "://" in text or text.startswith("//") else "//" + text)
+            domain = (parsed.hostname or "").casefold().rstrip(".")
+            uris = [parsed.path or "/"]
+            # A fragment route identifies an application, not an HTTP request path.
+            if parsed.fragment.startswith(("/", "!/")):
+                route = parsed.fragment.removeprefix("!").split("?", 1)[0]
+                uris.append((parsed.path or "").rstrip("/") + "/" + route.lstrip("/"))
+        except ValueError:
+            return False
+    if pattern.domain_suffixes and not any(domain == suffix.casefold().rstrip(".") or domain.endswith("." + suffix.casefold().rstrip(".")) for suffix in pattern.domain_suffixes):
+        return False
+    if pattern.uri_prefixes and not any(_uri_matches_prefix(uri, prefix) for uri in uris for prefix in pattern.uri_prefixes):
+        return False
+    if pattern.path_prefixes and not any(_path_matches_prefix(_normalize_path(value), _normalize_path(prefix)) for prefix in pattern.path_prefixes):
+        return False
+    if pattern.values and value.casefold() not in {candidate.casefold() for candidate in pattern.values}:
+        return False
+    return True
 
 
 def _normalize_domain(value: str) -> str:

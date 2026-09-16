@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 ObjectKind = Literal["host", "user", "container", "process", "file", "network", "http"]
 EventKind = Literal["file_detection", "process_execution", "network_access", "web_detection", "configuration_detection", "statistical_detection", "other_detection"]
 Scalar = str | int | float | bool
+BusinessClueType = Literal["url", "domain", "application", "file_path", "process"]
 
 
 class SourceQuote(BaseModel):
@@ -39,6 +40,7 @@ class NormalizationAdditionalFactProposal(SourceQuote):
     value: Scalar
     meaning: str = Field(min_length=1, max_length=500)
     subject_ref: str | None = Field(default=None, max_length=40)
+    clue_type: BusinessClueType | None = None
 
 
 class NormalizationReviewOutput(BaseModel):
@@ -80,6 +82,7 @@ class SupplementaryFactRef(CanonicalObservation):
     value: Scalar
     meaning: str = Field(min_length=1, max_length=500)
     subject_ref: str | None = Field(default=None, max_length=512)
+    clue_type: BusinessClueType | None = None
 
 
 class NormalizationSource(BaseModel):

@@ -79,6 +79,13 @@ class SequenceFakeChatClient(FakeChatClient):
         return super().complete(messages, model_name=model_name)
 
 
+def test_memory_lesson_source_preserves_long_business_context():
+    candidate = _candidate()
+    candidate.content = "业务事实。" * 1700 + "末尾边界：仅适用于已确认的业务调用。"
+    prompt = build_memory_lesson_draft_prompt(candidate, reviewer_verdict=Verdict.FALSE_POSITIVE, reviewer_context=None)
+    assert next(item.value for item in prompt.source_catalog if item.label == "candidate_content") == candidate.content
+
+
 def test_memory_lesson_prompt_uses_bounded_sources_and_tail_contract() -> None:
     candidate = _candidate()
 

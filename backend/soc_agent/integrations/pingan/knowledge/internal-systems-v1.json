@@ -1,7 +1,7 @@
 {
   "schema_version": "soc.tenant_knowledge_profile.v1",
   "profile_id": "pingan.internal_systems",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "integration_names": [
     "pingan_legacy_alert_platform"
   ],
@@ -62,6 +62,19 @@
       "statement": "The canonical HTTP URI under /pws/askbob-gpt is a reviewed identifier for an internal AskBob LLM invocation endpoint. This explains the service identity but does not by itself validate request content or authorization.",
       "selector": {
         "uri_prefixes": ["/pws/askbob-gpt"]
+      },
+      "source_ref": "operator confirmation; security-log-analysis/common/研判公共知识.md:AskBob",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.askbob-payload-clue",
+      "kind": "application_identity",
+      "label": "平安 AskBob 内部 LLM 服务线索",
+      "statement": "经运营确认，paic.com.cn 下 /pws/askbob-gpt（包括 /pws/#/askbob-gpt 页面路由）标识平安内部 AskBob LLM 服务。本次该地址出现在报文业务内容中，应评估内部 LLM 服务调用或内容传输是否解释了反连检测；不要仅因出现反连标签而忽略这一业务解释。它不自动代表当前网络连接的目的地址，也不单独证明所有行为均正常；若当前有实际恶意执行或不符合该业务用途的证据，仍须解释差异。",
+      "selector": {
+        "supplementary_fact_patterns": [
+          {"clue_type": "url", "domain_suffixes": ["paic.com.cn"], "uri_prefixes": ["/pws/askbob-gpt"]}
+        ]
       },
       "source_ref": "operator confirmation; security-log-analysis/common/研判公共知识.md:AskBob",
       "priority": 10

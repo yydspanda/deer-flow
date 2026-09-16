@@ -100,7 +100,7 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 人工角色修订 | Human Role Revision | `RoleAdjudicationRevisionRecord` | 分析师追加确认的角色/目标版本，不覆盖模型原始输出 |
 | 冲突报告 | Conflict Report | `ConflictReport` | 记录上游字段、加工字段、模型结论之间的冲突 |
 | 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、带来源证据；默认脱敏，批准环境可显式保留原值，不等于完整 raw payload |
-| Skill 选择上下文 | Skill Context | `SocSkillContext.v2` | 当前选择清单、原因、命中特征、包内 bounded guidance、package/projection hash 与 token budget；不是完整 `SKILL.md` 正文 |
+| Skill 选择上下文 | Skill Context | `SocSkillContext.v3` | 当前选择清单、原因、完整 `SKILL.md` 与包内 Markdown 参考方法、package/projection hash 和实际 Token 估算；不做前缀截断，模型仅接收一份 S-* 正文 |
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
 | 告警研判结果 | Alert Result | `SocAlertResult` | 以 `run_id` 为身份的主读模型；每条持久化 Run 都可查看，不依赖人工任务 |
 | 人工关注级别 | Human Attention Level | `SocAlertAttentionLevel` | 区分结论可用、可见提示和真正需人工介入，不等同于模型置信度 |

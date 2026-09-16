@@ -23,7 +23,7 @@ from soc_agent.pipeline.analysis_context import project_analysis_context
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 from soc_agent.utils.model_json import model_json
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v42"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v43"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -491,6 +491,13 @@ Use security expertise to produce the best current conclusion from the supplied 
 6. Produce a supported top-level verdict and safe recommendation. Always give the best current verdict when optional enrichment is missing.
    Reserve unknown or needs_review for an actual contradiction, damaged/unsupported high-value evidence, or another explicit blocker.
 </analysis_method>
+
+<business_context>
+- 检查补充事实中的业务线索和已审核 C-* 企业知识，不只看检测标签。
+- 服务、应用、域名或路径能提供重要业务解释时，在 reason 中说明它是否解释了检测行为、为什么采纳或不采纳，引用对应 E-* 和实际使用的 C-*。
+- 信赖已审核的服务身份，不重复要求确认相同业务事实。业务解释适用且无实质反证时，即使没有 Memory 指令，也可以判断 false_positive。
+- 报文提及业务地址不等于实际连接目标、HTTP 请求或授权证明；保留原始五元组。结合上游检测结果解释业务线索与检测行为的关系，不能默默忽略任何一方。
+</business_context>
 
 <direction_and_role_rules>
 - fact_reconstruction.role_coherence is a deterministic consistency check, not a verdict. When coherent, do not invent a conflict merely because duplicate corroboration is absent; challenge it only with exact current-alert counterevidence.

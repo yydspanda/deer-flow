@@ -34,6 +34,93 @@ from soc_agent.knowledge import TenantKnowledgeAnalysisRequestEnricher
 from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
 
 
+def _clue(value, *, kind="url", name="arbitrary_model_label", index=0):
+    from soc_agent.contracts.normalization import SupplementaryFactRef
+
+    return SupplementaryFactRef.model_validate(
+        {
+            "observation_id": f"SEM-clue-{index}",
+            "evidence_path": f"message[{index}]#semantic",
+            "event_scope_id": f"message[{index}]",
+            "name": name,
+            "value": value,
+            "meaning": "报文提及的业务线索。",
+            "clue_type": kind,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        r"paic.com.cn\/pws\/#\/askbob-gpt\/main?channel=pws",
+        "https://paic.com.cn/pws/askbob-gpt/main",
+    ],
+)
+def test_business_clue_selects_knowledge_without_rewriting_connection(value):
+    request = _request()
+    request.canonical_entities.supplementary_facts = [_clue(value)]
+    before = request.canonical_entities.model_dump()
+    enriched = TenantKnowledgeAnalysisRequestEnricher([load_pingan_internal_systems_profile()])(request)
+    item = next(i for i in enriched.context_catalog if i.metadata["fact_id"] == "pa.askbob-payload-clue")
+    assert "AskBob" in item.summary
+    assert "message[0]#semantic" in item.summary
+    assert item.metadata["decision_authority"] == "none"
+    assert enriched.canonical_entities.model_dump() == before
+    assert not any(i.metadata["fact_id"] == "pa.askbob-llm-endpoint" for i in enriched.context_catalog)
+
+
+@pytest.mark.parametrize(
+    "clues",
+    [
+        ["https://paic.com.cn.evil.test/pws/askbob-gpt/main"],
+        ["https://evilpaic.com.cn/pws/askbob-gpt/main"],
+        ["https://paic.com.cn/pws/askbob-gpt-other"],
+        ["https://paic.com.cn/other", "https://evil.test/pws/askbob-gpt/main"],
+    ],
+)
+def test_business_clue_does_not_join_unrelated_facts_or_lookalike_domains(clues):
+    request = _request()
+    request.canonical_entities.supplementary_facts = [_clue(value, index=i) for i, value in enumerate(clues)]
+    enriched = TenantKnowledgeAnalysisRequestEnricher([load_pingan_internal_systems_profile()])(request)
+    assert not any(i.metadata["fact_id"] == "pa.askbob-payload-clue" for i in enriched.context_catalog)
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "pattern"),
+    [
+        ("url", "https://ops.acme.test/apps/#/helpdesk", {"domain_suffixes": ["acme.test"], "uri_prefixes": ["/apps/helpdesk"]}),
+        ("file_path", r"C:\Program Files\Acme\agent.exe", {"path_prefixes": ["C:/Program Files/Acme"]}),
+        ("application", "Acme Assistant", {"values": ["Acme Assistant"]}),
+    ],
+)
+def test_supplementary_knowledge_selection_is_vendor_neutral(kind, value, pattern):
+    profile = load_pingan_internal_systems_profile().model_copy(
+        update={
+            "profile_id": "acme.services",
+            "tenant_ids": ["acme"],
+            "integration_names": ["acme_adapter"],
+            "facts": [
+                TenantKnowledgeFact.model_validate(
+                    {
+                        "fact_id": "acme.service",
+                        "kind": "application_identity",
+                        "label": "Acme service",
+                        "statement": "经审核的企业业务服务。",
+                        "source_ref": "reviewed:acme",
+                        "selector": {"supplementary_fact_patterns": [{"clue_type": kind, **pattern}]},
+                    }
+                )
+            ],
+        }
+    )
+    request = _request(integration_name="acme_adapter")
+    request.tenant_id = "acme"
+    request.canonical_entities.supplementary_facts = [_clue(value, kind=kind)]
+    assert len(TenantKnowledgeAnalysisRequestEnricher([profile])(request).context_catalog) == 1
+    assert not TenantKnowledgeAnalysisRequestEnricher([profile])(_request()).context_catalog
+
+
 def _request(
     *,
     integration_name: str = "pingan_legacy_alert_platform",
