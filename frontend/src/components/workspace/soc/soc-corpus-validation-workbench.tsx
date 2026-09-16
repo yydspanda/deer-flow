@@ -86,7 +86,6 @@ import type {
   SocCorpusWorkbenchState,
   SocLeadershipDemoTarget,
 } from "@/core/soc";
-import { memoryLearningHref } from "@/core/soc/memory-learning";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
@@ -162,57 +161,12 @@ interface RunFeedback {
   message: string;
   baselineRunId?: string | null;
   baselineWorkflowState?: SocCorpusWorkbenchAlert["workflow_state"];
-  action?: {
-    href: string;
-    label: string;
-  };
 }
 
 function completedRunFeedback(alert: SocCorpusWorkbenchAlert): RunFeedback {
   const replayPrefix = alert.replay_of_run_id
     ? "本次已创建新的 Runtime Run；"
     : "";
-  const learningHref = alert.learning
-    ? memoryLearningHref(alert.learning)
-    : null;
-  if (alert.learning && learningHref) {
-    return {
-      alertId: alert.alert_id,
-      status: "completed",
-      message: `${replayPrefix}${alert.learning.label}。${alert.learning.detail}`,
-      action: { href: learningHref, label: alert.learning.action_label },
-    };
-  }
-  if (
-    alert.candidate_id &&
-    alert.candidate_status === "pending_review" &&
-    !alert.memory_id
-  ) {
-    return {
-      alertId: alert.alert_id,
-      status: "completed",
-      message: `${replayPrefix}“${alert.rule_name ?? "当前告警模式"}”已达到经验沉淀质量门，等待审核。`,
-      action: {
-        href: `/workspace/soc/review/memory-candidates/${encodeURIComponent(alert.candidate_id)}`,
-        label: "审核这条经验",
-      },
-    };
-  }
-  if (alert.memory_id) {
-    const memoryUse = memoryRunUsageCopy(
-      alert.memory_contexts.length,
-      alert.memory_directive_applied,
-    );
-    return {
-      alertId: alert.alert_id,
-      status: "completed",
-      message: `${replayPrefix}本次已采用“${alert.rule_name ?? "当前告警模式"}”的审核经验：${memoryUse.label}。`,
-      action: {
-        href: `/workspace/soc/memory/records/${encodeURIComponent(alert.memory_id)}`,
-        label: "查看采用的经验",
-      },
-    };
-  }
   return {
     alertId: alert.alert_id,
     status: "completed",
@@ -657,10 +611,16 @@ function AlertDetail({
     alert.learning?.candidate_id ??
     alert.candidate_id ??
     alert.manual_candidate_id;
+  const manualCandidate =
+    !!candidateId && candidateId === alert.manual_candidate_id;
   const candidateStatus =
-    alert.manual_candidate_status ?? alert.candidate_status ?? "pending_review";
-  const candidateKind = alert.manual_candidate_id ? "人工提炼" : "同类模式";
-  const candidateNeedsReview = candidateStatus === "pending_review";
+    (manualCandidate
+      ? alert.manual_candidate_status
+      : alert.candidate_status) ?? "pending_review";
+  const candidateNeedsReview = [
+    "pending_review",
+    "confirmed_candidate",
+  ].includes(candidateStatus);
   const memoryUsage = memoryRunUsageCopy(
     alert.memory_contexts.length,
     alert.memory_directive_applied,
@@ -802,12 +762,18 @@ function AlertDetail({
             <BrainCircuitIcon className="mt-0.5 size-5 shrink-0" />
             <div className="min-w-0">
               <p className="font-semibold">
-                {candidateNeedsReview ? "同类经验待审核" : "同类经验已完成审核"}
+                {candidateNeedsReview
+                  ? manualCandidate
+                    ? "人工提炼经验待审核"
+                    : "同类经验待审核"
+                  : "经验已完成审核"}
               </p>
               <p className="mt-1 text-sm">
                 {candidateNeedsReview
-                  ? `${candidateKind}模式已达到沉淀质量门；审核后才会成为可供新告警使用的经验。`
-                  : `${candidateKind}模式已经处理，无需再次审核。`}
+                  ? manualCandidate
+                    ? "由运营人员主动发起提炼。审核并开放使用后，符合适用条件的新告警也可使用。"
+                    : "由同类样本自动提炼。符合适用条件的告警共用这条经验，审核一次即可。"
+                  : "这条经验已完成审核，可查看历史记录。"}
               </p>
               <p className="mt-1 font-mono text-xs opacity-70">
                 技术编号 {candidateId} · {candidateStatus}
@@ -819,7 +785,7 @@ function AlertDetail({
               <Link
                 href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(candidateId)}`}
               >
-                审核这条经验
+                {manualCandidate ? "审核人工提炼经验" : "审核同类经验"}
                 <ExternalLinkIcon className="size-3.5" />
               </Link>
             </Button>
@@ -1267,7 +1233,12 @@ export function SocCorpusValidationWorkbench() {
         updates[alertId] = completedRunFeedback(alert);
         if (alert.run_id && !completionNoticeRunIds.current.has(alert.run_id)) {
           completionNoticeRunIds.current.add(alert.run_id);
-          if (
+          if (alert.learning && alert.learning.action !== "promote") {
+            toast.success(alert.learning.label, {
+              description: alert.learning.detail,
+              duration: 12_000,
+            });
+          } else if (
             alert.candidate_id &&
             alert.candidate_status === "pending_review" &&
             !alert.memory_id
@@ -2249,14 +2220,6 @@ export function SocCorpusValidationWorkbench() {
             </div>
             {runFeedback.status === "completed" ? (
               <div className="flex flex-wrap items-center gap-2">
-                {runFeedback.action ? (
-                  <Button size="sm" asChild>
-                    <Link href={runFeedback.action.href}>
-                      <BrainCircuitIcon className="size-4" />
-                      {runFeedback.action.label}
-                    </Link>
-                  </Button>
-                ) : null}
                 <Button
                   size="sm"
                   variant="outline"

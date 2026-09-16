@@ -15,6 +15,12 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 ## API And Navigation
 
+- Completed-run notices report execution only; the experience status band owns the
+  single learning action. Do not duplicate its Candidate/Memory link in a session-local
+  completion banner. Review copy identifies automatic same-behavior learning versus
+  manual promotion from the saved source; both can serve later matching alerts after
+  review and activation. Shared candidate links mean one review, not one task per alert.
+
 - Memory learning entry labels and destinations come from `SocMemoryLearningView` on
   the server. Never prefer a stale per-run manual candidate over the resolved current
   candidate/revision. Manual and automatic extraction share the same review destination;
@@ -333,7 +339,16 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   do not look like unfinished confirmation fields. Deprecation is the terminal
   `废止这条经验` action: require an explicit reason and confirmation, and keep it distinct
   from temporary retrieval pause. Make the source-Candidate review a visible command on
-  the Memory record page rather than a low-emphasis audit link.
+  the Memory record page rather than a low-emphasis audit link. Label this navigation
+  `经验确认记录` / `查看确认记录`; it opens the saved confirmation context, not a new
+  review task. Keep Candidate IDs and storage terminology in technical audit only.
+- Record detail and revision pages share `SocMemoryDeprecationAction`, which submits
+  `decision=deprecate` to the existing source-Candidate review API. Cancellation makes no
+  mutation; a failure preserves the dialog and reason. Success refreshes server-owned
+  state and returns revision callers to record detail. Deprecated records display their
+  reason and cannot offer revision, activation, or future-use capability controls.
+  A pending revision must be resolved first on these record-level entry points; do not
+  silently discard a pending candidate or create a second governance workflow.
 - In DEV Runtime traces, name the first phase `来源适配与标准化 / Adapter & Normalize`:
   the active tenant/vendor Adapter parses and projects source data into the canonical SOC
   contract; the label must not imply generic field cleanup only or hard-code PingAn.

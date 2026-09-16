@@ -96,6 +96,15 @@ def test_manual_and_automatic_share_pending_candidate(automatic_first):
     second = service.propose_candidate(command(2, automatic=not automatic_first), coordinate_learning=True)
     assert first.candidate_id == second.candidate_id
     assert len(repository.list_memory_candidates()) == 1
+    view = learning_view(repository, second, now=NOW)
+    assert view.candidate_id == first.candidate_id
+    if automatic_first:
+        assert view.action_label == "审核同类经验"
+        assert "审核一次即可" in view.detail
+    else:
+        assert view.action_label == "审核人工提炼经验"
+        assert "ALERT-1" in view.detail
+        assert "符合适用条件的新告警也可使用" in view.detail
 
 
 @pytest.mark.parametrize("enabled", [False, True])

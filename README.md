@@ -62,6 +62,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Results separate resolved questions, necessary investigation, optional enrichment and future
 > reassessment triggers. Original analysis remains available for audit. The corpus workbench shows
 > the Memory actually read/cited by a run separately from the experience saved by its cohort.
+> Experience review identifies automatic same-behavior learning and manual promotion by source.
+> A completed run exposes one review entry per resolved candidate; matching alerts share that
+> review, and either origin can produce reusable experience under its approved applicability.
 > In `告警演练`, each alert exposes `查看同组` to open its complete server-defined group,
 > with `返回原筛选` restoring the previous search and page. The group picker searches rule
 > names/codes and behavior keywords, including singleton groups and groups without fingerprints.
@@ -106,7 +109,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > are separate AND conditions. Existing reviewed legacy scopes keep their original semantics.
 > Confirmed Memory keeps temporary pause/reopen under `管理使用状态`; the terminal
 > `废止这条经验` action requires an explicit audited reason and disables both reference and
-> decision reuse without deleting historical evidence.
+> decision reuse without deleting historical evidence. It is available directly from experience
+> details and the revision page, using the existing review API without creating a revision candidate.
+> `查看确认记录` opens the experience's existing review record for its reviewer, business
+> basis and reviewed usage settings; it does not start another review.
 > Semantic review supports `SOC_NORMALIZATION_ASSIST_MODE=off|shadow|apply`. In `apply`, accepted
 > supplements feed the standard alert, analysis input, and Memory conditions. The workbench reads
 > each saved run's review mode and matching signature; old shadow reports remain observation-only.

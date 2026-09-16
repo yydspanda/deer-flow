@@ -149,10 +149,16 @@ def learning_view(repository: MemoryCandidateRepository, candidate: SocMemoryCan
         return SocMemoryLearningView(
             **common,
             state="revision_pending" if revision else "pending_review",
-            label="经验正在修订" if revision else "已有待审核经验",
-            detail="继续完善已有修订，不重复创建。" if revision else "同类样本已达标，待确认业务结论。" if automatic else "已由人工发起提炼，无需等待样本数量达标。",
+            label="经验正在修订" if revision else "同类经验待审核" if automatic else "人工提炼经验待审核",
+            detail=(
+                "正在修订已有经验，审核通过后更新其内容与适用条件。"
+                if revision
+                else "由同类样本自动提炼。符合适用条件的告警共用这条经验，审核一次即可。"
+                if automatic
+                else (f"由告警 {candidate.source.alert_id} 人工发起提炼。" if candidate.source.alert_id else "由运营人员主动发起提炼。") + "审核并开放使用后，符合适用条件的新告警也可使用。"
+            ),
             action="review",
-            action_label="继续审核修订" if revision else "继续审核",
+            action_label="继续审核修订" if revision else "审核同类经验" if automatic else "审核人工提炼经验",
         )
     if record is not None:
         use = "retired" if record.status is not SocMemoryRecordStatus.CONFIRMED else "expired" if _expired(record, now) else "paused" if not record.retrieval_enabled else "exact" if record.decision_directive is not None else "reference"

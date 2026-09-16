@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memory-decision-capability";
+import { SocMemoryDeprecationAction } from "@/components/workspace/soc/soc-memory-deprecation-action";
 import { SocMemoryPendingRevision } from "@/components/workspace/soc/soc-memory-pending-revision";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
@@ -84,6 +85,7 @@ export function SocMemoryRevisionWorkbench({
   const selectedIssue = ISSUE_OPTIONS.find((item) => item.value === issueType);
   const canSubmit =
     record !== null &&
+    record.status === "confirmed" &&
     record.metadata.revision_pending !== true &&
     reason.trim().length >= 10 &&
     !revisionMutation.isPending;
@@ -134,7 +136,8 @@ export function SocMemoryRevisionWorkbench({
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-5xl px-5 py-6 md:px-7">
-          {record?.metadata.revision_pending !== true ? (
+          {record?.status === "confirmed" &&
+          record.metadata.revision_pending !== true ? (
             <Alert className="rounded-md border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
               <AlertTriangleIcon />
               <AlertTitle>提交纠错会立即暂停旧经验用于新告警</AlertTitle>
@@ -155,6 +158,18 @@ export function SocMemoryRevisionWorkbench({
               <AlertTitle>无法加载经验</AlertTitle>
               <AlertDescription>
                 {error instanceof Error ? error.message : `未找到 ${memoryId}`}
+              </AlertDescription>
+            </Alert>
+          ) : record.status !== "confirmed" ? (
+            <Alert className="mt-5 rounded-md">
+              <BanIcon />
+              <AlertTitle>
+                {record.status === "deprecated"
+                  ? "这条经验已废止"
+                  : "当前经验不可修订"}
+              </AlertTitle>
+              <AlertDescription>
+                当前记录仅保留历史，不再创建修订候选。可返回经验详情查看确认和使用记录。
               </AlertDescription>
             </Alert>
           ) : record.metadata.revision_pending === true ? (
@@ -217,6 +232,16 @@ export function SocMemoryRevisionWorkbench({
               </section>
 
               <SocMemoryDecisionCapability record={record} />
+
+              <SocMemoryDeprecationAction
+                record={record}
+                disabled={revisionMutation.isPending}
+                onDeprecated={() =>
+                  router.replace(
+                    `/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}`,
+                  )
+                }
+              />
 
               {!sourceRunId ? (
                 <Alert className="rounded-md">

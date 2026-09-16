@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { memoryAvailabilityCopy } from "@/components/workspace/soc/soc-memory-copy";
 import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memory-decision-capability";
+import { SocMemoryDeprecationAction } from "@/components/workspace/soc/soc-memory-deprecation-action";
 import { SocMemoryPendingRevision } from "@/components/workspace/soc/soc-memory-pending-revision";
 import { SocMemoryScope } from "@/components/workspace/soc/soc-memory-scope";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
@@ -161,7 +162,13 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
     right.created_at.localeCompare(left.created_at),
   )[0];
   const availability = record
-    ? memoryAvailabilityCopy(record.retrieval_enabled)
+    ? record.status === "deprecated"
+      ? {
+          label: "已废止",
+          detail:
+            "不再用于新告警的研判参考或结论复用；历史告警和使用记录仍保留。",
+        }
+      : memoryAvailabilityCopy(record.retrieval_enabled)
     : null;
 
   useEffect(() => {
@@ -256,14 +263,20 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                     </h1>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Badge variant="outline">{record.status}</Badge>
-                    <Badge
-                      variant={
-                        record.retrieval_enabled ? "default" : "secondary"
-                      }
-                    >
-                      {availability?.label}
+                    <Badge variant="outline">
+                      {record.status === "deprecated"
+                        ? "已废止"
+                        : record.status}
                     </Badge>
+                    {record.status !== "deprecated" ? (
+                      <Badge
+                        variant={
+                          record.retrieval_enabled ? "default" : "secondary"
+                        }
+                      >
+                        {availability?.label}
+                      </Badge>
+                    ) : null}
                     <Badge variant="outline">{record.memory_type}</Badge>
                     {record.reviewed_verdict ? (
                       <Badge variant="secondary">
@@ -309,11 +322,24 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                     <p className="text-muted-foreground mt-1 text-xs leading-5">
                       {availability.detail}
                     </p>
+                    {record.status === "deprecated" &&
+                    record.deprecation_reason ? (
+                      <div className="mt-3 text-sm">
+                        <span className="text-muted-foreground text-xs">
+                          废止原因
+                        </span>
+                        <p className="mt-1 break-words whitespace-pre-wrap">
+                          {record.deprecation_reason}
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </section>
 
-              <SocMemoryDecisionCapability record={record} />
+              {record.status === "confirmed" ? (
+                <SocMemoryDecisionCapability record={record} />
+              ) : null}
 
               <section
                 className="border"
@@ -406,7 +432,8 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                 ) : null}
               </section>
 
-              {record.metadata.revision_pending === true ? (
+              {record.status === "confirmed" &&
+              record.metadata.revision_pending === true ? (
                 <SocMemoryPendingRevision memoryId={record.memory_id} />
               ) : null}
 
@@ -437,11 +464,13 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                   <div>
                     <h2 className="text-sm font-semibold">版本化治理</h2>
                     <p className="text-muted-foreground mt-1 text-xs">
-                      不原地改写已确认经验；修订会暂停旧版本并创建待审
-                      经验候选。
+                      {record.status === "confirmed"
+                        ? "修订会暂停旧版本并创建待审候选；不再需要这条经验时，也可以直接废止。"
+                        : "当前记录仅保留历史，不再提供修订或开放使用操作。"}
                     </p>
                   </div>
-                  {record.metadata.revision_pending !== true ? (
+                  {record.status === "confirmed" &&
+                  record.metadata.revision_pending !== true ? (
                     <Button size="sm" asChild>
                       <Link
                         href={`/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}/revise`}
@@ -507,6 +536,14 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                         ? "暂停用于新告警"
                         : "开放给新告警"}
                     </Button>
+                  </div>
+                ) : null}
+                {record.status === "confirmed" ? (
+                  <div className="mt-4">
+                    <SocMemoryDeprecationAction
+                      record={record}
+                      disabled={retrievalMutation.isPending}
+                    />
                   </div>
                 ) : null}
               </section>
@@ -661,10 +698,10 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
                   <div>
                     <div className="text-foreground font-semibold">
-                      来源候选审核
+                      经验确认记录
                     </div>
                     <p className="text-muted-foreground mt-1 font-sans text-xs">
-                      查看这条经验最初由谁确认、依据什么业务事实，以及当时选择的使用方式。
+                      查看确认人、确认时的业务依据和使用设置。
                     </p>
                   </div>
                   <Button variant="secondary" size="sm" asChild>
@@ -672,7 +709,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(record.source_candidate_id)}`}
                     >
                       <ClipboardCheckIcon className="size-4" />
-                      查看来源候选审核
+                      查看确认记录
                     </Link>
                   </Button>
                 </div>

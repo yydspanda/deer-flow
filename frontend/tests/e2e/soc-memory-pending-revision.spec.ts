@@ -66,6 +66,16 @@ for (const width of [1440, 390]) {
       await expect(
         page.getByRole("button", { name: "暂停旧经验并创建修订候选" }),
       ).toHaveCount(0);
+      if (!suffix) {
+        await expect(
+          page.getByRole("button", { name: "废止这条经验", exact: true }),
+        ).toBeDisabled();
+        await expect(
+          page.getByText(
+            "已有待审核的修订，请先完成或取消该修订，再决定是否废止旧经验。",
+          ),
+        ).toBeVisible();
+      }
       await link.scrollIntoViewIfNeeded();
       const box = await link.boundingBox();
       expect(box!.x).toBeGreaterThanOrEqual(0);
@@ -76,6 +86,10 @@ for (const width of [1440, 390]) {
     }
     await page.getByRole("link", { name: "继续审核修订" }).click();
     await expect(page).toHaveURL(/\/review\/memory-candidates\/MC-ALPHA-001/);
-    expect(state.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+    expect(
+      state.requests.filter(
+        (r) => r.method === "POST" && !r.path.endsWith("/governance-preview"),
+      ),
+    ).toHaveLength(0);
   });
 }

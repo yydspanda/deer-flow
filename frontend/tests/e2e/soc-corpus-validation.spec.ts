@@ -72,6 +72,7 @@ function corpusState(processed = false, replayed = false) {
             context_ref: "M-001",
             label: "Windows 更新部署正常行为",
             source_id: "MEM-GALAXY",
+            memory_id: "MEM-GALAXY",
             summary: "相同规则和强行为指纹下可复用已审核误报结论。",
           },
         ]
@@ -1715,13 +1716,86 @@ test("announces a newly generated Pattern Candidate in the current alert", async
     page.getByRole("status").getByText("同类经验待审核", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "审核这条经验" }).first(),
+    page.getByRole("link", { name: "审核同类经验", exact: true }),
   ).toHaveAttribute(
     "href",
     "/workspace/soc/review/memory-candidates/MC-PATTERN-1",
   );
   await expect(page.getByRole("link", { name: "审核并决定" })).toHaveCount(0);
+  await expect(
+    page.locator(
+      'a[href="/workspace/soc/review/memory-candidates/MC-PATTERN-1"]',
+    ),
+  ).toHaveCount(1);
   await expect(page.getByText("同类经验待审核").first()).toBeVisible();
+});
+
+test("a completed run shows one shared learning action from the server", async ({
+  page,
+}, testInfo) => {
+  mockLangGraphAPI(page, { threads: [] });
+  let current = corpusState();
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    if (url.endsWith("/execution"))
+      return route.fulfill({
+        json: corpusExecution(current.readiness.processed_count > 0),
+      });
+    if (route.request().method() === "POST") {
+      const completed = corpusStateWithPatternCandidate();
+      current = {
+        ...completed,
+        alerts: completed.alerts.map((alert, index) =>
+          index === 0
+            ? {
+                ...alert,
+                learning: {
+                  state: "pending_review",
+                  label: "同类经验待审核",
+                  detail:
+                    "由同类样本自动提炼。符合适用条件的告警共用这条经验，审核一次即可。",
+                  action: "review",
+                  action_label: "审核同类经验",
+                  candidate_id: "MC-PATTERN-1",
+                },
+              }
+            : alert,
+        ),
+      };
+      return route.fulfill({ status: 202, json: corpusStart("1984426") });
+    }
+    return route.fulfill({ json: corpusStateForRequest(current, url) });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
+  await page.getByRole("button", { name: "运行", exact: true }).click();
+  await expect(
+    page.getByText("Alert 1984426 研判完成", { exact: true }),
+  ).toBeVisible();
+  const action = page.getByRole("link", { name: "审核同类经验", exact: true });
+  await expect(action).toHaveCount(1);
+  await expect(action).toHaveAttribute(
+    "href",
+    "/workspace/soc/review/memory-candidates/MC-PATTERN-1",
+  );
+  await expect(
+    page.getByRole("status").getByText(/审核一次即可/),
+  ).toBeVisible();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await action.scrollIntoViewIfNeeded();
+    await expect(action).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`shared-review-${width}.png`),
+    });
+  }
 });
 
 test("server learning target wins over stale manual candidate and old Memory", async ({
@@ -2047,10 +2121,10 @@ test("opens a used Memory correction and creates a governed revision candidate",
   });
 
   await page.goto("/workspace/soc/corpus-validation");
-  await page.getByRole("switch", { name: "仅显示未运行告警" }).click();
+  await page.getByRole("switch", { name: "仅显示未运行告警" }).uncheck();
   await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
-  await page.locator('[data-alert-id="1984426"]').click();
-  await page.getByRole("link", { name: "纠正此 Memory" }).click();
+  await page.getByRole("button", { name: "查看 Alert 1984426 结果" }).click();
+  await page.getByRole("link", { name: "不适用？发起修订" }).click();
   await expect(page).toHaveURL(
     /\/workspace\/soc\/memory\/records\/MEM-GALAXY\/revise\?run_id=RUN-CORPUS-1/,
     { timeout: 15_000 },
@@ -2204,10 +2278,15 @@ test("searches confirmed Memory records and opens their usage history", async ({
   ).toBeVisible();
   await expect(page.getByText("Alert 1984426")).toBeVisible();
   await expect(page.getByText("改变最终结论", { exact: true })).toBeVisible();
+  await expect(page.getByText("经验确认记录", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "查看来源候选审核" }),
+    page.getByText("查看确认人、确认时的业务依据和使用设置。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "查看确认记录", exact: true }),
   ).toHaveAttribute(
     "href",
     "/workspace/soc/review/memory-candidates/MC-GALAXY",
   );
+  await expect(page.getByText("来源候选审核", { exact: true })).toHaveCount(0);
 });
