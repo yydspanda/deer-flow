@@ -151,9 +151,16 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   the server-side `revision_of_memory_id` candidate filter, not a latest-N browser scan.
   Missing, failed or ambiguous lookup exposes recovery, never enables another revision.
 
-- Candidate inventory is all-status by default. Confirmed, rejected, superseded,
-  expired, and deprecated records remain discoverable for audit; terminal history may be
-  an explicit server filter.
+- Candidate inventory defaults to pending review with four server-filtered stages:
+  pending (including `confirmed_candidate`), confirmed, closed (rejected, superseded,
+  expired, deprecated), and all. Pass `review_stage=all` explicitly; omitting `status`
+  retains the legacy API's pending-only default. Filter before the global result limit,
+  never client-filter a latest-N list. Keep terminal details visible on individual rows.
+- Confirmed Candidate detail puts `修改经验`, record detail, and the shared deprecation
+  action before historical content. Opening revision is read-only; existing pending
+  revision links to its Candidate instead of offering another creation form. A failed
+  record lookup shows retry, never a destructive-only fallback. No inline overwrite of
+  a confirmed Lesson or editable terminal history.
 - Candidate detail always shows proposed content and evidence lineage. Only editable
   states show the review workflow. Confirmed candidates show the persisted six-part
   Business Lesson from the related Memory record.

@@ -39,6 +39,7 @@ import type {
   SocVerdict,
   SocMemoryCandidateReviewResult,
   SocMemoryCandidateStatus,
+  SocMemoryCandidateReviewStage,
   SocMemoryCandidateSupersessionRequest,
   SocMemoryCandidateSupersessionResult,
   SocMemoryCenterOverview,
@@ -771,6 +772,7 @@ export async function getSocNormalizationMetrics(
 
 export async function listSocMemoryCandidates({
   status = "pending_review",
+  reviewStage,
   tenantScope,
   tenantId,
   runId,
@@ -781,6 +783,7 @@ export async function listSocMemoryCandidates({
   context,
 }: {
   status?: SocMemoryCandidateStatus | null;
+  reviewStage?: SocMemoryCandidateReviewStage;
   tenantScope?: string | null;
   tenantId?: string | null;
   runId?: string | null;
@@ -791,7 +794,9 @@ export async function listSocMemoryCandidates({
   context?: SocRequestContext;
 } = {}): Promise<SocMemoryCandidate[]> {
   const params = new URLSearchParams();
-  if (status !== null) {
+  if (reviewStage !== undefined || status === null) {
+    params.set("review_stage", reviewStage ?? "all");
+  } else {
     params.set("status", status);
   }
   if (tenantScope) {

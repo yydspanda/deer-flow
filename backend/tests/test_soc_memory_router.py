@@ -4,7 +4,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from app.gateway.routers import soc_memory
 from soc_agent.contracts import (
@@ -116,6 +117,60 @@ def test_soc_memory_api_lists_candidates_by_review_filters() -> None:
     )
 
     assert response.items == [candidate]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("", {"pending_review"}),
+        ("?review_stage=pending", {"pending_review", "confirmed_candidate"}),
+        ("?review_stage=confirmed", {"confirmed"}),
+        ("?review_stage=closed", {"rejected", "superseded", "expired", "deprecated"}),
+        ("?review_stage=all", {item.value for item in SocMemoryCandidateStatus}),
+        ("?status=deprecated", {"deprecated"}),
+    ],
+)
+def test_candidate_review_stage_http_filters(query: str, expected: set[str]) -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository)
+    original = service.propose_candidate(_memory_candidate_command())
+    for status in SocMemoryCandidateStatus:
+        repository.save_memory_candidate(original.model_copy(update={"candidate_id": f"MC-{status.value}", "status": status}))
+    app = FastAPI()
+    app.include_router(soc_memory.router)
+    app.dependency_overrides[soc_memory.get_soc_memory_service] = lambda: service
+    with TestClient(app) as client:
+        response = client.get(f"/api/soc/memory/candidates{query}")
+    assert response.status_code == 200
+    assert {item["status"] for item in response.json()["items"]} == expected
+
+
+def test_candidate_review_stage_filters_before_limit_and_preserves_scope() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository)
+    original = service.propose_candidate(_memory_candidate_command())
+    for index in range(60):
+        status = SocMemoryCandidateStatus.REJECTED if index == 0 else SocMemoryCandidateStatus.CONFIRMED
+        repository.save_memory_candidate(original.model_copy(update={"candidate_id": f"MC-{index}", "status": status, "created_at": original.created_at + timedelta(minutes=index)}))
+    expired = original.model_copy(update={"candidate_id": "MC-EXPIRED", "status": SocMemoryCandidateStatus.EXPIRED, "created_at": original.created_at + timedelta(minutes=1)})
+    repository.save_memory_candidate(expired)
+    repository.save_memory_candidate(expired.model_copy(update={"candidate_id": "MC-OTHER-TENANT", "tenant_id": "other", "created_at": original.created_at + timedelta(days=1)}))
+
+    from soc_agent.contracts import SocMemoryCandidateReviewStage
+
+    items = service.list_candidates(review_stage=SocMemoryCandidateReviewStage.CLOSED, tenant_id=original.tenant_id, limit=2)
+    assert [item.candidate_id for item in items] == ["MC-EXPIRED", "MC-0"]
+    assert service.list_candidates(review_stage=SocMemoryCandidateReviewStage.CLOSED, tenant_id=original.tenant_id, limit=1) == [expired]
+
+
+def test_candidate_review_stage_rejects_conflicting_or_unknown_filters() -> None:
+    app = FastAPI()
+    app.include_router(soc_memory.router)
+    service = SocMemoryService(candidate_repository=InMemoryMemoryCandidateRepository())
+    app.dependency_overrides[soc_memory.get_soc_memory_service] = lambda: service
+    with TestClient(app) as client:
+        for query in ("review_stage=all&status=confirmed", "review_stage=missing"):
+            assert client.get(f"/api/soc/memory/candidates?{query}").status_code == 422
 
 
 def test_soc_memory_api_gets_candidate() -> None:

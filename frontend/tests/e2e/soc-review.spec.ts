@@ -94,7 +94,7 @@ test.describe("SOC review workbench", () => {
     expect(request?.idempotencyKey).toBeTruthy();
   });
 
-  test("lists every Memory Candidate status before opening governance detail", async ({
+  test("defaults to pending review and explicitly includes confirmed history", async ({
     page,
   }) => {
     mockLangGraphAPI(page, { threads: [] });
@@ -109,7 +109,11 @@ test.describe("SOC review workbench", () => {
     await expect(
       page.getByRole("heading", { name: "待审核与历史记录" }),
     ).toBeVisible();
-    await expect(page.getByLabel("候选状态")).toContainText("全部状态");
+    await expect(page.getByLabel("候选状态")).toContainText("待审核");
+    await expect(page.getByText("Authorized scanner pattern")).toHaveCount(0);
+    await page.getByLabel("候选状态").click();
+    await expect(page.getByRole("option")).toHaveCount(4);
+    await page.getByRole("option", { name: "全部", exact: true }).click();
     await expect(page.getByText("Authorized scanner pattern")).toBeVisible();
     await expect(
       page.getByText(
@@ -335,7 +339,7 @@ test.describe("SOC review workbench", () => {
     const dialog = page.getByRole("dialog", { name: "废止这条经验" });
     await expect(dialog).toBeVisible();
     await expect(
-      dialog.getByText(/后续告警将无法再检索或复用它/),
+      dialog.getByText(/新告警不能再参考或直接复用这条经验/),
     ).toBeVisible();
     await expect(
       dialog.getByRole("button", { name: "确认废止" }),

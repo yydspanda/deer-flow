@@ -99,6 +99,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
+    SocMemoryCandidateReviewStage,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
@@ -3234,6 +3235,7 @@ class SocMemoryService:
         self,
         *,
         status: SocMemoryCandidateStatus | None = None,
+        review_stage: SocMemoryCandidateReviewStage | None = None,
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         run_id: str | None = None,
@@ -3244,6 +3246,32 @@ class SocMemoryService:
     ) -> list[SocMemoryCandidate]:
         if self._candidate_repository is None:
             raise SocServiceNotImplementedError("list_candidates requires a MemoryCandidateRepository")
+
+        if review_stage is not None:
+            if status is not None:
+                raise ValueError("Use either review_stage or status, not both")
+            stages = {
+                SocMemoryCandidateReviewStage.PENDING: (SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE),
+                SocMemoryCandidateReviewStage.CONFIRMED: (SocMemoryCandidateStatus.CONFIRMED,),
+                SocMemoryCandidateReviewStage.CLOSED: (SocMemoryCandidateStatus.REJECTED, SocMemoryCandidateStatus.SUPERSEDED, SocMemoryCandidateStatus.EXPIRED, SocMemoryCandidateStatus.DEPRECATED),
+                SocMemoryCandidateReviewStage.ALL: (None,),
+            }
+            # Each indexed status lane contributes its top N before the global limit.
+            items = [
+                item
+                for lane in stages[review_stage]
+                for item in self.list_candidates(
+                    status=lane,
+                    tenant_scope=tenant_scope,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    alert_id=alert_id,
+                    queue_id=queue_id,
+                    revision_of_memory_id=revision_of_memory_id,
+                    limit=limit,
+                )
+            ]
+            return sorted(items, key=lambda item: item.created_at, reverse=True)[:limit]
 
         return self._candidate_repository.list_memory_candidates(
             status=status,

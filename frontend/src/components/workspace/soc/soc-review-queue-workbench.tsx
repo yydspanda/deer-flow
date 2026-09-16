@@ -58,6 +58,8 @@ import {
   SocDispositionSampleInbox,
   type SocDispositionSampleReviewTarget,
 } from "@/components/workspace/soc/soc-disposition-sample-inbox";
+import { SocMemoryDeprecationAction } from "@/components/workspace/soc/soc-memory-deprecation-action";
+import { SocMemoryPendingRevision } from "@/components/workspace/soc/soc-memory-pending-revision";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   SocApiError,
@@ -92,6 +94,7 @@ import type {
   SocInvestigationEvidence,
   SocInvestigationTimelineItem,
   SocMemoryCandidate,
+  SocMemoryCandidateReviewStage,
   SocMemoryCandidateReviewDecision,
   SocMemoryApplicabilitySpec,
   SocMemoryScopeView,
@@ -120,17 +123,13 @@ const STATUS_OPTIONS: { value: SocReviewQueueStatus | "all"; label: string }[] =
   ];
 
 const MEMORY_CANDIDATE_STATUS_OPTIONS: {
-  value: SocMemoryCandidate["status"] | "all";
+  value: SocMemoryCandidateReviewStage;
   label: string;
 }[] = [
-  { value: "all", label: "全部状态" },
-  { value: "pending_review", label: "待审核" },
-  { value: "confirmed_candidate", label: "已确认候选" },
-  { value: "confirmed", label: "已确认" },
-  { value: "rejected", label: "已放弃沉淀" },
-  { value: "superseded", label: "已被替代" },
-  { value: "expired", label: "已过期" },
-  { value: "deprecated", label: "已停用" },
+  { value: "pending", label: "待审核" },
+  { value: "confirmed", label: "已通过" },
+  { value: "closed", label: "已结束" },
+  { value: "all", label: "全部" },
 ];
 
 const MEMORY_REVISION_ISSUE_LABELS: Record<
@@ -608,12 +607,12 @@ function candidateSourceLabel(candidate: SocMemoryCandidate) {
 function candidateStatusLabel(status: SocMemoryCandidate["status"]) {
   const labels: Partial<Record<SocMemoryCandidate["status"], string>> = {
     pending_review: "待审核",
-    confirmed_candidate: "已确认候选",
-    confirmed: "已确认",
+    confirmed_candidate: "待审核",
+    confirmed: "已通过",
     rejected: "已放弃沉淀",
     superseded: "已被替代",
     expired: "已过期",
-    deprecated: "已停用",
+    deprecated: "已废止",
   };
   return labels[status] ?? status;
 }
@@ -1743,9 +1742,9 @@ function MemoryCandidateInventory({
   onRefresh,
 }: {
   candidates: SocMemoryCandidate[];
-  status: SocMemoryCandidate["status"] | "all";
+  status: SocMemoryCandidateReviewStage;
   isFetching: boolean;
-  onStatusChange: (status: SocMemoryCandidate["status"] | "all") => void;
+  onStatusChange: (status: SocMemoryCandidateReviewStage) => void;
   onRefresh: () => void;
 }) {
   return (
@@ -1754,7 +1753,9 @@ function MemoryCandidateInventory({
         <div>
           <h3 className="text-sm font-semibold">待审核与历史记录</h3>
           <p className="text-muted-foreground mt-1 text-xs">
-            待审、已确认和历史候选都保留在这里；打开详情查看完整审核对象和治理结果。
+            {status === "closed"
+              ? "已放弃、已废止、已过期或被新版本替代的审核记录。"
+              : "审核新经验，查看已通过的经验及历史审核记录。"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1896,13 +1897,13 @@ function MemoryCandidateGovernanceStatus({
 }) {
   const descriptions: Partial<Record<SocMemoryCandidate["status"], string>> = {
     confirmed:
-      "该候选已完成审核并沉淀为 Memory。审核后的完整 Business Lesson 在下方展示。",
+      "该经验已审核通过。下方保留当时的审核依据；修改内容请使用上方的“修改经验”。",
     rejected: candidate.revision_lineage
       ? "本次修订已放弃，旧经验内容保持不变。可查看当前使用状态，或明确恢复旧经验。"
       : "该候选已被审核人放弃沉淀。候选正文和历史审计仍保留，可显式重新打开审核。",
     superseded: "该候选已被更新版本替代，仅作为历史审计记录保留。",
     expired: "该候选已过有效期，仅作为历史审计记录保留。",
-    deprecated: "该候选已停用，不再参与后续 Memory 治理。",
+    deprecated: "该经验已废止，不再用于新告警。原内容和审核记录仍保留。",
   };
   return (
     <div
@@ -1952,6 +1953,10 @@ function MemoryCandidateGovernanceStatus({
 
 function MemoryCandidateSection({
   candidates,
+  records,
+  recordsLoading,
+  recordsError,
+  onRetryRecords,
   reviewDrafts,
   isReviewing,
   isDraftingLesson,
@@ -1960,6 +1965,10 @@ function MemoryCandidateSection({
   onDraftLesson,
 }: {
   candidates: SocMemoryCandidate[];
+  records: SocMemoryRecord[];
+  recordsLoading: boolean;
+  recordsError: unknown;
+  onRetryRecords: () => void;
   reviewDrafts: Record<string, MemoryCandidateReviewDraft>;
   isReviewing: boolean;
   isDraftingLesson: boolean;
@@ -1974,17 +1983,9 @@ function MemoryCandidateSection({
   ) => void;
   onDraftLesson: (candidate: SocMemoryCandidate) => void;
 }) {
-  const [deprecationTarget, setDeprecationTarget] =
-    useState<SocMemoryCandidate | null>(null);
-  const [deprecationReason, setDeprecationReason] = useState("");
   const [regenerationTarget, setRegenerationTarget] =
     useState<SocMemoryCandidate | null>(null);
   const busy = isReviewing || isDraftingLesson;
-
-  const closeDeprecationDialog = () => {
-    setDeprecationTarget(null);
-    setDeprecationReason("");
-  };
 
   return (
     <section className="rounded-md border">
@@ -2023,6 +2024,9 @@ function MemoryCandidateSection({
             const editable = ["pending_review", "confirmed_candidate"].includes(
               candidate.status,
             );
+            const record = records.find(
+              (item) => item.source_candidate_id === candidate.candidate_id,
+            );
             const cohortMetrics = candidateCohortMetrics(candidate);
             const hasLessonDraft = hasMemoryLessonDraft(draft);
             const reviewContextId = `memory-review-context-${candidate.candidate_id}`;
@@ -2057,6 +2061,80 @@ function MemoryCandidateSection({
                     </Badge>
                   </div>
                 </div>
+
+                {candidate.status === "confirmed" ? (
+                  <section
+                    aria-label="已通过经验的管理"
+                    className="mt-4 space-y-3 border-y border-emerald-200 bg-emerald-50/40 px-4 py-4 dark:border-emerald-900 dark:bg-emerald-950/20"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <CheckCircle2Icon className="size-4 text-emerald-600" />
+                      经验已通过审核
+                    </div>
+                    {recordsLoading ? (
+                      <p className="text-muted-foreground text-sm">
+                        正在加载已确认经验...
+                      </p>
+                    ) : recordsError || !record ? (
+                      <div className="space-y-2">
+                        <p className="text-muted-foreground text-sm">
+                          {recordsError
+                            ? "已确认经验加载失败，请重试。"
+                            : "暂未找到关联的已确认经验，请刷新核对。"}
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={onRetryRecords}
+                        >
+                          <RefreshCwIcon className="size-4" />
+                          重新加载经验
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        {record.metadata.revision_pending === true ? (
+                          <SocMemoryPendingRevision
+                            memoryId={record.memory_id}
+                          />
+                        ) : record.status === "confirmed" ? (
+                          <p className="text-muted-foreground text-sm leading-6">
+                            内容或适用条件需要调整时，可修改经验并重新确认；原审核记录会保留。
+                          </p>
+                        ) : (
+                          <p className="text-muted-foreground text-sm">
+                            关联经验已结束使用，保留历史内容供查看。
+                          </p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-3">
+                          {record.status === "confirmed" &&
+                          record.metadata.revision_pending !== true ? (
+                            <Button asChild>
+                              <Link
+                                href={`/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}/revise`}
+                              >
+                                <FilePenLineIcon className="size-4" />
+                                修改经验
+                              </Link>
+                            </Button>
+                          ) : null}
+                          <Button variant="outline" asChild>
+                            <Link
+                              href={`/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}`}
+                            >
+                              <EyeIcon className="size-4" />
+                              查看经验详情
+                            </Link>
+                          </Button>
+                          <SocMemoryDeprecationAction
+                            record={record}
+                            disabled={busy}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </section>
+                ) : null}
 
                 {candidate.revision_lineage ? (
                   <div className="mt-4 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
@@ -2494,145 +2572,79 @@ function MemoryCandidateSection({
                   </CollapsibleContent>
                 </Collapsible>
 
-                <div
-                  data-memory-review-actions
-                  className="bg-background/95 sticky bottom-0 z-10 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t px-4 py-4 shadow-[0_-8px_20px_-18px_rgba(0,0,0,0.7)] backdrop-blur"
-                >
-                  <div>
-                    <div className="text-sm font-semibold">审核决定</div>
-                    <div className="text-muted-foreground mt-0.5 text-xs">
-                      主操作会写入治理审计；放弃或停用不会改写原始告警结论。
+                {editable || candidate.status === "rejected" ? (
+                  <div
+                    data-memory-review-actions
+                    className="bg-background/95 sticky bottom-0 z-10 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t px-4 py-4 shadow-[0_-8px_20px_-18px_rgba(0,0,0,0.7)] backdrop-blur"
+                  >
+                    <div>
+                      <div className="text-sm font-semibold">审核决定</div>
+                      <div className="text-muted-foreground mt-0.5 text-xs">
+                        主操作会写入治理审计；放弃或停用不会改写原始告警结论。
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {candidate.status === "rejected" &&
+                      candidate.revision_lineage ? (
+                        <span className="text-muted-foreground max-w-sm text-right text-xs leading-5">
+                          本次修订已结束，可在上方查看或恢复旧经验。
+                        </span>
+                      ) : candidate.status === "rejected" ? (
+                        <Button
+                          size="sm"
+                          disabled={isReviewing}
+                          title="保留原驳回审计，并将候选返回待审核状态"
+                          onClick={() => onReview(candidate, "reopen")}
+                        >
+                          <RefreshCwIcon className="size-4" />
+                          重新打开审核
+                        </Button>
+                      ) : editable ? (
+                        <>
+                          <Button
+                            size="sm"
+                            disabled={
+                              busy ||
+                              draft.confirmedVerdict === null ||
+                              !reviewedLesson
+                            }
+                            onClick={() => onReview(candidate, "confirm")}
+                          >
+                            <CheckCircle2Icon className="size-4" />
+                            {draft.replacement
+                              ? "确认修订并替换旧经验"
+                              : "确认并启用经验"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            disabled={busy}
+                            title="仅放弃这条 Memory 候选，不改变告警的最终判断"
+                            onClick={() => onReview(candidate, "reject")}
+                          >
+                            <XCircleIcon className="size-4" />
+                            {candidate.revision_lineage
+                              ? "放弃修订，保持暂停"
+                              : "放弃沉淀此候选"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => onReview(candidate, "expire")}
+                          >
+                            过期
+                          </Button>
+                        </>
+                      ) : null}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {candidate.status === "rejected" &&
-                    candidate.revision_lineage ? (
-                      <span className="text-muted-foreground max-w-sm text-right text-xs leading-5">
-                        本次修订已结束，可在上方查看或恢复旧经验。
-                      </span>
-                    ) : candidate.status === "rejected" ? (
-                      <Button
-                        size="sm"
-                        disabled={isReviewing}
-                        title="保留原驳回审计，并将候选返回待审核状态"
-                        onClick={() => onReview(candidate, "reopen")}
-                      >
-                        <RefreshCwIcon className="size-4" />
-                        重新打开审核
-                      </Button>
-                    ) : editable ? (
-                      <>
-                        <Button
-                          size="sm"
-                          disabled={
-                            busy ||
-                            draft.confirmedVerdict === null ||
-                            !reviewedLesson
-                          }
-                          onClick={() => onReview(candidate, "confirm")}
-                        >
-                          <CheckCircle2Icon className="size-4" />
-                          {draft.replacement
-                            ? "确认修订并替换旧经验"
-                            : "确认并启用经验"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          disabled={busy}
-                          title="仅放弃这条 Memory 候选，不改变告警的最终判断"
-                          onClick={() => onReview(candidate, "reject")}
-                        >
-                          <XCircleIcon className="size-4" />
-                          {candidate.revision_lineage
-                            ? "放弃修订，保持暂停"
-                            : "放弃沉淀此候选"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={() => onReview(candidate, "expire")}
-                        >
-                          过期
-                        </Button>
-                      </>
-                    ) : candidate.status === "confirmed" ? (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={isReviewing}
-                        onClick={() => {
-                          setDeprecationTarget(candidate);
-                          setDeprecationReason("");
-                        }}
-                      >
-                        <XCircleIcon className="size-4" />
-                        废止这条经验
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
+                ) : null}
               </div>
             );
           })
         )}
       </div>
-      <Dialog
-        open={deprecationTarget !== null}
-        onOpenChange={(open) => {
-          if (!open && !isReviewing) closeDeprecationDialog();
-        }}
-      >
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>废止这条经验</DialogTitle>
-            <DialogDescription>
-              这不是临时暂停。关联 Candidate 和 Memory
-              将被标记为已废止，后续告警将无法再检索或复用它；历史告警、使用记录与审计证据仍会保留。
-            </DialogDescription>
-          </DialogHeader>
-          <label className="grid gap-2 text-sm">
-            <span className="font-medium">废止原因</span>
-            <Textarea
-              value={deprecationReason}
-              onChange={(event) => setDeprecationReason(event.target.value)}
-              placeholder="说明这条经验为什么已经错误、过时或不应继续使用"
-              rows={4}
-              disabled={isReviewing}
-            />
-            <span className="text-muted-foreground text-xs">
-              至少 10 个字符；该说明会进入治理审计。
-            </span>
-          </label>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isReviewing}
-              onClick={closeDeprecationDialog}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={isReviewing || deprecationReason.trim().length < 10}
-              onClick={() => {
-                if (!deprecationTarget) return;
-                onReview(
-                  deprecationTarget,
-                  "deprecate",
-                  deprecationReason.trim(),
-                );
-                closeDeprecationDialog();
-              }}
-            >
-              确认废止
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog
         open={regenerationTarget !== null}
         onOpenChange={(open) => {
@@ -3180,7 +3192,7 @@ export function SocReviewQueueWorkbench({
     SocReviewQueueStatus | "all"
   >(initialQueueId ? "all" : "open");
   const [memoryCandidateStatusFilter, setMemoryCandidateStatusFilter] =
-    useState<SocMemoryCandidate["status"] | "all">("all");
+    useState<SocMemoryCandidateReviewStage>("pending");
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(
     initialQueueId ?? null,
   );
@@ -3250,10 +3262,7 @@ export function SocReviewQueueWorkbench({
     error: listedMemoryCandidatesError,
     refetch: refetchListedMemoryCandidates,
   } = useSocMemoryCandidates({
-    status:
-      memoryCandidateStatusFilter === "all"
-        ? null
-        : memoryCandidateStatusFilter,
+    reviewStage: memoryCandidateStatusFilter,
     limit: 50,
     enabled: workspaceView === "memory" && !initialCandidateId,
   });
@@ -3271,7 +3280,12 @@ export function SocReviewQueueWorkbench({
         : (context?.memory_candidates ?? []),
     [context?.memory_candidates, standaloneMemoryCandidates, workspaceView],
   );
-  const { records: memoryRecords } = useSocMemoryRecords({
+  const {
+    records: memoryRecords,
+    isLoading: memoryRecordsLoading,
+    error: memoryRecordsError,
+    refetch: refetchMemoryRecords,
+  } = useSocMemoryRecords({
     status: null,
     sourceCandidateId:
       workspaceView === "memory" ? initialCandidateId : undefined,
@@ -3717,7 +3731,11 @@ export function SocReviewQueueWorkbench({
         }
         description={
           workspaceView === "memory"
-            ? "审核待沉淀经验；确认前不会影响新告警"
+            ? focusedMemoryCandidate?.status === "confirmed"
+              ? "查看确认依据，管理已通过的经验"
+              : initialCandidateId
+                ? "审核待沉淀经验；确认前不会影响新告警"
+                : "处理待审经验，查看已通过和已结束的审核记录"
             : workspaceView === "sample"
               ? "抽样评估处置建议，不属于日常告警队列"
               : "只处理 Runtime 无法解决的关键事实冲突"
@@ -3778,10 +3796,21 @@ export function SocReviewQueueWorkbench({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold">
-                    {initialCandidateId ? "审核这条经验" : "经验审核"}
+                    {!initialCandidateId
+                      ? "经验审核"
+                      : focusedMemoryCandidate?.status === "confirmed"
+                        ? "经验确认记录"
+                        : focusedMemoryCandidate &&
+                            !["pending_review", "confirmed_candidate"].includes(
+                              focusedMemoryCandidate.status,
+                            )
+                          ? "经验审核记录"
+                          : "审核这条经验"}
                   </h2>
                   <p className="text-muted-foreground mt-1 text-sm">
-                    决定跨告警经验是否值得沉淀，以及未来新告警可以如何使用。
+                    {focusedMemoryCandidate?.status === "confirmed"
+                      ? "查看当时的确认依据，也可以修改或废止已确认的经验。"
+                      : "决定跨告警经验是否值得沉淀，以及未来新告警可以如何使用。"}
                   </p>
                 </div>
                 {initialCandidateId ? (
@@ -3841,6 +3870,10 @@ export function SocReviewQueueWorkbench({
               <>
                 <MemoryCandidateSection
                   candidates={standaloneMemoryCandidates}
+                  records={relatedMemoryRecords}
+                  recordsLoading={memoryRecordsLoading}
+                  recordsError={memoryRecordsError}
+                  onRetryRecords={() => void refetchMemoryRecords()}
                   reviewDrafts={memoryReviewDrafts}
                   isReviewing={reviewMemoryCandidateMutation.isPending}
                   isDraftingLesson={draftMemoryLessonMutation.isPending}
@@ -4216,6 +4249,10 @@ export function SocReviewQueueWorkbench({
 
                 <MemoryCandidateSection
                   candidates={context?.memory_candidates ?? []}
+                  records={relatedMemoryRecords}
+                  recordsLoading={memoryRecordsLoading}
+                  recordsError={memoryRecordsError}
+                  onRetryRecords={() => void refetchMemoryRecords()}
                   reviewDrafts={memoryReviewDrafts}
                   isReviewing={reviewMemoryCandidateMutation.isPending}
                   isDraftingLesson={draftMemoryLessonMutation.isPending}

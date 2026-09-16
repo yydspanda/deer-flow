@@ -759,6 +759,34 @@ describe("SOC memory API", () => {
     );
   });
 
+  test("sends explicit grouped review filters, including all statuses", async () => {
+    mockedFetch.mockImplementation(async () =>
+      jsonResponse(200, { items: [] }),
+    );
+    await listSocMemoryCandidates({ status: null });
+    await listSocMemoryCandidates({
+      reviewStage: "pending",
+      tenantId: "tenant-1",
+      limit: 10,
+    });
+    await listSocMemoryCandidates({
+      reviewStage: "closed",
+      revisionOfMemoryId: "MEM-1",
+    });
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/soc/memory/candidates?review_stage=all&limit=50",
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/soc/memory/candidates?review_stage=pending&tenant_id=tenant-1&limit=10",
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      3,
+      "/api/soc/memory/candidates?review_stage=closed&revision_of_memory_id=MEM-1&limit=50",
+    );
+  });
+
   test("searches the operator Memory inventory with pagination", async () => {
     mockedFetch.mockResolvedValueOnce(
       jsonResponse(200, {

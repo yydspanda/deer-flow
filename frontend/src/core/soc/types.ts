@@ -483,6 +483,12 @@ export interface SocExternalDispositionRecord {
   metadata: Record<string, unknown>;
 }
 
+export type SocMemoryCandidateReviewStage =
+  | "pending"
+  | "confirmed"
+  | "closed"
+  | "all";
+
 export type SocMemoryCandidateStatus =
   | "pending_review"
   | "confirmed_candidate"

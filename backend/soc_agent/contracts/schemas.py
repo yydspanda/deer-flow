@@ -349,6 +349,13 @@ class SocMemoryCandidateStatus(StrEnum):
     EXPIRED = "expired"
 
 
+class SocMemoryCandidateReviewStage(StrEnum):
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    CLOSED = "closed"
+    ALL = "all"
+
+
 class SocMemoryCandidateReviewDecision(StrEnum):
     CONFIRM_CANDIDATE = "confirm_candidate"
     CONFIRM = "confirm"

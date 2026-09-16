@@ -1075,10 +1075,19 @@ export async function mockSocAPI(
     }
     if (method === "GET" && path === "/api/soc/memory/candidates") {
       const requestedStatus = url.searchParams.get("status");
+      const stage = url.searchParams.get("review_stage");
       const candidate = memoryCandidate(state);
+      const stages: Record<string, string[]> = {
+        pending: ["pending_review", "confirmed_candidate"],
+        confirmed: ["confirmed"],
+        closed: ["rejected", "superseded", "expired", "deprecated"],
+      };
       return fulfill(route, {
         items:
-          requestedStatus && requestedStatus !== candidate.status
+          (requestedStatus && requestedStatus !== candidate.status) ||
+          (stage &&
+            stage !== "all" &&
+            !stages[stage]?.includes(candidate.status))
             ? []
             : [candidate],
       });

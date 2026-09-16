@@ -57,6 +57,12 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 - Candidate governance is separate from the alert verdict. `confirm` persists reviewed
   Memory; `reject` means do not persist that candidate. Only the audited `reopen`
   transition may return an eligible rejected candidate to review.
+- Candidate inventory review-stage grouping is read-only and does not change stored
+  statuses. `SocMemoryService.list_candidates(review_stage=...)` merges bounded,
+  independently filtered status lanes before the global limit. Pending includes
+  `confirmed_candidate`; closed includes rejected/superseded/expired/deprecated.
+  HTTP callers must explicitly request `review_stage=all`; no-filter callers retain
+  the legacy pending-only default. Exact `status` and grouped `review_stage` are exclusive.
 - New decision-bearing confirmation requires reviewer-owned
   `soc.memory_business_lesson.v2`: detection scenario, observed business event,
   conclusion, business rationale, exact applicability, allowed generalization,

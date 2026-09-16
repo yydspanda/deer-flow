@@ -113,6 +113,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > details and the revision page, using the existing review API without creating a revision candidate.
 > `查看确认记录` opens the experience's existing review record for its reviewer, business
 > basis and reviewed usage settings; it does not start another review.
+> Experience review now defaults to `待审核`, with `已通过`, `已结束`, and `全部` filters.
+> Approved review records expose `修改经验` above historical content, alongside experience
+> detail and deprecation. Modification uses the existing versioned revision workflow;
+> an open revision links directly to its pending review instead of creating another one.
 > Semantic review supports `SOC_NORMALIZATION_ASSIST_MODE=off|shadow|apply`. In `apply`, accepted
 > supplements feed the standard alert, analysis input, and Memory conditions. The workbench reads
 > each saved run's review mode and matching signature; old shadow reports remain observation-only.

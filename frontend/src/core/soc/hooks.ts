@@ -68,6 +68,7 @@ import type {
   SocMemoryCandidateReviewRequest,
   SocMemoryBusinessLessonDraftRequest,
   SocMemoryCandidateStatus,
+  SocMemoryCandidateReviewStage,
   SocMemoryCandidateSupersessionRequest,
   SocCorpusWorkbenchQuery,
   SocAnalysisExecutionOptions,
@@ -143,6 +144,7 @@ export const socMemoryQueryKeys = {
   all: ["soc-memory"] as const,
   candidates: ({
     status,
+    reviewStage,
     tenantScope,
     tenantId,
     runId,
@@ -152,6 +154,7 @@ export const socMemoryQueryKeys = {
     limit,
   }: {
     status: SocMemoryCandidateStatus | null;
+    reviewStage?: SocMemoryCandidateReviewStage;
     tenantScope: string | null | undefined;
     tenantId: string | null | undefined;
     runId: string | null | undefined;
@@ -164,6 +167,7 @@ export const socMemoryQueryKeys = {
       ...socMemoryQueryKeys.all,
       "candidates",
       status,
+      reviewStage,
       tenantScope,
       tenantId,
       runId,
@@ -746,6 +750,7 @@ export function useUpdateSocNormalizationIssue() {
 
 export function useSocMemoryCandidates({
   status = "pending_review",
+  reviewStage,
   tenantScope,
   tenantId,
   runId,
@@ -756,6 +761,7 @@ export function useSocMemoryCandidates({
   enabled = true,
 }: {
   status?: SocMemoryCandidateStatus | null;
+  reviewStage?: SocMemoryCandidateReviewStage;
   tenantScope?: string | null;
   tenantId?: string | null;
   runId?: string | null;
@@ -769,6 +775,7 @@ export function useSocMemoryCandidates({
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: socMemoryQueryKeys.candidates({
       status,
+      reviewStage,
       tenantScope,
       tenantId,
       runId,
@@ -780,6 +787,7 @@ export function useSocMemoryCandidates({
     queryFn: () =>
       listSocMemoryCandidates({
         status,
+        reviewStage,
         tenantScope,
         tenantId,
         runId,

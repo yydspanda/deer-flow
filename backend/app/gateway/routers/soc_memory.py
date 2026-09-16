@@ -24,6 +24,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
+    SocMemoryCandidateReviewStage,
     SocMemoryCandidateStatus,
     SocMemoryCandidateSupersessionCommand,
     SocMemoryCandidateSupersessionResult,
@@ -315,7 +316,8 @@ MemoryEvolutionServiceDep = Annotated[
 @router.get("/candidates", response_model=MemoryCandidateListResponse)
 def list_memory_candidates(
     service: MemoryServiceDep,
-    status: SocMemoryCandidateStatus | None = Query(default=SocMemoryCandidateStatus.PENDING_REVIEW),
+    status: Annotated[SocMemoryCandidateStatus | None, Query()] = None,
+    review_stage: Annotated[SocMemoryCandidateReviewStage | None, Query()] = None,
     tenant_scope: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
     run_id: str | None = Query(default=None),
@@ -324,10 +326,15 @@ def list_memory_candidates(
     revision_of_memory_id: Annotated[str | None, Query(max_length=64)] = None,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> MemoryCandidateListResponse:
+    if review_stage is not None and status is not None:
+        raise HTTPException(status_code=422, detail="Use either review_stage or status, not both")
+    if review_stage is None and status is None:
+        status = SocMemoryCandidateStatus.PENDING_REVIEW
     try:
         return MemoryCandidateListResponse(
             items=service.list_candidates(
                 status=status,
+                review_stage=review_stage,
                 tenant_scope=tenant_scope,
                 tenant_id=tenant_id,
                 run_id=run_id,
