@@ -26,6 +26,7 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
 )
 from soc_agent.memory import SocMemoryProfileRegistry, memory_candidate_lineage_key
+from soc_agent.memory.learning import learning_view
 from soc_agent.protocols import (
     MemoryCandidateRepository,
     MemoryCenterRepository,
@@ -338,6 +339,7 @@ class SocMemoryCenterService:
             last_window_end=stats.last_window_end,
             candidate=_candidate_ref(candidate),
             memory_record=_record_ref(record),
+            learning=learning_view(self._candidate_repository, candidate, record_repository=self._record_repository) if self._candidate_repository is not None else None,
         )
 
     def _suggested_successor(
@@ -432,9 +434,14 @@ def _select_governance_objects(
         SocMemoryCandidateStatus.CONFIRMED,
     }
 
-    def rank(candidate: SocMemoryCandidate) -> tuple[int, int, int, object, str]:
+    def rank(candidate: SocMemoryCandidate) -> tuple[int, int, int, int, object, str]:
         record = records_by_candidate.get(candidate.candidate_id)
         return (
+            2
+            if candidate.revision_lineage is not None and candidate.status in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE}
+            else 1
+            if candidate.status in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE}
+            else 0,
             1 if record is not None and record.retrieval_enabled else 0,
             1 if record is not None else 0,
             1 if candidate.status in active_candidate_statuses else 0,

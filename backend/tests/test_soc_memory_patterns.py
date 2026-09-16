@@ -180,6 +180,23 @@ def _observe(
     )
 
 
+def test_replay_unknown_profile_reads_frozen_candidate_without_rebuilding_it() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+    for index in range(1, 4):
+        result = _observe(service, _run(index), transport_ref=f"legacy:{index}")
+    candidate = result.candidate
+    assert candidate is not None
+    from soc_agent.memory.profiles import SocMemoryProfileRegistry
+
+    read_service = SocMemoryPatternService(repository=repository, candidate_repository=repository, profile_registry=SocMemoryProfileRegistry(profiles=[]))
+    # Simulate a historical profile unavailable in the active registry.
+    read_service._profile_registry.get = lambda key: None
+    replay = read_service.replay(result.observation.aggregation_key)
+    assert replay.candidate_id == candidate.candidate_id
+    assert repository.get_memory_candidate(candidate.candidate_id) == candidate
+
+
 def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
     repository = InMemoryMemoryPatternRepository()
     service = _service(repository)

@@ -36,10 +36,15 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   fall back to generic facets merely because the action was initiated manually.
 - If that run already has a persisted `MemoryPatternObservation`, manual promotion must
   carry its exact Pattern lineage metadata and a frozen snapshot of the cohort visible
-  at promotion time. Pending or confirmed manual candidates govern the whole exact
-  Pattern lineage: later observations remain reinforcement/replay evidence and automatic
-  aggregation must not create a duplicate. Rejected candidates suppress only their own
-  aggregation window; a later independent window can qualify for a new pending candidate.
+  at promotion time. Automatic and manual learning share `memory/learning.py` scope
+  resolution under the existing governance transaction lock. Open work is reused; approved
+  scope comes from the reviewed Record, not the original Candidate. A narrowed IP scope
+  must not suppress uncovered observations or mere partial/context-only matches. An open
+  revision is the preferred review destination. Paused/expired records link to governed
+  review, never automatic reactivation. Rejected, expired or deprecated candidates suppress
+  only their own aggregation window; a later independent window can qualify again.
+  `SocMemoryLearningView` owns the action shown by Web surfaces. Normalize legacy manual
+  and automatic data-class locations without rewriting history or changing the Profile.
   Never reopen the rejected snapshot automatically. Equivalent automatic lessons use the
   same boundary, preserving idempotency within each window. Workbench list, execution,
   and audit projections show the candidate actually resolved by Pattern replay, including

@@ -568,7 +568,9 @@ def test_operational_projection_keeps_detection_and_disposition_separate() -> No
 def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
     tmp_path: Path,
     candidate_source: SocMemoryCandidateSourceType,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", "off")
     repository = _repository(tmp_path)
     pattern_service = SocMemoryPatternService(
         repository=repository,
@@ -652,7 +654,12 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
                 run_id=run.run_id if candidate_source is SocMemoryCandidateSourceType.REPEATED_PATTERN else "RUN-OLDER-SOURCE",
                 alert_id=case.alert_id if candidate_source is SocMemoryCandidateSourceType.REPEATED_PATTERN else "OLDER-ALERT",
             ),
-            metadata=({"source": "manual_run_promotion", "lineage_key": aggregation.observation.lineage_key, "aggregation_key": "f" * 64} if candidate_source is SocMemoryCandidateSourceType.MANUAL_NOTE else {}),
+            metadata={
+                "data_class": "operational",
+                "lineage_key": aggregation.observation.lineage_key,
+                "aggregation_key": "f" * 64 if candidate_source is SocMemoryCandidateSourceType.MANUAL_NOTE else aggregation.observation.aggregation_key,
+                **({"source": "manual_run_promotion"} if candidate_source is SocMemoryCandidateSourceType.MANUAL_NOTE else {}),
+            },
             evidence_refs=[f"run:{run.run_id}"],
             validity=SocMemoryCandidateValidity(notes="Regression coverage only."),
             idempotency_key=f"corpus-workbench-regression:{run.run_id}",
@@ -667,6 +674,8 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
 
     assert projected.candidate_id == candidate.candidate_id
     assert projected.candidate_status == candidate.status.value
+    assert projected.learning.action == "review"
+    assert projected.learning.candidate_id == candidate.candidate_id
     execution = service.get_execution(case.alert_id)
     memory_metrics = next(item.metrics for item in execution.phases if item.phase == "memory")
     assert memory_metrics["candidate"] == candidate.candidate_id

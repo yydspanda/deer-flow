@@ -46,6 +46,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
 import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
+import { SocMemoryLearningStatus } from "@/components/workspace/soc/soc-memory-learning-status";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useCorrectSocReviewRun,
@@ -285,7 +286,9 @@ export function SocAlertResultsWorkbench({
       setPromotionOpen(false);
       setPromotionReason("");
       if (result.memory_candidate) {
-        toast.success("已进入经验审核，确认前不会影响新告警");
+        toast.success(
+          result.learning?.label ?? "已进入经验审核，确认前不会影响新告警",
+        );
       } else {
         toast.info("已记录本次观察，尚未形成待审核经验");
       }
@@ -495,7 +498,17 @@ export function SocAlertResultsWorkbench({
                       <PencilLineIcon className="size-4" />
                       修正结论
                     </Button>
-                    {memoryCandidate ? (
+                    {context?.learning ? (
+                      context.learning.action === "promote" ? (
+                        <Button
+                          size="sm"
+                          onClick={() => setPromotionOpen(true)}
+                        >
+                          <SparklesIcon className="size-4" />
+                          提炼经验
+                        </Button>
+                      ) : null
+                    ) : memoryCandidate ? (
                       <Button asChild size="sm">
                         <Link
                           href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(memoryCandidate.candidate_id)}`}
@@ -513,6 +526,10 @@ export function SocAlertResultsWorkbench({
                   </div>
                 </div>
               </section>
+
+              {context?.learning ? (
+                <SocMemoryLearningStatus view={context.learning} />
+              ) : null}
 
               {operatorOutcome ? (
                 <SocCaseOutcomePanel outcome={operatorOutcome} />

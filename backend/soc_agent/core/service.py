@@ -134,6 +134,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.contracts.memory_governance import MemoryGovernancePreview
+from soc_agent.contracts.memory_learning import SocMemoryLearningView
 from soc_agent.core.alert_results import (
     classify_alert_result,
     is_required_human_intervention_item,
@@ -156,12 +157,14 @@ from soc_agent.memory import (
 )
 from soc_agent.memory.behavior_scope import required_directive_keys, select_memory_behavior_components
 from soc_agent.memory.governance import assessed_verdict, governed_records, preview_governance, scope_identity, scope_relation, validity_overlaps
+from soc_agent.memory.learning import aggregation_key, learning_view, resolve_learning_candidate
 from soc_agent.memory.lessons import promote_memory_applicability_facets
 from soc_agent.memory.scoring import (
     evaluate_memory_anchor_gate,
     evaluate_memory_applicability,
     score_memory_record,
 )
+from soc_agent.memory.sources import memory_candidate_command_from_run_promotion
 from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
@@ -1397,6 +1400,7 @@ class SocReviewService:
             disposition_outcomes=disposition_outcomes,
             external_dispositions=external_dispositions,
             memory_candidates=memory_candidates,
+            learning=self._learning_view_for_run(run),
             correlation_result=correlation_result,
             operator_outcome=project_soc_case_outcome(
                 run,
@@ -1672,11 +1676,8 @@ class SocReviewService:
         if (run.analysis is None and run.direct_resolution is None) or run.decision is None:
             raise SocServiceConflictError(f"run {command.run_id} has no complete analysis decision to promote")
 
-        memory_service = SocMemoryService(
-            candidate_repository=self._memory_candidate_repository,
-            event_sink=self._event_sink,
-        )
         pattern_metadata = self._run_pattern_lineage_metadata(run)
+        memory_service = SocMemoryService(candidate_repository=self._memory_candidate_repository, record_repository=self._memory_record_repository, event_sink=self._event_sink, _transaction_active=self._transaction_active)
         promotion_command = command.model_copy(
             update={
                 "metadata": {
@@ -1698,6 +1699,7 @@ class SocReviewService:
             alert_id=run.alert_id,
             memory_candidate=outcome.candidate,
             memory_admission=outcome.decision,
+            learning=learning_view(self._memory_candidate_repository, outcome.candidate, record_repository=self._memory_record_repository) if outcome.candidate is not None else None,
         )
         if existing_audit is None:
             audit_reason = command.note or ("Authenticated analyst explicitly promoted a completed run for Memory Candidate review.")
@@ -1752,6 +1754,17 @@ class SocReviewService:
             event_sink=event_sink,
             _transaction_active=True,
         )
+
+    def _learning_view_for_run(self, run: AnalysisRun) -> SocMemoryLearningView | None:
+        if self._memory_candidate_repository is None or run.decision is None:
+            return None
+        command = memory_candidate_command_from_run_promotion(
+            run,
+            SocMemoryRunPromotionCommand(run_id=run.run_id, metadata=self._run_pattern_lineage_metadata(run)),
+            profile_registry=self._memory_profile_registry,
+        )
+        candidate = resolve_learning_candidate(self._memory_candidate_repository, command, record_repository=self._memory_record_repository)
+        return learning_view(self._memory_candidate_repository, candidate, record_repository=self._memory_record_repository)
 
     def _run_pattern_lineage_metadata(
         self,
@@ -2013,6 +2026,7 @@ class SocMemoryService:
         command: SocMemoryCandidateCreateCommand,
         *,
         context: ServiceRequestContext | None = None,
+        coordinate_learning: bool = False,
     ) -> SocMemoryCandidate:
         """Persist candidate knowledge as pending review only."""
 
@@ -2024,17 +2038,43 @@ class SocMemoryService:
             events = BufferedSocEventSink(self._event_sink)
             with self._mutation_uow.mutation_transaction() as repository:
                 repository.lock_memory_governance()
-                result = self._governance_clone(repository, events).propose_candidate(command, context=request_context)
+                result = self._governance_clone(repository, events).propose_candidate(command, context=request_context, coordinate_learning=coordinate_learning)
             events.flush()
             return result
         self._lock_governance_transaction()
+        if coordinate_learning:
+            existing = resolve_learning_candidate(self._candidate_repository, command, record_repository=self._record_repository, now=self._now_provider())
+            if existing is not None:
+                if existing.status in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE}:
+                    incoming = {"run_id": command.source.run_id, "alert_id": command.source.alert_id, "source_id": command.source.source_id}
+                    sources = list(existing.metadata.get("governance_observations", []))
+                    if incoming not in sources and command.source != existing.source:
+                        existing = existing.model_copy(update={"metadata": {**existing.metadata, "governance_observations": (sources + [incoming])[-20:]}})
+                        self._candidate_repository.save_memory_candidate(existing)
+                self._event_sink.emit(
+                    SocEvent(
+                        event_type=SocEventType.MEMORY_UPDATED,
+                        request_id=request_context.request_id,
+                        run_id=command.source.run_id,
+                        alert_id=command.source.alert_id,
+                        actor=request_context.actor,
+                        payload={"operation": "memory_candidate.learning_reused", "candidate_id": existing.candidate_id, "candidate_status": existing.status.value},
+                    )
+                )
+                return existing
         if command.idempotency_key:
             existing = self._candidate_repository.find_memory_candidate_by_idempotency_key(command.idempotency_key)
-            if existing is not None:
-                return existing
+            original_key = command.idempotency_key
+            while existing is not None:
+                if not coordinate_learning:
+                    return existing
+                # Closed earlier cohorts and narrowed scopes cannot reserve a
+                # lineage's global lesson key forever.
+                command = command.model_copy(update={"idempotency_key": f"{original_key}:scope:{stable_hash({'scope': scope_identity(command), 'cohort': aggregation_key(command), 'predecessor': existing.candidate_id})[:24]}"})
+                existing = self._candidate_repository.find_memory_candidate_by_idempotency_key(command.idempotency_key)
 
         scope_key = scope_identity(command) if command.revision_lineage is None else None
-        if scope_key is not None:
+        if scope_key is not None and not coordinate_learning:
             finder = getattr(self._candidate_repository, "find_pending_memory_candidate_by_scope", None)
             existing = finder(scope_key) if callable(finder) else None
             if existing is not None:

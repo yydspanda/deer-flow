@@ -49,6 +49,7 @@ class MemoryCandidateProposer(Protocol):
         command: SocMemoryCandidateCreateCommand,
         *,
         context: ServiceRequestContext | None = None,
+        coordinate_learning: bool = False,
     ) -> SocMemoryCandidate: ...
 
 
@@ -77,11 +78,12 @@ class SocMemoryCandidateSourceBridge:
         command: SocMemoryCandidateCreateCommand,
         *,
         context: ServiceRequestContext | None = None,
+        coordinate_learning: bool = False,
     ) -> MemoryAdmissionOutcome:
         decision = self._admission_service.evaluate(command)
         if decision.status is not MemoryAdmissionStatus.ADMITTED:
             return MemoryAdmissionOutcome(decision=decision)
-        candidate = self._memory_service.propose_candidate(command, context=context)
+        candidate = self._memory_service.propose_candidate(command, context=context, coordinate_learning=True) if coordinate_learning else self._memory_service.propose_candidate(command, context=context)
         return MemoryAdmissionOutcome(
             decision=decision.model_copy(update={"candidate_id": candidate.candidate_id}),
             candidate=candidate,
@@ -213,6 +215,7 @@ class SocMemoryCandidateSourceBridge:
                 source_surface=context.actor.surface if context is not None else None,
             ),
             context=context,
+            coordinate_learning=True,
         )
 
 
@@ -495,13 +498,14 @@ def memory_candidate_command_from_run_promotion(
         }
     )
     analyst_note = command.note
+    tenant_id = run.llm_analysis_request.tenant_id if run.llm_analysis_request is not None else alert.tenant_id if alert is not None else None
     return SocMemoryCandidateCreateCommand(
         candidate_type=_candidate_type_for_verdict(verdict),
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
         summary=f"Analyst-promoted lesson candidate: {detection_label}",
         content=_run_promotion_content(run, command),
-        tenant_scope=_tenant_scope(alert),
-        tenant_id=alert.tenant_id if alert is not None else None,
+        tenant_scope=tenant_id or "global",
+        tenant_id=tenant_id,
         source=SocMemoryCandidateSource(
             source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
             source_surface=source_surface,

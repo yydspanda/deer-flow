@@ -41,7 +41,7 @@ def scope_identity(item: SocMemoryCandidate | SocMemoryCandidateCreateCommand) -
             "minimum_strong_anchor_matches": spec.minimum_strong_anchor_matches,
             "excluded": normalized_facets(spec.excluded_facets),
             **({"reuse_conditions": reuse_conditions(spec)} if spec.reuse_conditions else {}),
-            "data_class": item.metadata.get("data_class"),
+            "data_class": item.metadata.get("data_class") or item.source.metadata.get("data_class") or next(iter(item.facets.get("data_class", [])), None),
         }
     )
 

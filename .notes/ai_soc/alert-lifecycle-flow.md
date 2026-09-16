@@ -202,8 +202,11 @@ flowchart TD
     cohort 只保留 observation，不进入专家队列；候选必须总结适用范围、结论分布、代表性理由和例外，不能
     复述单条告警。后续记录仅供 replay，重复本身不证明授权、影响或处置权限。
 10.1 若某条已完成研判未达到自动 Pattern 候选门槛，但分析师判断其中包含值得复用的业务经验，可通过
-    `SocReviewService.promote_run_to_memory()` 显式提炼。该操作要求可信身份、幂等键、充分理由和可复用
-    facet，只创建 `manual_note` 来源的 `pending_review` candidate；它不修改本次 verdict、ReviewQueue、
+    `SocReviewService.promote_run_to_memory()` 显式提炼。该操作要求可信身份、幂等键和可复用
+    facet，理由可选。人工与自动入口先统一检查现有范围：待审进入原候选，已确认进入经验详情，
+    修订中进入待审修订；没有适用记录才创建 `manual_note` 来源的 `pending_review` candidate。
+    暂停或到期不自动恢复，旧窗口拒绝不阻挡新窗口，已审核 IP 等收窄条件不覆盖不匹配的新样本。
+    它不修改本次 verdict、ReviewQueue、
     confirmed Memory 或动作权限，后续仍必须完成 Business Lesson 审核与 retrieval activation。
 10.2 DEV 语料工作台按单告警读取真实持久化运行轨迹：`AnalysisRun.steps` 展示 Normalize、Facts、Context、
     LLM、Validate、Decision，Provider journal 展示当前模型调用，Pattern Observation 展示后续 Memory 写入。

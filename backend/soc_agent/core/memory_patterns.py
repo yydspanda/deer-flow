@@ -39,6 +39,7 @@ from soc_agent.contracts import (
     SocMemoryTargetArtifact,
     SocMutationOperation,
 )
+from soc_agent.memory.learning import resolve_learning_candidate
 from soc_agent.memory.patterns import (
     MemoryPatternIneligibleError,
     memory_pattern_command_from_run,
@@ -343,20 +344,10 @@ class SocMemoryPatternService:
             policy=policy,
             recurrence_threshold_met=threshold_met,
         )
-        current_candidate, current_coverage = self._find_candidate(
+        candidate, candidate_coverage = self._find_candidate(
             aggregation_key,
             observations[0].lineage_key,
         )
-        equivalent_candidate = (
-            self._find_equivalent_lesson_candidate(
-                observations[0],
-                cohort_quality,
-            )
-            if current_candidate is None and cohort_quality.quality_gate_passed
-            else None
-        )
-        candidate = current_candidate or equivalent_candidate
-        candidate_coverage = current_coverage if current_candidate is not None else "equivalent_lesson" if equivalent_candidate is not None else "none"
         current_ids = [item.observation_id for item in observations]
         snapshot_ids = _candidate_observation_ids(candidate)
         snapshot_items = [item for item in observations if item.observation_id in set(snapshot_ids)]
@@ -476,31 +467,14 @@ class SocMemoryPatternService:
                 duplicate_source=duplicate_source,
                 duplicate_occurrence=duplicate_occurrence,
                 note=(
-                    "manual candidate already governs this Pattern lineage; automatic candidate creation is suppressed" if existing_coverage == "lineage_governance" else "candidate snapshot is frozen; later observations remain replay-only"
+                    "manual candidate already governs this Pattern lineage; automatic candidate creation is suppressed"
+                    if existing_coverage == "lineage_governance"
+                    else "equivalent lesson governs current reinforcement observations"
+                    if existing_coverage == "equivalent_lesson"
+                    else "candidate snapshot is frozen; later observations remain replay-only"
                 ),
             )
-        equivalent = self._find_equivalent_lesson_candidate(
-            observation,
-            cohort_quality,
-        )
-        if equivalent is not None:
-            return MemoryPatternAggregationResult(
-                observation=observation,
-                support_count=support_count,
-                distinct_source_count=distinct_count,
-                minimum_support=self._policy.minimum_support,
-                minimum_distinct_sources=self._policy.minimum_distinct_sources,
-                threshold_met=True,
-                cohort_quality=cohort_quality,
-                candidate=equivalent,
-                candidate_coverage="equivalent_lesson",
-                candidate_frozen=True,
-                idempotent=idempotent,
-                duplicate_source=duplicate_source,
-                duplicate_occurrence=duplicate_occurrence,
-                note=("equivalent pattern lesson is already under governance; current cohort retained as reinforcement observations"),
-            )
-        candidate = self._propose_candidate(
+        candidate, created = self._propose_candidate(
             observations,
             cohort_quality=cohort_quality,
         )
@@ -513,13 +487,13 @@ class SocMemoryPatternService:
             threshold_met=True,
             cohort_quality=cohort_quality,
             candidate=candidate,
-            candidate_coverage="current_cohort",
-            candidate_created=True,
+            candidate_coverage="current_cohort" if _candidate_aggregation_key(candidate) == observation.aggregation_key else "lineage_governance",
+            candidate_created=created,
             candidate_frozen=True,
             idempotent=idempotent,
             duplicate_source=duplicate_source,
             duplicate_occurrence=duplicate_occurrence,
-            note="one frozen pending repeated-pattern candidate created for human review",
+            note="one frozen pending repeated-pattern candidate created for human review" if created else "existing governed candidate reused after concurrent proposal",
         )
 
     def _propose_candidate(
@@ -527,7 +501,7 @@ class SocMemoryPatternService:
         observations: list[MemoryPatternObservation],
         *,
         cohort_quality: MemoryPatternCohortQuality,
-    ) -> SocMemoryCandidate:
+    ) -> tuple[SocMemoryCandidate, bool]:
         if self._candidate_repository is None:
             raise SocServiceNotImplementedError("repeated-pattern threshold requires a MemoryCandidateRepository")
         snapshot = observations
@@ -542,11 +516,6 @@ class SocMemoryPatternService:
             profile=profile,
             proposed_at=proposed_at,
         )
-        previous = self._candidate_repository.find_memory_candidate_by_idempotency_key(command.idempotency_key)
-        if previous is not None and previous.status is SocMemoryCandidateStatus.REJECTED:
-            # Do not reopen a rejected snapshot or let its global lesson key veto
-            # a later independent cohort. The current cohort still deduplicates.
-            command = command.model_copy(update={"idempotency_key": f"{command.idempotency_key}:cohort:{snapshot[0].aggregation_key}"})
         first = snapshot[0]
         context = ServiceRequestContext(
             actor=_candidate_actor_from_observation(first),
@@ -560,13 +529,11 @@ class SocMemoryPatternService:
             now_provider=lambda: proposed_at,
             _transaction_active=self._transaction_active,
         )
-        candidate = memory_service.propose_candidate(command, context=context)
-        self._supersede_same_alert_profile_candidates(
-            candidate,
-            service=memory_service,
-            context=context,
-        )
-        return self._candidate_repository.get_memory_candidate(candidate.candidate_id) or candidate
+        candidate = memory_service.propose_candidate(command, context=context, coordinate_learning=True)
+        created = candidate.metadata.get("request_id") == context.request_id
+        if created:
+            self._supersede_same_alert_profile_candidates(candidate, service=memory_service, context=context)
+        return self._candidate_repository.get_memory_candidate(candidate.candidate_id) or candidate, created
 
     def _supersede_same_alert_profile_candidates(
         self,
@@ -625,41 +592,44 @@ class SocMemoryPatternService:
     ) -> tuple[SocMemoryCandidate | None, str]:
         if self._candidate_repository is None:
             return None, "none"
-        current = self._candidate_repository.find_memory_candidate_by_source_id(f"memory_pattern:{aggregation_key}")
-        if current is not None:
-            return current, "current_cohort"
-        find_by_lineage = getattr(
-            self._candidate_repository,
-            "find_memory_candidates_by_lineage_keys",
-            None,
+        observations = self._cohort(aggregation_key)
+        first = observations[0]
+        quality = _cohort_quality(observations, policy=first.aggregation_policy, recurrence_threshold_met=False)
+        profile = self._profile_registry.get(first.profile_id)
+        if profile is not None and (profile.identity.profile_version, profile.identity.feature_schema_version) != (first.profile_version, first.feature_schema_version):
+            profile = None
+        incoming = SocMemoryCandidateCreateCommand(
+            candidate_type=SocMemoryCandidateType.DETECTION_LESSON,
+            target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+            summary="Pattern learning lookup",
+            content="Read-only scope lookup; not a candidate proposal.",
+            tenant_scope=first.tenant_id,
+            tenant_id=first.tenant_id,
+            source=SocMemoryCandidateSource(source_type=SocMemoryCandidateSourceType.REPEATED_PATTERN, source_id=f"memory_pattern:{aggregation_key}"),
+            evidence_refs=first.evidence_refs,
+            validity=SocMemoryCandidateValidity(notes="Read-only lookup"),
+            facets=quality.applicability_facets,
+            applicability=profile.build_applicability(consensus_facets=quality.applicability_facets, strong_anchor_facets=quality.strong_anchor_facets) if profile is not None else None,
+            metadata={
+                "lineage_key": lineage_key,
+                "aggregation_key": aggregation_key,
+                "data_class": first.data_class.value,
+                "memory_profile_id": first.profile_id,
+                "memory_profile_version": first.profile_version,
+                "memory_feature_schema_version": first.feature_schema_version,
+            },
         )
-        if not callable(find_by_lineage):
-            return None, "none"
-        for candidate in find_by_lineage([lineage_key]):
-            if candidate.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE and candidate.metadata.get("source") == "manual_run_promotion":
-                if candidate.status is SocMemoryCandidateStatus.REJECTED and _candidate_aggregation_key(candidate) != aggregation_key:
-                    continue
-                return candidate, "lineage_governance"
-        return None, "none"
-
-    def _find_equivalent_lesson_candidate(
-        self,
-        observation: MemoryPatternObservation,
-        cohort_quality: MemoryPatternCohortQuality,
-    ) -> SocMemoryCandidate | None:
-        if self._candidate_repository is None:
-            return None
-        fingerprint = _lesson_fingerprint(observation, cohort_quality)
-        candidate = self._candidate_repository.find_memory_candidate_by_idempotency_key(_candidate_idempotency_key(fingerprint))
-        if candidate is not None and candidate.status is not SocMemoryCandidateStatus.REJECTED:
-            return candidate
-        find_by_lineage = getattr(self._candidate_repository, "find_memory_candidates_by_lineage_keys", None)
-        if callable(find_by_lineage):
-            return next(
-                (item for item in find_by_lineage([observation.lineage_key]) if item.metadata.get("lesson_fingerprint") == fingerprint and item.status is not SocMemoryCandidateStatus.REJECTED),
-                None,
-            )
-        return None
+        candidate = resolve_learning_candidate(self._candidate_repository, incoming, now=self._now_provider())
+        coverage = (
+            "none"
+            if candidate is None
+            else "lineage_governance"
+            if candidate.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE
+            else "current_cohort"
+            if _candidate_aggregation_key(candidate) == aggregation_key
+            else "equivalent_lesson"
+        )
+        return candidate, coverage
 
     def _cohort(self, aggregation_key: str) -> list[MemoryPatternObservation]:
         observations = self._require_repository().list_memory_pattern_observations(

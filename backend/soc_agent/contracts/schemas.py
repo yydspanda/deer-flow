@@ -15,6 +15,7 @@ from soc_agent.contracts.authorization import AuthorizationFactRef, Authorizatio
 from soc_agent.contracts.common import ActorContext, EntrySurface
 from soc_agent.contracts.enrichment import SocEnrichmentPlan
 from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
+from soc_agent.contracts.memory_learning import SocMemoryLearningView
 from soc_agent.contracts.normalization import ContextObservationRef, DetectionObservationRef, NormalizationObservationChange, NormalizationSource, SupplementaryFactRef
 from soc_agent.contracts.role_verification import (
     RoleAdjudicationVerificationResult,
@@ -5044,6 +5045,7 @@ class SocMemoryRunPromotionResult(BaseModel):
     alert_id: str = Field(min_length=1, max_length=128)
     memory_candidate: SocMemoryCandidate | None = None
     memory_admission: MemoryAdmissionDecision
+    learning: SocMemoryLearningView | None = None
 
 
 class PipelineStepTrace(BaseModel):

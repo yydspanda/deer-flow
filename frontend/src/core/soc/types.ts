@@ -996,6 +996,7 @@ export interface SocMemoryCenterRecordRef {
 }
 
 export interface SocMemoryCenterPatternSummary {
+  learning?: SocMemoryLearningView | null;
   schema_version: "soc.memory_center_pattern.v1";
   lineage_key: string;
   tenant_id: string;
@@ -1488,6 +1489,7 @@ export interface SocCorpusWorkbenchAlert {
   candidate_status?: string | null;
   manual_candidate_id?: string | null;
   manual_candidate_status?: string | null;
+  learning?: SocMemoryLearningView | null;
   memory_id?: string | null;
   memory_status?: string | null;
   memory_contexts: SocCorpusWorkbenchMemoryContext[];
@@ -1717,6 +1719,23 @@ export interface SocMemoryRunPromotionResult {
   alert_id: string;
   memory_candidate?: SocMemoryCandidate | null;
   memory_admission: SocMemoryAdmissionDecision;
+  learning?: SocMemoryLearningView | null;
+}
+
+export interface SocMemoryLearningView {
+  state:
+    | "accumulating"
+    | "pending_review"
+    | "confirmed"
+    | "revision_pending"
+    | "closed";
+  label: string;
+  detail: string;
+  action: "promote" | "review" | "view_memory" | "view_history";
+  action_label: string;
+  candidate_id?: string | null;
+  memory_id?: string | null;
+  use_mode?: "reference" | "exact" | "paused" | "expired" | "retired" | null;
 }
 
 export interface SocMemoryRetrievalActivationRequest {
@@ -2233,6 +2252,7 @@ export interface SocAlertInvestigationContext {
   disposition_outcomes: SocDispositionOutcomeRecord[];
   external_dispositions: SocExternalDispositionRecord[];
   memory_candidates: SocMemoryCandidate[];
+  learning?: SocMemoryLearningView | null;
   relevant_memories?: SocMemoryRetrievalResult | null;
   correlation_result?: SocCorrelationResult | null;
   domain_triage_results?: SocDomainTriageResult[];

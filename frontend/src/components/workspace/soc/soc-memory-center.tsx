@@ -56,6 +56,7 @@ import type {
   SocMemoryPatternStageFilter,
   SocMemoryProfileState,
 } from "@/core/soc";
+import { memoryLearningHref } from "@/core/soc/memory-learning";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -745,7 +746,18 @@ export function SocMemoryCenter({
                           </Badge>
                         </div>
                       </div>
-                      {detail.pattern.memory_record ? (
+                      {detail.pattern.learning &&
+                      memoryLearningHref(detail.pattern.learning) ? (
+                        <Button size="sm" asChild>
+                          <Link
+                            href={memoryLearningHref(detail.pattern.learning)!}
+                          >
+                            <ShieldCheckIcon className="size-4" />
+                            {detail.pattern.learning.action_label}
+                            <ChevronRightIcon className="size-4" />
+                          </Link>
+                        </Button>
+                      ) : detail.pattern.memory_record ? (
                         <Button size="sm" asChild>
                           <Link
                             href={`/workspace/soc/memory/records/${encodeURIComponent(detail.pattern.memory_record.memory_id)}`}

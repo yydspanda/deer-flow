@@ -233,6 +233,8 @@ class SqlAlchemyAlertRepository:
         state.memory_governance_locked = True
 
     def find_pending_memory_candidate_by_scope(self, scope_key: str) -> SocMemoryCandidate | None:
+        from soc_agent.memory.governance import scope_identity
+
         with self._session_factory() as session:
             row = session.execute(
                 select(SocMemoryCandidateRow)
@@ -244,15 +246,16 @@ class SqlAlchemyAlertRepository:
                 .limit(1)
             ).scalar_one_or_none()
             if row is not None:
-                return SocMemoryCandidate.model_validate(row.candidate_payload)
-            # Existing deployments predate the scope key; compare without rewriting them.
-            from soc_agent.memory.governance import scope_identity
+                candidate = SocMemoryCandidate.model_validate(row.candidate_payload)
+                if scope_identity(candidate) == scope_key:
+                    return candidate
+            # Older auto/manual keys used different data-class locations.
+            # Recompute identity without rewriting historical records.
 
             legacy_rows = session.execute(
                 select(SocMemoryCandidateRow)
                 .where(
                     SocMemoryCandidateRow.status.in_([SocMemoryCandidateStatus.PENDING_REVIEW.value, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE.value]),
-                    SocMemoryCandidateRow.candidate_payload["metadata"]["governance_scope_key"].as_string().is_(None),
                 )
                 .order_by(SocMemoryCandidateRow.created_at.asc())
             ).scalars()

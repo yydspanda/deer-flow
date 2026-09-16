@@ -64,6 +64,7 @@ import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-poli
 import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
 import { SocLeadershipDemoGuidePanel } from "@/components/workspace/soc/soc-leadership-demo-guide";
 import { memoryRunUsageCopy } from "@/components/workspace/soc/soc-memory-copy";
+import { SocMemoryLearningStatus } from "@/components/workspace/soc/soc-memory-learning-status";
 import { SocRunMemoryContext } from "@/components/workspace/soc/soc-run-memory-context";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
@@ -85,6 +86,7 @@ import type {
   SocCorpusWorkbenchState,
   SocLeadershipDemoTarget,
 } from "@/core/soc";
+import { memoryLearningHref } from "@/core/soc/memory-learning";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
@@ -170,6 +172,17 @@ function completedRunFeedback(alert: SocCorpusWorkbenchAlert): RunFeedback {
   const replayPrefix = alert.replay_of_run_id
     ? "本次已创建新的 Runtime Run；"
     : "";
+  const learningHref = alert.learning
+    ? memoryLearningHref(alert.learning)
+    : null;
+  if (alert.learning && learningHref) {
+    return {
+      alertId: alert.alert_id,
+      status: "completed",
+      message: `${replayPrefix}${alert.learning.label}。${alert.learning.detail}`,
+      action: { href: learningHref, label: alert.learning.action_label },
+    };
+  }
   if (
     alert.candidate_id &&
     alert.candidate_status === "pending_review" &&
@@ -640,7 +653,10 @@ function AlertDetail({
     );
   }
   const readiness = READINESS[alert.readiness];
-  const candidateId = alert.manual_candidate_id ?? alert.candidate_id;
+  const candidateId =
+    alert.learning?.candidate_id ??
+    alert.candidate_id ??
+    alert.manual_candidate_id;
   const candidateStatus =
     alert.manual_candidate_status ?? alert.candidate_status ?? "pending_review";
   const candidateKind = alert.manual_candidate_id ? "人工提炼" : "同类模式";
@@ -652,8 +668,9 @@ function AlertDetail({
   const canPromote =
     !!alert.run_id &&
     alert.workflow_state !== "failed" &&
-    !alert.manual_candidate_id &&
-    !alert.candidate_id;
+    (alert.learning
+      ? alert.learning.action === "promote"
+      : !alert.manual_candidate_id && !alert.candidate_id);
   const handlePromotion = async () => {
     if (!alert.run_id) return;
     const note = promotionNote.trim();
@@ -663,9 +680,7 @@ function AlertDetail({
         request: note ? { note } : {},
       });
       if (result.memory_candidate) {
-        toast.success(
-          `已创建待审 Candidate ${result.memory_candidate.candidate_id}`,
-        );
+        toast.success(result.learning?.label ?? "经验已进入审核");
         setPromotionOpen(false);
         setPromotionNote("");
       } else {
@@ -709,7 +724,7 @@ function AlertDetail({
               onClick={() => setPromotionOpen(true)}
             >
               <BrainCircuitIcon className="size-4" />
-              提炼 Candidate
+              提炼经验
             </Button>
           ) : null}
           {alert.run_id ? (
@@ -747,7 +762,9 @@ function AlertDetail({
         runId={alert.run_id}
       />
 
-      {alert.memory_id ? (
+      {alert.learning ? (
+        <SocMemoryLearningStatus view={alert.learning} />
+      ) : alert.memory_id ? (
         <div
           className="flex flex-wrap items-center justify-between gap-4 border-b border-emerald-300 bg-emerald-50 px-5 py-4 text-emerald-950 md:px-7"
           role="status"

@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .memory_learning import SocMemoryLearningView
 from .memory_patterns import MemoryPatternDataClass, MemoryPatternObservation
 from .schemas import (
     SocMemoryCandidate,
@@ -162,6 +163,7 @@ class SocMemoryCenterPatternSummary(BaseModel):
     last_window_end: datetime
     candidate: SocMemoryCenterCandidateRef | None = None
     memory_record: SocMemoryCenterRecordRef | None = None
+    learning: SocMemoryLearningView | None = None
 
 
 class SocMemoryCenterMetrics(BaseModel):

@@ -38,6 +38,7 @@ from soc_agent.contracts import (
     SocOperationalDisposition,
 )
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
+from soc_agent.contracts.memory_learning import SocMemoryLearningView
 from soc_agent.core import (
     SocAnalysisService,
     SocMemoryPatternService,
@@ -55,6 +56,7 @@ from soc_agent.demo.leadership_guide import (
 from soc_agent.demo.normalization_review import NormalizationReviewView, build_normalization_review_view
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm import SocLLMSettings
+from soc_agent.memory.learning import learning_view
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.prompts.analysis import (
     ANALYSIS_PROMPT_VERSION,
@@ -578,6 +580,7 @@ class SocCorpusWorkbenchAlert(BaseModel):
     candidate_status: str | None = None
     manual_candidate_id: str | None = None
     manual_candidate_status: str | None = None
+    learning: SocMemoryLearningView | None = None
     memory_id: str | None = None
     memory_status: str | None = None
     memory_contexts: list[SocCorpusWorkbenchMemoryContext] = Field(default_factory=list)
@@ -911,11 +914,6 @@ class SocCorpusWorkbenchService:
         }
         replay_by_key = {aggregation_key: self._pattern_service.replay(aggregation_key) for aggregation_key in {item.aggregation_key for item in observations_by_alert.values()}}
         candidate_by_source: dict[str, Any] = {}
-        source_ids = [f"memory_pattern:{item.aggregation_key}" for item in observations_by_alert.values()]
-        for item in self._repository.find_memory_candidates_by_source_ids(
-            source_ids,
-        ):
-            candidate_by_source.setdefault(item.source.source_id, item)
         manual_candidate_by_run: dict[str, Any] = {}
         candidates_by_id: dict[str, Any] = {}
         for item in self._repository.list_memory_candidates(
@@ -1663,6 +1661,7 @@ class SocCorpusWorkbenchService:
             candidate_status=(candidate.status.value if candidate is not None else None),
             manual_candidate_id=(manual_candidate.candidate_id if manual_candidate is not None else None),
             manual_candidate_status=(manual_candidate.status.value if manual_candidate is not None else None),
+            learning=learning_view(self._repository, candidate if observation is not None else manual_candidate) if run is not None else None,
             memory_id=(record.memory_id if record is not None else None),
             memory_status=(record.status.value if record is not None else None),
             memory_contexts=memory_contexts,

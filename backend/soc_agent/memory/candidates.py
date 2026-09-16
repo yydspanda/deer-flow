@@ -36,7 +36,9 @@ class InMemoryMemoryCandidateRepository:
         return self._candidates.get(candidate_id)
 
     def find_pending_memory_candidate_by_scope(self, scope_key: str) -> SocMemoryCandidate | None:
-        return next((item for item in self._candidates.values() if item.status in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE} and item.metadata.get("governance_scope_key") == scope_key), None)
+        from soc_agent.memory.governance import scope_identity
+
+        return next((item for item in self._candidates.values() if item.status in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE} and scope_identity(item) == scope_key), None)
 
     def find_memory_candidate_by_idempotency_key(self, idempotency_key: str) -> SocMemoryCandidate | None:
         for candidate in self._candidates.values():

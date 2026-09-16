@@ -15,6 +15,10 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 ## API And Navigation
 
+- Memory learning entry labels and destinations come from `SocMemoryLearningView` on
+  the server. Never prefer a stale per-run manual candidate over the resolved current
+  candidate/revision. Manual and automatic extraction share the same review destination;
+  reference/exact/paused/expired usage is separate from whether a lesson was confirmed.
 - Corpus `后续运行设置` is a per-run snapshot, not global configuration. The four switches cover
   semantic review, enterprise policy and its safe-path/advisor children. Store the local selection
   in session storage, mask unavailable capabilities and submit it with each process request.

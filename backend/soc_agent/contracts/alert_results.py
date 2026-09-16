@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
+from soc_agent.contracts.memory_learning import SocMemoryLearningView
 from soc_agent.contracts.schemas import (
     AlertSummary,
     AnalysisCapability,
@@ -170,6 +171,7 @@ class SocAlertInvestigationContext(BaseModel):
     disposition_outcomes: list[SocDispositionOutcomeRecord] = Field(default_factory=list)
     external_dispositions: list[SocExternalDispositionRecord] = Field(default_factory=list)
     memory_candidates: list[SocMemoryCandidate] = Field(default_factory=list)
+    learning: SocMemoryLearningView | None = None
     relevant_memories: SocMemoryRetrievalResult | None = None
     correlation_result: CorrelationResult | None = None
     domain_triage_results: list[SocDomainTriageResult] = Field(default_factory=list)

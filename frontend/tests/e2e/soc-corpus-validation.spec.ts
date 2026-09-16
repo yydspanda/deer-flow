@@ -1672,12 +1672,10 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(auditRegion.getByLabel("搜索 JSON")).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 720 });
 
-  await page.getByRole("button", { name: "提炼 Candidate" }).click();
+  await page.getByRole("button", { name: "提炼经验" }).click();
   await expect(page.getByLabel("补充说明（可选）")).toBeVisible();
   await page.getByRole("button", { name: "确认提前提炼" }).click();
-  await expect(
-    page.getByText("已创建待审 Candidate MC-MANUAL-1"),
-  ).toBeVisible();
+  await expect(page.getByText("经验已进入审核")).toBeVisible();
   expect(promotionRequestBody).toEqual({});
 });
 
@@ -1724,6 +1722,62 @@ test("announces a newly generated Pattern Candidate in the current alert", async
   );
   await expect(page.getByRole("link", { name: "审核并决定" })).toHaveCount(0);
   await expect(page.getByText("同类经验待审核").first()).toBeVisible();
+});
+
+test("server learning target wins over stale manual candidate and old Memory", async ({
+  page,
+}, testInfo) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const state = corpusState(true);
+  const current = {
+    ...state,
+    alerts: [
+      {
+        ...state.alerts[0]!,
+        manual_candidate_id: "MC-OLD",
+        manual_candidate_status: "confirmed",
+        learning: {
+          state: "revision_pending",
+          label: "经验正在修订",
+          detail: "继续完善已有修订，不重复创建。",
+          action: "review",
+          action_label: "继续审核修订",
+          candidate_id: "MC-REVISION",
+        },
+      },
+      state.alerts[1]!,
+    ],
+  };
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    if (route.request().url().endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    if (route.request().url().endsWith("/execution"))
+      return route.fulfill({ json: corpusExecution(true) });
+    return route.fulfill({ json: current });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByRole("button", { name: "查看 Alert 1984426 结果" }).click();
+  const action = page.getByRole("link", { name: "继续审核修订" });
+  await expect(action).toHaveAttribute(
+    "href",
+    "/workspace/soc/review/memory-candidates/MC-REVISION",
+  );
+  await expect(
+    page.getByRole("button", { name: "提炼经验", exact: true }),
+  ).toHaveCount(0);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await action.scrollIntoViewIfNeeded();
+    await expect(action).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`memory-learning-${width}.png`),
+    });
+  }
 });
 
 test("explains when tenant policy changes the operational action", async ({

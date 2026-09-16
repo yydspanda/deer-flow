@@ -34,6 +34,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > The alert verdict (`误报` / `真实攻击` / `可疑`) is separate from candidate governance: `放弃沉淀此候选`
 > rejects only the reusable Memory candidate. A mistaken rejection can be returned to `pending_review` through the
 > audited `重新打开审核` action; it is never repaired by editing SQLite directly.
+> Manual extraction and automatic recurrence now share one review destination: continue a
+> pending candidate/revision, or view the approved lesson. Repeated clicks do not create
+> duplicate work; narrowed scopes still allow uncovered alerts to form new lessons.
 > Alert results present one handling conclusion, **忽略 / 转交**, with its reason and necessary next steps.
 > Security judgment, confidence, execution progress and decision lineage remain available in collapsed
 > details. Actual failures and material conflicts stay visible; they are not hidden as successful handling.
