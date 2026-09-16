@@ -1358,6 +1358,7 @@ export interface SocCorpusWorkbenchExecutionPhase {
 }
 
 export interface SocCorpusWorkbenchExecution {
+  execution_options?: SocAnalysisExecutionOptions | null;
   schema_version: "soc.corpus_dev_execution.v1";
   alert_id: string;
   status: SocCorpusExecutionStatus;
@@ -1586,7 +1587,23 @@ export interface SocLeadershipDemoGuide {
   chapters: SocLeadershipDemoChapter[];
 }
 
+export interface SocAnalysisExecutionOptions {
+  normalization_review_mode: "off" | "shadow" | "apply";
+  tenant_policy_enabled: boolean;
+  tenant_policy_advisor_enabled: boolean;
+  tenant_policy_signal_providers_enabled: boolean;
+}
+
+export interface SocCorpusWorkbenchRunControls {
+  defaults: SocAnalysisExecutionOptions;
+  normalization_review_available: boolean;
+  tenant_policy_available: boolean;
+  tenant_policy_advisor_available: boolean;
+  tenant_policy_signal_providers_available: boolean;
+}
+
 export interface SocCorpusWorkbenchState {
+  run_controls?: SocCorpusWorkbenchRunControls | null;
   schema_version: "soc.corpus_dev_workbench.v4";
   safety: {
     environment: "dev";

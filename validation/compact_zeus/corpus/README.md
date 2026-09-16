@@ -32,7 +32,7 @@ backend/.venv/bin/python -m pytest -q validation/compact_zeus/corpus
 `*.workbench-index.json` 是与 PKL SHA-256 绑定的列表索引：只保存规范化时间、规则、
 行为指纹、同类组和标签元数据，不保存原始 payload。相邻的
 `*.workbench-payloads.sqlite` 按 `alert_id` 保存 zlib 压缩后的原始 payload，且其 SHA-256
-由索引锁定；页面点击运行时只读取目标告警，不把 1.2GB PKL 全部载入 Gateway 内存。
+由索引锁定；页面点击运行时只读取目标告警，不把完整 PKL 全部载入 Gateway 内存。
 manifest 记录每个输入文件的 SHA-256、重复行选择、标签命中、孤立标签和三个输出文件
 的摘要。
 
@@ -40,6 +40,29 @@ manifest 记录每个输入文件的 SHA-256、重复行选择、标签命中、
 13,133 条带运营标签，2,153 条无标签仍保留。原有 4,343 条所有字段均未变化。
 本次备份、差异报告和命令见 Git 忽略的 `data/audit/corpus-expansion-20260913/`
 （相对于 `validation/compact_zeus/`）；不生成或清空业务 Memory。
+
+专项样本也应包含在 Web 告警演练中。`--supplement-pickle` 从 212 条专项语料中
+仅补入缺失 ID；同 ID 的现有正文和标签优先，不把专项测试的模型结论作为运营标签。
+全量 CSV 重建时也应带此参数，避免再次遗漏 `2025642`、`2026494`。
+只补入专项样本、保留整个已合并数据集时，使用：
+
+```bash
+backend/.venv/bin/python validation/compact_zeus/corpus/build_dams_labeled_dataset.py \
+  --existing-dataset validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl \
+  --supplement-pickle validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl \
+  --output validation/compact_zeus/data/audit/special-cases-20260916/staging/full_alert_dams_labeled_merged.pkl
+```
+
+此命令生成独立的 PKL、manifest、index、payload SQLite，并校验旧行逐字段保留和
+受限 Pickle 往返；不会调用模型，也不会修改正在使用的语料或业务数据库。
+补入模式复用通过源文件哈希、索引版本和 Memory Profile 检查的旧索引，只对新增行
+重新归一化；按完整时间序列更新行号、分组计数和正文库绑定。专项回归验证增量结果
+与全量重建一致，避免每次补两条都重新解析全部告警。
+替换前核对新增 ID 与索引 payload hash，暂停 Gateway 后再成套替换四个文件。
+
+2026-09-16 已补入 `2025642`、`2026494`：共 **15,288 条**，原有 15,286 条正文、
+标签和分组保持不变。13,133 条带运营标签，2,155 条无标签；备份与校验报告在
+`data/audit/special-cases-20260916/`，业务 Memory 和运行数据库未重置。
 
 扩充批次时先在独立目录构建，检查新增 ID、旧告警和标签保留、时间顺序以及索引回读，
 通过后成套替换 PKL、manifest、index 和 payload SQLite。不要只替换 PKL，也不要删除
@@ -49,6 +72,7 @@ SOC 研判/Memory 数据库。原始 ZIP 与 CSV 留在本地，密码不得进�
 ```bash
 backend/.venv/bin/python validation/compact_zeus/corpus/build_dams_labeled_dataset.py \
   --exports-root datas/source/dams_exports \
+  --supplement-pickle validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl \
   --output validation/compact_zeus/data/audit/corpus-expansion/staging/full_alert_dams_labeled_merged.pkl \
   --manifest validation/compact_zeus/data/audit/corpus-expansion/staging/full_alert_dams_labeled_merged.manifest.json
 ```

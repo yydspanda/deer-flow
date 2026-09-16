@@ -39,8 +39,10 @@ from soc_agent.contracts import (
     SensitiveEvidenceMode,
     SocSkillContext,
 )
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core.decision_policy import SocDecisionPolicy
 from soc_agent.core.validator import validate_analysis_result
+from soc_agent.llm.errors import SocLLMResponseProtocolError
 from soc_agent.llm.normalization import apply_normalization_changes
 from soc_agent.llm.role_verifier import unavailable_role_verification
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
@@ -128,6 +130,7 @@ def analyze_alert(
     normalization_reviewer: NormalizationReviewer | None = None,
     normalization_reuse: AnalysisRun | None = None,
     direct_resolution: DirectResolutionResolver | None = None,
+    execution_options: SocAnalysisExecutionOptions | None = None,
     decision_policy: DecisionPolicy | None = None,
     before_provider: AnalysisBeforeProviderHook | None = None,
     analysis_request_enricher: AnalysisRequestEnricher | None = None,
@@ -140,6 +143,7 @@ def analyze_alert(
     policy = decision_policy or SocDecisionPolicy()
     run = AnalysisRun(
         alert_id="unknown",
+        execution_options=execution_options,
         status=AnalysisRunStatus.RUNNING,
         pipeline_version=(
             "soc-runtime-v10-direct"
@@ -872,6 +876,8 @@ def _classify_runtime_failure(exc: Exception, *, step_name: str) -> RuntimeFailu
 
 def _safe_error_message(exc: Exception, *, step_name: str) -> str:
     error_type = type(exc).__name__
+    if isinstance(exc, SocLLMResponseProtocolError):
+        return exc.public_message
     if step_name in {"build_normalization_input", "normalization_assist", "apply_normalization"}:
         return f"{error_type} during optional semantic review ({step_name})"
     if step_name == "analyze_llm" and not hasattr(exc, "stage"):

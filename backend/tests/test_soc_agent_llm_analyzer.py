@@ -610,3 +610,37 @@ def test_live_model_failure_keeps_requested_model_in_failed_trace() -> None:
     assert run.failure is not None
     assert run.failure.kind.value == "analyzer_timeout"
     assert run.failure.retryable is True
+
+
+def test_provider_protocol_failure_is_actionable_without_a_fabricated_verdict() -> None:
+    from soc_agent.llm.errors import SocLLMResponseProtocolError
+
+    class FailingClient:
+        def complete(self, messages, *, model_name):
+            raise SocLLMResponseProtocolError()
+
+    analyzer = JsonLLMAnalyzer(client=FailingClient(), model_name="configured-model")
+    run = SocAnalysisService(runtime=DeterministicAnalysisRuntime(analyzer=analyzer)).analyze(_sample("malicious_ioc.json"))
+
+    assert run.status == AnalysisRunStatus.FAILED
+    assert run.failure.retryable is True
+    assert run.failure.kind.value == "analyzer_unavailable"
+    assert run.failure.message == SocLLMResponseProtocolError.public_message
+    assert run.analysis is None
+    assert run.decision is None
+
+
+def test_transport_mode_survives_bounded_invocation_metadata() -> None:
+    from soc_agent.llm.analyzer import model_invocation_metadata
+
+    for mode in ("buffered_stream", "non_streaming", "untrusted-value"):
+        metadata = model_invocation_metadata(
+            [LLMChatResponse(content="{}", metadata={"transport_mode": mode})],
+            provider_call_count=2,
+            failed_call_measurement={"transport_mode": mode},
+        )
+        for call in metadata["provider_calls"]:
+            if mode == "untrusted-value":
+                assert "transport_mode" not in call
+            else:
+                assert call["transport_mode"] == mode

@@ -1,16 +1,14 @@
 # SOC Agent Execution Progress / 执行进度
 > 本文件只保存当前执行指针和近期完成记录。完整历史按月份归档；聊天记录、方案正文和能力总表不再进入本文件。
 ## Current Pointer / 当前指针
-
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
 - **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。新交付同时把 PingAn DeerFlow chat 固定为 buffered non-streaming，并将模型网关与 Runtime 并发统一为 `3`；SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
 - **Next Gate:** 部署 buffered chat / `3 + 3` 并发配置，验证普通聊天不再发送 `stream=true`、三条不同告警可同时研判；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-15`
+- **Last Updated:** `2026-09-16`
 
 ## Current Constraints / 当前约束
-
 | Boundary | Current fact |
 |---|---|
 | Fork strategy | SOC 继续作为 DeerFlow 增量层；除非需要小型通用扩展点，不修改上游核心 |
@@ -20,6 +18,8 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+09-16 `PI-03E` 修复带开关请求遗漏 JSON 请求头；另对 GlobalAI 非流式文本返回导致的 SDK AttributeError，支持模型显式 `streaming: true` 并收齐后解析，内网默认非流式不变。2025642 Web 重跑成功、无修复重试，方向为内网到内网；业务结论为真实攻击/转交，不能当成之前无风险经验的复用验收。证据与边界见月度 `EXP-20260916-soc-buffered-stream`。后续 Prompt v6 单次重跑已提炼业务地址并进入主模型，但最终解释仍未采用、来源标注未完全改善；核心方向/角色不变，保留限制，见 `EXP-20260916-semantic-business-clues`。
+本次补齐 `PI-03E` 告警演练按次运行开关：语义核对、企业策略及安全路径/LLM 子项；配置随运行保存，不改进程环境、历史结果或外部动作权限。64 项后端与 2 项浏览器回归通过，类型/lint 通过；无付费模型调用、打包或清库。详见[方案](architecture/direct-resolution-design.md)和月度 `EXP-20260915-corpus-run-controls`，内网指针不变。
 09-15 `PI-03E` SOC模型JSON紧凑发送：研判、语义核对、角色复核、经验生成、策略与修复入口共用无损序列化，SOC工具文本同步；不改DeerFlow核心、签名、审计排版或Memory匹配。冻结请求对照去排版后输入33680→24764Token并正常回复；新版2651342完整Web回放21.118秒、2次调用、24项补充进入模型、14条引用通过，已保存观察。三组133/71/5项回归通过（部分重叠）；批量稳定性与远端精确限制仍未验证。见[方案](architecture/normalization-assistance-design.md)与月度归档，PI-01指针不变。
 09-15 `PI-03E` 企业规则前置、精确 Memory 直接复用：确定性 enforced 忽略/转交可跳过全部模型；否则保留语义核对并复查，精确审核 override 可跳过主研判/角色复核。待定模型依赖规则保留优先级，完整指令集合冲突贯穿后置治理；v3 行为勾选保持有效。直接结果不伪造 Base/置信度，共用存储、回传、反馈、动作出口，使用不算新独立 Pattern 样本。133 项后端回归、后续 77 项及最终 17 项专项（有重叠）、10 项前端组件、桌面/手机浏览器通过；既有192→191快照问题保留。后续2546323暴露直接策略分支遗漏请求环境：原运行676ms、零模型调用已完成，工作台却无法识别；现前置绑定环境，旧结果仅按冻结策略范围恢复只读展示，轨迹不再等待不需要的Pattern步骤。详见[完整方案](architecture/direct-resolution-design.md)、[流程图](governance/decision-to-policy-flow.md)与月度归档。无真实模型/内网调用、清库或经验迁移，PI-01 指针不变。
 09-15 `PI-03E` Memory 适用条件改造：固定范围只读、核心行为全展开默认全选；v3 按审核选择逐项匹配，不再强制来源完整 hash 相同，去重排序不受顺序影响。额外限制只收窄直接复用，源/目标 AND，参考经验仍可影响模型判断；旧 Memory/索引不迁移。167 项后端、7 项组件、3 项浏览器测试及两个真实候选四次只读检查通过；六个范围变体是模拟，无真实模型/业务写入，不代表准确率提升。见[方案与剩余工作](architecture/memory-applicability-design.md)及月度归档，内网指针不变。

@@ -1117,6 +1117,169 @@ test("returns from a small group to the original paginated results", async ({
   await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(2);
 });
 
+test("per-run settings travel with each alert and survive page reload", async ({
+  page,
+}, testInfo) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const defaults = {
+    normalization_review_mode: "apply",
+    tenant_policy_enabled: true,
+    tenant_policy_advisor_enabled: true,
+    tenant_policy_signal_providers_enabled: true,
+  };
+  const current = {
+    ...corpusState(),
+    run_controls: {
+      defaults,
+      normalization_review_available: true,
+      tenant_policy_available: true,
+      tenant_policy_advisor_available: true,
+      tenant_policy_signal_providers_available: true,
+    },
+  };
+  const submitted: unknown[] = [];
+  const active = new Set<string>();
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity([...active]) });
+    if (url.endsWith("/execution"))
+      return route.fulfill({
+        json: { ...corpusExecution(true), execution_options: defaults },
+      });
+    if (route.request().method() === "POST") {
+      expect(route.request().headers()["content-type"]).toContain(
+        "application/json",
+      );
+      submitted.push(route.request().postDataJSON());
+      const alertId = /\/alerts\/([^/]+)\/process$/.exec(url)![1]!;
+      active.add(alertId);
+      return route.fulfill({ status: 202, json: corpusStart(alertId) });
+    }
+    return route.fulfill({ json: corpusStateForRequest(current, url) });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  const controls = page.getByRole("region", { name: "后续运行设置" });
+  await expect(controls.getByRole("switch")).toHaveCount(4);
+  await expect(
+    controls.getByRole("switch", { name: "语义核对", exact: true }),
+  ).toBeChecked();
+  const advisorLabel = controls
+    .locator("label")
+    .filter({ hasText: "LLM 策略建议" });
+  const advisorSwitch = controls.getByRole("switch", {
+    name: "LLM 策略建议",
+    exact: true,
+  });
+  await advisorLabel.click();
+  await expect(advisorSwitch).not.toBeChecked();
+  await expect(
+    controls.getByRole("switch", { name: "安全软件路径策略", exact: true }),
+  ).toBeChecked();
+  await advisorLabel.click();
+  await expect(advisorSwitch).toBeChecked();
+  await page
+    .locator('[data-alert-id="1984426"]')
+    .getByRole("button", { name: "运行", exact: true })
+    .click();
+  await expect.poll(() => submitted.length).toBe(1);
+  expect(submitted[0]).toEqual({ settings: defaults });
+  await controls
+    .getByRole("switch", { name: "企业策略", exact: true })
+    .uncheck();
+  await controls
+    .getByRole("switch", { name: "语义核对", exact: true })
+    .uncheck();
+  const savedSettings = page.locator('[aria-label="本次运行配置"]');
+  await expect(savedSettings).toContainText("企业策略：开启");
+  await expect(savedSettings).toContainText("语义核对：开启");
+  for (const name of ["安全软件路径策略", "LLM 策略建议"]) {
+    await expect(
+      controls.getByRole("switch", { name, exact: true }),
+    ).not.toBeChecked();
+    await expect(
+      controls.getByRole("switch", { name, exact: true }),
+    ).toBeDisabled();
+  }
+  await page
+    .locator('[data-alert-id="1965449"]')
+    .getByRole("button", { name: "运行", exact: true })
+    .click();
+  await expect.poll(() => submitted.length).toBe(2);
+  expect(submitted[1]).toEqual({
+    settings: {
+      normalization_review_mode: "off",
+      tenant_policy_enabled: false,
+      tenant_policy_advisor_enabled: false,
+      tenant_policy_signal_providers_enabled: false,
+    },
+  });
+  expect(submitted[0]).toEqual({ settings: defaults });
+  await page.reload();
+  await expect(
+    controls.getByRole("switch", { name: "企业策略", exact: true }),
+  ).not.toBeChecked();
+  await expect(
+    controls.getByRole("switch", { name: "语义核对", exact: true }),
+  ).not.toBeChecked();
+  await controls.getByRole("button", { name: "恢复默认" }).click();
+  await expect(
+    controls.getByRole("switch", { name: "企业策略", exact: true }),
+  ).toBeChecked();
+  for (const width of [2560, 1440, 768, 390]) {
+    await page.setViewportSize({ width, height: 960 });
+    await controls.scrollIntoViewIfNeeded();
+    await expect(
+      controls.getByRole("switch", { name: "LLM 策略建议", exact: true }),
+    ).toBeVisible();
+    for (const name of [
+      "语义核对",
+      "企业策略",
+      "安全软件路径策略",
+      "LLM 策略建议",
+    ]) {
+      const toggle = await controls
+        .getByRole("switch", { name, exact: true })
+        .boundingBox();
+      const label = await controls
+        .locator("label")
+        .filter({ hasText: new RegExp(`^${name}$`) })
+        .boundingBox();
+      expect(toggle).not.toBeNull();
+      expect(label).not.toBeNull();
+      const gap = label!.x - (toggle!.x + toggle!.width);
+      expect(gap).toBeGreaterThanOrEqual(8);
+      expect(gap).toBeLessThanOrEqual(16);
+      expect(Math.abs(toggle!.y - label!.y)).toBeLessThanOrEqual(4);
+    }
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <=
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`run-controls-${width}.png`),
+    });
+  }
+  current.run_controls.tenant_policy_available = false;
+  current.run_controls.tenant_policy_advisor_available = false;
+  current.run_controls.tenant_policy_signal_providers_available = false;
+  await page.reload();
+  for (const name of ["企业策略", "安全软件路径策略", "LLM 策略建议"]) {
+    await expect(
+      controls.getByRole("switch", { name, exact: true }),
+    ).not.toBeChecked();
+    await expect(
+      controls.getByRole("switch", { name, exact: true }),
+    ).toBeDisabled();
+  }
+  await expect(
+    controls.getByRole("switch", { name: "语义核对", exact: true }),
+  ).toBeChecked();
+});
+
 test("runs distinct alerts concurrently without enabling a duplicate click", async ({
   page,
 }) => {

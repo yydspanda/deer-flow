@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.contracts.authorization import AuthorizationFactRef, AuthorizationMatchResult, AuthorizationQuery
 from soc_agent.contracts.common import ActorContext, EntrySurface
 from soc_agent.contracts.enrichment import SocEnrichmentPlan
@@ -5309,6 +5310,7 @@ class AnalysisRun(BaseModel):
     input_payload: dict[str, Any] | None = None
     input_hash: str | None = None
     replay_of_run_id: str | None = None
+    execution_options: SocAnalysisExecutionOptions | None = None
     started_at: datetime = Field(default_factory=utc_now)
     ended_at: datetime | None = None
     total_duration_ms: int | None = Field(default=None, ge=0)

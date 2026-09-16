@@ -13,6 +13,7 @@ import type {
   SocAlertResultListResponse,
   SocAnalysisRun,
   SocCorpusWorkbenchActivity,
+  SocAnalysisExecutionOptions,
   SocCorpusWorkbenchAuditBundle,
   SocCorpusWorkbenchExecution,
   SocCorpusWorkbenchQuery,
@@ -301,12 +302,17 @@ export async function getSocCorpusWorkbenchActivity(
 export async function processSocCorpusWorkbenchAlert(
   alertId: string,
   context?: SocRequestContext,
+  settings?: SocAnalysisExecutionOptions,
 ): Promise<SocCorpusWorkbenchStartResult> {
   const response = await fetch(
     `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/alerts/${encodeURIComponent(alertId)}/process`,
     {
       method: "POST",
-      headers: buildSocHeaders(context, { stateChanging: true }),
+      headers: buildSocHeaders(context, {
+        stateChanging: true,
+        json: settings !== undefined,
+      }),
+      body: settings ? JSON.stringify({ settings }) : undefined,
     },
   );
   return readJson<SocCorpusWorkbenchStartResult>(

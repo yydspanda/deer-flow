@@ -11,9 +11,10 @@ from fastapi import Depends, HTTPException, Query, Request
 
 from app.gateway.routers.soc_transport import create_soc_router
 from app.gateway.soc_dependencies import soc_service_context_from_request
-from app.gateway.soc_dev_workbench import resolve_soc_dev_workbench_runtime
+from app.gateway.soc_dev_workbench import resolve_soc_dev_workbench_runtime, strict_env_bool
 from soc_agent.application.analysis import build_soc_analysis_service
 from soc_agent.application.memory import build_soc_memory_profile_registry
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
 from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
@@ -25,6 +26,8 @@ from soc_agent.demo.corpus_workbench import (
     SocCorpusWorkbenchCapacityError,
     SocCorpusWorkbenchError,
     SocCorpusWorkbenchExecution,
+    SocCorpusWorkbenchProcessRequest,
+    SocCorpusWorkbenchRunControls,
     SocCorpusWorkbenchService,
     SocCorpusWorkbenchStartResult,
     SocCorpusWorkbenchState,
@@ -65,14 +68,35 @@ def get_soc_corpus_workbench_service(
             )
         )
         try:
-            service = SocCorpusWorkbenchService(
-                repository=runtime.repository,
-                analysis_service=build_soc_analysis_service(
+            defaults = SocAnalysisExecutionOptions(
+                normalization_review_mode=os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower(),
+                tenant_policy_enabled=runtime.tenant_policy != "disabled",
+                tenant_policy_advisor_enabled=runtime.tenant_policy == "deterministic_and_llm",
+                tenant_policy_signal_providers_enabled=runtime.software_path_fast_policy,
+            )
+            policy_available = strict_env_bool("SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY", False) and bool(os.environ.get("SOC_TENANT_DISPOSITION_POLICY_PATH", "").strip())
+            controls = SocCorpusWorkbenchRunControls(
+                defaults=defaults,
+                tenant_policy_available=policy_available,
+                tenant_policy_advisor_available=policy_available and bool(os.environ.get("SOC_TENANT_POLICY_SKILL_PATH", "").strip()),
+                tenant_policy_signal_providers_available=policy_available and bool(os.environ.get("SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH", "").strip()),
+            )
+
+            def build_for_run(options: SocAnalysisExecutionOptions):
+                return build_soc_analysis_service(
                     runtime.repository,
                     settings=runtime.settings,
                     runtime_environment=CORPUS_WORKBENCH_ENVIRONMENT,
                     pattern_observation_enabled=False,
-                ),
+                    execute_authorized_actions=False,
+                    execution_options=options,
+                )
+
+            service = SocCorpusWorkbenchService(
+                repository=runtime.repository,
+                analysis_service=build_for_run(defaults),
+                analysis_service_factory=build_for_run,
+                run_controls=controls,
                 pattern_service=SocMemoryPatternService(
                     repository=runtime.repository,
                     candidate_repository=runtime.repository,
@@ -185,6 +209,7 @@ def process_corpus_workbench_alert(
     alert_id: str,
     request: Request,
     service: CorpusWorkbenchServiceDep,
+    body: SocCorpusWorkbenchProcessRequest | None = None,
 ) -> SocCorpusWorkbenchStartResult:
     context = soc_service_context_from_request(request, include_soc_roles=True)
     if "soc_admin" not in context.actor.roles:
@@ -193,6 +218,8 @@ def process_corpus_workbench_alert(
             detail="SOC DEV corpus workbench requires an administrator account",
         )
     try:
+        if body is not None and body.settings is not None:
+            return service.start_alert(alert_id, context=context, settings=body.settings)
         return service.start_alert(alert_id, context=context)
     except (SocCorpusWorkbenchBusyError, SocCorpusWorkbenchCapacityError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

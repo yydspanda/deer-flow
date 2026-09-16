@@ -37,6 +37,7 @@ import {
   listSocNormalizationBaselines,
   listSocNormalizationIssues,
   listSocReviewItems,
+  processSocCorpusWorkbenchAlert,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
@@ -69,6 +70,44 @@ function firstFetchInit(): RequestInit {
 
 beforeEach(() => {
   mockedFetch.mockReset();
+});
+
+describe("SOC corpus process API", () => {
+  test.each([true, false])(
+    "declares JSON when submitting run settings (policy enabled: %s)",
+    async (enabled) => {
+      mockedFetch.mockResolvedValueOnce(jsonResponse(202, { accepted: true }));
+      const settings = {
+        normalization_review_mode: "apply" as const,
+        tenant_policy_enabled: enabled,
+        tenant_policy_advisor_enabled: enabled,
+        tenant_policy_signal_providers_enabled: enabled,
+      };
+
+      await processSocCorpusWorkbenchAlert(
+        "2025642",
+        { actorId: "operator", surface: "web", idempotencyKey: "run-2025642" },
+        settings,
+      );
+
+      const init = firstFetchInit();
+      const headers = new Headers(init.headers);
+      expect(headers.get("Content-Type")).toBe("application/json");
+      expect(headers.get("idempotency-key")).toBe("run-2025642");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({ settings });
+    },
+  );
+
+  test("preserves bodyless calls that use deployment defaults", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(202, { accepted: true }));
+
+    await processSocCorpusWorkbenchAlert("2025642");
+
+    const init = firstFetchInit();
+    expect(init.body).toBeUndefined();
+    expect(new Headers(init.headers).has("Content-Type")).toBe(false);
+  });
 });
 
 describe("SOC review API", () => {

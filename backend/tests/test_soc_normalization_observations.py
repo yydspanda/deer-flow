@@ -423,6 +423,31 @@ def test_prompt_uses_task_language_and_sparse_typed_output():
     assert "检测" in prompt and "subject_refs" in prompt and "additional_facts" in prompt
 
 
+def test_prompt_business_clue_example_uses_existing_facts_and_separate_sources():
+    from soc_agent.prompts.normalization import build_normalization_prompt
+
+    reviewer = JsonLLMNormalizationReviewer(client=Client({}), model_name="synthetic")
+    prompt = build_normalization_prompt(reviewer.prepare(source('host="pc"')))[0]["content"]
+    examples = json.loads(prompt.split("<examples>\n", 1)[1].split("\n</examples>", 1)[0])
+    example = next(e for e in examples if any(f["name"] == "payload_business_address" for f in e["output"]["additional_facts"]))
+    alert = source(example["sources"][0]["text"])
+    alert.raw["other"] = example["sources"][1]["text"]
+    alert.extensions["evidence_input_policy"]["supplementary_input_paths"] = ["other"]
+    updated, report, _ = review(alert, example["output"], reference_validation_enabled=False)
+
+    assert report.status == "applied"
+    clue = next(f for f in updated.entities.supplementary_facts if f.name == "payload_business_address")
+    assert clue.value == "portal.example.invalid/apps/helpdesk"
+    assert clue.event_scope_id == "message"
+    assert updated.entities.network == alert.entities.network
+    assert updated.entities.http == alert.entities.http
+    assert updated.entities.detections[0].reported_result == "失陷"
+    assert updated.entities.detections[0].event_scope_id == "other"
+    assert [(c.source_id, c.source_path) for c in report.observation_changes if "detections" in c.target] == [("L1", "other")]
+    assert "跨日志的信息分别输出" in prompt
+    assert "不因出现业务域名就判定安全" in prompt
+
+
 def test_existing_primary_command_can_be_corrected_with_exact_reference():
     text = 'cmd="tool.exe --check"'
     alert = source(text)

@@ -167,6 +167,89 @@ def test_deerflow_client_accepts_bounded_call_trace_identity() -> None:
     ]
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+def test_deerflow_client_honors_explicit_buffered_stream_transport(streaming) -> None:
+    import httpx
+
+    from deerflow.models import create_chat_model
+
+    config = _FakeConfig("configured-model")
+    config.get_model_config = lambda _: SimpleNamespace(streaming=streaming)
+    requests = []
+
+    def handle(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert payload["stream"] is streaming
+        usage = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+        if streaming:
+            chunks = [
+                {"choices": [{"index": 0, "delta": {"role": "assistant", "content": '{"verdict":'}, "finish_reason": None}]},
+                {"choices": [{"index": 0, "delta": {"content": '"unknown"}'}, "finish_reason": "stop"}]},
+                {"choices": [], "usage": usage},
+            ]
+            body = "".join("data: " + json.dumps({"id": "test", "model": "test-model", "created": 0, "object": "chat.completion.chunk", **chunk}) + "\n\n" for chunk in chunks)
+            return httpx.Response(200, text=body + "data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+        return httpx.Response(
+            200, json={"id": "test", "model": "test-model", "created": 0, "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": '{"verdict":"unknown"}'}, "finish_reason": "stop"}], "usage": usage}
+        )
+
+    def factory(**kwargs):
+        from deerflow.config.app_config import AppConfig
+
+        kwargs["app_config"] = AppConfig(
+            sandbox={"use": "deerflow.sandbox.local:LocalSandboxProvider"},
+            models=[
+                {
+                    "name": "configured-model",
+                    "use": "deerflow.models.patched_deepseek:PatchedChatDeepSeek",
+                    "model": "test-model",
+                    "api_base": "https://model.invalid/v1",
+                    "api_key": "test",
+                    "streaming": streaming,
+                    "stream_usage": True,
+                    "max_retries": 0,
+                }
+            ],
+        )
+        kwargs["model_overrides"]["http_client"] = httpx.Client(transport=httpx.MockTransport(handle))
+        return create_chat_model(**kwargs)
+
+    client = DeerFlowLLMChatClient(app_config=config, model_factory=factory, attach_tracing=False)
+    response = client.complete([{"role": "user", "content": "test"}], model_name="configured-model")
+
+    assert response.content == '{"verdict":"unknown"}'
+    assert response.usage["total_tokens"] == 18
+    assert response.metadata["finish_reason"] == "stop"
+    assert response.metadata["transport_mode"] == ("buffered_stream" if streaming else "non_streaming")
+    assert len(requests) == 1
+
+
+def test_deerflow_client_classifies_sdk_text_response_without_leaking_body() -> None:
+    class BrokenResponseModel:
+        def invoke(self, *args, **kwargs):
+            body = 'data: {"choices":[],"private":"secret"}\n\ndata: [DONE]\n\n'
+            return body.model_dump()
+
+    client = DeerFlowLLMChatClient(app_config=_FakeConfig("test"), model_factory=lambda **_: BrokenResponseModel())
+    with pytest.raises(Exception) as caught:
+        client.complete([{"role": "user", "content": "test"}], model_name="test")
+
+    assert type(caught.value).__name__ == "SocLLMResponseProtocolError"
+    assert "secret" not in str(caught.value)
+    assert caught.value.soc_llm_client_measurement["transport_mode"] == "non_streaming"
+
+
+def test_deerflow_client_does_not_mask_unrelated_attribute_errors() -> None:
+    class BrokenModel:
+        def invoke(self, *args, **kwargs):
+            return object().unknown_method()
+
+    client = DeerFlowLLMChatClient(app_config=_FakeConfig("test"), model_factory=lambda **_: BrokenModel())
+    with pytest.raises(AttributeError):
+        client.complete([{"role": "user", "content": "test"}], model_name="test")
+
+
 def test_deerflow_client_requests_json_mode_only_when_enabled() -> None:
     model = _FakeModel()
     client = DeerFlowLLMChatClient(
@@ -426,6 +509,7 @@ def test_secret_free_status_lists_configured_models() -> None:
 
 
 def test_cli_analyze_passes_explicit_model_selection_to_runtime(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", "off")
     captured: list[SocLLMSettings] = []
 
     def fake_build(*, settings):

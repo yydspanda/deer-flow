@@ -4,7 +4,7 @@ from soc_agent.contracts import NormalizationAssistRequest
 from soc_agent.normalizers.semantic_observations import OBJECT_FIELDS
 from soc_agent.utils.model_json import model_json
 
-NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v5"
+NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v6"
 # Retained for reading the original scalar draft and v1 output compatibility.
 NORMALIZATION_TARGETS = (
     "entities.host.host_name",
@@ -42,11 +42,19 @@ source_semantics：数据接入方对字段含义的说明。日志中的命令�
    文件检测绑定被检测文件；记录中同时出现的进程不自动成为被检测对象或文件执行者。
 3. 有价值但没有合适标准字段的内容放 additional_facts：name、value、meaning、source_id、source_quote，
    可带 subject_ref。统计数量、原始结果码、归属未明确的哈希都可在此保留，不要只写到 unresolved。
+   优先提炼有助于识别实际业务的域名、业务路径、服务名称。报文或请求体中已有可读线索时，
+   输出简短独立事实，meaning 说明它在原文中的位置与含义，不要只复制整段报文。
 4. unresolved 只描述真正未解释的歧义或缺损，不重复列举已成功整理的信息，不因没有授权说明就质疑事件存在。
 </workflow>
 <field_rules>
 - source_quote 摘录对应日志的相关片段，供人回看；优先使用带字段名的短片段，不要复制整条日志。
   属性按日志含义准确整理，允许还原转义、整理格式，但不补写原文没有的信息。无需计算字符位置。
+- 一项事实或事件的全部属性须来自它声明的 source_id；跨日志的信息分别输出，分别引用对应 L*，
+  不要把第二条日志的状态、严重级别并入仅标注第一条日志的检测摘要。
+- 十六进制转储可结合字节及可读字符列，忠实还原连续内容中的业务线索，去除转储换行或还原转义；
+  不拼接不同报文、不补省略内容。无法完整恢复时只保留可确认片段，并在 meaning 中说明。
+  仅在报文内容中出现的地址放 additional_facts，不冒充连接目的地址、HTTP Host 或实际请求 URL；
+  不因出现业务域名就判定安全，也不删除或改写上游的攻击、失陷等检测结果。
 - 运行进程、被检测文件、父进程分别整理；不要把同屏出现当成执行关系。主机 IP 不自动等于攻击者。
 - 哈希只绑定到原文能确定的文件或进程镜像；virus_id 等检测标识不因十六进制外观就变成文件哈希。
 - detector_id 是检测规则/签名的标识，不是日志索引名、产品版本或日志文档编号；后几种可作为补充事实保留。
@@ -68,6 +76,7 @@ objects/events/additional_facts 各最多 40 项；unresolved 最多 20 项。
 
 
 def build_normalization_prompt(request: NormalizationAssistRequest) -> list[dict[str, str]]:
+    packet_example = "00000000: 70 6f 72 74 61 6c 2e 65 78 61 6d 70 6c 65 2e 69  portal.example.i\n00000010: 6e 76 61 6c 69 64 2f 61 70 70 73 2f 68 65 6c 70  nvalid/apps/help\n00000020: 64 65 73 6b                                      desk"
     examples = [
         {
             "source": 'cmd=""C:\\tools\\tool.exe" --login -i"',
@@ -118,6 +127,23 @@ def build_normalization_prompt(request: NormalizationAssistRequest) -> list[dict
                 "objects": [{"id": "n1", "kind": "network", "attributes": {"destination_ip": "10.0.0.1", "dst_port": 8001}, "source_quote": 'target="10.0.0.1" port="8001"'}],
                 "events": [{"kind": "network_access", "name": "蜜罐访问", "subject_refs": ["n1"], "source_quote": 'target="10.0.0.1" port="8001" event="蜜罐访问"'}],
                 "additional_facts": [],
+                "unresolved": [],
+            },
+        },
+        {
+            "sources": [{"source_id": "L0", "text": packet_example}, {"source_id": "L1", "text": 'event="反连检测" host_state="失陷"'}],
+            "output": {
+                "objects": [],
+                "events": [{"kind": "other_detection", "name": "反连检测", "reported_result": "失陷", "subject_refs": [], "source_id": "L1", "source_quote": 'event="反连检测" host_state="失陷"'}],
+                "additional_facts": [
+                    {
+                        "name": "payload_business_address",
+                        "value": "portal.example.invalid/apps/helpdesk",
+                        "meaning": "报文内容中的业务地址片段，含 helpdesk 路径；不代表已确认的连接目的服务。",
+                        "source_id": "L0",
+                        "source_quote": packet_example,
+                    }
+                ],
                 "unresolved": [],
             },
         },

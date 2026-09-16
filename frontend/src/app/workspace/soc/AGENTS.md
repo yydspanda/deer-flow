@@ -15,6 +15,18 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 ## API And Navigation
 
+- Corpus `后续运行设置` is a per-run snapshot, not global configuration. The four switches cover
+  semantic review, enterprise policy and its safe-path/advisor children. Store the local selection
+  in session storage, mask unavailable capabilities and submit it with each process request.
+  Requests carrying settings must declare `Content-Type: application/json`; keep bodyless
+  calls compatible with deployment defaults. Pin the header in both API and browser tests.
+  Turning the parent off also turns children off. The trace's `本次运行配置` reads only saved
+  execution options; toggling controls must not relabel historical or in-flight results. Provider
+  modes and real external execution remain read-only. No new client-owned decision or authority.
+  Place each switch immediately before its associated clickable label, with wider spacing between
+  options. Never distribute a label and switch to opposite ends of a column; this makes switches
+  appear to belong to the next option on wide screens. Preserve the pairing at responsive widths.
+
 - Candidate governance comparison is server-owned. Show the old business conclusion,
   scope relation/differences and an explicit replacement selection in the existing review
   page. Selection alone does not mutate Memory. Submit predecessor ID/version with the

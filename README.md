@@ -60,6 +60,17 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > with `返回原筛选` restoring the previous search and page. The group picker searches rule
 > names/codes and behavior keywords, including singleton groups and groups without fingerprints.
 > The rehearsal defaults to all alerts; enable `仅未运行` to filter out completed runs.
+> `后续运行设置` provides per-run switches for semantic review, enterprise policy,
+> safe-software-path policy and LLM policy advice. They take effect on the next run without
+> restarting services; disabling enterprise policy also disables its two sub-options.
+> Each switch sits directly before its clickable label, keeping the pairing clear on wide and small screens.
+> Each run saves its configuration in the trace. Browser choices do not change other users,
+> running alerts, existing results, provider endpoints or external-action authority.
+>
+> SOC defaults to non-streaming model requests. For a provider requiring streaming,
+> set `streaming: true` on that model in `config.yaml` and restart the Gateway. SOC
+> collects the full answer before parsing; the run records its transport mode and usage.
+> Keep this unset for internal gateways that only accept non-streaming requests.
 > A browser-driven local lifecycle is available for the reviewed 14-alert
 > `GalaxyLab_T1003-SAM-Dumping` cohort. For a trusted shared demonstration, run
 > `./scripts/soc-memory-dev.sh demo-start`, then open
@@ -90,6 +101,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Semantic review supports `SOC_NORMALIZATION_ASSIST_MODE=off|shadow|apply`. In `apply`, accepted
 > supplements feed the standard alert, analysis input, and Memory conditions. The workbench reads
 > each saved run's review mode and matching signature; old shadow reports remain observation-only.
+> Semantic review is prompted to extract readable business addresses from packet content as
+> supplementary facts, keeping per-log attribution without assuming a benign verdict or a new destination.
 > Completed semantic reviews show a checkmark and the adopted supplement count. Review notes
 > remain expandable; the original report and failure details remain available in audit JSON.
 > SOC model-bound JSON uses compact serialization for analysis, semantic review, role verification,

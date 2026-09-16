@@ -44,6 +44,14 @@ file for SOC code. The authoritative product and engineering documents are:
 
 ## Runtime Contract
 
+- DEV corpus run controls use immutable `SocAnalysisExecutionOptions` passed to the application
+  composition root, never process-wide environment mutation. Persist the options on `AnalysisRun`
+  before provider invocation and expose the saved snapshot in execution/audit reads. The existing
+  Workbench owns one shared executor, capacity limit and per-alert claim across all combinations.
+  Explicit options may disable configured policy children; enabled options must fit server capabilities.
+  Paths, models, tenant scope, provider modes and external-action authority are not request options.
+  Bodyless calls retain deployment defaults; existing stored runs need no migration.
+
 - The composition root enables policy-first direct resolution by default
   (`SOC_DIRECT_RESOLUTION_ENABLED=false` restores the full analysis path). After canonical
   normalization, enforced deterministic tenant rules may choose handling before any LLM.
@@ -73,8 +81,11 @@ file for SOC code. The authoritative product and engineering documents are:
   supported nonempty selected primary source is reviewed. `NormalizationReviewer` uses a
   distinct `NormalizationAssistRequest` and provider purpose. Persist before invocation;
   reuse only matching saved recovery results, without charging cached usage again. Explicit
-  replay may run a new measurement. Prompt v5 proposes objects, bound detector events and
+  replay may run a new measurement. Prompt v6 proposes objects, bound detector events and
   supplementary facts. Merge into existing canonical observations, not a parallel alert.
+  Readable business clues in packet content use existing supplementary facts, not assumed
+  connection destinations or benign verdicts. Prompt examples keep cross-log facts under
+  their respective L* sources; this does not introduce a new validation gate.
   Selected supplementary sources use independent L* IDs within eight sources/48k characters;
   catalog and source omissions, deduplication and truncation remain visible. Item-level errors
   must not erase valid sibling facts. Existing O* references allow sparse corrections without
@@ -151,6 +162,12 @@ file for SOC code. The authoritative product and engineering documents are:
 - Every step records start/end/duration. Provider token usage is `reported`, `estimated`,
   or `mixed`; monetary cost and accuracy stay unmeasured without reviewed pricing and
   independent truth labels.
+- SOC model transport is non-streaming by default. An explicit model-level
+  `streaming: true` enables the existing LangChain buffered stream through `invoke()`;
+  only the complete message reaches SOC parsing. Record `transport_mode` with timing
+  and usage. Do not enable it implicitly for intranet gateways, change reasoning, or
+  silently retry with another model. SDK text/envelope mismatch is a sanitized
+  retryable provider failure, never a fabricated verdict or a business evidence gap.
 - Operator-facing execution timelines are read-only projections of persisted
   `AnalysisRun.steps`, provider request journals, and downstream write state. Keep the
   endpoint alert-scoped and lightweight; expose bounded metrics and sanitized errors,

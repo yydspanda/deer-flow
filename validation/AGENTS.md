@@ -65,6 +65,9 @@ sensitive, gitignored evidence and must never become application imports.
   `datas/source/dams_exports/` by CSV header; unknown schemas fail explicitly.
   Stage expanded PKL/index/payload-store outputs separately, verify old-row retention
   and chronology, then replace the complete artifact set without resetting SOC Memory.
+  Include `--supplement-pickle` with the curated 212-case corpus to retain special-test
+  alerts in the Web. `--existing-dataset` supports append-only supplementation without
+  re-reading CSVs; existing IDs win and new special cases receive no operational labels.
 - `./scripts/soc-runtime-validation.sh checkpoint-d` covers deterministic D0-D6.
   D7/D10 are explicit-cost live boundaries; D8 Grounding and D9 Decision are
   deterministic; D11 is full-corpus deterministic compatibility/reexecution stability.

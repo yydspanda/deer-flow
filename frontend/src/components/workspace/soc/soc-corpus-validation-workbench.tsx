@@ -52,6 +52,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
 import { SocCorpusGroupPicker } from "@/components/workspace/soc/soc-corpus-group-picker";
+import {
+  availableCorpusRunSettings,
+  readCorpusRunSettings,
+  RUN_SETTINGS_STORAGE_KEY,
+  SocCorpusRunSettings,
+  SocRunOptionsSummary,
+} from "@/components/workspace/soc/soc-corpus-run-settings";
 import { SocDecisionLineageTable } from "@/components/workspace/soc/soc-decision-lineage-table";
 import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
 import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
@@ -69,6 +76,7 @@ import {
   useSocCorpusWorkbenchExecution,
 } from "@/core/soc";
 import type {
+  SocAnalysisExecutionOptions,
   SocCorpusComparisonStatus,
   SocCorpusWorkbenchAlert,
   SocCorpusWorkbenchExecution,
@@ -513,6 +521,10 @@ function ExecutionMonitor({
           </div>
         ))}
       </div>
+
+      {execution.execution_options ? (
+        <SocRunOptionsSummary value={execution.execution_options} />
+      ) : null}
 
       <div className="divide-y">
         {execution.phases.map((phase) => (
@@ -1047,6 +1059,22 @@ function AlertDetail({
 }
 
 export function SocCorpusValidationWorkbench() {
+  const [runSettings, setRunSettings] =
+    useState<SocAnalysisExecutionOptions | null>(null);
+  useEffect(() => {
+    setRunSettings(readCorpusRunSettings());
+  }, []);
+  function changeRunSettings(value: SocAnalysisExecutionOptions) {
+    setRunSettings(value);
+    try {
+      window.sessionStorage.setItem(
+        RUN_SETTINGS_STORAGE_KEY,
+        JSON.stringify(value),
+      );
+    } catch {
+      /* Session storage can be disabled. */
+    }
+  }
   const [search, setSearch] = useState("");
   const [readiness, setReadiness] = useState<ReadinessFilter>("all");
   const [comparison, setComparison] = useState<ComparisonFilter>("all");
@@ -1085,6 +1113,12 @@ export function SocCorpusValidationWorkbench() {
   const activityQuery = useSocCorpusWorkbenchActivity();
   const processMutation = useProcessSocCorpusWorkbenchAlert();
   const state = query.state;
+  const selectedRunSettings = state?.run_controls
+    ? availableCorpusRunSettings(
+        runSettings ?? state.run_controls.defaults,
+        state.run_controls,
+      )
+    : undefined;
   const locallyRunningAlertIds = useMemo(
     () =>
       new Set(
@@ -1432,7 +1466,8 @@ export function SocCorpusValidationWorkbench() {
       },
     }));
     try {
-      await processMutation.mutateAsync(alertId);
+      const settings = selectedRunSettings;
+      await processMutation.mutateAsync({ alertId, settings });
       setFocusAlertId(alertId);
       setRunFeedbackByAlert((current) => ({
         ...current,
@@ -1662,27 +1697,40 @@ export function SocCorpusValidationWorkbench() {
             </span>
             <span>可任意选择 · 可重新运行</span>
             <span>企业安全能力接口 · 关闭/模拟</span>
-            <span className="font-medium text-sky-800">
-              语义核对 ·{" "}
-              {state.safety.normalization_review_mode === "shadow"
-                ? "仅对比，未用于研判"
-                : state.safety.normalization_review_mode === "apply"
-                  ? "用于后续研判"
-                  : "未开启"}
-            </span>
-            <span>
-              企业专属策略 ·{" "}
-              {formatSocDevPolicyLabel({
-                tenantPolicy: state.safety.tenant_policy,
-                softwarePathFastPolicy: state.safety.software_path_fast_policy,
-              })}
-            </span>
+            {!state.run_controls ? (
+              <>
+                <span className="font-medium text-sky-800">
+                  语义核对 ·{" "}
+                  {state.safety.normalization_review_mode === "shadow"
+                    ? "仅对比，未用于研判"
+                    : state.safety.normalization_review_mode === "apply"
+                      ? "用于后续研判"
+                      : "未开启"}
+                </span>
+                <span>
+                  企业专属策略 ·{" "}
+                  {formatSocDevPolicyLabel({
+                    tenantPolicy: state.safety.tenant_policy,
+                    softwarePathFastPolicy:
+                      state.safety.software_path_fast_policy,
+                  })}
+                </span>
+              </>
+            ) : null}
             <span>外部动作 · 关闭</span>
           </div>
           <span className="font-mono">
             {state.source.file_name} · {shortHash(state.source.sha256)}
           </span>
         </section>
+
+        {state.run_controls && selectedRunSettings ? (
+          <SocCorpusRunSettings
+            controls={state.run_controls}
+            value={selectedRunSettings}
+            onChange={changeRunSettings}
+          />
+        ) : null}
 
         <SocLeadershipDemoGuidePanel
           guide={state.leadership_demo}

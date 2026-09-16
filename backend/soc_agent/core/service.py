@@ -132,6 +132,7 @@ from soc_agent.contracts import (
     UnifiedInvestigationView,
     Verdict,
 )
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.contracts.memory_governance import MemoryGovernancePreview
 from soc_agent.core.alert_results import (
     classify_alert_result,
@@ -235,6 +236,7 @@ class DeterministicAnalysisRuntime:
         role_verifier: RoleAdjudicationVerifier | None = None,
         normalization_reviewer: NormalizationReviewer | None = None,
         direct_resolution: DirectResolutionResolver | None = None,
+        execution_options: SocAnalysisExecutionOptions | None = None,
         decision_policy: DecisionPolicy | None = None,
         analysis_request_enricher: AnalysisRequestEnricher | None = None,
         sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
@@ -243,6 +245,7 @@ class DeterministicAnalysisRuntime:
         self._role_verifier = role_verifier
         self._normalization_reviewer = normalization_reviewer
         self._direct_resolution = direct_resolution
+        self._execution_options = execution_options
         self._decision_policy = decision_policy
         self._analysis_request_enricher = analysis_request_enricher
         self._sensitive_evidence_mode = sensitive_evidence_mode
@@ -254,6 +257,7 @@ class DeterministicAnalysisRuntime:
             role_verifier=self._role_verifier,
             normalization_reviewer=self._normalization_reviewer,
             direct_resolution=self._direct_resolution,
+            execution_options=self._execution_options,
             decision_policy=self._decision_policy,
             analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
@@ -271,6 +275,7 @@ class DeterministicAnalysisRuntime:
             role_verifier=self._role_verifier,
             normalization_reviewer=self._normalization_reviewer,
             direct_resolution=self._direct_resolution,
+            execution_options=self._execution_options,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
             analysis_request_enricher=self._analysis_request_enricher,
@@ -284,6 +289,7 @@ class DeterministicAnalysisRuntime:
             role_verifier=self._role_verifier,
             normalization_reviewer=self._normalization_reviewer,
             direct_resolution=self._direct_resolution,
+            execution_options=self._execution_options,
             normalization_reuse=previous_run,
             decision_policy=self._decision_policy,
             before_provider=before_provider,

@@ -9,6 +9,7 @@ from deerflow.config import get_app_config
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.automation import load_soc_automation_policy
 from soc_agent.contracts import MemoryPatternDataClass
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core import (
     DeterministicAnalysisRuntime,
     SocAnalysisService,
@@ -57,6 +58,7 @@ def build_soc_analysis_service(
     runtime_environment: str | None = None,
     pattern_observation_enabled: bool | None = None,
     execute_authorized_actions: bool | None = None,
+    execution_options: SocAnalysisExecutionOptions | None = None,
 ) -> SocAnalysisService:
     """Build the one analysis service shared by CLI and offline batch entry points."""
 
@@ -80,12 +82,13 @@ def build_soc_analysis_service(
         runtime_environment=resolved_environment,
         pattern_observation_enabled=pattern_observation_enabled,
         execute_authorized_actions=execute_authorized_actions,
+        execution_options=execution_options,
     )
     analysis_request_enricher = _build_analysis_request_enricher(
         repository,
         memory_environment=resolved_environment,
     )
-    assist_mode = os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower()
+    assist_mode = execution_options.normalization_review_mode if execution_options is not None else os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower()
     if assist_mode not in {"off", "shadow", "apply"}:
         raise ValueError("SOC_NORMALIZATION_ASSIST_MODE must be off, shadow or apply")
     reviewer = None
@@ -120,6 +123,7 @@ def build_soc_analysis_service(
             role_verifier=role_verifier,
             normalization_reviewer=reviewer,
             direct_resolution=direct_resolution,
+            execution_options=execution_options,
             analysis_request_enricher=analysis_request_enricher,
             sensitive_evidence_mode=resolved_settings.sensitive_evidence_mode,
         ),
@@ -199,11 +203,16 @@ def _build_post_analysis_observers(
     runtime_environment: str | None = None,
     pattern_observation_enabled: bool | None = None,
     execute_authorized_actions: bool | None = None,
+    execution_options: SocAnalysisExecutionOptions | None = None,
 ) -> tuple[PostAnalysisObserver, ...]:
     observers: list[PostAnalysisObserver] = []
-    tenant_policy_enabled = _strict_env_bool(
-        "SOC_TENANT_POLICY_ENABLED",
-        default=False,
+    tenant_policy_enabled = (
+        execution_options.tenant_policy_enabled
+        if execution_options is not None
+        else _strict_env_bool(
+            "SOC_TENANT_POLICY_ENABLED",
+            default=False,
+        )
     )
     policy_path = os.environ.get("SOC_TENANT_DISPOSITION_POLICY_PATH", "").strip()
     tenant_environment = (
@@ -227,11 +236,13 @@ def _build_post_analysis_observers(
         "SOC_TENANT_POLICY_SKILL_PATH",
         "",
     ).strip()
-    if advisor_mode == "off" and advisor_skill_path:
+    if execution_options is not None:
+        advisor_mode = "llm" if execution_options.tenant_policy_advisor_enabled else "off"
+    if execution_options is None and advisor_mode == "off" and advisor_skill_path:
         raise ValueError("SOC_TENANT_POLICY_SKILL_PATH requires SOC_TENANT_POLICY_ADVISOR_MODE=llm")
     if advisor_mode == "llm" and not tenant_policy_enabled:
         raise ValueError("SOC_TENANT_POLICY_ADVISOR_MODE=llm requires SOC_TENANT_POLICY_ENABLED=true")
-    if policy_path and not tenant_policy_enabled:
+    if execution_options is None and policy_path and not tenant_policy_enabled:
         raise ValueError("SOC_TENANT_DISPOSITION_POLICY_PATH is configured but SOC_TENANT_POLICY_ENABLED is false")
     if tenant_policy_enabled:
         if repository is None:
@@ -257,7 +268,7 @@ def _build_post_analysis_observers(
                 skill_path=advisor_skill_path,
             )
         policies = load_tenant_disposition_policies(policy_path)
-        signal_providers = build_configured_tenant_policy_signal_providers()
+        signal_providers = build_configured_tenant_policy_signal_providers(enabled=execution_options.tenant_policy_signal_providers_enabled) if execution_options is not None else build_configured_tenant_policy_signal_providers()
         observers.append(
             SocTenantPolicyEvaluationService(
                 policy_resolver=StaticTenantPolicyResolver(policies),
@@ -269,7 +280,7 @@ def _build_post_analysis_observers(
                 signal_providers=signal_providers,
             )
         )
-    elif _strict_env_bool(
+    elif execution_options is None and _strict_env_bool(
         "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED",
         default=False,
     ):
@@ -369,13 +380,18 @@ def _strict_env_bool(name: str, *, default: bool) -> bool:
     raise ValueError(f"{name} must be a strict boolean")
 
 
-def build_configured_tenant_policy_signal_providers() -> tuple[TenantPolicySignalProvider, ...]:
+def build_configured_tenant_policy_signal_providers(*, enabled: bool | None = None) -> tuple[TenantPolicySignalProvider, ...]:
     """Build optional tenant integration providers without changing Runtime."""
 
-    if not _strict_env_bool(
-        "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED",
-        default=False,
-    ):
+    use_providers = (
+        enabled
+        if enabled is not None
+        else _strict_env_bool(
+            "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED",
+            default=False,
+        )
+    )
+    if not use_providers:
         return ()
     from soc_agent.integrations.pingan.software_path_policy import (
         PingAnSoftwarePathPolicySignalProvider,

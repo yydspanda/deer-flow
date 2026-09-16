@@ -602,6 +602,82 @@ def write_dataset_atomic(frame: pd.DataFrame, output_path: Path) -> None:
         raise AssertionError("restricted-unpickler round trip changed DAMS dataset")
 
 
+def append_special_cases(
+    current: pd.DataFrame, supplements: pd.DataFrame, *, source_ref: str
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Append missing curated alerts without replacing existing payloads or labels."""
+    if not current.alert_id.is_unique or not supplements.alert_id.is_unique:
+        raise ValueError("corpus and supplement alert IDs must be unique")
+    existing_ids = {int(value) for value in current.alert_id}
+    additions = []
+    for original in supplements.to_dict("records"):
+        alert_id = int(original["alert_id"])
+        if alert_id in existing_ids:
+            continue
+        event_time = _canonical_event_time(original)
+        normalized = normalize_alert_payload(original["alert_full_data"]["alert_data"])
+        if str(normalized.alert_id) != str(alert_id):
+            raise ValueError(
+                f"supplement {alert_id} normalized to {normalized.alert_id}"
+            )
+        row = {column: original.get(column) for column in current.columns}
+        row.update(
+            {
+                "dataset_schema_version": DATASET_SCHEMA_VERSION,
+                "sample_origin": "legacy_demo",
+                "source_refs": list(
+                    dict.fromkeys(
+                        [
+                            *(original.get("source_refs") or []),
+                            f"{source_ref}#alert_id={alert_id}",
+                        ]
+                    )
+                ),
+                "canonical_payload_sha256": _canonical_sha256(
+                    original["alert_full_data"]
+                ),
+                "canonical_event_time": event_time.isoformat(),
+                "canonical_event_time_source": "soc.normalizer",
+                # Curated model-test outcomes are not operational labels.
+                "ground_label": None,
+                "action_label": None,
+                "status_label": None,
+                "operational_label_available": False,
+                "operational_label_source_ref": None,
+                "operational_label_record": None,
+                "operational_label_method": None,
+            }
+        )
+        additions.append(row)
+    result = current
+    if additions:
+        added = pd.DataFrame(additions, columns=current.columns, dtype=object)
+        added["alert_id"] = added.alert_id.astype("int64")
+        result = pd.concat([current, added], ignore_index=True)
+        order = sorted(
+            range(len(result)),
+            key=lambda index: (
+                datetime.fromisoformat(result.iloc[index]["canonical_event_time"]),
+                int(result.iloc[index]["alert_id"]),
+            ),
+        )
+        result = result.iloc[order].reset_index(drop=True)
+        result.columns = pd.Index(result.columns, dtype=object)
+        before = current.set_index("alert_id").sort_index()
+        after = (
+            result[result.alert_id.isin(existing_ids)]
+            .set_index("alert_id")
+            .sort_index()
+        )
+        if not before.equals(after):
+            raise AssertionError("supplement changed an existing alert or label")
+    return result, {
+        "added_alert_ids": sorted(int(row["alert_id"]) for row in additions),
+        "existing_rows_preserved": len(current),
+        "overlapping_rows_skipped": len(supplements) - len(additions),
+    }
+
+
 def write_manifest_atomic(manifest: Mapping[str, Any], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_name(f".{output_path.name}.tmp")
@@ -787,6 +863,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--alerts-dir", type=Path, default=None)
     parser.add_argument("--labels-dir", type=Path, default=None)
     parser.add_argument("--base-pickle", type=Path, default=DEFAULT_BASE_PICKLE)
+    parser.add_argument(
+        "--existing-dataset",
+        type=Path,
+        help="append to an existing merged dataset instead of rebuilding CSV inputs",
+    )
+    parser.add_argument(
+        "--supplement-pickle",
+        type=Path,
+        help="append missing curated cases; existing IDs and labels always win",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument(
@@ -796,6 +882,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="compact DEV workbench index; defaults beside --output",
     )
     args = parser.parse_args(argv)
+    if args.existing_dataset is not None:
+        if args.supplement_pickle is None:
+            parser.error("--existing-dataset requires --supplement-pickle")
+        if args.existing_dataset.resolve() == args.output.resolve():
+            parser.error(
+                "stage --output separately; do not replace the running dataset"
+            )
     if args.manifest is None:
         args.manifest = args.output.with_suffix(".manifest.json")
     return args
@@ -803,23 +896,65 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    alert_files, label_files = resolve_input_files(args)
-    print(
-        f"Building from {len(alert_files)} alert CSVs and {len(label_files)} label CSVs...",
-        file=sys.stderr,
-        flush=True,
-    )
-    base_frame = load_dataframe_pickle(args.base_pickle)
-    dataset, report = build_dataset(
-        alert_files=alert_files,
-        label_files=label_files,
-        base_frame=base_frame,
-        base_source_ref=_relative_path(args.base_pickle),
-    )
+    previous_manifest = None
+    if args.existing_dataset is not None:
+        print(
+            "Loading existing merged dataset (no CSV or model calls)...",
+            file=sys.stderr,
+            flush=True,
+        )
+        previous_manifest = json.loads(
+            args.existing_dataset.with_suffix(".manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        if previous_manifest["output"]["sha256"] != _sha256_file(args.existing_dataset):
+            raise ValueError("existing dataset does not match its manifest")
+        dataset = load_dataframe_pickle(args.existing_dataset)
+        report = previous_manifest["build"]
+    else:
+        alert_files, label_files = resolve_input_files(args)
+        print(
+            f"Building from {len(alert_files)} alert CSVs and {len(label_files)} label CSVs...",
+            file=sys.stderr,
+            flush=True,
+        )
+        base_frame = load_dataframe_pickle(args.base_pickle)
+        dataset, report = build_dataset(
+            alert_files=alert_files,
+            label_files=label_files,
+            base_frame=base_frame,
+            base_source_ref=_relative_path(args.base_pickle),
+        )
+    if args.supplement_pickle is not None:
+        dataset, supplement_report = append_special_cases(
+            dataset,
+            load_dataframe_pickle(args.supplement_pickle),
+            source_ref=_relative_path(args.supplement_pickle),
+        )
+        report["supplement"] = supplement_report
+        report["output"].update(
+            {
+                "rows": len(dataset),
+                "unique_alert_ids": int(dataset.alert_id.nunique()),
+                "labeled_rows": int(dataset.operational_label_available.sum()),
+                "unlabeled_rows": int(
+                    (~dataset.operational_label_available.astype(bool)).sum()
+                ),
+                "first_event_time": dataset.iloc[0]["canonical_event_time"],
+                "last_event_time": dataset.iloc[-1]["canonical_event_time"],
+            }
+        )
+        print(json.dumps(supplement_report), file=sys.stderr, flush=True)
     print(
         f"Writing and verifying {len(dataset)} alerts...", file=sys.stderr, flush=True
     )
     write_dataset_atomic(dataset, args.output)
+    additions = None
+    if args.existing_dataset is not None:
+        additions = dataset[
+            dataset.alert_id.isin(report["supplement"]["added_alert_ids"])
+        ].copy()
     del dataset
     from soc_agent.demo.corpus_workbench import (
         build_corpus_workbench_index,
@@ -827,15 +962,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     print("Building Workbench index and payload store...", file=sys.stderr, flush=True)
-    workbench_index = build_corpus_workbench_index(
-        args.output,
-        output_path=args.workbench_index,
-    )
+    if args.existing_dataset is not None:
+        from validation.compact_zeus.corpus.supplement_workbench_index import (
+            build_supplemented_index,
+        )
+
+        workbench_index = build_supplemented_index(
+            args.existing_dataset,
+            args.output,
+            additions,
+            index_path=args.workbench_index,
+        )
+    else:
+        workbench_index = build_corpus_workbench_index(
+            args.output,
+            output_path=args.workbench_index,
+        )
     payload_store = corpus_workbench_payload_store_path(
         args.output,
         index_path=workbench_index,
     )
-    manifest = build_manifest(
+    manifest = previous_manifest or build_manifest(
         alert_files=alert_files,
         label_files=label_files,
         base_path=args.base_pickle,
@@ -844,6 +991,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload_store_path=payload_store,
         report=report,
     )
+    if args.supplement_pickle is not None:
+        manifest["generated_at"] = datetime.now(UTC).isoformat()
+        manifest["builder"] = _file_identity(Path(__file__))
+        manifest["inputs"]["supplement_pickle"] = _file_identity(args.supplement_pickle)
+        if args.existing_dataset is not None:
+            manifest["inputs"]["previous_dataset"] = _file_identity(
+                args.existing_dataset
+            )
+        manifest["output"] = {
+            **_file_identity(args.output),
+            "rows": report["output"]["rows"],
+            "unique_alert_ids": report["output"]["unique_alert_ids"],
+            "workbench_index": _file_identity(workbench_index),
+            "workbench_payload_store": _file_identity(payload_store),
+        }
+        manifest["claim_boundaries"].append(
+            "Curated supplements only add missing IDs without operational labels; existing rows remain unchanged."
+        )
     write_manifest_atomic(manifest, args.manifest)
     print(
         json.dumps(

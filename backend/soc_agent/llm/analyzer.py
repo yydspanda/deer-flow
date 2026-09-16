@@ -626,6 +626,9 @@ def model_invocation_metadata(
             call["requested_model_name"] = requested_model_name
         if response.model_name:
             call["response_model_name"] = response.model_name
+        transport_mode = response_metadata.get("transport_mode")
+        if transport_mode in ("buffered_stream", "non_streaming"):
+            call["transport_mode"] = transport_mode
         for key in (
             "admission_wait_duration_ms",
             "provider_duration_ms",
@@ -673,6 +676,9 @@ def model_invocation_metadata(
         json_mode_requested = failed_call_measurement.get("json_mode_requested")
         if isinstance(json_mode_requested, bool):
             failed_call["json_mode_requested"] = json_mode_requested
+        transport_mode = failed_call_measurement.get("transport_mode")
+        if transport_mode in ("buffered_stream", "non_streaming"):
+            failed_call["transport_mode"] = transport_mode
         for key in (
             "admission_wait_duration_ms",
             "provider_duration_ms",

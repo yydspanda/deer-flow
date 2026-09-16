@@ -10,6 +10,7 @@ import pytest
 
 from validation.compact_zeus.corpus.build_dams_labeled_dataset import (
     DATASET_SCHEMA_VERSION,
+    append_special_cases,
     build_dataset,
     discover_export_files,
     parse_args,
@@ -187,6 +188,112 @@ def _base_frame() -> pd.DataFrame:
     frame = pd.DataFrame([row], columns=BASE_COLUMNS, dtype=object)
     frame["alert_id"] = frame["alert_id"].astype("int64")
     return frame
+
+
+def test_append_special_cases_preserves_existing_rows_and_sorts_time(
+    tmp_path: Path,
+) -> None:
+    current = _base_frame()
+    current["canonical_event_time"] = pd.Series(
+        ["2026-08-01T00:03:00+08:00"], dtype=object
+    )
+    current["ground_label"] = pd.Series(["忽略"], dtype=object)
+    current["operational_label_available"] = pd.Series([True], dtype=object)
+    current["source_refs"] = pd.Series([["original.csv#row=1"]], dtype=object)
+    current.columns = pd.Index(current.columns, dtype=object)
+    extra = _base_frame()
+    extra.loc[0, "alert_id"] = 1
+    extra.at[0, "alert_full_data"] = {
+        "alert_id": "1",
+        "alert_data": _payload(1, marker="special"),
+    }
+    extra["source_refs"] = pd.Series([["legacy.json"]], dtype=object)
+    overlap = _base_frame()
+    overlap["ground_label"] = pd.Series(["转交"], dtype=object)
+    supplements = pd.concat([overlap, extra], ignore_index=True)
+
+    result, report = append_special_cases(
+        current, supplements, source_ref="special.pkl"
+    )
+
+    assert result.alert_id.tolist() == [1, 3]
+    pd.testing.assert_frame_equal(
+        result[result.alert_id == 3].reset_index(drop=True), current
+    )
+    assert result.iloc[0].ground_label is None
+    assert result.iloc[0].operational_label_available is False
+    assert result.iloc[0].source_refs == ["legacy.json", "special.pkl#alert_id=1"]
+    assert report["added_alert_ids"] == [1]
+    assert report["existing_rows_preserved"] == 1
+    repeated, second = append_special_cases(
+        result, supplements, source_ref="special.pkl"
+    )
+    pd.testing.assert_frame_equal(result, repeated)
+    assert second["added_alert_ids"] == []
+    write_dataset_atomic(result, tmp_path / "supplemented.pkl")
+
+
+def test_append_special_cases_rejects_payload_id_mismatch() -> None:
+    extra = _base_frame()
+    extra.loc[0, "alert_id"] = 1
+    with pytest.raises(ValueError, match="normalized"):
+        append_special_cases(_base_frame(), extra, source_ref="special.pkl")
+
+
+def test_supplement_cli_requires_separate_staging_output(tmp_path: Path) -> None:
+    current = str(tmp_path / "current.pkl")
+    with pytest.raises(SystemExit):
+        parse_args(["--existing-dataset", current])
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--existing-dataset",
+                current,
+                "--supplement-pickle",
+                "special.pkl",
+                "--output",
+                current,
+            ]
+        )
+
+
+def test_incremental_index_matches_full_rebuild(tmp_path: Path) -> None:
+    from validation.compact_zeus.corpus.supplement_workbench_index import (
+        build_supplemented_index,
+    )
+
+    current = _base_frame()
+    current["canonical_event_time"] = pd.Series(
+        ["2026-08-01T00:03:00+08:00"], dtype=object
+    )
+    current.columns = pd.Index(current.columns, dtype=object)
+    extra = _base_frame()
+    extra.loc[0, "alert_id"] = 1
+    extra.at[0, "alert_full_data"] = {
+        "alert_id": "1",
+        "alert_data": _payload(1, marker="special"),
+    }
+    merged, _ = append_special_cases(current, extra, source_ref="special.pkl")
+    old_path = tmp_path / "original.pkl"
+    output_path = tmp_path / "staging" / "updated.pkl"
+    write_dataset_atomic(current, old_path)
+    build_corpus_workbench_index(old_path)
+    write_dataset_atomic(merged, output_path)
+    incremental = build_supplemented_index(
+        old_path, output_path, merged[merged.alert_id == 1].copy()
+    )
+    incremental_cases = json.loads(incremental.read_text())["cases"]
+    for case in _load_cases(output_path).values():
+        assert (
+            _load_payload_from_store(
+                corpus_workbench_payload_store_path(output_path), case
+            )["alert"]["alertId"]
+            == case.alert_id
+        )
+    full = build_corpus_workbench_index(
+        output_path, output_path=tmp_path / "full" / "index.json"
+    )
+    assert incremental_cases == json.loads(full.read_text())["cases"]
 
 
 def test_build_dataset_keeps_unlabeled_alert_and_uses_latest_rows(

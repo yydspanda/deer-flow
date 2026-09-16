@@ -12,7 +12,7 @@ import re
 import sqlite3
 import zlib
 from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -37,6 +37,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateSourceType,
     SocOperationalDisposition,
 )
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core import (
     SocAnalysisService,
     SocMemoryPatternService,
@@ -268,6 +269,32 @@ class SocCorpusWorkbenchSafety(BaseModel):
     label_visibility: Literal["hidden_until_runtime_decision"] = "hidden_until_runtime_decision"
 
 
+class SocCorpusWorkbenchRunControls(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    defaults: SocAnalysisExecutionOptions
+    normalization_review_available: bool = True
+    tenant_policy_available: bool = False
+    tenant_policy_advisor_available: bool = False
+    tenant_policy_signal_providers_available: bool = False
+
+    def validate_selection(self, options: SocAnalysisExecutionOptions) -> None:
+        for selected, available, label in (
+            (options.normalization_review_mode != "off", self.normalization_review_available, "语义核对"),
+            (options.tenant_policy_enabled, self.tenant_policy_available, "企业策略"),
+            (options.tenant_policy_advisor_enabled, self.tenant_policy_advisor_available, "LLM 策略建议"),
+            (options.tenant_policy_signal_providers_enabled, self.tenant_policy_signal_providers_available, "安全软件路径策略"),
+        ):
+            if selected and not available:
+                raise SocCorpusWorkbenchError(f"当前部署未配置或未允许{label}")
+
+
+class SocCorpusWorkbenchProcessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    settings: SocAnalysisExecutionOptions | None = None
+
+
 class SocCorpusWorkbenchSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -338,6 +365,7 @@ class SocCorpusWorkbenchExecution(BaseModel):
     current_phase: str | None = None
     run_id: str | None = None
     run_status: str | None = None
+    execution_options: SocAnalysisExecutionOptions | None = None
     started_at: str | None = None
     ended_at: str | None = None
     elapsed_ms: int | None = Field(default=None, ge=0)
@@ -589,6 +617,7 @@ class SocCorpusWorkbenchState(BaseModel):
 
     schema_version: Literal["soc.corpus_dev_workbench.v4"] = "soc.corpus_dev_workbench.v4"
     safety: SocCorpusWorkbenchSafety
+    run_controls: SocCorpusWorkbenchRunControls | None = None
     source: SocCorpusWorkbenchSource
     model: SocCorpusWorkbenchModelConfig
     readiness: SocCorpusWorkbenchReadiness
@@ -672,6 +701,8 @@ class SocCorpusWorkbenchService:
         ] = "disabled",
         software_path_fast_policy: bool = False,
         normalization_review_mode: Literal["off", "shadow", "apply"] = "off",
+        run_controls: SocCorpusWorkbenchRunControls | None = None,
+        analysis_service_factory: Callable[[SocAnalysisExecutionOptions], SocAnalysisService] | None = None,
     ) -> None:
         self._repository = repository
         self._analysis_service = analysis_service
@@ -682,6 +713,8 @@ class SocCorpusWorkbenchService:
         self._tenant_policy = tenant_policy
         self._software_path_fast_policy = software_path_fast_policy
         self._normalization_review_mode = normalization_review_mode
+        self._run_controls = run_controls
+        self._analysis_service_factory = analysis_service_factory
         self._source_sha256 = _sha256_file(self._source_path)
         self._index_path = index_path.expanduser().resolve() if index_path is not None else self._source_path.with_suffix(".workbench-index.json")
         self._cases = _load_cases(
@@ -811,6 +844,7 @@ class SocCorpusWorkbenchService:
         first_case = cases[0]
         last_case = cases[-1]
         return SocCorpusWorkbenchState(
+            run_controls=self._run_controls,
             safety=SocCorpusWorkbenchSafety(
                 database_file=self._database_file,
                 tenant_policy=self._tenant_policy,
@@ -1069,27 +1103,33 @@ class SocCorpusWorkbenchService:
         alert_id: str,
         *,
         context: ServiceRequestContext,
+        settings: SocAnalysisExecutionOptions | None = None,
     ) -> SocCorpusWorkbenchProcessResult:
         self._validate_process_request(alert_id, context=context)
+        service, options = self._select_run_service(settings)
         with self._claim_execution(alert_id, context=context):
-            return self._process_claimed_alert(alert_id, context=context)
+            return self._process_claimed_alert(alert_id, context=context, analysis_service=service, execution_options=options)
 
     def start_alert(
         self,
         alert_id: str,
         *,
         context: ServiceRequestContext,
+        settings: SocAnalysisExecutionOptions | None = None,
     ) -> SocCorpusWorkbenchStartResult:
         """Reserve an alert atomically and execute it outside the HTTP request."""
 
         self._validate_process_request(alert_id, context=context)
         claim = self._reserve_execution(alert_id, context=context)
         try:
+            service, options = self._select_run_service(settings)
             future = self._execution_executor.submit(
                 self._run_reserved_alert,
                 alert_id,
                 context,
                 claim,
+                service,
+                options,
             )
         except BaseException:
             self._release_execution(claim)
@@ -1102,6 +1142,18 @@ class SocCorpusWorkbenchService:
                 now=datetime.now(UTC),
             ),
         )
+
+    def _select_run_service(self, settings: SocAnalysisExecutionOptions | None) -> tuple[SocAnalysisService, SocAnalysisExecutionOptions | None]:
+        if self._run_controls is None or self._analysis_service_factory is None:
+            if settings is not None:
+                raise SocCorpusWorkbenchError("当前部署尚未启用单次运行设置")
+            return self._analysis_service, None
+        options = settings or self._run_controls.defaults
+        self._run_controls.validate_selection(options)
+        try:
+            return self._analysis_service_factory(options), options
+        except (ValueError, OSError) as exc:
+            raise SocCorpusWorkbenchError(f"运行设置不可用：{exc}") from exc
 
     def _validate_process_request(
         self,
@@ -1120,9 +1172,11 @@ class SocCorpusWorkbenchService:
         alert_id: str,
         context: ServiceRequestContext,
         claim: _ActiveExecutionClaim,
+        analysis_service: SocAnalysisService,
+        execution_options: SocAnalysisExecutionOptions | None,
     ) -> SocCorpusWorkbenchProcessResult:
         try:
-            return self._process_claimed_alert(alert_id, context=context)
+            return self._process_claimed_alert(alert_id, context=context, analysis_service=analysis_service, execution_options=execution_options)
         finally:
             self._release_execution(claim)
 
@@ -1140,8 +1194,12 @@ class SocCorpusWorkbenchService:
         alert_id: str,
         *,
         context: ServiceRequestContext,
+        analysis_service: SocAnalysisService | None = None,
+        execution_options: SocAnalysisExecutionOptions | None = None,
     ) -> SocCorpusWorkbenchProcessResult:
         case = self._cases[alert_id]
+        service = analysis_service or self._analysis_service
+        previous = None
         observation_id: str | None = None
         pattern_observation_reused = False
         idempotent = False
@@ -1151,6 +1209,8 @@ class SocCorpusWorkbenchService:
         )
         if not current.can_process:
             raise SocCorpusWorkbenchBusyError(self._persisted_running_execution(current, context=context))
+        if current.run_id is not None:
+            previous = self._repository.get_run(current.run_id)
 
         if current.run_id is None:
             execution_mode: Literal[
@@ -1158,12 +1218,15 @@ class SocCorpusWorkbenchService:
                 "rerun",
                 "pattern_resume",
             ] = "initial"
-            request_context = context.model_copy(update={"idempotency_key": self._analysis_idempotency_key(alert_id)})
-            run = self._analysis_service.analyze(
+            key = self._analysis_idempotency_key(alert_id)
+            if execution_options is not None:
+                key += f":{stable_hash(execution_options.model_dump(mode='json'))[:16]}"
+            request_context = context.model_copy(update={"idempotency_key": key})
+            run = service.analyze(
                 copy.deepcopy(self._payload_for_case(case)),
                 context=request_context,
             )
-        elif current.workflow_state == "analysis_only":
+        elif current.workflow_state == "analysis_only" and (execution_options is None or (previous is not None and previous.execution_options == execution_options)):
             execution_mode = "pattern_resume"
             request_context = context
             run = self._repository.get_run(current.run_id)
@@ -1176,10 +1239,11 @@ class SocCorpusWorkbenchService:
                     "idempotency_key": self._rerun_idempotency_key(
                         alert_id,
                         context=context,
+                        execution_options=execution_options,
                     )
                 }
             )
-            run = self._analysis_service.replay(
+            run = service.replay(
                 current.run_id,
                 context=request_context,
             )
@@ -1352,6 +1416,7 @@ class SocCorpusWorkbenchService:
         alert_id: str,
         *,
         context: ServiceRequestContext,
+        execution_options: SocAnalysisExecutionOptions | None = None,
     ) -> str:
         request_identity = context.idempotency_key or context.request_id
         request_hash = stable_hash(
@@ -1359,6 +1424,7 @@ class SocCorpusWorkbenchService:
                 "source_sha256": self._source_sha256,
                 "alert_id": alert_id,
                 "request_identity": request_identity,
+                **({"execution_options": execution_options.model_dump(mode="json")} if execution_options is not None else {}),
             }
         )[:24]
         return f"soc-corpus-dev-rerun:{alert_id}:{request_hash}"
@@ -1752,6 +1818,7 @@ def _audit_bundle(
                     "started_at": run.started_at.isoformat(),
                     "ended_at": run.ended_at.isoformat() if run.ended_at else None,
                     "total_duration_ms": run.total_duration_ms,
+                    "execution_options": _audit_json(run.execution_options),
                 },
                 "steps": _audit_json(run.steps),
                 "failure": _audit_json(run.failure),
@@ -2295,6 +2362,7 @@ def _execution_view(
         current_phase=current_phase,
         run_id=run.run_id if run is not None else None,
         run_status=run.status.value if run is not None else None,
+        execution_options=run.execution_options if run is not None else None,
         started_at=run.started_at.isoformat() if run is not None else None,
         ended_at=(run.ended_at.isoformat() if run is not None and run.ended_at is not None else None),
         elapsed_ms=elapsed_ms,

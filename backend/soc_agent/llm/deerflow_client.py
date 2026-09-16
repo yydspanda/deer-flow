@@ -15,6 +15,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.models import create_chat_model
 from soc_agent.llm.admission import SocLLMAdmissionController
 from soc_agent.llm.analyzer import LLMChatResponse
+from soc_agent.llm.errors import SocLLMResponseProtocolError
 from soc_agent.llm.usage import resolve_chat_usage
 
 _SAFE_RESPONSE_METADATA_KEYS = (
@@ -84,6 +85,7 @@ class DeerFlowLLMChatClient:
     ) -> LLMChatResponse:
         client_started = time.monotonic()
         model = self._get_model(model_name)
+        transport_mode = "buffered_stream" if self._streaming_enabled(model_name) else "non_streaming"
         admission_started = time.monotonic()
         with self._admission.admit():
             admission_wait_duration_ms = round(
@@ -115,6 +117,7 @@ class DeerFlowLLMChatClient:
                     requested_model_name=model_name,
                     thinking_enabled_requested=self._thinking_enabled,
                     json_mode_requested=self._json_mode_enabled,
+                    transport_mode=transport_mode,
                     admission_wait_duration_ms=admission_wait_duration_ms,
                     provider_duration_ms=round(
                         (time.monotonic() - provider_started) * 1000,
@@ -127,11 +130,15 @@ class DeerFlowLLMChatClient:
                 )
                 raise timeout_error from exc
             except Exception as exc:
+                error = exc
+                if isinstance(exc, AttributeError) and exc.name == "model_dump" and isinstance(exc.obj, str):
+                    error = SocLLMResponseProtocolError()
                 _attach_client_failure_timing(
-                    exc,
+                    error,
                     requested_model_name=model_name,
                     thinking_enabled_requested=self._thinking_enabled,
                     json_mode_requested=self._json_mode_enabled,
+                    transport_mode=transport_mode,
                     admission_wait_duration_ms=admission_wait_duration_ms,
                     provider_duration_ms=round(
                         (time.monotonic() - provider_started) * 1000,
@@ -142,6 +149,8 @@ class DeerFlowLLMChatClient:
                         3,
                     ),
                 )
+                if error is not exc:
+                    raise error from exc
                 raise
             provider_duration_ms = round(
                 (time.monotonic() - provider_started) * 1000,
@@ -160,6 +169,7 @@ class DeerFlowLLMChatClient:
                 "requested_model_name": model_name,
                 "thinking_enabled_requested": self._thinking_enabled,
                 "json_mode_requested": self._json_mode_enabled,
+                "transport_mode": transport_mode,
                 "usage_measurement": usage_measurement,
                 "admission_wait_duration_ms": admission_wait_duration_ms,
                 "provider_duration_ms": provider_duration_ms,
@@ -185,10 +195,15 @@ class DeerFlowLLMChatClient:
                     thinking_enabled=self._thinking_enabled,
                     app_config=self._app_config,
                     attach_tracing=self._attach_tracing,
-                    model_overrides={"disable_streaming": True},
+                    model_overrides={"disable_streaming": not self._streaming_enabled(model_name)},
                 )
                 self._models[model_name] = model
             return model
+
+    def _streaming_enabled(self, model_name: str) -> bool:
+        # invoke() still returns one complete message; only transport is streamed.
+        model_config = self._app_config.get_model_config(model_name)
+        return getattr(model_config, "streaming", False) is True
 
 
 def _response_usage(response: Any, response_metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -262,6 +277,7 @@ def _attach_client_failure_timing(
     requested_model_name: str,
     thinking_enabled_requested: bool,
     json_mode_requested: bool,
+    transport_mode: str,
     admission_wait_duration_ms: float,
     provider_duration_ms: float,
     client_total_duration_ms: float,
@@ -275,6 +291,7 @@ def _attach_client_failure_timing(
         "requested_model_name": requested_model_name,
         "thinking_enabled_requested": thinking_enabled_requested,
         "json_mode_requested": json_mode_requested,
+        "transport_mode": transport_mode,
         "admission_wait_duration_ms": admission_wait_duration_ms,
         "provider_duration_ms": provider_duration_ms,
         "client_total_duration_ms": client_total_duration_ms,

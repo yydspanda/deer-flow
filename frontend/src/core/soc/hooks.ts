@@ -70,6 +70,7 @@ import type {
   SocMemoryCandidateStatus,
   SocMemoryCandidateSupersessionRequest,
   SocCorpusWorkbenchQuery,
+  SocAnalysisExecutionOptions,
   SocMemoryFutureUseState,
   SocMemoryQuery,
   SocMemoryRecord,
@@ -660,8 +661,18 @@ export function useProcessSocCorpusWorkbenchAlert() {
   const context = useSocWebRequestContext();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (alertId: string) =>
-      processSocCorpusWorkbenchAlert(alertId, context),
+    mutationFn: (
+      input:
+        | string
+        | { alertId: string; settings?: SocAnalysisExecutionOptions },
+    ) =>
+      typeof input === "string"
+        ? processSocCorpusWorkbenchAlert(input, context)
+        : processSocCorpusWorkbenchAlert(
+            input.alertId,
+            context,
+            input.settings,
+          ),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({
         queryKey: socCorpusWorkbenchQueryKeys.all,
