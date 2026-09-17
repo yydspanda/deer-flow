@@ -17,6 +17,7 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+本日 `PI-03E` 收尾补验：修复1984510当前进程/目标文件归属及六条HIDS的detail字段消费，旧210条指纹覆盖恢复到197条；271项聚焦后端回归通过。v47两次主研判、v10一次经验起草真实调用完成，共86236Token、无额外调用；但2488604解释和草稿仍弱化未覆盖检测，质量门禁未关闭。未修改审核经验、清库、重跑语义模型或打包。完整记录见月度 `EXP-20260917-closure`，下文当日先前验证保留其时间口径。
 09-17 `PI-03E` 完成 [Memory 范围整改](architecture/memory-reuse-scope-remediation.md)：Profile 9/v7、审核覆盖 v4、宽窄优先、暂停边界、分页实体和细分候选已接入。用户闭环后修复身份任选与草稿刷新：Prompt v9 保留 rule/sig 命名空间，相同输入复用事实但重评当前经验/策略，显式重新核对可比对变化。2480991 真实补充正确绑定两条检测，同输入复跑特征一致、核对调用为0；旧经验未覆盖新增 Nmap，仍参考使用，不自动扩张授权。详见月度 `EXP-20260917-normalization-stability`。同项主研判 Prompt v46 区分匹配差异与业务影响，190 项回归通过；固定事实两次新版调用，一次正确解释未覆盖检测、一次连接失败，非两次稳定通过，见 `EXP-20260917-memory-difference-explanation`。后续将系统匹配说明与模型依据分开，来源事实进入新候选和经验起草；132 项后端回归、10 项前端组件与两告警各两尺寸只读检查通过，v47/v10 未新增真实模型调用，详见 `EXP-20260917-memory-matching-facts`。批量质量、PostgreSQL 并发和内网验收仍开放，PI-01 指针不变。
 09-16 `PI-03E` 修复带开关请求头与 GlobalAI 非流式文本兼容，模型显式流式聚合、内网默认不变。2025642 已恢复真实模型研判，见月度 `EXP-20260916-soc-buffered-stream`。Prompt v6 提炼业务地址后解释仍未采用，见 `EXP-20260916-semantic-business-clues`；后续去除 Skill/审核知识静默截断，以类型化线索接通通用知识选择器，PingAn 配置隔离。恢复轮已引用 AskBob 知识，真实攻击/80% 变为可疑/62%，企业策略仍转交；26 项补充采用、方向不变，282+1 项回归通过。首次 DEV 热重载中断/恢复有留痕，不作为误报率验收；见 `EXP-20260916-knowledge-bridge`。后续修复已放弃的旧窗口候选永久阻挡新窗口提炼及跨窗口候选展示遗漏，2484162 同组7条已保存观察补聚合为待审候选，无模型重跑或自动审核；见 `EXP-20260916-pattern-candidate-recovery`，内网指针不变。 同项完成自动/人工经验入口协调、已审核范围覆盖和待审修订导航；无清库、自动启用或模型调用，详见月度 `EXP-20260916-memory-learning-coordination`。
 本次补齐 `PI-03E` 告警演练按次运行开关：语义核对、企业策略及安全路径/LLM 子项；配置随运行保存，不改进程环境、历史结果或外部动作权限。64 项后端与 2 项浏览器回归通过，类型/lint 通过；无付费模型调用、打包或清库。详见[方案](architecture/direct-resolution-design.md)和月度 `EXP-20260915-corpus-run-controls`，内网指针不变。
@@ -176,54 +177,6 @@ Prompt v40、75 项聚焦测试和真实保存请求 `2448168` 的三组隔离�
 - **Outcome:** Host 路径解析器统一导出 checkout-owned 绝对 `SOC_DATABASE_URL`；启动器在任何 Sidecar/Web 进程前集中完成 SOC migration，并关闭 API/Worker 的重复自动迁移。新建 SQLite 首次发生瞬时 `disk I/O error` 时，只清理本次失败产生的半库并重试一次；调用前已存在的数据库绝不自动删除。`status` 增加数据库路径、状态和 revision，生成式 Runbook 删除手工建库分支；无状态重装确认从 `/dev/tty` 读取，避免 heredoc 吞掉后续 Shell。live acceptance 在任何 `8090` 请求前验证 SQLite 文件、`soc_alembic_version` 和 Processing Job/Callback 表，并提供显式恢复模式。内网首轮真实证据进一步定位 `code=40100/签名验证失败`：旧实现签名 `json.dumps`，却让 HTTPX `json=` 重新压缩 wire body。现已让 lifecycle/callback/asset/TI/security-tag 五个 ISEC Provider 一次序列化并以相同 bytes 签名和发送；报告契约升级为 v3，失败 callback 的 HTTP/provider code 与 response hash 可安全持久化。新增模型调用前的只读 lifecycle/signature smoke，并把 local self-submit 与 ZEUS-originated 最终验收分开。内网复验已从 `40100` 推进到业务码 `65505`；新增显式完整响应探针，复用 Worker 的真实 Provider，只在忽略目录以 `0600` 保存完整响应，且不创建 Job、调用模型、触发回调或放宽 bounded smoke 门禁。根据内网联调约束，新增受治理部署 profile：DEV/STG 分别绑定独立 SOC SQLite、Memory/Policy/Automation scope，STG 禁用 DEV Workbench/免登录，两者均关闭真实动作；私有 env 保存 ZEUS PRD/STG 两套 profile，切换原子应用 `项目 DEV -> ZEUS PRD`、`项目 STG -> ZEUS STG`，Host/preflight 对错配 fail closed。模型目标、Provider mode 和权限保持独立；Agent Platform target 后续与 ZEUS 一样纳入 Runtime 环境映射治理，生命周期和回写仍默认 `fake`。
 - **Verification:** 外网 350 项 PingAn 集成/Host/签名/Provider/transfer 回归及 12 项 SOC 架构边界回归通过；真实形状私有 env 副本完成 DEV -> STG -> DEV 往返，除 Runtime selector 外其余内容哈希不变，STG 解析到独立数据库并使用 `--prod`。migration/legacy/Processing Job 回归继续覆盖瞬时新库失败、已有库非破坏性失败、数据库先于 Sidecar 启动及只读状态检查。真实内网已人工证明 SQLite 可升级到 `0027_processing_jobs`、六个进程全部启动、模型网关 completion 通过；新签名代码和 lifecycle smoke 仍需随下一交付在内网复验。
 
-### 2026-09-01 — PingAn private-profile migration and transfer freeze
-
-- **Task:** `PI-01`
-- **Status:** `Done`
-- **Outcome:** 新增只读 AST profile preparer，从已审阅旧源码生成项目自有 EAGW 网关、旧 ZEUS ingress 与 `YHSYS` Workflow 的 Git-ignored 私有配置；RSA key 独立保存为 mode-`0600` private-overlay 文件。Transfer builder 拒绝旧 LiteLLM 环境变量/本地 model profile、占位值、宽权限 key、非 loopback 模型网关、非安全初始 lifecycle/callback 模式及不一致 app-key，并随包生成逐步内网安装、Fake、model smoke、live compatibility 与递进 shadow 手册。三个大 PKL 与 Workbench payload SQLite 改为内网既有数据，私有包只冻结 manifest/index；项目 staging 脚本在 Host DEV 前按 SHA-256/大小校验并以 `0600` 原子落位，数据库 migration 显式使用解析后的独立 SQLite 路径。旧源码复核进一步确认 `8090` 对 Bearer/`app-key` 使用全局 allowed-key-set 语义，`app_code=zeus` 只属于业务请求。新增 live-request preparer：操作员只输入获批 pending `alert_id`，脚本从 hash-bound payload store 保留完整 `alert_data`、生成 fresh session 和 `0600` 请求；lifecycle/callback mode 也由独立命令成对切换，不再手工编辑 JSON/env。安装收敛为自包含 `INSTALL-PINGAN-MAC.sh` 子脚本，不再把裸 `exit` 和长篇目录替换逻辑交给操作员终端；已有部署默认保留 DeerFlow/SOC SQLite、JWT、用户 Memory、Agent/线程工作区与受管集成，release-owned private overlay 保持更新，常规重部署不再清空业务状态。
-- **Verification:** 真实旧源码 dry-run 不执行旧代码且 `secret_in_output=false`；staging dry-run/apply/missing/hash-mismatch 回归、兼容执行面/Host DEV/transfer 回归与自带无敏感合成夹具的 hermetic Fake E2E 通过，交付不再依赖 `datas/legacy_demos`。Runbook 中每个加载本地配置的命令块会自行定位 checkout，不依赖前序终端状态。内网手工无业务请求已证明 EAGW 非推理 completion 与 usage 可用，并暴露原 Smoke 的 8 Token/误报参数问题；基线已改为与 Runtime 一致的 `thinking=false`、128 Token。允许集合鉴权、鉴权先于任务存在性、旧 `zeus/alert_agent` 请求形态及歧义密钥 fail-closed 均有聚焦回归。请求准备器已用真实 4343 条 Workbench store 中的告警验证完整 payload、ID/hash/status 与权限，Provider mode updater 验证成对原子切换；安装器回归覆盖无前序 shell 状态的完整替换、坏 Hash 保留旧 checkout、持久化 allowlist 跨版本恢复以及旧 PID/新 `pingan-context` 隔离，重部署固定先停止旧 checkout 并确认 `3000/8001/2026/4001/8090` 全部释放，再事务式替换目录。Runbook 同时固定以 `soc_alembic_version` 验证 SOC migration。兼容/live/架构/transfer 回归通过；正式内网 live 报告、ZEUS 生命周期/回调和旧页面回读仍待关闭。
-
-### 2026-09-01 — Legacy ZEUS compatibility execution plane
-
-- **Task:** `PI-01`
-- **Status:** `Done`
-- **Outcome:** 保留旧 task/status/precheck/callback 协议，内部替换为持久 Processing Job、租约 Worker、统一 SOC Runtime、legacy result projection 与 Callback Outbox；项目自有 `4001` OpenAI-compatible 模型网关取代旧 LiteLLM，macOS Host DEV 统一启停模型网关、`8090` 兼容 API 和 Worker。仅 `executeType=1/3` 使用 30 分钟排队时限，过期不调用模型但仍持久化兼容结果并回调；脱敏 live runner 可在内网一次验证 fresh submit、幂等 replay、真实 precheck、Runtime 与真实 callback attempt。
-- **Verification:** 核心兼容/网关回归、Host sidecar/transfer 回归、SOC 架构边界、空库 `0027` migration、PostgreSQL `FOR UPDATE SKIP LOCKED` 编译回归与真实 Fake E2E 均通过；Fake 报告明确 `simulated=true`、`proves_real_internal_connectivity=false`。
-
-### 2026-08-31 — SOC workspace navigation and corpus projection performance
-
-- **Task:** `PI-04C`
-- **Status:** `Done`
-- **Outcome:** 告警演练改为服务端筛选与分页，初始响应仅包含当前 20 条告警、重复行为组和两组演练样本；单条运行不再返回完整语料快照。页面不自动恢复/展开首条告警，轨迹与审计按需读取；经验中心复用导航缓存，活动轮询仅在运行中保持高频。SOC 导航增加即时加载反馈，DEV 启动脚本同时预热页面代码和语料索引。
-- **Verification:** 后端语料工作台 `16 passed`，前端 lint/type-check 通过，SOC 语料/Memory 浏览器流程 `8 passed`；暖态语料 API 从约 `6.7 MB` 收敛到约 `0.3 MB`，真实浏览器告警演练可用时间由约 `3.2s` 降至约 `2.2s`，导航等待期间持续显示加载状态。
-
-### 2026-08-28 — Effectiveness, rule optimization and Memory feedback UX
-
-- **Task:** `PI-04C`
-- **Status:** `Done`
-- **Outcome:** 新增最终真值驱动的准确率、漏报、转交、自动忽略、规则质量和算力只读模型，并形成 `Rule Code -> 同类行为 -> Memory 版本` 下钻。共享后分析 Observer 统一记录 Pattern，入口重投按业务事件幂等；Memory 只按实际效果归因，`context-only` 不记改判功劳，历史版本不继承当前状态，错误自动忽略必须同时存在最终攻击真值与真实忽略动作。运营总览将八个公式组织为研判质量、自动化安全、转交质量和减负效果，只显示处理量，不向运营暴露 coverage 等统计术语；无数据项统一显示 `--`。
-- **Verification:** 80 项后端效果/Pattern/Memory/API/迁移聚焦回归、35 项前端 SOC API 单测、前端 lint/type-check，以及桌面/移动端 Playwright 下钻与布局验收；新增结论维持口径、快照缓存和四组指标布局继续通过聚焦聚合/API/浏览器回归。真实 Zeus 最终状态和生产 telemetry 仍归 `PI-04D`。
-
-### 2026-08-27 — Alert result and operator-workflow separation
-
-- **Task:** `BD-02`
-- **Status:** `Done`
-- **Outcome:** 以 `run_id` 建立所有告警可见的研判结果与调查上下文；ReviewQueue 收窄为仅处理未解决关键事实冲突，并将告警修正、经验审核、高风险动作审批和技术审计拆成独立操作路径。
-- **Verification:** Alert-result/attention policy、Gateway API、后端服务回归、前端 lint/type-check、API 单测及 Playwright 告警研判/人工介入/动作审批流程。
-
-### 2026-08-26 — Alert rehearsal UX simplification
-
-- **Task:** `PI-03`
-- **Status:** `Done`
-- **Outcome:** 将用户入口统一为“告警研判演练”，推荐区收敛为同一 `rule_code` 下的 context-only 与精确复用两组真实样本；运行保持在原列表并由用户显式打开结果，不再强制跳转到下方轨迹。
-- **Verification:** 真实语料分组清单、后端 workbench 回归、前端 lint/type-check、桌面/移动端 Playwright 交互与截图检查。
-
-### 2026-08-26 — DEV tenant-policy acceptance and Memory authority clarity
-
-- **Task:** `PI-03`
-- **Status:** `Done`
-- **Outcome:** PingAn DEV 工作台显式开启确定性处置规则、安全软件路径和 bounded Policy Advisor，同时继续禁止真实外部动作；Memory Center 强制重取生命周期投影，详情/修订页区分 exact Directive 与 context-only 使用语义。
-- **Verification:** DEV safety contract、Docker/macOS 启动配置、tenant policy/software-path 回归、前端 lint/type-check 和浏览器验收。
 
 ## Update Contract / 更新约定
 

@@ -35,6 +35,11 @@ SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 MAPPINGS = Path(__file__).resolve().parents[1] / "samples" / "mappings"
 
 
+@pytest.fixture(autouse=True)
+def _offline_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", "off")
+
+
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
 

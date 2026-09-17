@@ -4,6 +4,8 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
+
 from soc_agent.cli import main
 from soc_agent.contracts import (
     AlertSourceType,
@@ -59,6 +61,48 @@ def test_pingan_adapter_preserves_trusted_ingress_tenant() -> None:
     assert alert.tenant_id == "pingan"
     assert request.tenant_id == "pingan"
     assert alert.raw["tenant_id"] == "pingan"
+
+
+@pytest.mark.parametrize("prefix", ["", "detail."])
+def test_pingan_hids_known_detail_fields_keep_process_file_and_provenance(prefix: str) -> None:
+    fields = {
+        "pname": "bash",
+        "pid": "123",
+        "path": "/usr/bin/bash",
+        "cmd": "/usr/bin/bash /tmp/task.sh",
+        "ppname": "agent",
+        "ppid": "12",
+        "ppath": "/opt/agent",
+        "uname": "root",
+        "rule": "BD-example",
+        "file_path": "/tmp/task.sh",
+        "md5": "a" * 32,
+        "sha256": "b" * 64,
+    }
+    message = 'host_name="example" event_type="backdoor_diagnose" ' + " ".join(f'{prefix}{key}="{value}"' for key, value in fields.items())
+    request = build_analysis_request_for_payload(_payload(message, topic="security_qthids", topic_name="HIDS"))
+    alert = normalize_alert_payload(_payload(message, topic="security_qthids", topic_name="HIDS"))
+    assert alert.detection.rule_name == "BD-example"
+    process = request.canonical_entities.process
+    assert process.process_name == "bash"
+    assert process.process_id == 123
+    assert process.process_path == "/usr/bin/bash"
+    assert process.command_line == "/usr/bin/bash /tmp/task.sh"
+    assert process.parent_process_name == "agent"
+    assert request.canonical_entities.file.file_path == "/tmp/task.sh"
+    assert request.canonical_entities.user.username == "root"
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    for name, field in (("entities.process.process_name", "pname"), ("entities.process.process_path", "path"), ("entities.file.file_path", "file_path")):
+        assert provenance[name].selected_from.endswith("#parsed." + prefix + field)
+    assert provenance["detection.rule_name"].selected_from.endswith("#parsed." + prefix + "rule")
+
+
+def test_pingan_hids_does_not_flatten_unrelated_namespaces_or_override_explicit_fields() -> None:
+    message = 'pname="bash" detail.pname="sh" other.pid="999" other.path="/tmp/unrelated" event_type="backdoor_diagnose"'
+    alert = normalize_alert_payload(_payload(message, topic="security_qthids", topic_name="HIDS"))
+    assert alert.entities.process.process_name == "bash"
+    assert alert.entities.process.process_id is None
+    assert alert.entities.process.process_path is None
 
 
 def test_pingan_adapter_does_not_use_alert_id_as_detection_key() -> None:
@@ -944,6 +988,53 @@ def test_pingan_edr_comma_kv_message_populates_canonical_entities() -> None:
         "vendor_activity_identifier",
         "vendor_attack_ip_assertion",
     } <= semantics
+
+
+def test_pingan_edr_current_process_does_not_inherit_ancestor_identity_or_target_hash() -> None:
+    process_path = r"C:\WINDOWS\UUS\amd64\wuaucltcore.exe"
+    target_path = r"C:\$WinREAgent\Scratch\Mount\Windows\System32\config\SAM"
+    digest = "a" * 32
+    message = (
+        "<14>[SourceIP:30.99.16.122][AuditDB.tbl_ud_pe_threat_alert]"
+        f"str_process_short=,str_process_full={process_path},str_cmd={process_path} /RunHandlerComServer,"
+        "str_suspicious_process_ancestor_short=services.exe,"
+        r"str_suspicious_process_ancestor_cmd=C:\Windows\System32\services.exe,"
+        r"str_parent_path_full=C:\Windows\System32\svchost.exe,"
+        f"str_md5=,str_suspicious_file={target_path},str_suspicious_file_md5={digest}"
+    )
+    request = build_analysis_request_for_payload(_payload(message, topic="leagsoft-edr", topic_name="EDR"))
+    process = request.canonical_entities.process
+
+    assert process.process_name == "wuaucltcore.exe"
+    assert process.process_path == process_path
+    assert process.parent_process_name == "svchost.exe"
+    assert process.md5 is None
+    assert len(process.observations) == 1
+    assert process.observations[0].nodes[0].process_name == "wuaucltcore.exe"
+    assert process.observations[0].nodes[0].md5 is None
+    target = request.canonical_entities.file.observations[0]
+    assert target.file_path == target_path
+    assert target.md5.lower() == digest
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.process.process_name"].selected_from.endswith(".str_process_full")
+    assert provenance["entities.process.observations[0].nodes[0].process_name"].selected_from.endswith(".str_process_full")
+    assert provenance["entities.file.observations[0].md5"].selected_from.endswith(".str_suspicious_file_md5")
+    assert "entities.process.md5" not in provenance
+
+
+def test_pingan_edr_ancestor_only_does_not_invent_a_current_process() -> None:
+    message = (
+        "<14>[SourceIP:30.99.16.122][AuditDB.tbl_ud_pe_threat_alert]"
+        "str_process_short=,str_process_full=,str_cmd=,"
+        "str_suspicious_process_ancestor_short=services.exe,"
+        r"str_suspicious_process_ancestor_cmd=C:\Windows\System32\services.exe"
+    )
+    alert = normalize_alert_payload(_payload(message, topic="leagsoft-edr", topic_name="EDR"))
+
+    assert alert.entities.process.process_name is None
+    assert alert.entities.process.command_line is None
+    assert alert.entities.process.observations == []
+    assert alert.extensions["parsed_raw_messages"][0]["fields"]["str_suspicious_process_ancestor_short"] == "services.exe"
 
 
 def test_pingan_edr_preserves_path_shaped_ioc_as_distinct_file_observation() -> None:

@@ -24,18 +24,20 @@ _ENDPOINT_IP_ALIASES = (
     "str_source_ip",
     "external_ip",
 )
-_PROCESS_NAME_ALIASES = ("pname", "process_name")
-_PROCESS_ID_ALIASES = ("pid", "process__pid", "str_process_id")
-_PROCESS_PATH_ALIASES = ("path", "process__file__path", "str_process_full")
-_PROCESS_COMMAND_ALIASES = ("cmd", "process__cmd_line", "str_cmd")
-_PROCESS_USER_ALIASES = ("uname", "process__user__name")
-_SESSION_USER_ALIASES = ("login_user",)
-_PARENT_NAME_ALIASES = ("ppname",)
-_PARENT_ID_ALIASES = ("ppid",)
-_PARENT_PATH_ALIASES = ("ppath",)
-_PARENT_COMMAND_ALIASES = ("pcmd",)
-_PARENT_USER_ALIASES = ("puname",)
+_PROCESS_NAME_ALIASES = ("pname", "process_name", "detail.pname", "detail.process_name")
+_PROCESS_ID_ALIASES = ("pid", "process__pid", "str_process_id", "detail.pid")
+_PROCESS_PATH_ALIASES = ("path", "process__file__path", "str_process_full", "detail.path")
+_PROCESS_COMMAND_ALIASES = ("cmd", "process__cmd_line", "str_cmd", "detail.cmd")
+_PROCESS_USER_ALIASES = ("uname", "process__user__name", "detail.uname")
+_SESSION_USER_ALIASES = ("login_user", "detail.login_user")
+_PARENT_NAME_ALIASES = ("ppname", "detail.ppname")
+_PARENT_ID_ALIASES = ("ppid", "detail.ppid")
+_PARENT_PATH_ALIASES = ("ppath", "detail.ppath")
+_PARENT_COMMAND_ALIASES = ("pcmd", "detail.pcmd")
+_PARENT_USER_ALIASES = ("puname", "detail.puname")
 _TREE_ALIASES = ("process_tree", "detail.process_tree", "event_content")
+_PROCESS_CHAIN_ALIASES = ("process_chain", "detail.process_chain")
+_RULE_NAME_ALIASES = ("hit_rule_name", "hit_rule_names", "rule", "detail.hit_rule_name", "detail.hit_rule_names", "detail.rule")
 _FILE_EVENT_TYPES = frozenset(
     {
         "backdoor_diagnose",
@@ -65,6 +67,10 @@ def hids_endpoint_addresses(fields: Mapping[str, Any]) -> list[str]:
     return [value for value, _ in hids_endpoint_sources(fields)]
 
 
+def hids_detection_rule_name(fields: Mapping[str, Any]) -> str | None:
+    return _first_str(fields, _RULE_NAME_ALIASES)
+
+
 def hids_primary_process(
     parsed_messages: Sequence[ParsedRawMessageEvidence],
 ) -> dict[str, Any]:
@@ -92,8 +98,8 @@ def hids_primary_process(
             "parent_process_name": parent.get("process_name") if parent else _first_str(fields, _PARENT_NAME_ALIASES),
             "parent_process_id": parent.get("process_id") if parent else _intish(_first_str(fields, _PARENT_ID_ALIASES)),
             "parent_command_line": parent.get("command_line") if parent else _first_str(fields, _PARENT_COMMAND_ALIASES),
-            "md5": selected.get("md5") if selected else _validated_digest(_first_str(fields, ("md5",)), expected_length=32),
-            "sha256": selected.get("sha256") if selected else _validated_digest(_first_str(fields, ("sha256",)), expected_length=64),
+            "md5": selected.get("md5") if selected else _validated_digest(_first_str(fields, ("md5", "detail.md5")), expected_length=32),
+            "sha256": selected.get("sha256") if selected else _validated_digest(_first_str(fields, ("sha256", "detail.sha256")), expected_length=64),
         }
     )
 
@@ -167,10 +173,10 @@ def build_hids_file_observations(
         event_type = _event_type(fields)
         if event_type not in _FILE_EVENT_TYPES:
             continue
-        file_path = _first_str(fields, ("file_path",))
-        md5 = _validated_digest(_first_str(fields, ("md5",)), expected_length=32)
-        sha1 = _validated_digest(_first_str(fields, ("sha1",)), expected_length=40)
-        sha256 = _validated_digest(_first_str(fields, ("sha256",)), expected_length=64)
+        file_path = _first_str(fields, ("file_path", "detail.file_path"))
+        md5 = _validated_digest(_first_str(fields, ("md5", "detail.md5")), expected_length=32)
+        sha1 = _validated_digest(_first_str(fields, ("sha1", "detail.sha1")), expected_length=40)
+        sha256 = _validated_digest(_first_str(fields, ("sha256", "detail.sha256")), expected_length=64)
         if not any((file_path, md5, sha1, sha256)):
             continue
         observations.append(
@@ -629,7 +635,7 @@ def build_hids_canonical_field_provenance(
         direct = {
             "event.event_time": _first_present_path(fields, ("datatime", "time", "atime")),
             "classification.severity": _first_present_path(fields, ("event_level",)),
-            "detection.rule_name": _first_present_path(fields, ("hit_rule_name", "hit_rule_names", "rule")),
+            "detection.rule_name": _first_present_path(fields, _RULE_NAME_ALIASES),
             "classification.category": _first_present_path(fields, ("event_name", "event_type")),
             "entities.host.host_name": _first_present_path(fields, ("host_name",)),
             "entities.host.host_id": _first_present_path(fields, ("agent_id",)),
@@ -651,12 +657,12 @@ def build_hids_canonical_field_provenance(
                 _PARENT_ID_ALIASES,
             ),
             "entities.process.parent_command_line": _first_present_path(fields, _PARENT_COMMAND_ALIASES),
-            "entities.process.md5": _first_present_path(fields, ("md5",)),
-            "entities.process.sha256": _first_present_path(fields, ("sha256",)),
-            "entities.file.file_path": _first_present_path(fields, ("file_path",)),
-            "entities.file.md5": _first_present_path(fields, ("md5",)),
-            "entities.file.sha1": _first_present_path(fields, ("sha1",)),
-            "entities.file.sha256": _first_present_path(fields, ("sha256",)),
+            "entities.process.md5": _first_present_path(fields, ("md5", "detail.md5")),
+            "entities.process.sha256": _first_present_path(fields, ("sha256", "detail.sha256")),
+            "entities.file.file_path": _first_present_path(fields, ("file_path", "detail.file_path")),
+            "entities.file.md5": _first_present_path(fields, ("md5", "detail.md5")),
+            "entities.file.sha1": _first_present_path(fields, ("sha1", "detail.sha1")),
+            "entities.file.sha256": _first_present_path(fields, ("sha256", "detail.sha256")),
         }
         for canonical_path, source_path in direct.items():
             _append_provenance(
@@ -770,11 +776,11 @@ def _append_observation_provenance(
         for field_name, aliases in (
             ("event_time", ("datatime", "discovery_time", "first_discovery_time")),
             ("process_id", _PROCESS_ID_ALIASES),
-            ("file_name", ("file_path",)),
-            ("file_path", ("file_path",)),
-            ("md5", ("md5",)),
-            ("sha1", ("sha1",)),
-            ("sha256", ("sha256",)),
+            ("file_name", ("file_path", "detail.file_path")),
+            ("file_path", ("file_path", "detail.file_path")),
+            ("md5", ("md5", "detail.md5")),
+            ("sha1", ("sha1", "detail.sha1")),
+            ("sha256", ("sha256", "detail.sha256")),
         ):
             _append_provenance(
                 provenance,
@@ -842,7 +848,7 @@ def _tree_nodes(fields: Mapping[str, Any]) -> list[dict[str, Any]]:
     nodes = [{"process_name": name, "process_id": int(process_id)} for name, process_id in re.findall(r"([A-Za-z0-9_.-]+)\((\d+)\)", tree)]
     if nodes:
         return nodes
-    process_chain = _first_str(fields, ("process_chain",))
+    process_chain = _first_str(fields, _PROCESS_CHAIN_ALIASES)
     if not process_chain:
         return []
     parts = [item.strip() for item in re.split(r"\s*(?:-&gt;|->|→)\s*", process_chain) if item.strip()]
@@ -862,8 +868,8 @@ def _explicit_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
             "process_path": _first_str(fields, _PROCESS_PATH_ALIASES),
             "command_line": _process_command_line(fields),
             "username": _first_str(fields, _PROCESS_USER_ALIASES),
-            "md5": _validated_digest(_first_str(fields, ("md5",)), expected_length=32),
-            "sha256": _validated_digest(_first_str(fields, ("sha256",)), expected_length=64),
+            "md5": _validated_digest(_first_str(fields, ("md5", "detail.md5")), expected_length=32),
+            "sha256": _validated_digest(_first_str(fields, ("sha256", "detail.sha256")), expected_length=64),
         }
     )
 
@@ -957,11 +963,11 @@ def _process_source_path(fields: Mapping[str, Any], value: str | None) -> str | 
         for alias in (*_PROCESS_NAME_ALIASES, *_PARENT_NAME_ALIASES):
             if _first_str(fields, (alias,)) == value:
                 return alias
-        for alias in (*_TREE_ALIASES, "process_chain"):
+        for alias in (*_TREE_ALIASES, *_PROCESS_CHAIN_ALIASES):
             text = _first_str(fields, (alias,))
             if text and value in text:
                 return alias
-    return _first_present_path(fields, (*_PROCESS_NAME_ALIASES, *_TREE_ALIASES, "process_chain"))
+    return _first_present_path(fields, (*_PROCESS_NAME_ALIASES, *_TREE_ALIASES, *_PROCESS_CHAIN_ALIASES))
 
 
 def _process_node_source_path(
@@ -976,8 +982,8 @@ def _process_node_source_path(
         "process_path": _PROCESS_PATH_ALIASES,
         "command_line": _PROCESS_COMMAND_ALIASES,
         "username": _PROCESS_USER_ALIASES,
-        "md5": ("md5",),
-        "sha256": ("sha256",),
+        "md5": ("md5", "detail.md5"),
+        "sha256": ("sha256", "detail.sha256"),
     }
     parent_aliases = {
         "process_name": _PARENT_NAME_ALIASES,
@@ -1005,8 +1011,8 @@ def _process_node_source_path(
         if source:
             return source
     if field_name in {"process_name", "process_id"}:
-        tree_source = _first_present_path(fields, (*_TREE_ALIASES, "process_chain"))
-        tree_text = _first_str(fields, (*_TREE_ALIASES, "process_chain")) or ""
+        tree_source = _first_present_path(fields, (*_TREE_ALIASES, *_PROCESS_CHAIN_ALIASES))
+        tree_text = _first_str(fields, (*_TREE_ALIASES, *_PROCESS_CHAIN_ALIASES)) or ""
         if node.process_name in tree_text:
             return tree_source
     return None

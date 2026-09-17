@@ -50,6 +50,11 @@ from soc_agent.llm import SocAnalyzerMode, SocLLMSettings
 _CORPUS = Path(__file__).resolve().parents[2] / "datas" / "source" / "full_alert_2026_month_forth_sample_200.pkl"
 
 
+@pytest.fixture(autouse=True)
+def _offline_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", "off")
+
+
 class _FakeRequest:
     def __init__(self, *, system_role: str = "admin") -> None:
         self.app = SimpleNamespace(state=SimpleNamespace())
@@ -176,12 +181,15 @@ def test_corpus_workbench_projects_all_real_alerts_and_memory_readiness(
     assert state.alert_page.limit == 500
     assert state.alert_page.offset == 0
     assert state.source_types
-    assert state.readiness.fingerprint_coverage_count == 192
-    assert state.readiness.decision_eligible_alert_count == 121
+    # Six HIDS detail.* records regained their existing typed behavior fields.
+    assert state.readiness.fingerprint_coverage_count == 197
+    assert state.readiness.decision_eligible_alert_count == 126
+    recovered = {"1985655", "1973457", "1980407", "1975890", "1983975", "1978266"}
+    assert all(item.behavior_fingerprint for item in state.alerts if item.alert_id in recovered)
     # Feature schema v5 splits same-rule network alerts by canonical service,
     # vulnerability and behavior family instead of counting a broad rule cohort.
     assert state.readiness.recurrent_group_count == 14
-    assert state.readiness.recurrent_alert_count == 59
+    assert state.readiness.recurrent_alert_count == 58
     assert state.readiness.candidate_window_group_count == 2
     assert state.readiness.candidate_window_alert_count == 18
     galaxy = next(item for item in state.groups if item.rule_name == "GalaxyLab_T1003-SAM-Dumping")

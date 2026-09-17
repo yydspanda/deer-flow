@@ -243,6 +243,8 @@ def build_edr_file_observations(
                                 )
                             ),
                             "file_path": target_path,
+                            "md5": validated_edr_digest(_first_str(parsed.fields, ("str_suspicious_file_md5",)), expected_length=32),
+                            "sha256": validated_edr_digest(_first_str(parsed.fields, ("str_suspicious_file_sha256",)), expected_length=64),
                         }
                     )
                 )
@@ -563,10 +565,11 @@ def _append_primary_provenance(
                 "process__name",
                 "str_process_short",
                 "process__file__name",
-                "str_suspicious_process_ancestor_short",
             ),
         )
-        or detail_path("process_mame", "process_name"),
+        or detail_path("process_mame", "process_name")
+        or _first_present_path(fields, ("process__file__path", "str_process_full"))
+        or detail_path("process_path"),
         "entities.process.process_id": _first_present_path(
             fields,
             ("process__pid", "str_process_id"),
@@ -582,8 +585,6 @@ def _append_primary_provenance(
             (
                 "process__cmd_line",
                 "str_cmd",
-                "str_suspicious_process_ancestor_cmd",
-                "process__ancestor__cmd_line",
             ),
         )
         or detail_path("command"),
@@ -592,7 +593,6 @@ def _append_primary_provenance(
             (
                 "process__file__hashes__md5",
                 "str_md5",
-                "str_suspicious_file_md5",
             ),
         )
         or detail_path("process_md5"),
@@ -601,7 +601,6 @@ def _append_primary_provenance(
             (
                 "process__file__hashes__sha256",
                 "str_sha256",
-                "str_suspicious_file_sha256",
             ),
         )
         or detail_path("process_sha256"),
@@ -784,7 +783,7 @@ def _append_observation_provenance(
                 sources = {
                     "process_name": _first_present_path(
                         parsed.fields,
-                        ("process__name", "str_process_short", "process__file__name"),
+                        ("process__name", "str_process_short", "process__file__name", "process__file__path", "str_process_full"),
                     ),
                     "process_id": _first_present_path(
                         parsed.fields,
@@ -796,7 +795,7 @@ def _append_observation_provenance(
                     ),
                     "command_line": _first_present_path(
                         parsed.fields,
-                        ("process__cmd_line", "str_cmd", "process__ancestor__cmd_line"),
+                        ("process__cmd_line", "str_cmd"),
                     ),
                     "username": _first_present_path(
                         parsed.fields,
@@ -807,7 +806,6 @@ def _append_observation_provenance(
                         (
                             "process__file__hashes__md5",
                             "str_md5",
-                            "str_suspicious_file_md5",
                         ),
                     ),
                     "sha256": _first_present_path(
@@ -815,7 +813,6 @@ def _append_observation_provenance(
                         (
                             "process__file__hashes__sha256",
                             "str_sha256",
-                            "str_suspicious_file_sha256",
                         ),
                     ),
                 }
@@ -838,6 +835,14 @@ def _append_observation_provenance(
                 parsed=parsed,
                 source_path="str_suspicious_file",
             )
+            for digest in ("md5", "sha256"):
+                _append_provenance(
+                    provenance,
+                    canonical_path=f"entities.file.observations[{observation_index}].{digest}",
+                    selected_value=getattr(observation, digest),
+                    parsed=parsed,
+                    source_path=_first_present_path(parsed.fields, (f"str_suspicious_file_{digest}",)),
+                )
 
 
 def _detail_records(
@@ -896,9 +901,13 @@ def _process_nodes(detail: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _flat_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
-    process_name = _first_str(
-        fields,
-        ("process__name", "str_process_short", "process__file__name"),
+    process_name = (
+        _first_str(
+            fields,
+            ("process__name", "str_process_short", "process__file__name"),
+        )
+        or _file_name(_first_str(fields, ("process__file__path", "str_process_full")) or "")
+        or None
     )
     if process_name is None:
         return None
@@ -914,7 +923,7 @@ def _flat_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
             ),
             "command_line": _first_str(
                 fields,
-                ("process__cmd_line", "str_cmd", "process__ancestor__cmd_line"),
+                ("process__cmd_line", "str_cmd"),
             ),
             "username": _first_str(
                 fields,
@@ -926,7 +935,6 @@ def _flat_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
                     (
                         "process__file__hashes__md5",
                         "str_md5",
-                        "str_suspicious_file_md5",
                     ),
                 ),
                 expected_length=32,
@@ -937,7 +945,6 @@ def _flat_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
                     (
                         "process__file__hashes__sha256",
                         "str_sha256",
-                        "str_suspicious_file_sha256",
                     ),
                 ),
                 expected_length=64,

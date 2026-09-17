@@ -142,6 +142,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > explicitly regenerate the facts; the new run records the comparison without rewriting history.
 > Detector rule/signature identifiers keep their source and namespace instead of depending on
 > which identifier the model happens to choose.
+> PingAn endpoint mapping keeps the current process separate from its ancestors and from
+> detected files and their hashes. HIDS `detail.*` process/file fields retain their original
+> namespace and provenance instead of disappearing between parsing and canonical mapping.
 > Result details separate a server-generated **系统匹配说明** from **模型研判依据**. The former
 > lists the saved Memory use mode and uncovered conditions; the latter explains business impact.
 > New experience candidates carry the same matching facts into lesson drafting. Historical model

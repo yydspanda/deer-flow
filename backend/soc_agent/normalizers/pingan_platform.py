@@ -43,6 +43,7 @@ from soc_agent.normalizers.pingan_hids import (
     build_hids_network_observations,
     build_hids_process_observations,
     build_hids_source_field_semantics,
+    hids_detection_rule_name,
     hids_field_importance_rules,
     hids_primary_file,
     hids_primary_process,
@@ -152,6 +153,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             "rule_code": _first_str(hit_log, ("ruleCode",)) or _first_str(evidence_event, ("str_rule_id", "rule_id")),
             "rule_name": _first_str(sensor_alert, ("signature",))
             or _first_str(primary_edr_fields, ("rule_name", "rule_desc"))
+            or (hids_detection_rule_name(parsed_fields) if source_type is AlertSourceType.HIDS else None)
             or _first_str(
                 parsed_fields,
                 (
@@ -530,18 +532,17 @@ def _entities(
         (
             "process__file__hashes__md5",
             "str_md5",
-            "str_suspicious_file_md5",
         ),
     ) or _first_str(edr_fields, ("process_md5",))
     process_sha256_value = source_value(
         (
             "process__file__hashes__sha256",
             "str_sha256",
-            "str_suspicious_file_sha256",
         ),
     ) or _first_str(edr_fields, ("process_sha256",))
     process_md5 = validated_edr_digest(process_md5_value, expected_length=32) if source_type is AlertSourceType.EDR else process_md5_value
     process_sha256 = validated_edr_digest(process_sha256_value, expected_length=64) if source_type is AlertSourceType.EDR else process_sha256_value
+    current_process_path = source_value(("process__file__path", "str_process_full")) or _first_str(edr_fields, ("process_path",))
     process = {
         "process_name": hids_process.get("process_name")
         or source_value(
@@ -549,10 +550,10 @@ def _entities(
                 "process__name",
                 "str_process_short",
                 "process__file__name",
-                "str_suspicious_process_ancestor_short",
             ),
         )
         or _first_str(edr_fields, ("process_mame", "process_name"))
+        or (_basename(current_process_path) if source_type is AlertSourceType.EDR else None)
         or (process_chain[-1] if process_chain else None),
         "process_id": hids_process.get("process_id") or _intish(source_value(("process__pid", "str_process_id")) or _first_str(edr_fields, ("process_pid",))),
         "process_path": hids_process.get("process_path") or source_value(("process__file__path", "str_process_full", "str_suspicious_file")) or _first_str(edr_fields, ("process_path",)),
@@ -561,8 +562,6 @@ def _entities(
             (
                 "process__cmd_line",
                 "str_cmd",
-                "str_suspicious_process_ancestor_cmd",
-                "process__ancestor__cmd_line",
             ),
         )
         or _first_str(edr_fields, ("command",)),

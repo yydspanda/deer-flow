@@ -69,12 +69,19 @@ generic `soc_agent` code.
 - EDR mapping owns nested `detailsN`, process trees, command lines, users, hashes, paths,
   hosts, network observations, and MITRE fields. Ambiguous `device__ip` or
   `str_attack_ip` values stay candidates until semantics establish their role.
+  An empty current-process name may use the basename of its explicit current-process
+  path, never `str_suspicious_process_ancestor_short`. Ancestor commands cannot fill
+  the current command; `str_suspicious_file_md5/sha256` belongs to the per-message
+  target file, not to the executing process. Preserve corresponding provenance.
 - NDR/APT mapping owns each parsed message as one observation and preserves five-tuple,
   HTTP, file, IOC, detector, and provider-reported session direction. Reverse connection
   does not imply source=attacker.
 - HIDS mapping owns endpoint identity, process ancestry, command/path/user/hash and event
   network observations. Known source sentinels are retained in raw input and excluded
   from semantic facts with provenance.
+  Reviewed `detail.pname/pid/path/cmd`, parent, user, file and rule aliases are consumed
+  without flattening dotted keys. Provenance must name the exact dotted key; do not
+  strip arbitrary namespaces or let a detail alias override an explicit flat value.
 - Threat-intelligence source normalization keeps provider IOC labels and freshness
   separate from live TI provider results.
 
