@@ -6,7 +6,7 @@
 
 | Month | Records | Notes |
 |---|---:|---|
-| [2026-09](2026-09.md) | 38 | Memory/semantic review, field-mapping closure, live quality checks and internal compatibility |
+| [2026-09](2026-09.md) | 39 | Memory/semantic review, navigation performance, field-mapping closure and internal compatibility |
 | [2026-08](2026-08.md) | 99 | Legacy records migrated by `PI-06`, plus completed August workflow and performance records |
 | [2026-07](2026-07.md) | 172 | Legacy records migrated by `PI-06` |
 | [2026-06](2026-06.md) | 25 | Legacy records migrated by `PI-06` |

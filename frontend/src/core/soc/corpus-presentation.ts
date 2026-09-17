@@ -67,7 +67,7 @@ export function summarizeCorpusGroupBehavior(
 }
 
 export function formatCorpusGroupOption(
-  group: SocCorpusWorkbenchGroup,
+  group: Omit<SocCorpusWorkbenchGroup, "processed_count" | "memory_hit_count">,
 ): string {
   const rule = group.rule_name ?? group.detection_key ?? "未命名规则";
   const behavior = summarizeCorpusGroupBehavior(group.behavior_components);

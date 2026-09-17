@@ -18,6 +18,7 @@ import {
   expireSocApprovalRequest,
   getSocAlertInvestigationContext,
   getSocCorpusWorkbenchActivity,
+  getSocCorpusGroups,
   getSocCorpusWorkbenchAudit,
   getSocCorpusWorkbenchExecution,
   getSocCorpusWorkbenchState,
@@ -618,6 +619,21 @@ export function useSocCorpusWorkbench(query: SocCorpusWorkbenchQuery = {}) {
     placeholderData: (previous) => previous,
   });
   return { state: result.data ?? null, ...result };
+}
+
+export function useSocCorpusGroups(
+  search: string,
+  offset: number,
+  enabled: boolean,
+) {
+  const context = useSocWebRequestContext();
+  return useQuery({
+    queryKey: [...socCorpusWorkbenchQueryKeys.all, "groups", search, offset],
+    queryFn: () => getSocCorpusGroups(search, offset, context),
+    enabled,
+    retry: false,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
 }
 
 export function useSocCorpusWorkbenchActivity() {

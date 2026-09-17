@@ -52,6 +52,24 @@ class SocAnalysisRunRow(SocBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class SocCorpusListProjectionRow(SocBase):
+    """Disposable DEV list index; source runs and governance records remain authoritative."""
+
+    __tablename__ = "soc_corpus_list_projections"
+    __table_args__ = (Index("ix_soc_corpus_list_order", "catalog_id", "sequence_number"),)
+
+    catalog_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    input_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    search_text: Mapped[str] = mapped_column(Text, nullable=False)
+    group_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    labeled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    projection_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class SocDecisionAuditLogRow(SocBase):
     """Structured audit record for SOC run decisions and corrections."""
 

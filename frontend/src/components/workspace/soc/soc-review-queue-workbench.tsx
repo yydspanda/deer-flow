@@ -205,7 +205,7 @@ const REVIEW_REASON_COPY: Record<string, ReviewReasonCopy> = {
   unsupported_message_schema: {
     title: "当前日志格式尚未适配",
     explanation: "系统保留了原始输入，但无法稳定投影出完整研判字段。",
-    analystAction: "依据原始日志完成判断，并将格式问题反馈给归一化运维。",
+    analystAction: "依据原始日志完成判断；发现解析问题时，向平台维护人员反馈。",
   },
   high_value_evidence_gap: {
     title: "缺少关键原始证据",

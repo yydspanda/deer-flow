@@ -7,12 +7,20 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "soc-memory-dev.sh"
 COMPOSE_PATH = REPO_ROOT / "docker" / "docker-compose.soc-memory-dev.yaml"
 
 
-def test_memory_dev_start_prewarms_each_operational_soc_route() -> None:
+def test_memory_dev_prebuild_precedes_start_and_keeps_optional_dev_warmup() -> None:
     script = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert '"${COMPOSE[@]}" up --no-build' in script
-    assert '"${COMPOSE[@]}" up --build' in script
-    assert script.count("    warm_soc_routes\n") == 2
+    assert '"${COMPOSE[@]}" build frontend gateway' in script
+    assert script.count("    ready_frontend\n") == 2
+    assert "exec node scripts/soc-frontend.mjs build" in script
+    assert "pnpm install --frozen-lockfile" in script
+    assert "node_modules/.soc-dependencies" in script
+    assert '"${SOC_DEMO_AUTH_DISABLED:-0}" != "1"' in script
+    assert "/api/soc/dev/corpus-workbench/groups?limit=1&offset=0" in script
+    assert "include_group_catalog=false&include_rehearsal=false" in script
+    assert "        prepare_corpus_index\n" in script
+    assert script.index("    build_frontend\n", script.index("start()")) < script.index('"${COMPOSE[@]}" up --no-build')
     for path in (
         "/workspace/soc/operations",
         "/workspace/soc/review/alerts",
@@ -37,6 +45,10 @@ def test_memory_dev_warmup_is_bounded_and_reports_route_latency() -> None:
     assert "%{time_starttransfer}" in script
     assert "%{time_total}" in script
     assert "warm) warm_soc_routes ;;" in script
+    status = script.split("status() {", 1)[1].split("logs() {", 1)[0]
+    assert 'curl -fsS --max-time 5 "$ENTRYPOINT_HEALTH_URL"' in status
+    assert 'curl -fsS --max-time 5 "$FRONTEND_HEALTH_URL"' in status
+    assert 'curl -fsS --max-time 15 "$WORKBENCH_URL"' not in status
 
 
 def test_memory_dev_overlay_avoids_forced_idle_polling_by_default() -> None:

@@ -75,6 +75,7 @@ from soc_agent.contracts import (
     SocMutationOperation,
     TenantPolicyDecision,
 )
+from soc_agent.db.corpus_lists import SocCorpusListQueries
 from soc_agent.db.models import (
     SocActionAuthorizationRow,
     SocActionExecutionRow,
@@ -270,6 +271,9 @@ class SqlAlchemyAlertRepository:
             _upsert_run(session, run)
             session.commit()
 
+    def corpus_list_queries(self) -> SocCorpusListQueries:
+        return SocCorpusListQueries(self._session_factory)
+
     def save_analysis_bundle(
         self,
         *,
@@ -319,6 +323,22 @@ class SqlAlchemyAlertRepository:
                 .limit(limit)
             )
             return [AnalysisRun.model_validate(row.run_payload) for row in result.scalars()]
+
+    def list_runs_for_input(
+        self,
+        alert_id: str,
+        input_hash: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AnalysisRun]:
+        """Page one input's runs by execution time, not subsequent audit updates."""
+
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(SocAnalysisRunRow).where(SocAnalysisRunRow.alert_id == alert_id, SocAnalysisRunRow.input_hash == input_hash).order_by(SocAnalysisRunRow.started_at.desc(), SocAnalysisRunRow.run_id.desc()).offset(offset).limit(limit)
+            ).scalars()
+            return [AnalysisRun.model_validate(row.run_payload) for row in rows]
 
     def claim_run_recovery(
         self,
@@ -475,10 +495,13 @@ class SqlAlchemyAlertRepository:
         self,
         *,
         status: ReviewQueueStatus | None = None,
+        run_id: str | None = None,
         limit: int = 50,
     ) -> list[ReviewQueueItem]:
         with self._session_factory() as session:
             query = select(SocReviewQueueRow)
+            if run_id is not None:
+                query = query.where(SocReviewQueueRow.run_id == run_id)
             if status is not None:
                 query = query.where(SocReviewQueueRow.status == status.value)
             result = session.execute(query.order_by(SocReviewQueueRow.updated_at.desc()).limit(limit))

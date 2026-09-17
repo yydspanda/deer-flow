@@ -14,7 +14,7 @@ import zlib
 from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -48,6 +48,7 @@ from soc_agent.core.handling import project_operational_handling
 from soc_agent.core.operator_language import operator_text
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
+from soc_agent.db.corpus_lists import EMPTY_REVISION, CorpusListSummary
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
 from soc_agent.demo.leadership_guide import (
     SocLeadershipDemoGuide,
@@ -484,6 +485,24 @@ class SocCorpusWorkbenchGroup(BaseModel):
     memory_hit_count: int
 
 
+class SocCorpusGroupDirectoryItem(SocCorpusWorkbenchGroup):
+    """Static selection metadata; runtime counts are deliberately not queried."""
+
+    processed_count: None = None
+    memory_hit_count: None = None
+
+
+class SocCorpusGroupPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.corpus_group_page.v1"] = "soc.corpus_group_page.v1"
+    groups: list[SocCorpusGroupDirectoryItem]
+    total: int
+    offset: int
+    limit: int
+    has_next: bool
+
+
 class SocCorpusWorkbenchMemoryContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -625,7 +644,7 @@ class SocCorpusWorkbenchState(BaseModel):
     model: SocCorpusWorkbenchModelConfig
     readiness: SocCorpusWorkbenchReadiness
     evaluation: SocCorpusWorkbenchEvaluation
-    leadership_demo: SocLeadershipDemoGuide
+    leadership_demo: SocLeadershipDemoGuide | None
     source_types: list[str]
     groups: list[SocCorpusWorkbenchGroup]
     rehearsal_alerts: list[SocCorpusWorkbenchAlert]
@@ -730,8 +749,20 @@ class SocCorpusWorkbenchService:
         self._payload_store_path, self._payload_store_sha256 = _resolve_payload_store(self._index_path) if self._index_path.is_file() else (None, None)
         self._index_sha256 = _sha256_file(self._index_path) if self._index_path.is_file() else None
         self._execution_lock = Lock()
+        self._list_lock = Lock()
+        self._list_queries = repository.corpus_list_queries()
+        self._list_catalog_id = stable_hash(
+            {
+                "projection": "soc.corpus_list.v2",
+                "source": self._source_sha256,
+                "index": self._index_sha256,
+                "workbench": CORPUS_WORKBENCH_VERSION,
+                "profile": PingAnSocMemoryProfile.identity.feature_schema_version,
+            }
+        )
         self._active_executions: dict[str, _ActiveExecutionClaim] = {}
         self._max_concurrent_executions = settings.max_concurrency
+        self._group_catalog = [SocCorpusGroupDirectoryItem.model_validate(item.model_dump(exclude={"processed_count", "memory_hit_count"})) for item in _group_views(self._cases.values(), [])]
         self._execution_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self._max_concurrent_executions,
             thread_name_prefix="soc-corpus-workbench",
@@ -749,6 +780,8 @@ class SocCorpusWorkbenchService:
         focus_alert_id: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        include_group_catalog: bool = True,
+        include_rehearsal: bool = True,
     ) -> SocCorpusWorkbenchState:
         if limit < 1 or limit > 500:
             raise SocCorpusWorkbenchError("corpus workbench limit must be between 1 and 500")
@@ -764,7 +797,35 @@ class SocCorpusWorkbenchService:
             focus_alert_id=focus_alert_id,
             limit=limit,
             offset=offset,
+            include_group_catalog=include_group_catalog,
+            include_rehearsal=include_rehearsal,
         )
+
+    def get_groups(self, *, search: str | None = None, limit: int = 50, offset: int = 0) -> SocCorpusGroupPage:
+        if not 1 <= limit <= 100 or offset < 0:
+            raise SocCorpusWorkbenchError("group page requires limit 1..100 and non-negative offset")
+        # These are display/search aliases, never Memory matching rules.
+        aliases = {
+            "命令执行": "command_execution",
+            "拒绝服务": "denial_of_service",
+            "代理隧道": "proxy_tunnel_activity",
+            "反向连接": "reverse_connection",
+            "漏洞利用": "vulnerability_exploitation",
+            "Web 攻击": "web_attack",
+            "C2 外联": "outbound_c2",
+        }
+        query = (search or "").strip().casefold()
+        for label, value in aliases.items():
+            query = query.replace(label.casefold(), value)
+        terms = query.split()
+        case = self._cases.get((search or "").strip())
+        matches = [
+            group
+            for group in self._group_catalog
+            if (case is not None and group.group_id == case.group_id)
+            or (case is None and all(term in " ".join([group.group_id, group.rule_name or "", group.rule_code or "", group.detection_key or "", group.source_type, *group.behavior_components]).casefold() for term in terms))
+        ]
+        return SocCorpusGroupPage(groups=matches[offset : offset + limit], total=len(matches), limit=limit, offset=offset, has_next=offset + limit < len(matches))
 
     def _get_state(
         self,
@@ -779,70 +840,51 @@ class SocCorpusWorkbenchService:
         limit: int = 20,
         offset: int = 0,
         exclude_active_alert_id: str | None = None,
+        include_group_catalog: bool = True,
+        include_rehearsal: bool = True,
     ) -> SocCorpusWorkbenchState:
-        context = self._projection_context(
-            exclude_active_alert_id=exclude_active_alert_id,
-        )
+        active_ids = [item.alert_id for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id]
+        summaries = self._list_summaries()
+        dynamic_alerts = [replace(item, workflow_state="running") if item.alert_id in active_ids else item for item in summaries.values()]
         alert_cache: dict[str, SocCorpusWorkbenchAlert] = {}
 
         def alert_view(case: _CorpusCase) -> SocCorpusWorkbenchAlert:
             cached = alert_cache.get(case.alert_id)
             if cached is not None:
                 return cached
-            projected = self._alert_view_from_context(case, context=context)
+            projected = self._get_alert_view(case.alert_id, exclude_active_alert_id=exclude_active_alert_id)
             alert_cache[case.alert_id] = projected
             return projected
 
-        dynamic_alert_ids = set(context.active_executions) | set(context.observations_by_alert) | set(context.runs_by_alert)
-        dynamic_alerts = [alert_view(self._cases[alert_id]) for alert_id in dynamic_alert_ids if alert_id in self._cases]
-        leadership_demo = build_soc_leadership_demo_guide(
-            alert_groups={alert_id: case.group_id for alert_id, case in self._cases.items()},
+        leadership_demo = (
+            build_soc_leadership_demo_guide(
+                alert_groups={alert_id: case.group_id for alert_id, case in self._cases.items()},
+            )
+            if include_rehearsal
+            else None
         )
-        rehearsal_alert_ids = {alert_id for chapter in leadership_demo.chapters for target in chapter.targets for alert_id in target.rehearsal_alert_ids}
+        rehearsal_alert_ids = {alert_id for chapter in leadership_demo.chapters for target in chapter.targets for alert_id in target.rehearsal_alert_ids} if leadership_demo is not None else set()
         cases = sorted(
             self._cases.values(),
             key=lambda item: item.sequence_number,
         )
-        normalized_search = search.strip().casefold() if search else ""
-        filtered_cases: list[_CorpusCase] = []
-        for case in cases:
-            if normalized_search and not _case_matches_search(
-                case,
-                normalized_search,
-            ):
-                continue
-            projected_readiness = alert_cache[case.alert_id].readiness if case.alert_id in alert_cache else case.readiness
-            if readiness is not None and projected_readiness != readiness and case.alert_id != focus_alert_id:
-                continue
-            if source_type is not None and case.source_type != source_type:
-                continue
-            if group_id is not None and case.group_id != group_id:
-                continue
-            if unprocessed_only and case.alert_id != focus_alert_id and case.alert_id in context.observations_by_alert and case.alert_id not in context.active_executions:
-                continue
-            if comparison is not None and case.alert_id == focus_alert_id:
-                pass
-            elif comparison == "labeled":
-                if not case.operational_label_available:
-                    continue
-            elif comparison is not None:
-                if not case.operational_label_available:
-                    comparison_status: CorpusComparisonStatus = "unlabeled"
-                else:
-                    run = context.runs_by_alert.get(case.alert_id)
-                    if run is None or run.decision is None:
-                        comparison_status = "not_run"
-                    else:
-                        comparison_status = alert_view(
-                            case,
-                        ).effective_label_comparison
-                if comparison_status != comparison:
-                    continue
-            filtered_cases.append(case)
-
-        total = len(filtered_cases)
-        page_cases = filtered_cases[offset : offset + limit]
-        groups = [item for item in _group_views(self._cases.values(), dynamic_alerts) if item.alert_count >= 2]
+        total, page_ids = self._list_queries.page(
+            self._list_catalog_id,
+            search=search,
+            readiness=readiness,
+            source_type=source_type,
+            group_id=group_id,
+            comparison=comparison,
+            unprocessed_only=unprocessed_only,
+            focus_alert_id=focus_alert_id,
+            active_alert_ids=active_ids,
+            limit=limit,
+            offset=offset,
+        )
+        page_cases = [self._cases[item] for item in page_ids]
+        visible_group_ids = {group_id} | {self._cases[item].group_id for item in rehearsal_alert_ids if item in self._cases}
+        group_cases = self._cases.values() if include_group_catalog else [case for case in self._cases.values() if case.group_id in visible_group_ids]
+        groups = [item for item in _group_views(group_cases, dynamic_alerts) if item.alert_count >= 2 or item.group_id == group_id]
         labeled_count = sum(item.operational_label_available for item in self._cases.values())
         first_case = cases[0]
         last_case = cases[-1]
@@ -897,28 +939,132 @@ class SocCorpusWorkbenchService:
             alerts=[alert_view(case) for case in page_cases],
         )
 
+    def _list_summaries(self) -> dict[str, CorpusListSummary]:
+        # Only list predicates/statistics are cached. Candidate governance and
+        # complete audit records are always read fresh for the requested page.
+        with self._list_lock:
+            rows = self._list_queries.rows(self._list_catalog_id)
+            missing = []
+            for case in self._cases.values():
+                if case.alert_id in rows:
+                    continue
+                summary = self._list_summary(case, run=None, observation=None)
+                rows[case.alert_id] = (EMPTY_REVISION, summary)
+                missing.append(
+                    {
+                        "catalog_id": self._list_catalog_id,
+                        "alert_id": case.alert_id,
+                        "input_hash": case.payload_hash,
+                        "sequence_number": case.sequence_number,
+                        "source_revision": EMPTY_REVISION,
+                        "group_id": case.group_id,
+                        "source_type": case.source_type,
+                        "labeled": case.operational_label_available,
+                        "search_text": "\n".join(value.casefold() for value in (case.alert_id, case.rule_code, case.rule_name, case.detection_key, case.endpoint, case.host_name, case.topic) if value),
+                        "projection_payload": asdict(summary),
+                    }
+                )
+            self._list_queries.insert_missing(missing)
+            revisions = self._list_queries.source_revisions(self._list_catalog_id, tenant_id=CORPUS_WORKBENCH_TENANT, environment=CORPUS_WORKBENCH_ENVIRONMENT)
+            counts = self._list_queries.aggregation_counts()
+            refreshed = 0
+            for alert_id, (previous, summary) in rows.items():
+                revision = revisions.get(alert_id, EMPTY_REVISION)
+                if previous == revision:
+                    # Cohort growth changes readiness, not the immutable run/facets.
+                    # Do not deserialize every sibling when one new alert arrives.
+                    if summary.semantic_features_applied:
+                        case = replace(self._cases[alert_id], behavior_fingerprint=summary.behavior_fingerprint, decision_eligible=summary.decision_eligible)
+                        support = max(counts.get(summary.aggregation_key, 0), 1)
+                        readiness = _case_readiness(case, group_alert_count=support, window_alert_count=support)
+                        if summary.readiness != readiness:
+                            summary = replace(summary, readiness=readiness)
+                            self._list_queries.save(self._list_catalog_id, alert_id, revision, summary)
+                            rows[alert_id] = (revision, summary)
+                    continue
+                case = self._cases[alert_id]
+                run = self._run_for_case(case)
+                observation = self._observations_by_alert({alert_id: run}, alert_id=alert_id).get(alert_id) if run is not None else None
+                summary = self._list_summary(case, run=run, observation=observation)
+                self._list_queries.save(self._list_catalog_id, alert_id, revision, summary)
+                rows[alert_id] = (revision, summary)
+                refreshed += 1
+            if refreshed:
+                logger.info("Corpus list index refreshed %s changed alerts", refreshed)
+            return {alert_id: item[1] for alert_id, item in rows.items()}
+
+    def _list_summary(self, case: _CorpusCase, *, run: AnalysisRun | None, observation: Any | None) -> CorpusListSummary:
+        decision = run.decision if run is not None else None
+        transition = next(iter(self._repository.list_decision_transitions(run_id=run.run_id, limit=1)), None) if run is not None else None
+        effective = transition.after if transition is not None else decision
+        memory_hit = bool(run is not None and run.llm_analysis_request is not None and any(item.kind.value == "confirmed_memory" for item in run.llm_analysis_request.context_catalog))
+        support = self._list_queries.support_count(observation.aggregation_key) if observation is not None else 0
+        outcome = project_soc_case_outcome(run, decision_transition=transition, memory_context_count=int(memory_hit), pattern_support_count=support or None) if run is not None else None
+        base_available = decision is not None and run.direct_resolution is None
+        base, _ = _project_operational_outcome(decision=decision if base_available else None, disposition=None)
+        feature_case, readiness = _runtime_feature_case(case, run, support_count=support)
+        workflow_state = "ready"
+        if run is not None:
+            if run.status is AnalysisRunStatus.RUNNING:
+                workflow_state = "running"
+            elif run.status is AnalysisRunStatus.FAILED:
+                workflow_state = "failed"
+            elif observation is not None or run.direct_resolution is not None:
+                workflow_state = "completed"
+            else:
+                workflow_state = "analysis_only"
+        return CorpusListSummary(
+            alert_id=case.alert_id,
+            group_id=case.group_id,
+            behavior_fingerprint=feature_case.behavior_fingerprint,
+            decision_eligible=feature_case.decision_eligible,
+            readiness=readiness,
+            workflow_state=workflow_state,
+            base_label_comparison=_compare_operational_label(case, projection=base, decision_available=base_available),
+            effective_label_comparison=_compare_operational_label(case, projection=outcome.recommended_handling if outcome else "undetermined", decision_available=effective is not None),
+            memory_hit=memory_hit,
+            observed=observation is not None,
+            decision_available=decision is not None,
+            run_id=run.run_id if run else None,
+            aggregation_key=observation.aggregation_key if observation is not None else None,
+            semantic_features_applied=bool(run is not None and run.llm_analysis_request is not None and run.normalization_assistance is not None and run.normalization_assistance.mode == "apply"),
+        )
+
     def _projection_context(
         self,
         *,
         exclude_active_alert_id: str | None = None,
+        alert_id: str,
     ) -> _CorpusProjectionContext:
         active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
-        runs_by_alert = self._runs_by_alert()
-        observations_by_alert = self._observations_by_alert(runs_by_alert)
+        run = self._run_for_case(self._cases[alert_id])
+        runs_by_alert = {alert_id: run} if run is not None else {}
+        run_query = {"run_id": runs_by_alert[alert_id].run_id} if alert_id in runs_by_alert else {}
+        observations_by_alert = self._observations_by_alert(runs_by_alert, alert_id=alert_id) if runs_by_alert else {}
         queues_by_run = {
             item.run_id: item
-            for item in self._repository.list_review_items(
-                status=None,
-                limit=10_000,
+            for item in (
+                self._repository.list_review_items(
+                    status=None,
+                    limit=10_000,
+                    **run_query,
+                )
+                if runs_by_alert
+                else []
             )
         }
         replay_by_key = {aggregation_key: self._pattern_service.replay(aggregation_key) for aggregation_key in {item.aggregation_key for item in observations_by_alert.values()}}
         candidate_by_source: dict[str, Any] = {}
         manual_candidate_by_run: dict[str, Any] = {}
         candidates_by_id: dict[str, Any] = {}
-        for item in self._repository.list_memory_candidates(
-            status=None,
-            limit=10_000,
+        for item in (
+            self._repository.list_memory_candidates(
+                status=None,
+                limit=10_000,
+                **run_query,
+            )
+            if runs_by_alert
+            else []
         ):
             candidates_by_id[item.candidate_id] = item
             if item.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE and item.source.run_id is not None:
@@ -934,10 +1080,10 @@ class SocCorpusWorkbenchService:
         ):
             record_by_candidate.setdefault(item.source_candidate_id, item)
         transitions_by_run: dict[str, Any] = {}
-        for item in self._repository.list_decision_transitions(limit=10_000):
+        for item in self._repository.list_decision_transitions(limit=10_000, **run_query) if runs_by_alert else []:
             transitions_by_run.setdefault(item.run_id, item)
         memory_uses_by_run: dict[str, list[Any]] = defaultdict(list)
-        for item in self._repository.list_memory_uses(limit=10_000):
+        for item in self._repository.list_memory_uses(limit=10_000, **run_query) if runs_by_alert else []:
             memory_uses_by_run[item.run_id].append(item)
         return _CorpusProjectionContext(
             active_executions=active_executions,
@@ -988,6 +1134,7 @@ class SocCorpusWorkbenchService:
             case,
             context=self._projection_context(
                 exclude_active_alert_id=exclude_active_alert_id,
+                alert_id=alert_id,
             ),
         )
 
@@ -1339,11 +1486,14 @@ class SocCorpusWorkbenchService:
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         pattern_source_id = f"memory_pattern:{observation.aggregation_key}" if observation is not None else None
         resolved_candidate = self._repository.get_memory_candidate(replay.candidate_id) if replay is not None and replay.candidate_id is not None else None
-        candidates = [item for item in self._repository.list_memory_candidates(status=None, limit=10_000) if item.source.run_id == run.run_id or (pattern_source_id is not None and item.source.source_id == pattern_source_id)]
+        candidates = self._repository.list_memory_candidates(status=None, limit=10_000, run_id=run.run_id)
+        if pattern_source_id is not None:
+            known_ids = {item.candidate_id for item in candidates}
+            candidates.extend(item for item in self._repository.find_memory_candidates_by_source_ids([pattern_source_id]) if item.candidate_id not in known_ids)
         if resolved_candidate is not None and all(item.candidate_id != resolved_candidate.candidate_id for item in candidates):
             candidates.append(resolved_candidate)
         memory_records = self._repository.find_memory_records_by_candidate_ids([item.candidate_id for item in candidates])
-        review_items = [item for item in self._repository.list_review_items(status=None, limit=10_000) if item.run_id == run.run_id]
+        review_items = self._repository.list_review_items(status=None, limit=10_000, run_id=run.run_id)
         summary = self._repository.get_alert_summary(run.run_id)
         decision_transitions = self._repository.list_decision_transitions(
             run_id=run.run_id,
@@ -1374,12 +1524,16 @@ class SocCorpusWorkbenchService:
         )
 
     def _run_for_case(self, case: _CorpusCase) -> AnalysisRun | None:
-        # Recovery can update the parent last; use the same chronology as the list.
-        return max(
-            (run for run in self._repository.list_runs_by_alert_id(case.alert_id, limit=20) if _matches_corpus_run(run, case)),
-            key=lambda run: run.started_at,
-            default=None,
-        )
+        # A newer foreign-scope run must not hide a valid older corpus result.
+        offset = 0
+        while True:
+            runs = self._repository.list_runs_for_input(case.alert_id, case.payload_hash, limit=50, offset=offset)
+            for run in runs:
+                if _matches_corpus_run(run, case):
+                    return run
+            if len(runs) < 50:
+                return None
+            offset += len(runs)
 
     def _payload_for_case(self, case: _CorpusCase) -> dict[str, Any]:
         if case.payload is not None:
@@ -1436,33 +1590,29 @@ class SocCorpusWorkbenchService:
         )[:24]
         return f"soc-corpus-dev-rerun:{alert_id}:{request_hash}"
 
-    def _observations_by_alert(self, runs_by_alert: Mapping[str, AnalysisRun]) -> dict[str, Any]:
-        observations = self._repository.list_memory_pattern_observations(
-            tenant_id=CORPUS_WORKBENCH_TENANT,
-            environment=CORPUS_WORKBENCH_ENVIRONMENT,
-            data_class=MemoryPatternDataClass.OPERATIONAL,
-            source_type=MemoryPatternSourceType.BATCH_ALERT,
-            limit=10_000,
-        )
+    def _observations_by_alert(self, runs_by_alert: Mapping[str, AnalysisRun], *, alert_id: str | None = None) -> dict[str, Any]:
         selected: dict[str, Any] = {}
-        for item in observations:
-            alert_id = item.source.alert_id
-            if alert_id not in self._cases or not _observation_matches_run(item, runs_by_alert.get(alert_id)):
-                continue
-            previous = selected.get(alert_id)
-            if previous is None or item.created_at > previous.created_at:
-                selected[alert_id] = item
-        return selected
-
-    def _runs_by_alert(self) -> dict[str, AnalysisRun]:
-        selected: dict[str, AnalysisRun] = {}
-        for run in self._repository.list_runs(limit=10_000):
-            case = self._cases.get(run.alert_id)
-            if case is None or not _matches_corpus_run(run, case):
-                continue
-            previous = selected.get(run.alert_id)
-            if previous is None or run.started_at > previous.started_at:
-                selected[run.alert_id] = run
+        offset = 0
+        while True:
+            observations = self._repository.list_memory_pattern_observations(
+                tenant_id=CORPUS_WORKBENCH_TENANT,
+                environment=CORPUS_WORKBENCH_ENVIRONMENT,
+                data_class=MemoryPatternDataClass.OPERATIONAL,
+                source_type=MemoryPatternSourceType.BATCH_ALERT,
+                alert_id=alert_id,
+                limit=100,
+                offset=offset,
+            )
+            for item in observations:
+                item_alert_id = item.source.alert_id
+                if item_alert_id not in self._cases or not _observation_matches_run(item, runs_by_alert.get(item_alert_id)):
+                    continue
+                previous = selected.get(item_alert_id)
+                if previous is None or item.created_at > previous.created_at:
+                    selected[item_alert_id] = item
+            if len(observations) < 100:
+                break
+            offset += len(observations)
         return selected
 
     def _alert_view(
@@ -1583,25 +1733,7 @@ class SocCorpusWorkbenchService:
         if operator_outcome is not None:
             effective_projection = operator_outcome.recommended_handling
             effective_basis = operator_outcome.recommended_handling_basis
-        runtime_facets = (
-            PingAnSocMemoryProfile.for_run(run).project_run_facets(run) if run is not None and run.llm_analysis_request is not None and run.normalization_assistance is not None and run.normalization_assistance.mode == "apply" else None
-        )
-        feature_case = case
-        feature_readiness = case.readiness
-        if runtime_facets is not None:
-            fingerprint = next(iter(runtime_facets.get("behavior_fingerprint", [])), None)
-            strength = next(iter(runtime_facets.get("behavior_strength", [])), None)
-            feature_case = replace(
-                case,
-                behavior_fingerprint=fingerprint,
-                behavior_components=tuple(runtime_facets.get("behavior_component", [])),
-                behavior_strength=strength,
-                decision_eligible=bool(fingerprint and strength == "strong" and (not runtime_facets.get("detection_key") or runtime_facets.get("detection_signature"))),
-            )
-            # The raw group may split after review. Only actual matching observations
-            # can establish repeated support for the new signature.
-            support_count = max(replay.support_count if replay is not None else 0, 1)
-            feature_readiness = _case_readiness(feature_case, group_alert_count=support_count, window_alert_count=support_count)
+        feature_case, feature_readiness = _runtime_feature_case(case, run, support_count=replay.support_count if replay is not None else 0)
         return SocCorpusWorkbenchAlert(
             alert_id=case.alert_id,
             source_index=case.source_index,
@@ -3210,6 +3342,24 @@ def _case_readiness(
     return "context_only_singleton"
 
 
+def _runtime_feature_case(case: _CorpusCase, run: AnalysisRun | None, *, support_count: int) -> tuple[_CorpusCase, CorpusReadiness]:
+    if run is None or run.llm_analysis_request is None or run.normalization_assistance is None or run.normalization_assistance.mode != "apply":
+        return case, case.readiness
+    facets = PingAnSocMemoryProfile.for_run(run).project_run_facets(run)
+    fingerprint = next(iter(facets.get("behavior_fingerprint", [])), None)
+    strength = next(iter(facets.get("behavior_strength", [])), None)
+    projected = replace(
+        case,
+        behavior_fingerprint=fingerprint,
+        behavior_components=tuple(facets.get("behavior_component", [])),
+        behavior_strength=strength,
+        decision_eligible=bool(fingerprint and strength == "strong" and (not facets.get("detection_key") or facets.get("detection_signature"))),
+    )
+    # Semantic review may split the raw group. Count only the actual signature.
+    support = max(support_count, 1)
+    return projected, _case_readiness(projected, group_alert_count=support, window_alert_count=support)
+
+
 def _project_operational_outcome(
     *,
     decision: Any | None,
@@ -3261,7 +3411,7 @@ def _compare_operational_label(
 
 def _evaluation(
     cases: Any,
-    alerts: list[SocCorpusWorkbenchAlert],
+    alerts: list[SocCorpusWorkbenchAlert] | list[CorpusListSummary],
 ) -> SocCorpusWorkbenchEvaluation:
     cases = list(cases)
     label_counts = Counter(item.operational_label for item in cases if item.operational_label_available and item.operational_label is not None)
@@ -3295,7 +3445,7 @@ def _evaluation(
 
 def _readiness(
     cases: Any,
-    alerts: list[SocCorpusWorkbenchAlert],
+    alerts: list[SocCorpusWorkbenchAlert] | list[CorpusListSummary],
 ) -> SocCorpusWorkbenchReadiness:
     cases = list(cases)
     current_features = {item.alert_id: item for item in alerts}
@@ -3311,13 +3461,13 @@ def _readiness(
         candidate_window_alert_count=sum(item.window_id in candidate_windows for item in cases),
         processed_count=sum(item.workflow_state == "completed" for item in alerts),
         failed_count=sum(item.workflow_state == "failed" for item in alerts),
-        memory_hit_alert_count=sum(bool(item.memory_contexts) for item in alerts),
+        memory_hit_alert_count=sum(_has_memory_context(item) for item in alerts),
     )
 
 
 def _group_views(
     cases: Any,
-    alerts: list[SocCorpusWorkbenchAlert],
+    alerts: list[SocCorpusWorkbenchAlert] | list[CorpusListSummary],
 ) -> list[SocCorpusWorkbenchGroup]:
     grouped_cases: dict[str, list[_CorpusCase]] = defaultdict(list)
     for item in cases:
@@ -3345,7 +3495,7 @@ def _group_views(
                 max_window_alert_count=max(windows.values()),
                 candidate_window_count=sum(count >= 5 for count in windows.values()) if representative.decision_eligible else 0,
                 processed_count=sum(item.workflow_state == "completed" for item in group_alerts),
-                memory_hit_count=sum(bool(item.memory_contexts) for item in group_alerts),
+                memory_hit_count=sum(_has_memory_context(item) for item in group_alerts),
             )
         )
     return sorted(
@@ -3357,6 +3507,10 @@ def _group_views(
             item.rule_name or "",
         ),
     )
+
+
+def _has_memory_context(item: SocCorpusWorkbenchAlert | CorpusListSummary) -> bool:
+    return item.memory_hit if isinstance(item, CorpusListSummary) else bool(item.memory_contexts)
 
 
 def _group_id(

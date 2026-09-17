@@ -269,8 +269,9 @@ PingAn Apple Silicon DEV/STG uses `scripts/soc_pingan_macos_host_dev.py` with Py
 uv, Node `22+`, pinned pnpm, nginx `1.23+`, and approved registries. It runs local SQLite
 and `LocalSandboxProvider` without Docker, exposes detected private LAN addresses by
 default, and supports `--local-only`. `SOC_PINGAN_ENV=dev|stg` is changed only through
-the governed switch command: DEV uses its own SQLite plus hot reload and Workbenches;
-STG uses a separate SQLite, production-optimized services, authentication, and no DEV
+the governed switch command: DEV uses its own SQLite plus Gateway hot reload and Workbenches.
+The frontend defaults to a reusable prebuilt snapshot; DEV alone can opt into
+`start --frontend-mode dev`. STG uses a separate SQLite, production-optimized services, authentication, and no DEV
 Workbench. That command also atomically applies the approved remote mappings
 `DEV -> ZEUS PRD + Agent Platform PRD` and
 `STG -> ZEUS STG + Agent Platform STG` from protected private profiles; startup

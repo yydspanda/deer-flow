@@ -265,7 +265,8 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "确认 Core 全部为 `true`、三个 Sidecar 都为 `running`" in runbook
     assert "首次提交这份\n新请求" in runbook
     assert "`soc_database.status=ready`" in runbook
-    assert "`soc_database.schema_revision=0027_processing_jobs`" in runbook
+    assert "`soc_database.schema_revision=0028_corpus_list`" in runbook
+    assert "--frontend-mode dev" in runbook
     assert all("unset SOC_DATABASE_URL" not in block for block in local_env_blocks)
     assert (
         "正常重部署不要删除 `deerflow.db`、`soc_agent_dev.db` 或 "

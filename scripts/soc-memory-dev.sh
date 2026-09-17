@@ -39,6 +39,7 @@ SOC_WARMUP_PATHS=(
     "/workspace/soc/dev/memory-validation/galaxylab"
 )
 export DEER_FLOW_ROOT="${DEER_FLOW_ROOT:-$PROJECT_ROOT}"
+export SOC_FRONTEND_MODE="${SOC_FRONTEND_MODE:-prebuilt}"
 COMPOSE=(
     docker compose
     -p deer-flow-dev
@@ -167,12 +168,57 @@ warm_soc_routes() {
     fi
 }
 
+build_frontend() {
+    require_docker
+    if [ "$SOC_FRONTEND_MODE" != "prebuilt" ] && [ "$SOC_FRONTEND_MODE" != "dev" ]; then
+        echo "SOC_FRONTEND_MODE must be prebuilt or dev" >&2
+        return 1
+    fi
+    "${COMPOSE[@]}" run --rm --no-deps frontend sh -ec '
+        cd /app/frontend
+        expected="$(sha256sum package.json pnpm-lock.yaml; node -p "process.version + process.platform + process.arch")"
+        if [ ! -f node_modules/next/dist/bin/next ] || [ "$(cat node_modules/.soc-dependencies 2>/dev/null || true)" != "$expected" ]; then
+            pnpm install --frozen-lockfile
+            printf "%s" "$expected" > node_modules/.soc-dependencies
+        fi
+        if [ "$SOC_FRONTEND_MODE" = "prebuilt" ]; then
+            exec node scripts/soc-frontend.mjs build
+        fi
+    '
+}
+
+ready_frontend() {
+    if [ "$SOC_FRONTEND_MODE" = "dev" ]; then
+        warm_soc_routes
+    else
+        wait_for_entrypoint
+        wait_for_frontend
+        prepare_corpus_index
+    fi
+}
+
+prepare_corpus_index() {
+    if [ "${SOC_DEMO_AUTH_DISABLED:-0}" != "1" ]; then
+        echo "Corpus index preparation requires an authenticated first visit (normal auth mode)."
+        return 0
+    fi
+    wait_for_entrypoint
+    echo "Preparing the DEV corpus index before accepting browser visits..."
+    curl -fsS -o /dev/null --connect-timeout 3 --max-time 120 \
+        -w 'Corpus index ready: HTTP %{http_code}, %{time_total}s\n' \
+        "http://localhost:2026/api/soc/dev/corpus-workbench/groups?limit=1&offset=0"
+    curl -fsS -o /dev/null --connect-timeout 3 --max-time 120 \
+        -w 'Corpus result index ready: HTTP %{http_code}, %{time_total}s\n' \
+        "http://localhost:2026/api/soc/dev/corpus-workbench?limit=1&offset=0&unprocessed_only=false&include_group_catalog=false&include_rehearsal=false"
+}
+
 start() {
     require_docker
     require_source
+    build_frontend
     upgrade_database
     "${COMPOSE[@]}" up --no-build -d --remove-orphans redis frontend gateway nginx
-    warm_soc_routes
+    ready_frontend
     echo
     echo "SOC Memory Center: $MEMORY_CENTER_URL"
     echo "SOC Memory DEV workbench: $WORKBENCH_URL"
@@ -190,9 +236,11 @@ demo_start() {
 rebuild() {
     require_docker
     require_source
+    "${COMPOSE[@]}" build frontend gateway
+    build_frontend
     upgrade_database
-    "${COMPOSE[@]}" up --build -d --remove-orphans redis frontend gateway nginx
-    warm_soc_routes
+    "${COMPOSE[@]}" up --no-build -d --remove-orphans redis frontend gateway nginx
+    ready_frontend
     echo
     echo "SOC Memory Center: $MEMORY_CENTER_URL"
     echo "SOC Memory DEV workbench: $WORKBENCH_URL"
@@ -205,24 +253,20 @@ status() {
     "${COMPOSE[@]}" ps
     echo
     echo "Database: $DATABASE_PATH"
-    if curl -fsS --max-time 15 "$MEMORY_CENTER_URL" >/dev/null; then
-        echo "READY: $MEMORY_CENTER_URL"
+    if curl -fsS --max-time 5 "$ENTRYPOINT_HEALTH_URL" >/dev/null; then
+        echo "READY: SOC Gateway"
     else
         echo "NOT READY: inspect logs/gateway.log and logs/frontend.log" >&2
         return 1
     fi
-    if curl -fsS --max-time 15 "$WORKBENCH_URL" >/dev/null; then
-        echo "READY: $WORKBENCH_URL"
+    if curl -fsS --max-time 5 "$FRONTEND_HEALTH_URL" >/dev/null; then
+        echo "READY: SOC Frontend"
     else
         echo "NOT READY: inspect logs/gateway.log and logs/frontend.log" >&2
         return 1
     fi
-    if curl -fsS --max-time 15 "$CORPUS_WORKBENCH_URL" >/dev/null; then
-        echo "READY: $CORPUS_WORKBENCH_URL"
-    else
-        echo "NOT READY: inspect logs/gateway.log and logs/frontend.log" >&2
-        return 1
-    fi
+    echo "Open: $MEMORY_CENTER_URL"
+    echo "Open: $CORPUS_WORKBENCH_URL"
 }
 
 logs() {
@@ -250,6 +294,8 @@ Commands:
   demo-start  Start the DEV stack without registration/login for a trusted demo.
   rebuild     Rebuild Docker images, then start the persistent DEV stack.
   warm        Precompile the common SOC routes and print first-request timings.
+  build-frontend  Prepare a frontend build without stopping services.
+  warm-index      Prepare the backend corpus index after a Gateway reload (demo mode).
   status      Probe the browser workbench.
   logs        Follow Gateway and Frontend logs.
   stop        Stop this checkout's DEV services.
@@ -258,6 +304,7 @@ Commands:
 Open: $MEMORY_CENTER_URL
 DEV fixed cohort: $WORKBENCH_URL
 Open: $CORPUS_WORKBENCH_URL
+Frontend defaults to prebuilt. SOC_FRONTEND_MODE=dev restores hot reload.
 EOF
 }
 
@@ -266,6 +313,8 @@ case "${1:-help}" in
     demo-start) demo_start ;;
     rebuild) rebuild ;;
     warm) warm_soc_routes ;;
+    build-frontend) build_frontend ;;
+    warm-index) prepare_corpus_index ;;
     status) status ;;
     logs) logs ;;
     stop) stop ;;

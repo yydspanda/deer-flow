@@ -78,6 +78,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > In `告警演练`, each alert exposes `查看同组` to open its complete server-defined group,
 > with `返回原筛选` restoring the previous search and page. The group picker searches rule
 > names/codes and behavior keywords, including singleton groups and groups without fingerprints.
+> Fixed recommended demos are no longer shown; group browsing, group search and existing
+> alert links remain available. Normalization inspection is retained at
+> `/workspace/soc/normalization` for on-demand maintenance, outside the operator navigation.
 > The rehearsal defaults to all alerts; enable `仅未运行` to filter out completed runs.
 > `后续运行设置` provides per-run switches for semantic review, enterprise policy,
 > safe-software-path policy and LLM policy advice. They take effect on the next run without
@@ -90,6 +93,21 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > set `streaming: true` on that model in `config.yaml` and restart the Gateway. SOC
 > collects the full answer before parsing; the run records its transport mode and usage.
 > Keep this unset for internal gateways that only accept non-streaming requests.
+>
+> SOC Docker startup now builds the frontend before replacing it; normal page navigation
+> no longer waits for development compilation. Unchanged builds/dependencies are reused.
+> Use `./scripts/soc-memory-dev.sh build-frontend` to prepare without stopping services,
+> or `SOC_FRONTEND_MODE=dev ./scripts/soc-memory-dev.sh demo-start` for hot reload.
+> Backend DEV, Memory, authentication and provider settings are unchanged by this mode.
+> Corpus group search loads 50 groups per page when opened, including alert-ID lookup;
+> full audit data remains available on demand. The internal Mac Host launcher also
+> defaults to prebuilt pages with the normal `start --daemon --demo-no-auth` command.
+> DEV may explicitly restore frontend hot reload with `--frontend-mode dev`;
+> STG rejects that option. No Docker is needed on Mac.
+> Corpus lists use a rebuildable SQLite/PostgreSQL projection (`0028_corpus_list`):
+> SQL filters/pagination read small state, while page details load the complete records.
+> Source changes invalidate affected entries; confirmed experience is never cached as
+> authority. The first historical backfill is preparation work, not recurring navigation.
 > A browser-driven local lifecycle is available for the reviewed 14-alert
 > `GalaxyLab_T1003-SAM-Dumping` cohort. For a trusted shared demonstration, run
 > `./scripts/soc-memory-dev.sh demo-start`, then open

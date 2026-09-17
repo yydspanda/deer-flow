@@ -20,6 +20,7 @@ from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
     CorpusComparisonFilter,
     CorpusReadiness,
+    SocCorpusGroupPage,
     SocCorpusWorkbenchActivity,
     SocCorpusWorkbenchAuditBundle,
     SocCorpusWorkbenchBusyError,
@@ -134,6 +135,8 @@ def get_corpus_workbench_state(
     group_id: Annotated[str | None, Query(max_length=512)] = None,
     comparison: CorpusComparisonFilter | None = None,
     unprocessed_only: bool = True,
+    include_group_catalog: bool = True,
+    include_rehearsal: bool = True,
     focus_alert_id: Annotated[str | None, Query(max_length=128)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -145,10 +148,22 @@ def get_corpus_workbench_state(
         group_id=group_id,
         comparison=comparison,
         unprocessed_only=unprocessed_only,
+        include_group_catalog=include_group_catalog,
+        include_rehearsal=include_rehearsal,
         focus_alert_id=focus_alert_id,
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/groups", response_model=SocCorpusGroupPage, response_model_exclude_none=True)
+def get_corpus_workbench_groups(
+    service: CorpusWorkbenchServiceDep,
+    search: Annotated[str | None, Query(max_length=256)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> SocCorpusGroupPage:
+    return service.get_groups(search=search, limit=limit, offset=offset)
 
 
 @router.get(

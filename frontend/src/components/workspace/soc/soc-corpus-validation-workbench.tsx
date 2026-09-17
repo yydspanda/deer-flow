@@ -62,7 +62,6 @@ import {
 import { SocDecisionLineageTable } from "@/components/workspace/soc/soc-decision-lineage-table";
 import { formatSocDevPolicyLabel } from "@/components/workspace/soc/soc-dev-policy-label";
 import { SocHandlingBadge } from "@/components/workspace/soc/soc-handling-badge";
-import { SocLeadershipDemoGuidePanel } from "@/components/workspace/soc/soc-leadership-demo-guide";
 import { memoryRunUsageCopy } from "@/components/workspace/soc/soc-memory-copy";
 import { SocMemoryLearningStatus } from "@/components/workspace/soc/soc-memory-learning-status";
 import { SocRunMemoryContext } from "@/components/workspace/soc/soc-run-memory-context";
@@ -84,7 +83,6 @@ import type {
   SocCorpusWorkbenchExecutionPhase,
   SocCorpusWorkbenchReadiness,
   SocCorpusWorkbenchState,
-  SocLeadershipDemoTarget,
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
 
@@ -1083,6 +1081,8 @@ export function SocCorpusValidationWorkbench() {
   const terminalRefreshRunIds = useRef(new Set<string>());
   const deferredSearch = useDeferredValue(search.trim());
   const query = useSocCorpusWorkbench({
+    includeGroupCatalog: false,
+    includeRehearsal: false,
     search: deferredSearch || null,
     readiness: readiness === "all" ? null : readiness,
     sourceType: sourceType === "all" ? null : sourceType,
@@ -1330,13 +1330,7 @@ export function SocCorpusValidationWorkbench() {
     if (sourceType !== "all" && !sourceTypes.includes(sourceType)) {
       setSourceType("all");
     }
-    if (
-      groupId !== "all" &&
-      !state.groups.some((group) => group.group_id === groupId)
-    ) {
-      setGroupId("all");
-    }
-  }, [filtersHydrated, groupId, sourceType, sourceTypes, state]);
+  }, [filtersHydrated, sourceType, sourceTypes, state]);
 
   const pageCount = Math.max(
     1,
@@ -1408,22 +1402,13 @@ export function SocCorpusValidationWorkbench() {
     if (!filtersHydrated || !state) return;
     if (!selectedAlertId) return;
     if (pageAlerts.some((item) => item.alert_id === selectedAlertId)) return;
-    if (
-      state.rehearsal_alerts.some((item) => item.alert_id === selectedAlertId)
-    ) {
-      return;
-    }
     setSelectedAlertId(null);
   }, [filtersHydrated, pageAlerts, selectedAlertId, state]);
 
   const selectedAlert = useMemo(
     () =>
-      state?.alerts.find((item) => item.alert_id === selectedAlertId) ??
-      state?.rehearsal_alerts.find(
-        (item) => item.alert_id === selectedAlertId,
-      ) ??
-      null,
-    [selectedAlertId, state?.alerts, state?.rehearsal_alerts],
+      state?.alerts.find((item) => item.alert_id === selectedAlertId) ?? null,
+    [selectedAlertId, state?.alerts],
   );
 
   const handleProcess = async (alertId: string) => {
@@ -1435,9 +1420,9 @@ export function SocCorpusValidationWorkbench() {
       return;
     }
     setSelectedAlertId(alertId);
-    const baselineAlert =
-      state?.alerts.find((item) => item.alert_id === alertId) ??
-      state?.rehearsal_alerts.find((item) => item.alert_id === alertId);
+    const baselineAlert = state?.alerts.find(
+      (item) => item.alert_id === alertId,
+    );
     setProcessingAlertIds((current) => {
       const next = new Set(current);
       next.add(alertId);
@@ -1520,19 +1505,6 @@ export function SocCorpusValidationWorkbench() {
     requestAnimationFrame(() => {
       detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
-  };
-
-  const handleSelectDemoTarget = (target: SocLeadershipDemoTarget) => {
-    if (!target.actual_group_id || target.availability !== "ready") return;
-    setGroupOrigin(null);
-    setSearch("");
-    setReadiness("all");
-    setComparison("all");
-    setSourceType(target.source_type);
-    setGroupId(target.actual_group_id);
-    setUnprocessedOnly(false);
-    setSelectedAlertId(target.primary_alert_id);
-    setPage(0);
   };
 
   const handleOpenGroup = (nextGroupId: string) => {
@@ -1719,14 +1691,6 @@ export function SocCorpusValidationWorkbench() {
             onChange={changeRunSettings}
           />
         ) : null}
-
-        <SocLeadershipDemoGuidePanel
-          guide={state.leadership_demo}
-          groups={state.groups}
-          alerts={state.rehearsal_alerts}
-          activeGroupId={groupId}
-          onSelectTarget={handleSelectDemoTarget}
-        />
 
         <SummaryBand state={state} />
 

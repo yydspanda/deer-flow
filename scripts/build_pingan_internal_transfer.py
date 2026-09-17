@@ -263,6 +263,9 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/contracts/processing_jobs.py",
     "backend/soc_agent/db/jobs.py",
     "backend/soc_agent/db/migrations/versions/0027_processing_jobs.py",
+    "backend/soc_agent/db/migrations/versions/0028_corpus_list_projection.py",
+    "backend/soc_agent/db/corpus_lists.py",
+    "frontend/scripts/soc-frontend.mjs",
     "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json",
     "backend/soc_agent/integrations/pingan/security_tag.py",
     "backend/soc_agent/integrations/pingan/threat_intel.py",
@@ -1536,13 +1539,21 @@ python3.12 scripts/soc_pingan_macos_host_dev.py status
 三个 Sidecar 都为 `running`，且 `soc_database.status=ready`，不要重复 `start`，直接执行模型 Smoke；
 否则重新执行上面的启动块。
 
-Host DEV 驱动会先准备 SOC 数据库，再启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，最后启动
+Host DEV 驱动会先准备可复用的前端构建，再准备 SOC 数据库，启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，最后启动
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
 Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机使用时加 `--local-only`。
 `status` 必须同时显示 `soc_database.status=ready`、
-`soc_database.schema_revision=0027_processing_jobs`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
+`soc_database.schema_revision=0028_corpus_list`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
 Runtime、Tenant Policy、ZEUS lifecycle 和 Callback 初始化完成并发布 PID-bound ready 信号后才会显示
 `running`；`stale`、`not_running` 或启动时报 `did not become ready` 都不能继续真实验收。
+
+前端默认使用预构建产物，点击页面时不再临时编译；首次或代码改变后启动需要等待一次编译，
+后续不变的启动复用构建，不重新安装依赖。构建失败会在迁移/替换服务之前停止。
+`status` 中 `frontend_mode_last_started=prebuilt` 表示上次成功启动采用预构建；
+Gateway 的 DEV 热更新与 Memory/Policy 环境没有因此改为 STG。
+仅外观开发需要热更新时，DEV 可在启动命令加 `--frontend-mode dev`；STG 拒绝此参数。
+查询索引是可重建的派生数据，不替代原始结果；第一次进入历史运行较多的工作台可能需要补建索引，
+不要把该准备时间视为每次导航的耗时，也不要为此删除业务数据库。
 
 服务启动后执行无业务数据的真实模型 smoke：
 

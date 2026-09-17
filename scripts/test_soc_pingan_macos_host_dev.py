@@ -579,6 +579,9 @@ def test_start_runtime_prepares_database_before_sidecars(
 
     monkeypatch.setattr(host_dev, "prepare_soc_database", fake_prepare)
     monkeypatch.setattr(
+        host_dev, "prepare_frontend", lambda **kwargs: events.append("frontend")
+    )
+    monkeypatch.setattr(
         host_dev,
         "build_pingan_sidecar_specs",
         lambda **kwargs: (),
@@ -590,6 +593,7 @@ def test_start_runtime_prepares_database_before_sidecars(
 
     monkeypatch.setattr(host_dev, "start_sidecars", fake_start_sidecars)
     monkeypatch.setattr(host_dev, "build_start_command", lambda **kwargs: ["true"])
+    monkeypatch.setattr(host_dev, "record_frontend_start", lambda mode: None)
     monkeypatch.setattr(
         host_dev.subprocess,
         "run",
@@ -602,7 +606,7 @@ def test_start_runtime_prepares_database_before_sidecars(
         local_only=True,
     )
 
-    assert events == ["database", "sidecars", "core"]
+    assert events == ["frontend", "database", "sidecars", "core"]
     assert sidecar_environment["SOC_TENANT_POLICY_ENABLED"] == "true"
     assert sidecar_environment["SOC_TENANT_DISPOSITION_POLICY_PATH"].endswith(
         "/backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"
@@ -611,6 +615,56 @@ def test_start_runtime_prepares_database_before_sidecars(
     assert sidecar_environment["SOC_TENANT_POLICY_SKILL_PATH"].endswith(
         "/backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"
     )
+
+
+def test_host_frontend_defaults_to_prebuilt_without_changing_runtime_scope() -> None:
+    args = parse_args(["start", "--daemon"])
+    assert args.frontend_mode == "prebuilt"
+    command = build_start_command(daemon=True)
+    assert "--frontend-entry=" in command[2]
+    assert "soc-frontend.mjs" in command[2]
+    assert "export SOC_FRONTEND_MODE=prebuilt" in command[2]
+    assert 'serve.sh" --dev' in command[2]
+    assert "--skip-env" in command[2]
+    assert "unset DEER_FLOW_AUTH_DISABLED" in command[2]
+
+
+def test_host_frontend_dev_rollback_is_explicit_and_stg_rejects_it() -> None:
+    command = build_start_command(daemon=True, frontend_mode="dev")
+    assert "export SOC_FRONTEND_MODE=dev" in command[2]
+    with pytest.raises(HostDevError, match="only available in DEV"):
+        build_start_command(daemon=True, runtime_environment="stg", frontend_mode="dev")
+
+
+def test_frontend_preparation_reuses_pinned_runner_and_same_auth_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(
+        host_dev.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    host_dev.prepare_frontend(
+        environment={"LOCAL": "value"},
+        runtime_environment="dev",
+        demo_no_auth=True,
+        frontend_mode="prebuilt",
+    )
+    command = calls[0][0][0]
+    assert "scripts/pnpm.py" in command[2]
+    assert "soc-frontend.mjs" in command[2]
+    assert " build" in command[2]
+    assert "export DEER_FLOW_AUTH_DISABLED=1" in command[2]
+    assert "serve.sh" not in command[2]
+    assert "install" not in command[2]
+    assert calls[0][1]["env"] == {"LOCAL": "value"}
+    calls.clear()
+    host_dev.prepare_frontend(
+        environment={},
+        runtime_environment="dev",
+        demo_no_auth=False,
+        frontend_mode="dev",
+    )
+    assert calls == []
 
 
 def test_start_plan_applies_explicit_lan_origin_after_private_env() -> None:

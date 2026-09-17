@@ -51,6 +51,33 @@ function corpusState(processed = false, replayed = false) {
     effective_verdict: processed ? "false_positive" : null,
     effective_confidence: processed ? 0.95 : null,
     effective_needs_review: processed ? false : null,
+    operator_outcome: processed
+      ? {
+          schema_version: "soc.case_outcome_view.v1",
+          processing_path: "model_analysis",
+          event_summary: "当前行为符合 Windows 更新部署模式。",
+          security_verdict: "false_positive",
+          base_verdict: "suspicious",
+          confidence: 0.95,
+          decision_usable: true,
+          decision_change: "overridden",
+          operational_disposition: "ignored",
+          recommended_handling: "ignore",
+          handling_reason: "已审核经验确认这是正常更新部署行为。",
+          handling_recommendation: "忽略。",
+          closure_status: "handling_pending",
+          closure_reason_codes: [],
+          evidence_gap_impact: "none",
+          evidence_gaps: [],
+          blocked_capabilities: [],
+          next_steps: [],
+          basis: [],
+          contributions: [],
+          memory_context_count: 1,
+          memory_directive_applied: true,
+          tenant_policy_applied: false,
+        }
+      : null,
     analysis_summary: processed ? "当前行为符合 Windows 更新部署模式。" : null,
     analysis_reason: processed ? "规则命中，但已确认业务行为模式一致。" : null,
     queue_id: null,
@@ -154,6 +181,7 @@ function corpusState(processed = false, replayed = false) {
     effective_verdict: null,
     effective_confidence: null,
     effective_needs_review: null,
+    operator_outcome: null,
     analysis_summary: null,
     analysis_reason: null,
     observation_id: null,
@@ -389,6 +417,18 @@ function corpusStateForRequest(
   requestUrl: string,
 ) {
   const params = new URL(requestUrl).searchParams;
+  if (new URL(requestUrl).pathname.endsWith("/groups")) {
+    const offset = Number(params.get("offset") ?? 0);
+    const limit = Number(params.get("limit") ?? 50);
+    return {
+      schema_version: "soc.corpus_group_page.v1",
+      groups: state.groups.slice(offset, offset + limit),
+      total: state.groups.length,
+      limit,
+      offset,
+      has_next: offset + limit < state.groups.length,
+    };
+  }
   const search = params.get("search")?.toLocaleLowerCase() ?? "";
   const readiness = params.get("readiness");
   const sourceType = params.get("source_type");
@@ -1047,7 +1087,40 @@ test("searches same-rule groups by behavior and includes singleton groups withou
     decision_eligible: false,
     alert_count: 1,
   });
+  let directoryRequests = 0;
   await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/groups")) {
+      directoryRequests++;
+      const terms = (url.searchParams.get("search") ?? "")
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean);
+      const groups = current.groups.filter((group) =>
+        terms.every((term) =>
+          [
+            group.group_id,
+            group.rule_name,
+            group.rule_code,
+            ...group.behavior_components,
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(term),
+        ),
+      );
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      return route.fulfill({
+        json: {
+          schema_version: "soc.corpus_group_page.v1",
+          groups: groups.slice(offset, offset + 50),
+          total: groups.length,
+          offset,
+          limit: 50,
+          has_next: offset + 50 < groups.length,
+        },
+      });
+    }
     await route.fulfill({
       json: route.request().url().endsWith("/activity")
         ? corpusActivity()
@@ -1055,6 +1128,14 @@ test("searches same-rule groups by behavior and includes singleton groups withou
     });
   });
   await page.goto("/workspace/soc/corpus-validation");
+  await expect(page.getByLabel("行为模式组", { exact: true })).toBeVisible();
+  await expect(page.getByText("推荐演练", { exact: true })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("navigation", { name: "SOC 运营导航" })
+      .getByRole("link", { name: "归一化运维" }),
+  ).toHaveCount(0);
+  expect(directoryRequests).toBe(0);
   await page.getByLabel("行为模式组", { exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "查找行为模式组" });
   const search = dialog.getByRole("combobox", { name: "搜索分组" });
@@ -1543,7 +1624,7 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   ).toHaveAttribute("href", "/workspace/soc/alerts");
   await expect(
     navigation.getByRole("link", { name: "归一化运维" }),
-  ).toHaveAttribute("href", "/workspace/soc/normalization");
+  ).toHaveCount(0);
   const currentNavigationLink = navigation.getByRole("link", {
     name: /告警演练/,
   });
@@ -1570,20 +1651,13 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(page.getByText("Runtime 运行后揭示")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "历史经验如何参与研判" }),
-  ).toBeVisible();
-  await expect(page.getByText("两组告警已就绪", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "查看这组告警" })).toHaveCount(
-    2,
+  ).toHaveCount(0);
+  await expect(page.getByText("两组告警已就绪", { exact: true })).toHaveCount(
+    0,
   );
-  const exactMatchRehearsal = page.getByRole("article").filter({
-    hasText: "精确匹配复用",
-  });
-  await exactMatchRehearsal
-    .getByRole("button", { name: "查看这组告警" })
-    .click();
-  await expect(
-    exactMatchRehearsal.getByRole("button", { name: "已显示这组" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看这组告警" })).toHaveCount(
+    0,
+  );
   await expect(
     page.getByRole("heading", { name: "Alert 1984426" }),
   ).toBeVisible();
@@ -1605,31 +1679,32 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   await expect(corpusSearch).toHaveValue("1984426");
   await page.getByRole("button", { name: "运行", exact: true }).click();
 
-  await expect(page.getByLabel("当前安全结论")).toContainText(
-    "误报 / False Positive",
-  );
+  await expect(
+    page.getByRole("region", { name: "处理结论", exact: true }),
+  ).toContainText("忽略");
   await expect(
     page.getByText("已复用审核结论", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByText("Windows 更新部署正常行为")).toBeVisible();
-  await expect(page.getByText("可疑", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("误报", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
+  ).not.toBeInViewport();
+  await page.getByText("历史处置对比（DEV 评测）", { exact: true }).click();
+  await expect(page.getByText("转交", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("忽略", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("历史处置依据：")).toBeVisible();
   await expect(page.getByText("已确认更新部署行为")).toBeVisible();
   await expect(page.getByText("一致", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
-  ).not.toBeInViewport();
   await expect(page.getByText("Alert 1984426 研判完成")).toBeVisible();
   await page
     .getByRole("button", { name: "查看 Alert 1984426 结果" })
     .last()
     .click();
   await expect(
-    page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
+    page.getByRole("heading", { name: "Alert 1984426", exact: true }),
   ).toBeInViewport();
   await expect(
     page

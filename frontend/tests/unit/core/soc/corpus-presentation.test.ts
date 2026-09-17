@@ -50,8 +50,6 @@ describe("SOC corpus group presentation", () => {
         window_count: 2,
         max_window_alert_count: 7,
         candidate_window_count: 1,
-        processed_count: 0,
-        memory_hit_count: 0,
       }),
     ).toBe(
       "红队IP监控 · CVE-2017-7924 / 漏洞利用 / UDP/44818 · 组 83A997 · 8 条",

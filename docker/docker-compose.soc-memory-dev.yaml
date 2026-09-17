@@ -1,15 +1,13 @@
 # Browser-driven SOC Memory DEV acceptance overlay.
 services:
   frontend:
-    # Next.js 16.2.x Turbopack can emit an invalid negative component
-    # performance measurement during dev redirects. Keep the normal project
-    # command unchanged; this acceptance-only overlay uses the supported
-    # webpack dev path so browser testing is not interrupted by that tracer.
+    # Prepare a separate build before replacing the running frontend.
+    # Backend DEV, authentication and tenant settings stay unchanged.
     command: >-
-      sh -c "cd frontend &&
-      pnpm install --frozen-lockfile &&
-      pnpm exec next dev --webpack > /app/logs/frontend.log 2>&1"
+      sh -c "exec node frontend/scripts/soc-frontend.mjs start > /app/logs/frontend.log 2>&1"
     volumes:
+      - soc-memory-frontend-builds:/app/frontend/.soc-frontend
+      - ../frontend/scripts:/app/frontend/scripts:ro
       - ../frontend/package.json:/app/frontend/package.json:ro
       - ../frontend/pnpm-lock.yaml:/app/frontend/pnpm-lock.yaml:ro
       - type: volume
@@ -18,6 +16,8 @@ services:
         volume:
           nocopy: true
     environment:
+      SOC_FRONTEND_MODE: ${SOC_FRONTEND_MODE:-prebuilt}
+      NEXT_TELEMETRY_DISABLED: "1"
       DEER_FLOW_AUTH_DISABLED: "${SOC_DEMO_AUTH_DISABLED:-0}"
       NPM_CONFIG_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
       # Docker Desktop/WSL can drop bind-mount events, so keep polling but at a
@@ -53,4 +53,5 @@ services:
       SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS: "false"
 
 volumes:
+  soc-memory-frontend-builds:
   soc-memory-frontend-node-modules-v2:

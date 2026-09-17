@@ -1,5 +1,22 @@
 ## Service Startup Contracts
 
+The SOC Docker wrapper defaults to a prebuilt frontend without changing backend DEV
+or authentication. `build-frontend` prepares an isolated `.soc-frontend` snapshot;
+publish its manifest only after successful compilation. Dependencies synchronize
+with the frozen lock only when their manifest changes or Next is missing. An unchanged
+restart must neither compile nor install. `SOC_FRONTEND_MODE=dev` restores hot reload.
+Readiness uses lightweight entry checks, not route compilation. The Mac Host wrapper
+uses the same build script before migrations or sidecar replacement. DEV defaults to
+prebuilt pages with explicit `--frontend-mode dev` rollback; STG rejects hot reload.
+Build and serve receive the same resolved auth/public configuration. The generic launcher
+accepts an operator-owned `--frontend-entry=PATH` and `--skip-env`; ordinary upstream
+startup remains unchanged. Keep all SOC build behavior outside `serve.sh`.
+Explicit demo startup also prepares the backend corpus index once via the bounded
+group endpoint and a one-item result page before reporting ready. Normal authentication is never bypassed for
+warmup; its first authorized visit still initializes the index. After a code-triggered
+Gateway reload, `SOC_DEMO_AUTH_DISABLED=1 ./scripts/soc-memory-dev.sh warm-index`
+repeats that preparation without changing a service or business record.
+
 The root `PORT` value configures Docker's published nginx ingress only; local
 orchestration pins Next.js to `3000`. Runtime commands launch from the already
 synchronized environment with `uv run --no-sync`. Production Compose probes

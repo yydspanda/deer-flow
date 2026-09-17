@@ -11,6 +11,20 @@ file for SOC code. The authoritative product and engineering documents are:
 
 ## Ownership Boundaries
 
+- DEV Corpus group search is a static, paginated directory under the existing
+  Workbench service. `include_group_catalog=false` keeps list payloads bounded by
+  page/selected-guide data; default true preserves existing script clients. Group
+  directory reads never replay Pattern observations or load full Runtime records.
+  Global list filters/pagination use `db/corpus_lists.py` and disposable
+  `soc_corpus_list_projections` (`0028_corpus_list`). Catalog identity binds the
+  source/index and projection version. Only scalar Run/transition/observation revisions
+  are scanned; hydrate changed runs once, retain compact list predicates/statistics,
+  and read complete page details/governance fresh. Cohort growth invalidates member
+  projections. Never cache Memory authority, truncate history at 10,000 rows, or select
+  a newer foreign-scope run. Initial historical backfill is preparation, not warm latency.
+  Changes to projection semantics must bump its catalog version; the index is rebuildable
+  and must never rewrite source runs, observations, candidates or Memory.
+
 - Prefer new modules, adapters, contracts, routes, and tests under `soc_agent` over
   changes to DeerFlow core. A core change must be a small generic extension point or a
   framework fix that is useful without SOC.
@@ -187,16 +201,23 @@ file for SOC code. The authoritative product and engineering documents are:
   never raw prompts, evidence bodies, provider responses, or credentials.
   Corpus list, execution and audit select the latest eligible run by `started_at`;
   recovery updates to an older parent must not replace its newer completed child.
+  Single-alert projections load runs by alert and input hash in started-time pages,
+  retaining scope validation and the legacy policy-snapshot fallback. Related candidates,
+  reviews, transitions and Memory uses are Run-scoped; Pattern observations remain
+  alert-scoped so an explicit rerun can reuse its original matching observation.
 - The explicitly gated corpus DEV workbench may expose a separate, on-demand,
   `soc_admin`-only audit bundle containing the persisted raw input, canonical alert,
   bounded model context, parsed model result, validation reports, Decision lineage, and
   Pattern/Memory writes. It must never share the live polling response, re-run Runtime,
   read process secrets, mutate state, or be enabled as a production analyst endpoint.
-- The workbench recommendation guide is navigation metadata only and contains exactly
+- The legacy workbench recommendation guide is navigation metadata only and contains exactly
   two same-rule Memory rehearsals: context-only reference and exact-match Decision reuse.
   The server validates every fixed alert against its expected current Pattern group and
   reports missing/regrouped targets as drift; the guide must not seed results, prescribe
   a verdict, bypass Runtime/Memory governance, or turn rehearsal state into quality proof.
+  Current Web clients opt out with `include_rehearsal=false`: no guide construction or
+  extra rehearsal alert projections. The default remains compatible with older API clients;
+  all corpus samples and the paginated group directory remain available.
 - Corpus DEV execution uses a process-local, bounded claim registry owned by the
   workbench service. Different alert IDs may run concurrently up to the configured LLM
   admission capacity; one alert ID may have only one active claim, and a duplicate

@@ -2662,6 +2662,16 @@ Security invariants:
 
 The system should be reviewable from a single alert before scaling to Kafka.
 
+拟议的内网 DEV 下一步见
+[`告警演练性能与内网两批经验验证方案`](architecture/corpus-memory-batch-validation-design.md)：
+先修复页面临时编译与无界列表加载，再按同类组内时间固定“沉淀经验 / 验证效果”两批名单。
+两批均以脚本后台执行为主，网页承担审核和查看；复用 SOC 服务、持久任务与同一数据库，
+不增加 Celery/Redis，不把验证轮次的新经验自动加入当前评测。本机 Docker 导航已提速并只读验收：
+预构建前端、分组按需分页，20次导航 P95 为504ms；完整记录见方案3.5。
+同日补齐全量列表轻量查询索引（迁移0028，仅派生数据）和 Mac Host 共用预构建接入；
+10,005条合成结果分页与迁移保留数据测试通过，完整页详情仍即时读取治理状态。
+两批后台执行仍待实施；历史索引首次补建和真实 Mac 性能单独验收，未清库、未关闭真实内网门禁。
+
 ### 13.1 Product Effectiveness / 产品效能闭环
 
 Runtime quality cannot be inferred from its own output. Migration `0026_effectiveness_telemetry`

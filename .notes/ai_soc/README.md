@@ -52,6 +52,7 @@ Web 只保留一个 **经验中心**：默认打开 **已确认经验**，可切
 | 审阅模型坏 JSON、局部 Schema 错误、一次纠错和 deterministic fallback 是否可靠 | `validation/compact_zeus/e2e/README.md` 的 `analysis_output_quality` | 本地 `backend/.deer-flow/soc-validation/e2e-ten-output-resilience-20260813/SUMMARY.md` |
 | 审核本轮 LLM 萃取的知识建议并决定落点 | `validation/compact_zeus/e2e/README.md` 的 Authority Boundary | 本地 `backend/.deer-flow/soc-validation/e2e-ten-current/knowledge-review/REVIEW.md` |
 | 判断产品方向和系统设计 | `soc-agent-solution.md` | `delivery-roadmap.md` 的阶段边界 |
+| 审阅页面提速与两批经验验证 | [`architecture/corpus-memory-batch-validation-design.md`](architecture/corpus-memory-batch-validation-design.md) | 本机导航已验收；大库查询/Mac 适配、两批名单和后台执行待做，未清库 |
 | 理解 SOC Analysis Runtime、DeerFlow/Codex 类 Agent Runtime 与 Agent Graph 的区别 | `architecture/runtime-and-agent-architecture.md` | `soc-agent-solution.md` Sections 1、5.3、6 |
 | 面向管理或技术评审解释为什么 Runtime 控制流程、LLM 只做受控推理 | `reporting/project-brief.md` | `reporting/technical-solution.md` |
 | 开始下一刀开发 | `progress.md` | `.notes/reference-index/soc-agent-engineering-contracts.md` |
@@ -97,7 +98,8 @@ ai_soc/
 ├── alert-lifecycle-flow.md            # 当前端到端流程图谱
 ├── architecture/
 │   ├── runtime-and-agent-architecture.md # SOC Runtime、Agent Graph、DeerFlow/Codex 对照与分享材料
-│   └── normalization-assistance-design.md # 拟议：覆盖检查、模型事实补充与运维收敛
+│   ├── normalization-assistance-design.md # 拟议：覆盖检查、模型事实补充与运维收敛
+│   └── corpus-memory-batch-validation-design.md # 拟议：页面提速、内网两批脚本执行与经验评测
 ├── reporting/
 │   ├── README.md                       # 当前汇报材料入口与真实性口径
 │   ├── capability-demo-runbook.md      # 4,343 条语料的能力演示路线与现场话术

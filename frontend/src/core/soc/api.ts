@@ -13,6 +13,7 @@ import type {
   SocAlertResultListResponse,
   SocAnalysisRun,
   SocCorpusWorkbenchActivity,
+  SocCorpusGroupPage,
   SocAnalysisExecutionOptions,
   SocCorpusWorkbenchAuditBundle,
   SocCorpusWorkbenchExecution,
@@ -279,6 +280,12 @@ export async function getSocCorpusWorkbenchState(
   }
   params.set("limit", String(query.limit ?? 20));
   params.set("offset", String(query.offset ?? 0));
+  if (query.includeGroupCatalog !== undefined) {
+    params.set("include_group_catalog", String(query.includeGroupCatalog));
+  }
+  if (query.includeRehearsal !== undefined) {
+    params.set("include_rehearsal", String(query.includeRehearsal));
+  }
   const response = await fetch(
     `${getBackendBaseURL()}/api/soc/dev/corpus-workbench?${params.toString()}`,
     { headers: buildSocHeaders(context) },
@@ -287,6 +294,25 @@ export async function getSocCorpusWorkbenchState(
     response,
     "Failed to load SOC Corpus DEV workbench",
   );
+}
+
+export async function getSocCorpusGroups(
+  search: string,
+  offset: number,
+  context?: SocRequestContext,
+): Promise<SocCorpusGroupPage> {
+  const params = new URLSearchParams({
+    search,
+    offset: String(offset),
+    limit: "50",
+  });
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/groups?${params}`,
+    {
+      headers: buildSocHeaders(context),
+    },
+  );
+  return readJson<SocCorpusGroupPage>(response, "无法加载行为模式组");
 }
 
 export async function getSocCorpusWorkbenchActivity(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, insert
 from sqlalchemy.orm import sessionmaker
 
 from app.gateway.routers import soc_corpus_workbench
@@ -37,6 +38,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import SocAnalysisService, SocMemoryPatternService, SocMemoryService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
+from soc_agent.db.models import SocAnalysisRunRow
 from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
     SocCorpusWorkbenchActiveExecution,
@@ -138,6 +140,46 @@ class _BlockingAnalysisService:
 
     def replay(self, run_id, *, context):
         return self._delegate.replay(run_id, context=context)
+
+
+@pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+def test_group_directory_is_lazy_paged_and_searches_alert_ids(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    service = SocCorpusWorkbenchService(
+        repository=repository,
+        analysis_service=SimpleNamespace(),
+        pattern_service=SocMemoryPatternService(repository=repository, candidate_repository=repository, profile_registry=build_soc_memory_profile_registry()),
+        source_path=_CORPUS,
+        settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+        database_file="fixture.sqlite",
+    )
+    full = service.get_state(unprocessed_only=False)
+    slim = service.get_state(unprocessed_only=False, include_group_catalog=False)
+    assert slim.alerts == full.alerts
+    assert len(slim.groups) < len(full.groups)
+    page = service.get_groups(limit=2, offset=0)
+    assert page.total >= len(full.groups)
+    assert len(page.groups) == 2
+    assert page.has_next
+    assert not set(item.group_id for item in page.groups) & set(item.group_id for item in service.get_groups(limit=2, offset=2).groups)
+    case = next(iter(service._cases.values()))
+    found = service.get_groups(search=case.alert_id)
+    assert [item.group_id for item in found.groups] == [case.group_id]
+    selected = service.get_state(group_id=case.group_id, unprocessed_only=False, include_group_catalog=False)
+    assert case.group_id in {item.group_id for item in selected.groups}
+    without_rehearsal = service.get_state(
+        group_id=case.group_id,
+        unprocessed_only=False,
+        include_group_catalog=False,
+        include_rehearsal=False,
+    )
+    assert without_rehearsal.alerts == selected.alerts
+    assert without_rehearsal.source == full.source
+    assert without_rehearsal.leadership_demo is None
+    assert without_rehearsal.rehearsal_alerts == []
+    assert [item.group_id for item in without_rehearsal.groups] == [case.group_id]
+    with pytest.raises(ValueError):
+        service.get_groups(limit=1000)
 
 
 def _admin_context(request_id: str, *, actor_id: str) -> ServiceRequestContext:
@@ -261,6 +303,7 @@ def test_corpus_workbench_pages_and_filters_alerts_on_the_server(
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
 def test_corpus_workbench_reruns_one_alert_without_duplicate_pattern_support(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _repository(tmp_path)
     settings = SocLLMSettings(mode=SocAnalyzerMode.STUB)
@@ -329,6 +372,99 @@ def test_corpus_workbench_reruns_one_alert_without_duplicate_pattern_support(
     assert projected.operator_outcome is not None
     assert projected.operator_outcome.security_verdict is first.alert.operator_outcome.security_verdict
     assert projected.operator_outcome.closure_status is first.alert.operator_outcome.closure_status
+
+    # Unrelated rows deliberately lack a valid full payload: SQL must exclude them.
+    latest = repository.get_run(rerun.run_id)
+    assert latest is not None
+    with repository._session_factory() as session:
+        session.execute(
+            insert(SocAnalysisRunRow),
+            [
+                {
+                    "run_id": f"UNRELATED-{index}",
+                    "alert_id": "outside-corpus",
+                    "input_hash": "other-input",
+                    "status": "completed",
+                    "pipeline_version": "test",
+                    "model_name": "not-invoked",
+                    "prompt_version": "test",
+                    "started_at": latest.started_at,
+                    "created_at": latest.started_at,
+                    "updated_at": latest.started_at,
+                    "run_payload": {},
+                }
+                for index in range(10_001)
+            ],
+        )
+        session.commit()
+    parent = repository.get_run(first.run_id)
+    assert parent is not None
+    repository.save_run(parent)
+
+    def reject_global_run_scan(**kwargs):
+        pytest.fail("single-alert detail must not scan all runs")
+
+    monkeypatch.setattr(repository, "list_runs", reject_global_run_scan)
+    for name in ("list_review_items", "list_memory_candidates", "list_decision_transitions", "list_memory_uses"):
+        original = getattr(repository, name)
+
+        def require_run_scope(*, _original=original, **kwargs):
+            assert kwargs.get("run_id") == rerun.run_id
+            return _original(**kwargs)
+
+        monkeypatch.setattr(repository, name, require_run_scope)
+    scoped = service._get_alert_view(alert_id)
+    assert scoped.run_id == projected.run_id
+    assert scoped.pattern_support_count == projected.pattern_support_count
+    assert scoped.operator_outcome == projected.operator_outcome
+    unrun_alert_id = next(item for item in service._cases if item != alert_id)
+    assert service._get_alert_view(unrun_alert_id).run_id is None
+
+    state = service.get_state(search=alert_id, unprocessed_only=False, include_rehearsal=False, include_group_catalog=False)
+    assert state.alert_page.total == 1
+    assert state.alerts[0].run_id == rerun.run_id
+    assert state.readiness.processed_count == 1
+    assert state.alerts[0].operator_outcome == projected.operator_outcome
+    # A warm list must not hydrate another full run merely to compute totals.
+    original_run_for_case = service._run_for_case
+    queried = []
+
+    def counted(case):
+        queried.append(case.alert_id)
+        return original_run_for_case(case)
+
+    monkeypatch.setattr(service, "_run_for_case", counted)
+    state = service.get_state(search=unrun_alert_id, unprocessed_only=False, include_rehearsal=False, include_group_catalog=False)
+    assert state.readiness.processed_count == 1
+    assert queried == [unrun_alert_id]
+    monkeypatch.setattr(service, "_run_for_case", original_run_for_case)
+
+    revision, cached = service._list_queries.rows(service._list_catalog_id)[alert_id]
+    service._list_queries.save(
+        service._list_catalog_id, alert_id, revision, replace(cached, semantic_features_applied=True, aggregation_key="synthetic-cohort", readiness="singleton_strong", decision_eligible=True, behavior_fingerprint="synthetic")
+    )
+    monkeypatch.setattr(service._list_queries, "aggregation_counts", lambda: {"synthetic-cohort": 5})
+    monkeypatch.setattr(service, "_run_for_case", lambda case: pytest.fail("cohort growth must not hydrate unchanged sibling runs"))
+    assert service._list_summaries()[alert_id].readiness == "candidate_window"
+    monkeypatch.setattr(service, "_run_for_case", original_run_for_case)
+
+    assert latest.llm_analysis_request is not None
+    foreign = latest.model_copy(
+        update={
+            "llm_analysis_request": latest.llm_analysis_request.model_copy(update={"environment": "stg"}),
+        }
+    )
+    pages: list[int] = []
+
+    def paged_runs(queried_alert_id, input_hash, *, limit, offset):
+        assert queried_alert_id == alert_id
+        assert input_hash == service._cases[alert_id].payload_hash
+        pages.append(offset)
+        return [foreign] * limit if offset == 0 else [latest]
+
+    monkeypatch.setattr(repository, "list_runs_for_input", paged_runs)
+    assert service._run_for_case(service._cases[alert_id]) == latest
+    assert pages == [0, 50]
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
@@ -739,7 +875,7 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
     assert repository.list_runs_by_alert_id(case.alert_id)[0].run_id == older.run_id
     assert service.get_execution(case.alert_id).run_id == run.run_id
     assert service.get_audit_bundle(case.alert_id, context=context).run_id == run.run_id
-    assert service._runs_by_alert()[case.alert_id].run_id == run.run_id
+    assert service._list_summaries()[case.alert_id].run_id == run.run_id
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
@@ -846,6 +982,8 @@ def test_corpus_workbench_state_endpoint_forwards_server_filters() -> None:
 
     assert result.alerts == []
     assert service.state_query == {
+        "include_group_catalog": True,
+        "include_rehearsal": True,
         "search": "OpenVPN",
         "readiness": "recurrent_strong",
         "source_type": "nids",

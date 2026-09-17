@@ -14,6 +14,8 @@
 #   --skip-install        Skip dependency installation (faster restart)
 #   --skip-frontend-build With --prod, reuse the existing .next build via `next start`
 #                         instead of `next build` (opt-in; fails if no build exists)
+#   --frontend-entry=PATH Operator-owned Node launcher, called with `start`
+#   --skip-env            Caller already resolved the operator environment
 #   --stop                Stop all running services and exit
 #   --restart             Stop all services, then start with the given mode flags
 #
@@ -33,7 +35,11 @@ cd "$REPO_ROOT"
 
 # ── Load .env ────────────────────────────────────────────────────────────────
 
-if [ -f "$REPO_ROOT/.env" ]; then
+LOAD_ENV=true
+for arg in "$@"; do
+    if [ "$arg" = "--skip-env" ]; then LOAD_ENV=false; fi
+done
+if $LOAD_ENV && [ -f "$REPO_ROOT/.env" ]; then
     set -a
     source "$REPO_ROOT/.env"
     set +a
@@ -64,6 +70,7 @@ DEV_MODE=true
 DAEMON_MODE=false
 SKIP_INSTALL=false
 SKIP_FRONTEND_BUILD=false
+DEERFLOW_FRONTEND_ENTRY=""
 ACTION="start"   # start | stop | restart
 
 for arg in "$@"; do
@@ -72,12 +79,14 @@ for arg in "$@"; do
         --prod)    DEV_MODE=false ;;
         --daemon)  DAEMON_MODE=true ;;
         --skip-install) SKIP_INSTALL=true ;;
+        --skip-env) ;;
         --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
+        --frontend-entry=*) DEERFLOW_FRONTEND_ENTRY="${arg#*=}" ;;
         --stop)    ACTION="stop" ;;
         --restart) ACTION="restart" ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: $0 [--dev|--prod] [--daemon] [--skip-install] [--skip-frontend-build] [--stop|--restart]"
+            echo "Usage: $0 [--dev|--prod] [--daemon] [--skip-install] [--skip-frontend-build] [--frontend-entry=PATH] [--stop|--restart]"
             exit 1
             ;;
     esac
@@ -282,7 +291,15 @@ stop_all() {
 
 # Validate the reusable frontend build before any stop_all runs, so start and
 # restart never tear down a healthy stack only to fail here. --stop is exempt.
-if [ "$ACTION" != "stop" ] && ! $DEV_MODE && $SKIP_FRONTEND_BUILD; then
+if [ "$ACTION" != "stop" ] && [ -n "$DEERFLOW_FRONTEND_ENTRY" ]; then
+    if [ ! -f "$DEERFLOW_FRONTEND_ENTRY" ]; then
+        echo "Custom frontend entry does not exist: $DEERFLOW_FRONTEND_ENTRY"
+        exit 1
+    fi
+    DEERFLOW_FRONTEND_ENTRY="$(cd "$(dirname "$DEERFLOW_FRONTEND_ENTRY")" && pwd)/$(basename "$DEERFLOW_FRONTEND_ENTRY")"
+    export DEERFLOW_FRONTEND_ENTRY
+fi
+if [ "$ACTION" != "stop" ] && [ -z "$DEERFLOW_FRONTEND_ENTRY" ] && ! $DEV_MODE && $SKIP_FRONTEND_BUILD; then
     if [ ! -f "$REPO_ROOT/frontend/.next/BUILD_ID" ]; then
         echo "✗ --skip-frontend-build requires an existing frontend build."
         echo "  Run 'make start' once (full build), or: cd frontend && pnpm run build"
@@ -325,7 +342,9 @@ DEERFLOW_PNPM_RUNNER="$REPO_ROOT/scripts/pnpm.py"
 export DEERFLOW_PNPM_PYTHON DEERFLOW_PNPM_RUNNER
 
 # Frontend command
-if $DEV_MODE; then
+if [ -n "$DEERFLOW_FRONTEND_ENTRY" ]; then
+    FRONTEND_CMD='env PORT=3000 "$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" exec node "$DEERFLOW_FRONTEND_ENTRY" start'
+elif $DEV_MODE; then
     FRONTEND_CMD='env PORT=3000 "$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" run dev'
     if $SKIP_FRONTEND_BUILD; then
         echo "  Note: --skip-frontend-build is ignored in dev mode (next dev does not build)."

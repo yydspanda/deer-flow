@@ -474,6 +474,7 @@ def start_runtime(
     allowed_origins: tuple[str, ...] = (),
     local_only: bool = False,
     demo_no_auth: bool = False,
+    frontend_mode: str = "prebuilt",
 ) -> None:
     inspect_host(python_executable=python_executable)
     start_environment = build_start_environment(
@@ -524,6 +525,16 @@ def start_runtime(
         runtime_environment,
         runtime_environment=selected_environment,
     )
+    prepare_frontend(
+        environment=runtime_environment,
+        runtime_environment=selected_environment,
+        demo_no_auth=demo_no_auth,
+        frontend_mode=frontend_mode,
+    )
+    print(
+        f"Frontend mode: {frontend_mode} (Gateway profile: {selected_environment})",
+        flush=True,
+    )
     runtime_environment = prepare_soc_database(runtime_environment)
     if (
         resolved_origins
@@ -552,6 +563,7 @@ def start_runtime(
         daemon=daemon,
         demo_no_auth=demo_no_auth,
         runtime_environment=selected_environment,
+        frontend_mode=frontend_mode,
     )
     try:
         subprocess.run(
@@ -563,6 +575,7 @@ def start_runtime(
     except BaseException:
         stop_sidecars(specs, runtime_dir=SIDECAR_RUNTIME_DIR)
         raise
+    record_frontend_start(frontend_mode)
     if not daemon:
         stop_sidecars(specs, runtime_dir=SIDECAR_RUNTIME_DIR)
 
@@ -572,6 +585,8 @@ def build_start_command(
     daemon: bool,
     demo_no_auth: bool = False,
     runtime_environment: str = "dev",
+    frontend_mode: str = "prebuilt",
+    prepare_only: bool = False,
 ) -> list[str]:
     selected_environment = normalize_runtime_environment(runtime_environment)
     expected_zeus_environment = PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS[
@@ -579,6 +594,10 @@ def build_start_command(
     ]
     if demo_no_auth and selected_environment != "dev":
         raise HostDevError("--demo-no-auth is only available in DEV")
+    if frontend_mode not in {"prebuilt", "dev"}:
+        raise HostDevError("frontend mode must be prebuilt or dev")
+    if frontend_mode == "dev" and selected_environment != "dev":
+        raise HostDevError("frontend hot reload is only available in DEV")
     workbench_enabled = "true" if selected_environment == "dev" else "false"
     service_mode = "--dev" if selected_environment == "dev" else "--prod"
     auth_setup = (
@@ -587,7 +606,8 @@ def build_start_command(
         else "unset DEER_FLOW_AUTH_DISABLED; "
     )
     shell_command = (
-        'set -a; source "$SOC_HOST_DEV_ROOT/.env.soc-dev.local"; set +a; '
+        'set -a; if [[ -f "$SOC_HOST_DEV_ROOT/.env" ]]; then source "$SOC_HOST_DEV_ROOT/.env"; fi; '
+        'source "$SOC_HOST_DEV_ROOT/.env.soc-dev.local"; set +a; '
         f'if [[ "${{SOC_PINGAN_ENV:-}}" != "{selected_environment}" ]]; then '
         'echo "PingAn runtime profile changed after startup planning; retry start" >&2; exit 1; fi; '
         f'if [[ "${{SOC_PINGAN_ZEUS_ENV:-}}" != "{expected_zeus_environment}" ]]; then '
@@ -615,8 +635,20 @@ def build_start_command(
         'if [[ "${SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE+x}" == x ]]; then '
         'export DEER_FLOW_DEV_ALLOWED_ORIGINS="$SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"; '
         "fi; "
-        f'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" {service_mode} --skip-install "$@"'
+        f"export SOC_FRONTEND_MODE={frontend_mode}; "
     )
+    if prepare_only:
+        shell_command += (
+            'cd "$SOC_HOST_DEV_ROOT/frontend"; '
+            'exec "$SOC_HOST_DEV_ROOT/backend/.venv/bin/python" '
+            '"$SOC_HOST_DEV_ROOT/scripts/pnpm.py" exec node '
+            '"$SOC_HOST_DEV_ROOT/frontend/scripts/soc-frontend.mjs" build'
+        )
+    else:
+        shell_command += (
+            f'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" {service_mode} --skip-install --skip-env '
+            '--frontend-entry="$SOC_HOST_DEV_ROOT/frontend/scripts/soc-frontend.mjs" "$@"'
+        )
     command = [
         "/bin/bash",
         "-c",
@@ -626,6 +658,44 @@ def build_start_command(
     if daemon:
         command.append("--daemon")
     return command
+
+
+def prepare_frontend(
+    *,
+    environment: dict[str, str],
+    runtime_environment: str,
+    demo_no_auth: bool,
+    frontend_mode: str,
+) -> None:
+    """Compile before replacing services; the shared builder reuses unchanged inputs."""
+    command = build_start_command(
+        daemon=False,
+        runtime_environment=runtime_environment,
+        demo_no_auth=demo_no_auth,
+        frontend_mode=frontend_mode,
+        prepare_only=True,
+    )
+    if frontend_mode == "prebuilt":
+        subprocess.run(command, cwd=ROOT, env=environment, check=True)
+
+
+def record_frontend_start(mode: str) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = RUNTIME_DIR / "frontend-mode.json"
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"mode": mode}) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def last_frontend_mode() -> str:
+    try:
+        value = json.loads(
+            (RUNTIME_DIR / "frontend-mode.json").read_text(encoding="utf-8")
+        )
+        return value["mode"] if value.get("mode") in {"dev", "prebuilt"} else "unknown"
+    except (OSError, ValueError, TypeError, AttributeError):
+        return "unknown"
 
 
 def prepare_soc_database(
@@ -938,6 +1008,7 @@ def runtime_status() -> dict[str, Any]:
     except HostDevError:
         runtime_environment = "unknown"
     runtime_profile = {
+        "frontend_mode_last_started": last_frontend_mode(),
         "workbenches_enabled": runtime_environment == "dev",
         "demo_no_auth_allowed": runtime_environment == "dev",
         "service_mode": (
@@ -1183,6 +1254,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     start.add_argument("--daemon", action="store_true")
     start.add_argument(
+        "--frontend-mode",
+        choices=("prebuilt", "dev"),
+        default="prebuilt",
+        help="serve a reusable optimized frontend; dev explicitly restores DEV hot reload",
+    )
+    start.add_argument(
         "--allowed-origin",
         action="append",
         default=[],
@@ -1231,6 +1308,7 @@ def main(argv: list[str] | None = None) -> int:
                 allowed_origins=tuple(args.allowed_origin),
                 local_only=args.local_only,
                 demo_no_auth=args.demo_no_auth,
+                frontend_mode=args.frontend_mode,
             )
             return 0
         elif args.action == "stop":

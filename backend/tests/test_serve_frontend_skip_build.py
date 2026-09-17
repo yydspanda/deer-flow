@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,3 +54,22 @@ def test_make_start_exposes_flag_as_opt_in() -> None:
         recipe = _make_recipe(target)
         assert "--skip-frontend-build" in recipe
         assert "$(if $(filter 1,$(SKIP_FRONTEND_BUILD)),--skip-frontend-build)" in recipe
+
+
+def test_custom_frontend_entry_is_validated_before_stopping_services() -> None:
+    completed = subprocess.run(
+        ["bash", str(SERVE_SH), "--restart", "--frontend-entry=/nonexistent/entry.mjs"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "frontend entry does not exist" in completed.stdout
+    assert "Stopping all services" not in completed.stdout
+
+
+def test_custom_frontend_entry_is_generic_and_uses_host_pnpm_runner() -> None:
+    serve = SERVE_SH.read_text(encoding="utf-8")
+    assert 'exec node "$DEERFLOW_FRONTEND_ENTRY" start' in serve
+    assert "soc-frontend" not in serve
+    assert 'if [ -n "$DEERFLOW_FRONTEND_ENTRY" ]; then' in serve

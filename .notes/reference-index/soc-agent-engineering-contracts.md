@@ -2642,6 +2642,14 @@ worker pool；这些属于 `AC-06/AC-47/AC-48`，不能按本节文字冒充已�
 
 ## 十八、部署、运维与恢复
 
+- DEV corpus list projections are disposable read models, never Memory authority or an
+  alternate result store. Migration `0028_corpus_list` binds their catalog to source/index
+  and projection version. Search/filter/page use SQL; compact source revisions trigger
+  incremental refresh, while page governance and audit details are read fresh. Do not
+  scan/deserialise every full run, clip global history at 10,000, or silently substitute a
+  newer foreign-scope run. Initial historical backfill is preparation and must be reported
+  separately from warm navigation. Query capacity fixtures do not prove LLM throughput.
+
 ### 环境分层
 
 ```text

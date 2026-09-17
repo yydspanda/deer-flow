@@ -1,7 +1,12 @@
 "use client";
 
-import { CheckIcon, ChevronsUpDownIcon, PlusIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronsUpDownIcon,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +27,7 @@ import {
   formatCorpusGroupOption,
   summarizeCorpusGroupBehavior,
 } from "@/core/soc/corpus-presentation";
+import { useSocCorpusGroups } from "@/core/soc/hooks";
 import type { SocCorpusWorkbenchGroup } from "@/core/soc/types";
 
 const RESULT_BATCH_SIZE = 50;
@@ -37,31 +43,18 @@ export function SocCorpusGroupPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [limit, setLimit] = useState(RESULT_BATCH_SIZE);
+  const [offset, setOffset] = useState(0);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setOffset(0);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const query = useSocCorpusGroups(debouncedSearch, offset, open);
   const selected = groups.find((group) => group.group_id === value);
-  const matches = useMemo(() => {
-    const terms = search
-      .trim()
-      .toLocaleLowerCase()
-      .split(/\s+/)
-      .filter(Boolean);
-    return groups.filter((group) => {
-      const text = [
-        group.group_id,
-        group.rule_name,
-        group.rule_code,
-        group.source_type,
-        group.detection_key,
-        ...group.behavior_components,
-        ...group.behavior_components.map((component) =>
-          summarizeCorpusGroupBehavior([component]),
-        ),
-      ]
-        .join(" ")
-        .toLocaleLowerCase();
-      return terms.every((term) => text.includes(term));
-    });
-  }, [groups, search]);
+  const matches = query.data?.groups ?? [];
   const select = (groupId: string) => {
     onValueChange(groupId);
     setOpen(false);
@@ -74,7 +67,8 @@ export function SocCorpusGroupPicker({
         setOpen(next);
         if (next) {
           setSearch("");
-          setLimit(RESULT_BATCH_SIZE);
+          setOffset(0);
+          setDebouncedSearch("");
         }
       }}
     >
@@ -103,20 +97,20 @@ export function SocCorpusGroupPicker({
         <Command shouldFilter={false}>
           <CommandInput
             aria-label="搜索分组"
-            placeholder="规则名称 / 规则编码 / 行为关键词 / 分组编号"
+            placeholder="告警编号 / 规则名称 / 规则编码 / 行为关键词 / 分组编号"
             value={search}
             onValueChange={(next) => {
               setSearch(next);
-              setLimit(RESULT_BATCH_SIZE);
+              setOffset(0);
             }}
           />
           <div
             className="text-muted-foreground border-b px-4 py-2 text-xs"
             role="status"
           >
-            {search.trim()
-              ? `找到 ${matches.length} 个分组`
-              : `共 ${groups.length} 个分组`}
+            {query.isFetching
+              ? "正在加载分组"
+              : `共 ${query.data?.total ?? 0} 个分组`}
           </div>
           <CommandList
             className="max-h-[min(60vh,480px)] p-1"
@@ -128,8 +122,14 @@ export function SocCorpusGroupPicker({
                 {value === "all" && <CheckIcon className="size-4" />}
               </CommandItem>
             )}
-            <CommandEmpty>未找到匹配的分组</CommandEmpty>
-            {matches.slice(0, limit).map((group) => (
+            <CommandEmpty>
+              {query.isFetching
+                ? "正在加载"
+                : query.isError
+                  ? "分组加载失败，请重试"
+                  : "未找到匹配的分组"}
+            </CommandEmpty>
+            {matches.map((group) => (
               <CommandItem
                 key={group.group_id}
                 value={group.group_id}
@@ -156,18 +156,41 @@ export function SocCorpusGroupPicker({
                 {value === group.group_id && <CheckIcon className="size-4" />}
               </CommandItem>
             ))}
-            {matches.length > limit && (
-              <CommandItem
-                value="show-more"
-                onSelect={() =>
-                  setLimit((current) => current + RESULT_BATCH_SIZE)
-                }
-              >
-                <PlusIcon className="size-4" />
-                显示更多分组（剩余 {matches.length - limit} 组）
-              </CommandItem>
-            )}
           </CommandList>
+          <div className="flex items-center justify-end gap-2 border-t p-2">
+            {query.isError && (
+              <Button variant="outline" onClick={() => void query.refetch()}>
+                重试
+              </Button>
+            )}
+            <span className="text-muted-foreground text-xs">
+              第 {Math.floor(offset / RESULT_BATCH_SIZE) + 1} 页
+            </span>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="上一页分组"
+              title="上一页分组"
+              disabled={offset === 0 || query.isFetching}
+              onClick={() =>
+                setOffset((current) => Math.max(0, current - RESULT_BATCH_SIZE))
+              }
+            >
+              <ChevronLeftIcon className="size-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="下一页分组"
+              title="下一页分组"
+              disabled={!query.data?.has_next || query.isFetching}
+              onClick={() =>
+                setOffset((current) => current + RESULT_BATCH_SIZE)
+              }
+            >
+              <ChevronRightIcon className="size-4" />
+            </Button>
+          </div>
         </Command>
       </DialogContent>
     </Dialog>

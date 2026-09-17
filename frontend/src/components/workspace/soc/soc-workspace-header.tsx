@@ -6,7 +6,6 @@ import {
   FileSearchIcon,
   KeyRoundIcon,
   ShieldCheckIcon,
-  WrenchIcon,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -51,12 +50,6 @@ const NAVIGATION: {
     href: "/workspace/soc/approvals",
     label: "动作审批",
     icon: KeyRoundIcon,
-    section: "operations",
-  },
-  {
-    href: "/workspace/soc/normalization",
-    label: "归一化运维",
-    icon: WrenchIcon,
     section: "operations",
   },
   {

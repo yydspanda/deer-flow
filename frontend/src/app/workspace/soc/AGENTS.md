@@ -15,6 +15,20 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 ## API And Navigation
 
+- Corpus list requests set `include_group_catalog=false&include_rehearsal=false`. Keep
+  the selected group in that lightweight response; open the group picker to fetch
+  `/dev/corpus-workbench/groups` with server search and bounded pagination. Do not
+  reset a selected group merely because a partial directory does not contain it.
+  Directory counts describe static corpus membership, not current processing state.
+  SOC Docker acceptance uses `scripts/soc-memory-dev.sh` prebuilt mode; opt in to
+  `SOC_FRONTEND_MODE=dev` for source hot reload. This does not change backend DEV,
+  authentication or provider targets. Read-only navigation measurement is in
+  `tests/e2e-real-backend/soc-navigation-performance.mjs`.
+- Fixed recommended rehearsal panels are retired; preserve the existing group picker,
+  group presentation, alert-to-group navigation and return-to-filter flow. Do not remove
+  samples or group browsing along with the old guide. Normalization inspection remains
+  directly addressable at `/workspace/soc/normalization`, not in routine operator navigation.
+
 - Completed-run notices report execution only; the experience status band owns the
   single learning action. Do not duplicate its Candidate/Memory link in a session-local
   completion banner. Review copy identifies automatic same-behavior learning versus

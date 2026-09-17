@@ -1562,6 +1562,18 @@ export interface SocCorpusWorkbenchGroup {
 
 export type SocLeadershipDemoAvailability = "ready" | "drifted" | "unavailable";
 
+export interface SocCorpusGroupPage {
+  schema_version: "soc.corpus_group_page.v1";
+  groups: Omit<
+    SocCorpusWorkbenchGroup,
+    "processed_count" | "memory_hit_count"
+  >[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_next: boolean;
+}
+
 export interface SocLeadershipDemoTarget {
   target_id: string;
   label: string;
@@ -1688,7 +1700,7 @@ export interface SocCorpusWorkbenchState {
     effective_unscored_count: number;
     effective_match_rate?: number | null;
   };
-  leadership_demo: SocLeadershipDemoGuide;
+  leadership_demo?: SocLeadershipDemoGuide | null;
   source_types: string[];
   groups: SocCorpusWorkbenchGroup[];
   rehearsal_alerts: SocCorpusWorkbenchAlert[];
@@ -1702,6 +1714,8 @@ export interface SocCorpusWorkbenchState {
 }
 
 export interface SocCorpusWorkbenchQuery {
+  includeGroupCatalog?: boolean;
+  includeRehearsal?: boolean;
   search?: string | null;
   readiness?: SocCorpusWorkbenchReadiness | null;
   sourceType?: string | null;
