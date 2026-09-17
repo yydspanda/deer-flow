@@ -69,6 +69,7 @@ class SocProcessingJobSubmission(BaseModel):
     tenant_id: str | None = Field(default=None, max_length=128)
     workload_kind: str = Field(min_length=1, max_length=64)
     queue_name: str = Field(min_length=1, max_length=128)
+    concurrency_key: str | None = Field(default=None, min_length=1, max_length=256)
     idempotency_key: str = Field(min_length=1, max_length=512)
     external_ref: str | None = Field(default=None, max_length=256)
     alert_id: str | None = Field(default=None, max_length=128)
@@ -108,6 +109,7 @@ class SocProcessingJob(BaseModel):
     tenant_id: str | None = None
     workload_kind: str
     queue_name: str
+    concurrency_key: str | None = None
     status: ProcessingJobStatus
     idempotency_key: str
     external_ref: str | None = None
@@ -228,6 +230,8 @@ def stable_processing_submission_sha256(submission: SocProcessingJobSubmission) 
         mode="json",
         exclude={"available_at", "expires_at"},
     )
+    if protected.get("concurrency_key") is None:
+        protected.pop("concurrency_key", None)
     return stable_processing_payload_sha256(protected)
 
 

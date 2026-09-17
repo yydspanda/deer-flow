@@ -99,9 +99,10 @@ class PingAnLegacyJobWorker:
 
     def run_once(self) -> SocProcessingJob | None:
         now = self._now()
-        self._repository.recover_expired_leases(now=now)
+        self._repository.recover_expired_leases(queue_name=self._queue_name, workload_kind="alert_analysis", now=now)
         job = self._repository.claim_next(
             queue_name=self._queue_name,
+            workload_kind="alert_analysis",
             worker_id=self._worker_id,
             lease_seconds=self._lease_seconds,
             now=now,

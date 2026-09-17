@@ -741,6 +741,285 @@ function corpusAudit() {
   };
 }
 
+for (const width of [1920, 390]) {
+  test(`experiment controls keep preparation, execution and historical results separate at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    mockLangGraphAPI(page, { threads: [] });
+    const options = {
+      normalization_review_mode: "apply",
+      tenant_policy_enabled: false,
+      tenant_policy_advisor_enabled: false,
+      tenant_policy_signal_providers_enabled: false,
+    };
+    const configuration = {
+      defaults: options,
+      full_flow_defaults: options,
+      max_concurrency: 3,
+      dispatcher_running: false,
+    };
+    const experiments: {
+      experiment_id: string;
+      name: string;
+      created_at: string;
+    }[] = [];
+    let round: Record<string, unknown> | null = null;
+    const writes: { path: string; body: Record<string, unknown> }[] = [];
+    const audits: string[] = [];
+    const comparisonReads: string[] = [];
+    await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname.replace("/api/soc/dev/corpus-workbench", "");
+      const post = route.request().method() === "POST";
+      const body = post
+        ? (route.request().postDataJSON() as Record<string, unknown>)
+        : {};
+      if (post) writes.push({ path, body });
+      let json: unknown;
+      if (path === "/experiments/configuration") json = configuration;
+      else if (path === "/experiments") {
+        if (post)
+          experiments.push({
+            experiment_id: String(body.experiment_id),
+            name: String(body.name),
+            created_at: "2026-09-18T01:00:00Z",
+          });
+        json = post ? experiments[0] : experiments;
+      } else if (path.startsWith("/experiments/") && path.endsWith("/rounds"))
+        json = round
+          ? [
+              {
+                round_id: round.round_id,
+                batch: "learning",
+                state: round.state,
+                created_at: round.created_at,
+              },
+            ]
+          : [];
+      else if (path === "/rounds" && post) {
+        expect(route.request().headers()["idempotency-key"]).toBeTruthy();
+        round = {
+          ...body,
+          round_id: body.parent_round_id ? "ROUND-retest" : "ROUND-fixture",
+          state: "prepared",
+          version: 1,
+          config_hash: "a".repeat(64),
+          memory_snapshot: [],
+          created_at: "2026-09-18T01:01:00Z",
+        };
+        json = round;
+      } else if (path === `/rounds/${String(round?.round_id)}/start`) {
+        round!.state = "completed";
+        json = round;
+      } else if (path === `/rounds/${String(round?.round_id)}`)
+        json = {
+          round,
+          selected_count: 1,
+          admitted_count: 1,
+          active_count: 0,
+          completed_count: round?.state === "completed" ? 1 : 0,
+          failed_count: 0,
+          counts: { completed: 1 },
+          timing: {
+            elapsed_ms: 160000,
+            running_ms: 100000,
+            paused_ms: 60000,
+            terminal_count: 1,
+            processed_per_minute: 0.6,
+            estimated_remaining_seconds:
+              round?.state === "completed" ? 0 : null,
+            estimate_status:
+              round?.state === "completed" ? "finished" : "not_running",
+          },
+        };
+      else if (path === `/rounds/${String(round?.round_id)}/results`)
+        json = {
+          round_id: "ROUND-fixture",
+          total: 1,
+          items: [
+            {
+              alert_id: "1984426",
+              group_id: "CG-GALAXY",
+              status: round?.state === "completed" ? "completed" : "queued",
+              run_id: round?.state === "completed" ? "RUN-FIXED" : null,
+              candidate_id: round?.state === "completed" ? "MC-FIXED" : null,
+              snapshot_changed_during_run: false,
+              summary:
+                round?.state === "completed"
+                  ? {
+                      recommended_handling: "transfer",
+                      processing_path: "model_analysis",
+                      total_duration_ms: 1000,
+                    }
+                  : {},
+              label: {},
+            },
+          ],
+        };
+      else if (path === "/rounds/ROUND-retest/comparison") {
+        comparisonReads.push(url.search);
+        const side = (before: boolean) => ({
+          run_id: before ? "RUN-FIXED" : "RUN-RETEST",
+          status: "completed",
+          snapshot_changed_during_run: false,
+          summary: {
+            recommended_handling: before ? "transfer" : "ignore",
+            total_duration_ms: before ? 1000 : 100,
+            memory_uses: before
+              ? []
+              : [
+                  {
+                    memory_id: "MEM-REVIEWED",
+                    memory_version: 2,
+                    directive_applied: true,
+                  },
+                ],
+            measurements: {
+              total_tokens: before ? null : 0,
+              provider_call_count: before ? 1 : 0,
+            },
+          },
+        });
+        json = {
+          round_id: "ROUND-retest",
+          parent_round_id: "ROUND-fixture",
+          config_changed: false,
+          total: 1,
+          items: [
+            {
+              alert_id: "1984426",
+              before: side(true),
+              after: side(false),
+              comparison_status: "handling_changed",
+              changed_fields: ["recommended_handling", "memory_uses"],
+            },
+          ],
+        };
+      } else if (path.endsWith("/audit")) {
+        audits.push(url.searchParams.get("run_id") ?? "latest");
+        json = {
+          ...corpusAudit(),
+          run_id: url.searchParams.get("run_id") ?? "RUN-FIXED",
+        };
+      } else if (path === "/activity") json = corpusActivity();
+      else {
+        const current = corpusStateForRequest(
+          corpusState(true),
+          url.toString(),
+        );
+        json = {
+          ...current,
+          batch_selection: {
+            plan_id: "a".repeat(64),
+            batch: url.searchParams.get("batch") ?? "learning",
+            selected_count: 1,
+            group_count: 1,
+            labeled_count: 1,
+            counts: {
+              learning: 1,
+              validation_main: 1,
+              validation_supplementary: 0,
+              total: 2,
+            },
+            execution_enabled: false,
+            existing_results_only: true,
+          },
+        };
+      }
+      await route.fulfill({ status: post ? 201 : 200, json });
+    });
+    await page.goto("/workspace/soc/corpus-validation");
+    await page.getByRole("button", { name: "准备新实验", exact: true }).click();
+    await page.getByRole("button", { name: "确认准备", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "准备本批轮次" }),
+    ).toBeEnabled();
+    await page
+      .locator('[data-alert-id="1984426"]')
+      .getByRole("button", { name: "选择本条" })
+      .click();
+    await expect(page.getByLabel("指定告警（可选）")).toHaveValue("1984426");
+    await page.getByRole("button", { name: "确认范围并准备" }).click();
+    await expect(
+      page.getByRole("button", { name: "开始运行", exact: true }),
+    ).toBeVisible();
+    expect(writes.map((item) => item.path)).toEqual([
+      "/experiments",
+      "/rounds",
+    ]);
+    expect(writes[1]!.body.selection).toMatchObject({
+      batch: "learning",
+      alert_ids: ["1984426"],
+    });
+    await page.getByRole("button", { name: "开始运行", exact: true }).click();
+    await expect(page.getByLabel("批次执行")).toContainText("完成 1");
+    await expect(page.getByLabel("批次执行")).toContainText(
+      "运行计时 1 分 40 秒",
+    );
+    await expect(page.getByLabel("批次执行")).toContainText(
+      "暂停累计 1 分 0 秒",
+    );
+    await expect(page.getByText(/企业专属策略 ·/)).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "本轮已完成", exact: true }),
+    ).toBeDisabled();
+    await page.reload();
+    await expect(page.getByLabel("批次执行")).toContainText("完成 1");
+    await expect(page.getByLabel("累计运行额度")).toContainText("1 条");
+    await expect(
+      page.getByRole("link", { name: "审核经验", exact: true }),
+    ).toHaveAttribute(
+      "href",
+      `/workspace/soc/review/memory-candidates/MC-FIXED?experiment=${experiments[0]!.experiment_id}`,
+    );
+    await page.getByRole("button", { name: "本轮结果", exact: true }).click();
+    await page.getByRole("button", { name: /打开完整审计/ }).click();
+    await expect.poll(() => audits).toEqual(["RUN-FIXED"]);
+    await page.getByRole("button", { name: "准备本批轮次" }).click();
+    await page.getByLabel("作为当前轮次的复测，保留旧结果对照").check();
+    await page.getByRole("button", { name: "确认范围并准备" }).click();
+    await expect(
+      page.getByRole("button", { name: "开始运行", exact: true }),
+    ).toBeVisible();
+    expect(writes[3]!.body.parent_round_id).toBe("ROUND-fixture");
+    expect(comparisonReads).toHaveLength(0);
+    await page.getByRole("button", { name: "开始运行", exact: true }).click();
+    await page.getByRole("tab", { name: "前后对照", exact: true }).click();
+    const comparisonPanel = page.getByLabel("前后结果对照");
+    await expect(comparisonPanel).toContainText("处置改变");
+    await expect(comparisonPanel).toContainText("Token 未记录");
+    await expect(comparisonPanel).toContainText("复用审核结论");
+    await expect(
+      comparisonPanel.getByRole("link", { name: /MEM-REVIEWED/ }),
+    ).toHaveAttribute("href", "/workspace/soc/memory/records/MEM-REVIEWED");
+    expect(comparisonReads[0]).toBe("?limit=20&offset=0");
+    await comparisonPanel.getByRole("button", { name: "查看复测结果" }).click();
+    await comparisonPanel.getByRole("button", { name: /打开完整审计/ }).click();
+    await expect.poll(() => audits).toEqual(["RUN-FIXED", "RUN-RETEST"]);
+    await page.screenshot({
+      path: testInfo.outputPath(`experiment-${width}.png`),
+      fullPage: true,
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    expect(
+      await page
+        .locator("main")
+        .last()
+        .evaluate((element) => element.scrollLeft),
+    ).toBe(0);
+    await page.getByRole("tab", { name: /第二批/ }).click();
+    await expect(
+      page.getByRole("button", { name: "本轮结果", exact: true }),
+    ).toHaveCount(0);
+    expect(writes).toHaveLength(5);
+  });
+}
+
 function corpusStateWithPatternCandidate() {
   const state = corpusState(true);
   const candidateAlert = state.alerts[0]!;
@@ -1022,6 +1301,8 @@ test("opens the searched alert's complete group and restores original filters wi
     sequence_number: 4,
   });
   const initialFilters = {
+    batch: "learning",
+    validationTier: "main",
     search: "1984426",
     readiness: "candidate_window",
     comparison: "not_run",
@@ -1070,6 +1351,151 @@ test("opens the searched alert's complete group and restores original filters wi
   expect(writes).toBe(0);
   expect(detailCalls).toBe(0);
 });
+
+for (const width of [1440, 390]) {
+  test(`batch selection scopes lists and groups and survives reload at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    mockLangGraphAPI(page, { threads: [] });
+    const reads: string[] = [];
+    let writes = 0;
+    await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+      const url = new URL(route.request().url());
+      if (route.request().method() !== "GET") writes++;
+      if (url.pathname.includes("/experiments")) {
+        await route.fulfill({
+          json: url.pathname.endsWith("/configuration")
+            ? {
+                defaults: {},
+                full_flow_defaults: {},
+                max_concurrency: 3,
+                dispatcher_running: false,
+              }
+            : [],
+        });
+        return;
+      }
+      if (url.pathname.endsWith("/activity")) {
+        await route.fulfill({ json: corpusActivity() });
+        return;
+      }
+      const batch = url.searchParams.get("batch");
+      const tier = url.searchParams.get("validation_tier");
+      reads.push(`${batch}:${tier}:${url.pathname}`);
+      const id =
+        batch === "learning"
+          ? "1984426"
+          : tier === "supplementary"
+            ? "SUP-1"
+            : "MAIN-1";
+      const fixture = corpusState();
+      const alert = {
+        ...fixture.alerts[0]!,
+        alert_id: id,
+        can_process: false,
+        batch,
+        validation_tier: tier,
+        batch_reason:
+          tier === "supplementary" ? "singleton" : "group_later_samples",
+        batch_group_alert_count: 1,
+      };
+      const group = { ...fixture.groups[0]!, alert_count: 1 };
+      if (url.pathname.endsWith("/groups")) {
+        await route.fulfill({
+          json: {
+            groups: [group],
+            total: 1,
+            offset: 0,
+            limit: 50,
+            has_next: false,
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          ...fixture,
+          alerts: [alert],
+          groups: [group],
+          rehearsal_alerts: [],
+          leadership_demo: null,
+          alert_page: { total: 1, limit: 20, offset: 0, has_next: false },
+          batch_selection: {
+            plan_id: "fixture-plan",
+            batch,
+            validation_tier: tier,
+            counts: {
+              learning: 1,
+              validation_main: 1,
+              validation_supplementary: 1,
+              total: 3,
+            },
+            selected_count: 1,
+            group_count: 1,
+            labeled_count: 0,
+            execution_enabled: false,
+            existing_results_only: true,
+          },
+        },
+      });
+    });
+    await page.goto("/workspace/soc/corpus-validation");
+    await expect(page.locator('[data-alert-id="1984426"]')).toBeVisible();
+    await expect(page.getByText("样本目录", { exact: true })).toBeVisible();
+    await expect(
+      page
+        .locator('[data-alert-id="1984426"]')
+        .getByRole("button", { name: "选择本条", exact: true }),
+    ).toBeEnabled();
+    await page
+      .locator('[data-alert-id="1984426"]')
+      .getByRole("button", { name: /查看同组/ })
+      .click();
+    await expect(page.getByLabel("当前行为模式组")).toBeVisible();
+    await page.getByRole("tab", { name: /第二批/ }).click();
+    await expect(page.locator('[data-alert-id="MAIN-1"]')).toBeVisible();
+    await expect(page.locator('[data-alert-id="1984426"]')).toHaveCount(0);
+    await expect(page.getByLabel("当前行为模式组")).toHaveCount(0);
+    await page.getByLabel("验证样本范围").click();
+    await page.getByRole("option", { name: /探索少样本告警/ }).click();
+    await expect(page.locator('[data-alert-id="SUP-1"]')).toBeVisible();
+    await expect(page.getByText("少样本探索 · 单例")).toBeVisible();
+    await page.locator("#corpus-group-filter").click();
+    await expect(
+      page.getByRole("dialog").getByRole("heading", { name: "查找行为模式组" }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        reads.some(
+          (r) =>
+            r ===
+            "validation:supplementary:/api/soc/dev/corpus-workbench/groups",
+        ),
+      )
+      .toBe(true);
+    await page.keyboard.press("Escape");
+    await page.reload();
+    await expect(page.getByRole("tab", { name: /第二批/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByLabel("验证样本范围")).toContainText(
+      "探索少样本告警",
+    );
+    await expect(page.locator('[data-alert-id="SUP-1"]')).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath(`batch-${width}.png`),
+      fullPage: true,
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    expect(writes).toBe(0);
+  });
+}
 
 test("searches same-rule groups by behavior and includes singleton groups without fingerprints", async ({
   page,

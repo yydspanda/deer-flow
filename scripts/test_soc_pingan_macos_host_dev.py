@@ -57,6 +57,59 @@ def test_direct_script_entry_ignores_unrelated_installed_scripts_package(
     assert "Prepare and run PingAn SOC DEV" in completed.stdout
 
 
+def test_reset_entry_is_preview_by_default_and_never_starts_services(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    calls = []
+    monkeypatch.setattr(host_dev, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        host_dev, "load_local_runtime_environment", lambda: {"SOC_PINGAN_ENV": "dev"}
+    )
+    monkeypatch.setattr(
+        host_dev,
+        "reset_dev_database",
+        lambda **kwargs: calls.append(kwargs) or {"status": "preview"},
+    )
+    monkeypatch.setattr(
+        host_dev,
+        "start_runtime",
+        lambda **kwargs: pytest.fail("reset must not start services"),
+    )
+    assert host_dev.main(["reset-dev-data"]) == 0
+    assert calls == [{"root": tmp_path, "environment": "dev", "confirmation": None}]
+    assert json.loads(capsys.readouterr().out)["status"] == "preview"
+    assert (
+        parse_args(["reset-dev-data", "--confirm", "RESET-SOC-DEV"]).confirm
+        == "RESET-SOC-DEV"
+    )
+    assert (
+        parse_args(
+            [
+                "restore-dev-data",
+                "--backup-name",
+                "saved",
+                "--confirm",
+                "RESTORE-SOC-DEV",
+            ]
+        ).backup_name
+        == "saved"
+    )
+
+
+def test_main_start_holds_database_maintenance_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(host_dev, "ROOT", tmp_path)
+
+    def start(**kwargs):
+        with pytest.raises(ValueError, match="maintenance command"):
+            with host_dev.database_maintenance_lock(tmp_path):
+                pytest.fail("startup must hold the shared lock")
+
+    monkeypatch.setattr(host_dev, "start_runtime", start)
+    assert host_dev.main(["start", "--daemon"]) == 0
+
+
 def test_local_config_profile_requires_project_gateway_and_sqlite(
     tmp_path: Path,
 ) -> None:

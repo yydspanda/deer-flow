@@ -749,7 +749,7 @@ def test_idempotency_reuse_with_changed_content_conflicts() -> None:
 
     with pytest.raises(SocServiceConflictError, match="reused for different content"):
         service.ingest_observation(
-            MemoryPatternObservationCreateCommand.model_validate(command),
+            MemoryPatternObservationCreateCommand.model_validate({key: value for key, value in command.items() if key != "accumulation_scope"}),
             context=_context(),
         )
 

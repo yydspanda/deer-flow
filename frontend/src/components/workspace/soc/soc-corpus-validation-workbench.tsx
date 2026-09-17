@@ -49,8 +49,10 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
+import { SocCorpusExperiments } from "@/components/workspace/soc/soc-corpus-experiments";
 import { SocCorpusGroupPicker } from "@/components/workspace/soc/soc-corpus-group-picker";
 import {
   availableCorpusRunSettings,
@@ -77,6 +79,8 @@ import {
 } from "@/core/soc";
 import type {
   SocAnalysisExecutionOptions,
+  SocCorpusBatch,
+  SocCorpusValidationTier,
   SocCorpusComparisonStatus,
   SocCorpusWorkbenchAlert,
   SocCorpusWorkbenchExecution,
@@ -145,6 +149,8 @@ type ReadinessFilter = SocCorpusWorkbenchReadiness | "all";
 type ComparisonFilter = SocCorpusComparisonStatus | "all" | "labeled";
 
 interface CorpusFilterSnapshot {
+  batch: SocCorpusBatch;
+  validationTier: SocCorpusValidationTier | "all";
   search: string;
   readiness: ReadinessFilter;
   comparison: ComparisonFilter;
@@ -207,6 +213,16 @@ function readStoredFilters(): Partial<CorpusFilterSnapshot> | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
+      batch:
+        parsed.batch === "learning" || parsed.batch === "validation"
+          ? parsed.batch
+          : undefined,
+      validationTier:
+        parsed.validationTier === "main" ||
+        parsed.validationTier === "supplementary" ||
+        parsed.validationTier === "all"
+          ? parsed.validationTier
+          : undefined,
       search: typeof parsed.search === "string" ? parsed.search : undefined,
       readiness: isReadinessFilter(parsed.readiness)
         ? parsed.readiness
@@ -287,40 +303,68 @@ function comparisonClass(value: SocCorpusComparisonStatus) {
 function SummaryBand({ state }: { state: SocCorpusWorkbenchState }) {
   const summary = state.readiness;
   const evaluation = state.evaluation;
-  const items = [
-    {
-      label: "全部样本",
-      value: `${summary.total_alert_count} 条`,
-      detail: `${state.source.labeled_alert_count} 有处置标签 · ${state.source.unlabeled_alert_count} 无标签`,
-    },
-    {
-      label: "已完成研判",
-      value: `${summary.processed_count} 已完成`,
-      detail: `${summary.failed_count} 失败 · ${evaluation.processed_labeled_count} 条已比较`,
-    },
-    {
-      label: "基础结论对比",
-      value: formatPercent(evaluation.base_match_rate),
-      detail: `${evaluation.base_matched_count} 一致 · ${evaluation.base_mismatched_count} 不一致 · ${evaluation.base_unscored_count} 未定`,
-    },
-    {
-      label: "最终结论对比",
-      value: formatPercent(evaluation.effective_match_rate),
-      detail: `${evaluation.effective_matched_count} 一致 · ${evaluation.effective_mismatched_count} 不一致 · ${evaluation.effective_unscored_count} 未定`,
-    },
-    {
-      label: "历史经验命中",
-      value: `${summary.memory_hit_alert_count} 条`,
-      detail: "研判时找到相关已审核经验",
-    },
-    {
-      label: "样本时间范围",
-      value: `${formatDateTime(state.source.first_event_time)}`,
-      detail: `至 ${formatDateTime(state.source.last_event_time)} · 按事件时间升序`,
-    },
-  ];
+  const batch = state.batch_selection;
+  const items = batch
+    ? [
+        {
+          label: "当前批次样本",
+          value: `${batch.selected_count.toLocaleString()} 条`,
+          detail: `${batch.group_count} 个同类组 · ${batch.labeled_count} 条有处置标签`,
+        },
+        {
+          label: "已有历史运行",
+          value: `${summary.processed_count} 已完成`,
+          detail: "历史记录保留，未计入新实验结果",
+        },
+        {
+          label: "样本时间范围",
+          value: batch.first_event_time
+            ? formatDateTime(batch.first_event_time)
+            : "--",
+          detail: batch.last_event_time
+            ? `至 ${formatDateTime(batch.last_event_time)}`
+            : "当前范围暂无样本",
+        },
+      ]
+    : [
+        {
+          label: "全部样本",
+          value: `${summary.total_alert_count} 条`,
+          detail: `${state.source.labeled_alert_count} 有处置标签 · ${state.source.unlabeled_alert_count} 无标签`,
+        },
+        {
+          label: "已完成研判",
+          value: `${summary.processed_count} 已完成`,
+          detail: `${summary.failed_count} 失败 · ${evaluation.processed_labeled_count} 条已比较`,
+        },
+        {
+          label: "基础结论对比",
+          value: formatPercent(evaluation.base_match_rate),
+          detail: `${evaluation.base_matched_count} 一致 · ${evaluation.base_mismatched_count} 不一致 · ${evaluation.base_unscored_count} 未定`,
+        },
+        {
+          label: "最终结论对比",
+          value: formatPercent(evaluation.effective_match_rate),
+          detail: `${evaluation.effective_matched_count} 一致 · ${evaluation.effective_mismatched_count} 不一致 · ${evaluation.effective_unscored_count} 未定`,
+        },
+        {
+          label: "历史经验命中",
+          value: `${summary.memory_hit_alert_count} 条`,
+          detail: "研判时找到相关已审核经验",
+        },
+        {
+          label: "样本时间范围",
+          value: `${formatDateTime(state.source.first_event_time)}`,
+          detail: `至 ${formatDateTime(state.source.last_event_time)} · 按事件时间升序`,
+        },
+      ];
   return (
-    <section className="grid border-b sm:grid-cols-2 xl:grid-cols-6">
+    <section
+      className={cn(
+        "grid border-b sm:grid-cols-2",
+        batch ? "xl:grid-cols-3" : "xl:grid-cols-6",
+      )}
+    >
       {items.map((item) => (
         <div
           key={item.label}
@@ -1040,6 +1084,14 @@ function AlertDetail({
 }
 
 export function SocCorpusValidationWorkbench() {
+  const [requestedBatchAlert, setRequestedBatchAlert] = useState<{
+    alertId: string;
+    key: number;
+  } | null>(null);
+  const [batch, setBatch] = useState<SocCorpusBatch>("learning");
+  const [validationTier, setValidationTier] = useState<
+    SocCorpusValidationTier | "all"
+  >("main");
   const [runSettings, setRunSettings] =
     useState<SocAnalysisExecutionOptions | null>(null);
   useEffect(() => {
@@ -1081,6 +1133,11 @@ export function SocCorpusValidationWorkbench() {
   const terminalRefreshRunIds = useRef(new Set<string>());
   const deferredSearch = useDeferredValue(search.trim());
   const query = useSocCorpusWorkbench({
+    batch,
+    validationTier:
+      batch === "validation" && validationTier !== "all"
+        ? validationTier
+        : null,
     includeGroupCatalog: false,
     includeRehearsal: false,
     search: deferredSearch || null,
@@ -1096,6 +1153,7 @@ export function SocCorpusValidationWorkbench() {
   const activityQuery = useSocCorpusWorkbenchActivity();
   const processMutation = useProcessSocCorpusWorkbenchAlert();
   const state = query.state;
+  const batchPreview = state?.batch_selection?.execution_enabled === false;
   const selectedRunSettings = state?.run_controls
     ? availableCorpusRunSettings(
         runSettings ?? state.run_controls.defaults,
@@ -1280,6 +1338,8 @@ export function SocCorpusValidationWorkbench() {
   useEffect(() => {
     const stored = readStoredFilters();
     if (stored) {
+      if (stored.batch) setBatch(stored.batch);
+      if (stored.validationTier) setValidationTier(stored.validationTier);
       if (stored.search !== undefined) setSearch(stored.search);
       if (stored.readiness !== undefined) setReadiness(stored.readiness);
       if (stored.comparison !== undefined) setComparison(stored.comparison);
@@ -1295,6 +1355,8 @@ export function SocCorpusValidationWorkbench() {
   useEffect(() => {
     if (!filtersHydrated || typeof window === "undefined") return;
     const snapshot: CorpusFilterSnapshot = {
+      batch,
+      validationTier,
       search,
       readiness,
       comparison,
@@ -1311,6 +1373,8 @@ export function SocCorpusValidationWorkbench() {
       // Navigation continuity is best-effort; the workbench remains usable.
     }
   }, [
+    batch,
+    validationTier,
     comparison,
     filtersHydrated,
     groupId,
@@ -1390,13 +1454,23 @@ export function SocCorpusValidationWorkbench() {
     setPage(restoredPage.current ?? 0);
     restoredPage.current = null;
     setFocusAlertId(null);
-  }, [comparison, groupId, readiness, search, sourceType, unprocessedOnly]);
+  }, [
+    batch,
+    validationTier,
+    comparison,
+    groupId,
+    readiness,
+    search,
+    sourceType,
+    unprocessedOnly,
+  ]);
 
   useEffect(() => {
-    if (query.isPlaceholderData || deferredSearch !== search.trim()) return;
+    if (!state || query.isPlaceholderData || deferredSearch !== search.trim())
+      return;
     if (page < pageCount) return;
     setPage(Math.max(0, pageCount - 1));
-  }, [deferredSearch, page, pageCount, query.isPlaceholderData, search]);
+  }, [deferredSearch, page, pageCount, query.isPlaceholderData, search, state]);
 
   useEffect(() => {
     if (!filtersHydrated || !state) return;
@@ -1516,6 +1590,8 @@ export function SocCorpusValidationWorkbench() {
     setGroupOrigin(
       (current) =>
         current ?? {
+          batch,
+          validationTier,
           search,
           readiness,
           comparison,
@@ -1554,6 +1630,24 @@ export function SocCorpusValidationWorkbench() {
     setPage(groupOrigin.page);
     setSelectedAlertId(null);
     setGroupOrigin(null);
+  };
+  const changeBatchSelection = (
+    nextBatch: SocCorpusBatch,
+    nextTier = validationTier,
+  ) => {
+    setBatch(nextBatch);
+    setValidationTier(nextTier);
+    setGroupId("all");
+    setGroupOrigin(null);
+    setSearch("");
+    setReadiness("all");
+    setComparison("all");
+    setSourceType("all");
+    setUnprocessedOnly(false);
+    setSelectedAlertId(null);
+    setFocusAlertId(null);
+    setPage(0);
+    restoredPage.current = null;
   };
   const selectedGroup = state?.groups.find(
     (group) => group.group_id === groupId,
@@ -1608,7 +1702,7 @@ export function SocCorpusValidationWorkbench() {
       <SocWorkspaceHeader
         icon={FileSearchIcon}
         title="SOC 告警研判演练"
-        description="选择历史告警，观察完整研判、经验参考与结论复用"
+        description="沉淀经验与效果验证"
         actions={
           <>
             <Badge
@@ -1649,15 +1743,81 @@ export function SocCorpusValidationWorkbench() {
         }
       />
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+        <section
+          className="flex flex-wrap items-center gap-3 border-b px-5 py-3 md:px-7"
+          aria-label="实验批次"
+        >
+          <Tabs
+            value={batch}
+            onValueChange={(value) =>
+              changeBatchSelection(value as SocCorpusBatch)
+            }
+          >
+            <TabsList className="h-auto flex-wrap">
+              <TabsTrigger value="learning" className="gap-2 py-2">
+                第一批 · 沉淀经验
+                <span className="tabular-nums">
+                  {state.batch_selection?.counts.learning.toLocaleString()}
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="validation" className="gap-2 py-2">
+                第二批 · 验证效果
+                <span className="tabular-nums">
+                  {state.batch_selection
+                    ? (
+                        state.batch_selection.counts.validation_main +
+                        state.batch_selection.counts.validation_supplementary
+                      ).toLocaleString()
+                    : ""}
+                </span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {batch === "validation" && (
+            <Select
+              value={validationTier}
+              onValueChange={(value) =>
+                changeBatchSelection(
+                  batch,
+                  value as SocCorpusValidationTier | "all",
+                )
+              }
+            >
+              <SelectTrigger aria-label="验证样本范围" className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="main">
+                  验证同类经验 ·{" "}
+                  {state.batch_selection?.counts.validation_main.toLocaleString()}
+                </SelectItem>
+                <SelectItem value="supplementary">
+                  探索少样本告警 ·{" "}
+                  {state.batch_selection?.counts.validation_supplementary.toLocaleString()}
+                </SelectItem>
+                <SelectItem value="all">全部验证样本</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+          {batchPreview && (
+            <Badge variant="outline" className="border-sky-300 text-sky-800">
+              样本目录
+            </Badge>
+          )}
+        </section>
         <section className="flex flex-wrap items-center justify-between gap-3 border-b bg-zinc-50 px-5 py-3 text-xs md:px-7">
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             <span className="font-medium text-amber-800">
               历史告警样本 · 非生产演练
             </span>
-            <span>可任意选择 · 可重新运行</span>
+            <span>
+              {batchPreview
+                ? "历史运行记录保留 · 本轮结果独立统计"
+                : "可任意选择 · 可重新运行"}
+            </span>
             <span>企业安全能力接口 · 关闭/模拟</span>
-            {!state.run_controls ? (
+            {!batchPreview && !state.run_controls ? (
               <>
                 <span className="font-medium text-sky-800">
                   语义核对 ·{" "}
@@ -1684,7 +1844,17 @@ export function SocCorpusValidationWorkbench() {
           </span>
         </section>
 
-        {state.run_controls && selectedRunSettings ? (
+        {batchPreview && (
+          <SocCorpusExperiments
+            batch={batch}
+            tier={validationTier}
+            groupId={groupId}
+            requestedAlert={requestedBatchAlert}
+            onRequestHandled={() => setRequestedBatchAlert(null)}
+          />
+        )}
+
+        {!batchPreview && state.run_controls && selectedRunSettings ? (
           <SocCorpusRunSettings
             controls={state.run_controls}
             value={selectedRunSettings}
@@ -1796,6 +1966,13 @@ export function SocCorpusValidationWorkbench() {
                 行为模式组
               </label>
               <SocCorpusGroupPicker
+                selection={{
+                  batch,
+                  validationTier:
+                    batch === "validation" && validationTier !== "all"
+                      ? validationTier
+                      : null,
+                }}
                 groups={state.groups}
                 value={groupId}
                 onValueChange={handleOpenGroup}
@@ -1937,8 +2114,21 @@ export function SocCorpusValidationWorkbench() {
                           }}
                         >
                           <ListFilterIcon className="size-3.5" />
-                          查看同组 · {alert.group_alert_count} 条
+                          查看同组 ·{" "}
+                          {alert.batch_group_alert_count ??
+                            alert.group_alert_count}{" "}
+                          条
                         </Button>
+                        {alert.validation_tier === "supplementary" && (
+                          <p className="mt-2 text-xs text-amber-800">
+                            少样本探索 ·{" "}
+                            {alert.batch_reason === "singleton"
+                              ? "单例"
+                              : alert.batch_reason === "small_group"
+                                ? "同类样本较少"
+                                : "时间待核验"}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <Badge
@@ -2027,7 +2217,38 @@ export function SocCorpusValidationWorkbench() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {processing ? (
+                        {batchPreview ? (
+                          <div className="flex flex-wrap justify-end gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setRequestedBatchAlert({
+                                  alertId: alert.alert_id,
+                                  key: Date.now(),
+                                });
+                              }}
+                            >
+                              <PlayIcon className="size-4" />
+                              选择本条
+                            </Button>
+                            {alert.run_id && (
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                title="查看已有历史记录（非本轮结果）"
+                                aria-label={`查看 Alert ${alert.alert_id} 历史记录`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleViewResult(alert.alert_id);
+                                }}
+                              >
+                                <EyeIcon className="size-4" />
+                              </Button>
+                            )}
+                          </div>
+                        ) : processing ? (
                           <Button
                             size="sm"
                             variant="outline"
@@ -2066,7 +2287,9 @@ export function SocCorpusValidationWorkbench() {
                               title={
                                 executionCapacityFull
                                   ? "当前并发槽位已满"
-                                  : "创建新 Run；不重复累计同一告警的模式样本"
+                                  : batchPreview
+                                    ? "批次执行待接入"
+                                    : "创建新 Run；不重复累计同一告警的模式样本"
                               }
                               aria-label={`重新运行 Alert ${alert.alert_id}`}
                               onClick={(event) => {
@@ -2087,7 +2310,9 @@ export function SocCorpusValidationWorkbench() {
                             title={
                               executionCapacityFull
                                 ? "当前并发槽位已满"
-                                : undefined
+                                : batchPreview
+                                  ? "批次执行待接入"
+                                  : undefined
                             }
                             onClick={(event) => {
                               event.stopPropagation();

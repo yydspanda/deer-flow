@@ -25,6 +25,12 @@ ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(ROOT))
 
 if __package__:
+    from .soc_pingan_dev_database import (  # noqa: E402
+        DEV_DATABASE,
+        database_maintenance_lock,
+        reset_dev_database,
+        restore_dev_database,
+    )
     from .soc_pingan_host_sidecars import (  # noqa: E402
         HostDevSidecarError,
         build_pingan_sidecar_specs,
@@ -34,6 +40,12 @@ if __package__:
     )
 else:
     sys.path.insert(0, str(SCRIPT_DIR))
+    from soc_pingan_dev_database import (  # noqa: E402
+        DEV_DATABASE,
+        database_maintenance_lock,
+        reset_dev_database,
+        restore_dev_database,
+    )
     from soc_pingan_host_sidecars import (  # noqa: E402
         HostDevSidecarError,
         build_pingan_sidecar_specs,
@@ -60,7 +72,7 @@ DEV_CORPUS = (
 DEV_CORPUS_INDEX = DEV_CORPUS.with_suffix(".workbench-index.json")
 DEV_CORPUS_PAYLOAD_STORE = DEV_CORPUS.with_suffix(".workbench-payloads.sqlite")
 SOC_DATABASE_RELATIVE_PATHS = {
-    "dev": Path("backend/.deer-flow/data/soc_agent_dev.db"),
+    "dev": DEV_DATABASE,
     "stg": Path("backend/.deer-flow/data/soc_agent_stg.db"),
 }
 PINGAN_RUNTIME_ZEUS_TARGET_ENVIRONMENTS = {
@@ -1284,6 +1296,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     subparsers.add_parser("stop", help="stop native DEV services")
     subparsers.add_parser("status", help="show core and SOC sidecar process status")
+    reset = subparsers.add_parser(
+        "reset-dev-data",
+        help="preview SOC DEV reset; stopped services and explicit confirmation required",
+    )
+    reset.add_argument("--confirm", choices=("RESET-SOC-DEV",))
+    restore = subparsers.add_parser(
+        "restore-dev-data",
+        help="restore a verified reset backup into an empty stopped DEV database",
+    )
+    restore.add_argument("--backup-name", required=True)
+    restore.add_argument("--confirm", required=True, choices=("RESTORE-SOC-DEV",))
     return parser.parse_args(argv)
 
 
@@ -1302,18 +1325,30 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "install":
             result = install_dependencies(python_executable=args.python)
         elif args.action == "start":
-            start_runtime(
-                python_executable=args.python,
-                daemon=args.daemon,
-                allowed_origins=tuple(args.allowed_origin),
-                local_only=args.local_only,
-                demo_no_auth=args.demo_no_auth,
-                frontend_mode=args.frontend_mode,
-            )
+            with database_maintenance_lock(ROOT):
+                start_runtime(
+                    python_executable=args.python,
+                    daemon=args.daemon,
+                    allowed_origins=tuple(args.allowed_origin),
+                    local_only=args.local_only,
+                    demo_no_auth=args.demo_no_auth,
+                    frontend_mode=args.frontend_mode,
+                )
             return 0
         elif args.action == "stop":
             stop_runtime()
             result = {"status": "stopped"}
+        elif args.action in ("reset-dev-data", "restore-dev-data"):
+            environment = load_local_runtime_environment()
+            params = {
+                "root": ROOT,
+                "environment": environment.get("SOC_PINGAN_ENV", ""),
+                "confirmation": args.confirm,
+            }
+            if args.action == "reset-dev-data":
+                result = reset_dev_database(**params)
+            else:
+                result = restore_dev_database(**params, backup_name=args.backup_name)
         else:
             result = runtime_status()
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -1323,6 +1358,7 @@ def main(argv: list[str] | None = None) -> int:
         HostDevSidecarError,
         OSError,
         subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
         ValueError,
     ) as exc:
         print(f"error: {str(exc)[:1000] or type(exc).__name__}", file=sys.stderr)

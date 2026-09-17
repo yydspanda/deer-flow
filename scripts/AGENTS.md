@@ -1,5 +1,23 @@
 ## Service Startup Contracts
 
+Host `reset-dev-data` is an explicit, DEV-only offline operation, never part of
+ordinary install/start/resume. Default is read-only preview; `--confirm RESET-SOC-DEV`
+archives only `soc_agent_dev.db` and its SQLite sidecars with a hash manifest before
+leaving the active path empty. Refuse listening services, orphan workers, open file
+handles, symlinks and hard links; share a maintenance lock with Host startup. Keep
+STG, authentication, source corpus, configuration and secrets untouched. Restore
+requires explicit confirmation, verifies the saved file set, and never overwrites
+a new database. Next ordinary Host start owns empty-schema initialization. Tests
+must use temporary checkouts/databases, not the running DEV database.
+
+PingAn corpus transfer is separate from source/config releases. The bounded
+`build_pingan_corpus_transfer.py` reads the same frozen manifest/index as
+`soc_pingan_stage_internal_corpus.py`, packs only its four allowlisted artifacts in
+Downloads-compatible paths, verifies all hashes by streaming, then publishes without
+overwriting an existing archive. It must never unpickle data, package a business DB,
+include credentials, or extract an untrusted archive during inspection. Reuse unchanged
+internal data by hash; source updates must not repeatedly transfer corpus payloads.
+
 The SOC Docker wrapper defaults to a prebuilt frontend without changing backend DEV
 or authentication. `build-frontend` prepares an isolated `.soc-frontend` snapshot;
 publish its manifest only after successful compilation. Dependencies synchronize

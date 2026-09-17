@@ -15,4 +15,26 @@ def build_soc_memory_profile_registry() -> SocMemoryProfileRegistry:
     return SocMemoryProfileRegistry([PingAnSocMemoryProfile(semantic_features=semantic_features)])
 
 
-__all__ = ["build_soc_memory_profile_registry"]
+def build_soc_memory_lesson_draft_service(repository, *, settings=None):
+    from soc_agent.core import SocMemoryLessonDraftService, SocMemoryService
+    from soc_agent.llm import build_configured_memory_lesson_drafter
+
+    registry = build_soc_memory_profile_registry()
+    governance = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        memory_evolution_repository=repository,
+        mutation_audit_repository=repository,
+        mutation_uow=repository,
+        analysis_run_repository=repository,
+        profile_registry=registry,
+    )
+    return SocMemoryLessonDraftService(
+        candidate_repository=repository,
+        drafter=build_configured_memory_lesson_drafter(settings=settings),
+        governance_service=governance,
+        profile_registry=registry,
+    )
+
+
+__all__ = ["build_soc_memory_profile_registry", "build_soc_memory_lesson_draft_service"]

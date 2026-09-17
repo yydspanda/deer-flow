@@ -8,9 +8,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from soc_agent.contracts import (
     ACTIVE_PROCESSING_JOB_STATUSES,
@@ -97,7 +97,6 @@ class SqlAlchemyProcessingJobRepository:
     ) -> tuple[SocProcessingJob, bool]:
         observed_at = _as_utc(now or datetime.now(UTC))
         submission_hash = stable_processing_submission_sha256(submission)
-        payload_hash = stable_processing_payload_sha256(submission.input_payload)
         with self._session_factory() as session:
             existing = session.execute(select(SocProcessingJobRow).where(SocProcessingJobRow.idempotency_key == submission.idempotency_key).limit(1)).scalar_one_or_none()
             if existing is not None:
@@ -106,40 +105,7 @@ class SqlAlchemyProcessingJobRepository:
                     submission_hash=submission_hash,
                 ), False
 
-            job_id = f"JOB-{uuid4().hex[:16].upper()}"
-            available_at = _as_utc(submission.available_at or observed_at)
-            row = SocProcessingJobRow(
-                job_id=job_id,
-                tenant_id=submission.tenant_id,
-                workload_kind=submission.workload_kind,
-                queue_name=submission.queue_name,
-                status=ProcessingJobStatus.QUEUED.value,
-                idempotency_key=submission.idempotency_key,
-                submission_sha256=submission_hash,
-                payload_sha256=payload_hash,
-                external_ref=submission.external_ref,
-                alert_id=submission.alert_id,
-                detection_key=submission.detection_key,
-                execution_type=submission.execution_type,
-                model_name=submission.model_name,
-                priority=submission.priority,
-                input_payload=submission.input_payload,
-                metadata_payload=submission.metadata,
-                run_id=None,
-                result_payload=None,
-                error_code=None,
-                error_message=None,
-                attempt_count=0,
-                version=1,
-                available_at=available_at,
-                expires_at=_as_utc(submission.expires_at),
-                lease_owner=None,
-                lease_expires_at=None,
-                created_at=observed_at,
-                updated_at=observed_at,
-                started_at=None,
-                completed_at=None,
-            )
+            row = _new_job_row(submission, observed_at)
             session.add(row)
             self._append_event(
                 session,
@@ -164,10 +130,56 @@ class SqlAlchemyProcessingJobRepository:
                 ), False
             return _job_from_row(row), True
 
+    def submit_many(self, submissions: Sequence[SocProcessingJobSubmission], *, now: datetime | None = None) -> list[tuple[SocProcessingJob, bool]]:
+        """Atomic bounded insert; callers retry the whole transaction on a race."""
+        if not 1 <= len(submissions) <= 500 or len({item.idempotency_key for item in submissions}) != len(submissions):
+            raise ValueError("submit_many requires 1..500 distinct idempotency keys")
+        observed_at = _as_utc(now or datetime.now(UTC))
+        with self._session_factory() as session:
+            existing = {row.idempotency_key: row for row in session.scalars(select(SocProcessingJobRow).where(SocProcessingJobRow.idempotency_key.in_([item.idempotency_key for item in submissions])))}
+            rows = []
+            for item in submissions:
+                row = existing.get(item.idempotency_key)
+                if row is not None:
+                    self._validate_idempotent_replay(row, submission_hash=stable_processing_submission_sha256(item))
+                else:
+                    row = _new_job_row(item, observed_at)
+                    session.add(row)
+                    self._append_event(session, row, event_type="submitted", from_status=None, to_status=ProcessingJobStatus.QUEUED, worker_id=None, occurred_at=observed_at, details={"created": True})
+                rows.append((row, item.idempotency_key not in existing))
+            session.commit()
+            return [(_job_from_row(row), created) for row, created in rows]
+
     def get(self, job_id: str) -> SocProcessingJob | None:
         with self._session_factory() as session:
             row = session.get(SocProcessingJobRow, job_id)
             return _job_from_row(row) if row is not None else None
+
+    def active_workload_count(self, workloads: Sequence[str]) -> int:
+        """Call under the shared claim lock when applying a multi-workload budget."""
+        with self._session_factory() as session:
+            return (
+                session.scalar(
+                    select(func.count())
+                    .select_from(SocProcessingJobRow)
+                    .where(
+                        SocProcessingJobRow.workload_kind.in_(workloads),
+                        SocProcessingJobRow.status.in_([s.value for s in ACTIVE_PROCESSING_JOB_STATUSES]),
+                    )
+                )
+                or 0
+            )
+
+    def list_workload_jobs(self, workload_kind: str, *, external_ref: str | None = None, statuses: Sequence[ProcessingJobStatus] | None = None, limit: int = 50, offset: int = 0) -> list[SocProcessingJob]:
+        if not 1 <= limit <= 100 or offset < 0:
+            raise ValueError("job page requires limit 1..100 and nonnegative offset")
+        query = select(SocProcessingJobRow).where(SocProcessingJobRow.workload_kind == workload_kind)
+        if external_ref is not None:
+            query = query.where(SocProcessingJobRow.external_ref == external_ref)
+        if statuses is not None:
+            query = query.where(SocProcessingJobRow.status.in_([s.value for s in statuses]))
+        with self._session_factory() as session:
+            return [_job_from_row(row) for row in session.scalars(query.order_by(SocProcessingJobRow.created_at.desc(), SocProcessingJobRow.job_id).offset(offset).limit(limit))]
 
     def claim_next(
         self,
@@ -175,22 +187,32 @@ class SqlAlchemyProcessingJobRepository:
         queue_name: str,
         worker_id: str,
         lease_seconds: int,
+        workload_kind: str | None = None,
+        job_ids: Sequence[str] | None = None,
         now: datetime | None = None,
     ) -> SocProcessingJob | None:
         if not queue_name.strip() or not worker_id.strip():
             raise ValueError("queue_name and worker_id are required")
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be >= 1")
+        if job_ids is not None and not job_ids:
+            return None
         observed_at = _as_utc(now or datetime.now(UTC))
 
         with self._session_factory() as session:
+            # SQLite has no SELECT FOR UPDATE; serialize the short claim transaction.
+            if session.get_bind().dialect.name == "sqlite" and not session.in_transaction():
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             while True:
+                other = aliased(SocProcessingJobRow)
+                active_scope = select(other.job_id).where(other.concurrency_key == SocProcessingJobRow.concurrency_key, other.status.in_([s.value for s in ACTIVE_PROCESSING_JOB_STATUSES])).exists()
                 query = (
                     select(SocProcessingJobRow)
                     .where(
                         SocProcessingJobRow.queue_name == queue_name,
                         SocProcessingJobRow.status == ProcessingJobStatus.QUEUED.value,
                         SocProcessingJobRow.available_at <= observed_at,
+                        or_(SocProcessingJobRow.concurrency_key.is_(None), ~active_scope),
                     )
                     .order_by(
                         SocProcessingJobRow.priority.asc(),
@@ -199,6 +221,10 @@ class SqlAlchemyProcessingJobRepository:
                     )
                     .limit(1)
                 )
+                if workload_kind is not None:
+                    query = query.where(SocProcessingJobRow.workload_kind == workload_kind)
+                if job_ids is not None:
+                    query = query.where(SocProcessingJobRow.job_id.in_(job_ids))
                 if session.get_bind().dialect.name == "postgresql":
                     query = query.with_for_update(skip_locked=True)
                 row = session.execute(query).scalar_one_or_none()
@@ -224,12 +250,24 @@ class SqlAlchemyProcessingJobRepository:
                     occurred_at=observed_at,
                     details={"lease_seconds": lease_seconds},
                 )
-                session.commit()
+                scope = row.concurrency_key
+                try:
+                    session.commit()
+                except IntegrityError:
+                    session.rollback()
+                    if (
+                        scope is not None
+                        and session.execute(select(SocProcessingJobRow.job_id).where(SocProcessingJobRow.concurrency_key == scope, SocProcessingJobRow.status.in_([s.value for s in ACTIVE_PROCESSING_JOB_STATUSES])).limit(1)).first()
+                    ):
+                        return None
+                    raise
                 return _job_from_row(row)
 
     def recover_expired_leases(
         self,
         *,
+        queue_name: str | None = None,
+        workload_kind: str | None = None,
         now: datetime | None = None,
     ) -> list[str]:
         observed_at = _as_utc(now or datetime.now(UTC))
@@ -247,6 +285,10 @@ class SqlAlchemyProcessingJobRepository:
                     SocProcessingJobRow.job_id.asc(),
                 )
             )
+            if queue_name is not None:
+                query = query.where(SocProcessingJobRow.queue_name == queue_name)
+            if workload_kind is not None:
+                query = query.where(SocProcessingJobRow.workload_kind == workload_kind)
             if session.get_bind().dialect.name == "postgresql":
                 query = query.with_for_update(skip_locked=True)
             rows = list(session.execute(query).scalars())
@@ -273,6 +315,37 @@ class SqlAlchemyProcessingJobRepository:
                 recovered_ids.append(row.job_id)
             session.commit()
             return recovered_ids
+
+    def retry_failed(self, job_id: str, *, expected_version: int, actor_id: str, max_attempts: int = 3) -> SocProcessingJob:
+        """Explicit bounded retry; retain Run and attempt events for recovery/audit."""
+        with self._session_factory() as session:
+            row = session.get(SocProcessingJobRow, job_id)
+            if row is None:
+                raise ProcessingJobNotFoundError(job_id)
+            if row.version != expected_version or row.status != ProcessingJobStatus.FAILED.value:
+                raise ProcessingJobConflictError("only the current failed job can be retried")
+            if not (row.result_payload or {}).get("retryable") or row.attempt_count >= max_attempts:
+                raise ProcessingJobConflictError("job is not retryable or its attempt budget is exhausted")
+            now = datetime.now(UTC)
+            row.status = ProcessingJobStatus.QUEUED.value
+            row.available_at = now
+            row.completed_at = None
+            row.updated_at = now
+            row.version += 1
+            self._append_event(
+                session,
+                row,
+                event_type="operator_retry",
+                from_status=ProcessingJobStatus.FAILED,
+                to_status=ProcessingJobStatus.QUEUED,
+                worker_id=actor_id,
+                occurred_at=now,
+                details={"previous_error_code": row.error_code, "previous_error_message": row.error_message, "run_id": row.run_id},
+            )
+            row.error_code = None
+            row.error_message = None
+            session.commit()
+            return _job_from_row(row)
 
     def renew_lease(
         self,
@@ -758,12 +831,38 @@ class SqlAlchemyProcessingJobRepository:
         )
 
 
+def _new_job_row(submission: SocProcessingJobSubmission, now: datetime) -> SocProcessingJobRow:
+    return SocProcessingJobRow(
+        **submission.model_dump(exclude={"metadata", "available_at", "expires_at"}),
+        job_id=f"JOB-{uuid4().hex[:16].upper()}",
+        status=ProcessingJobStatus.QUEUED.value,
+        submission_sha256=stable_processing_submission_sha256(submission),
+        payload_sha256=stable_processing_payload_sha256(submission.input_payload),
+        metadata_payload=submission.metadata,
+        run_id=None,
+        result_payload=None,
+        error_code=None,
+        error_message=None,
+        attempt_count=0,
+        version=1,
+        available_at=_as_utc(submission.available_at or now),
+        expires_at=_as_utc(submission.expires_at),
+        lease_owner=None,
+        lease_expires_at=None,
+        created_at=now,
+        updated_at=now,
+        started_at=None,
+        completed_at=None,
+    )
+
+
 def _job_from_row(row: SocProcessingJobRow) -> SocProcessingJob:
     return SocProcessingJob(
         job_id=row.job_id,
         tenant_id=row.tenant_id,
         workload_kind=row.workload_kind,
         queue_name=row.queue_name,
+        concurrency_key=row.concurrency_key,
         status=ProcessingJobStatus(row.status),
         idempotency_key=row.idempotency_key,
         external_ref=row.external_ref,

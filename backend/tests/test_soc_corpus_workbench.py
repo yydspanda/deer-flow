@@ -982,6 +982,8 @@ def test_corpus_workbench_state_endpoint_forwards_server_filters() -> None:
 
     assert result.alerts == []
     assert service.state_query == {
+        "batch": None,
+        "validation_tier": None,
         "include_group_catalog": True,
         "include_rehearsal": True,
         "search": "OpenVPN",

@@ -1,7 +1,161 @@
 import { expect, test } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
-import { mockSocAPI } from "./utils/mock-soc-api";
+import { memoryCandidate, mockSocAPI } from "./utils/mock-soc-api";
+
+for (const width of [1920, 390]) {
+  test(`shared Memory draft is editable and survives a new tab cache at ${width}`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    mockLangGraphAPI(page, { threads: [] });
+    const state = await mockSocAPI(page, {
+      includeQueueItem: false,
+      standaloneMemoryCandidate: true,
+    });
+    const revision = "a".repeat(64);
+    let draft = {
+      candidate_id: "MC-ALPHA-001",
+      candidate_revision: revision,
+      version: 1,
+      updated_by: "模拟审核人",
+      updated_at: "2026-09-18T00:00:00Z",
+      authority: "draft_only",
+      generation_job_id: null,
+      last_generation: null,
+      content: {
+        reviewer_verdict: "false_positive",
+        reviewer_context: "",
+        apply_to_future_matches: false,
+        selected_behavior_components: null,
+        promoted_facet_values: {},
+        detection_scenario: "规则报告了反向连接检测",
+        observed_event: "模拟来源显示访问内部服务",
+        conclusion: "模拟审核结论：内部服务正常访问。",
+        business_rationale: "模拟运营已选择误报",
+        generalization_boundaries: "仅相同服务与行为",
+        invalidation_conditions: "出现新的攻击行为时失效",
+        handling_guidance: "审核通过后按适用条件使用",
+      },
+    };
+    let writes = 0;
+    await page.route(
+      "**/api/soc/memory/candidates/MC-ALPHA-001/working-draft",
+      async (route) => {
+        if (route.request().method() === "PUT") {
+          const body = route.request().postDataJSON();
+          expect(body.expected_version).toBe(draft.version);
+          expect(body.candidate_revision).toBe(revision);
+          writes += 1;
+          draft = {
+            ...draft,
+            version: draft.version + 1,
+            content: body.content,
+          };
+          await route.fulfill({ json: draft });
+        } else {
+          await route.fulfill({
+            json: {
+              candidate_id: draft.candidate_id,
+              candidate_revision: revision,
+              editable: true,
+              stale: false,
+              draft,
+            },
+          });
+        }
+      },
+    );
+    await page.goto("/workspace/soc/review/memory-candidates/MC-ALPHA-001");
+    const conclusion = page.getByRole("textbox", {
+      name: "审核结论",
+      exact: true,
+    });
+    await expect(conclusion).toHaveValue(draft.content.conclusion);
+    await conclusion.fill(
+      "模拟人工补充：保留相同服务与行为边界，不直接套用其他场景。",
+    );
+    await page.getByRole("button", { name: "保存草稿", exact: true }).click();
+    await expect.poll(() => writes).toBe(1);
+    await page.evaluate(() => sessionStorage.clear());
+    await page.reload();
+    await expect(conclusion).toHaveValue(
+      "模拟人工补充：保留相同服务与行为边界，不直接套用其他场景。",
+    );
+    await page
+      .getByRole("button", { name: "保存草稿", exact: true })
+      .scrollIntoViewIfNeeded();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`shared-draft-${width}.png`),
+    });
+    const nonReadRequests = state.requests.filter(
+      (request) => request.method !== "GET",
+    );
+    for (const request of nonReadRequests) {
+      expect(request.method).toBe("POST");
+      expect(request.path).toBe(
+        "/api/soc/memory/candidates/MC-ALPHA-001/governance-preview",
+      );
+    }
+  });
+}
+
+test("experiment review stays scoped and paginated without loading global candidates", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const state = await mockSocAPI(page, {
+    includeQueueItem: false,
+    standaloneMemoryCandidate: true,
+  });
+  const requests: string[] = [];
+  await page.route(
+    "**/api/soc/dev/corpus-workbench/experiments/EXP-only/candidates**",
+    async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      const offset = Number(url.searchParams.get("offset"));
+      await route.fulfill({
+        json: {
+          total: 21,
+          items: [
+            {
+              ...memoryCandidate(state),
+              candidate_id: offset ? "MC-PAGE2" : "MC-PAGE1",
+              summary: offset ? "第二页本实验经验" : "第一页本实验经验",
+            },
+          ],
+        },
+      });
+    },
+  );
+  await page.goto(
+    "/workspace/soc/review/memory-candidates?experiment=EXP-only",
+  );
+  await expect(page.getByText("第一页本实验经验")).toBeVisible();
+  await expect(page.getByRole("link", { name: "审核并决定" })).toHaveAttribute(
+    "href",
+    "/workspace/soc/review/memory-candidates/MC-PAGE1?experiment=EXP-only",
+  );
+  await expect(page.getByText("本实验第一批", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "下一页经验" }).click();
+  await expect(page.getByText("第二页本实验经验")).toBeVisible();
+  await expect(page.getByText("第一页本实验经验")).toHaveCount(0);
+  expect(requests.some((value) => value.includes("offset=20"))).toBe(true);
+  expect(
+    state.requests.some(
+      (request) => request.path === "/api/soc/memory/candidates",
+    ),
+  ).toBe(false);
+  expect(state.requests.some((request) => request.method !== "GET")).toBe(
+    false,
+  );
+});
 
 test.describe("SOC review workbench", () => {
   test("resolves a critical fact conflict without mixing other workflows", async ({

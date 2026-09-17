@@ -28,7 +28,10 @@ import {
   summarizeCorpusGroupBehavior,
 } from "@/core/soc/corpus-presentation";
 import { useSocCorpusGroups } from "@/core/soc/hooks";
-import type { SocCorpusWorkbenchGroup } from "@/core/soc/types";
+import type {
+  SocCorpusWorkbenchGroup,
+  SocCorpusWorkbenchQuery,
+} from "@/core/soc/types";
 
 const RESULT_BATCH_SIZE = 50;
 
@@ -36,10 +39,12 @@ export function SocCorpusGroupPicker({
   groups,
   value,
   onValueChange,
+  selection = {},
 }: {
   groups: SocCorpusWorkbenchGroup[];
   value: string;
   onValueChange: (value: string) => void;
+  selection?: Pick<SocCorpusWorkbenchQuery, "batch" | "validationTier">;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -52,7 +57,7 @@ export function SocCorpusGroupPicker({
     }, 200);
     return () => clearTimeout(timer);
   }, [search]);
-  const query = useSocCorpusGroups(debouncedSearch, offset, open);
+  const query = useSocCorpusGroups(debouncedSearch, offset, open, selection);
   const selected = groups.find((group) => group.group_id === value);
   const matches = query.data?.groups ?? [];
   const select = (groupId: string) => {

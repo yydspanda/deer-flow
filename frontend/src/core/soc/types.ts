@@ -1437,6 +1437,10 @@ export interface SocCorpusWorkbenchAuditBundle {
 }
 
 export interface SocCorpusWorkbenchAlert {
+  batch?: SocCorpusBatch | null;
+  validation_tier?: SocCorpusValidationTier | null;
+  batch_reason?: string | null;
+  batch_group_alert_count?: number | null;
   alert_id: string;
   source_index: number;
   sequence_number: number;
@@ -1628,7 +1632,30 @@ export interface SocCorpusWorkbenchRunControls {
   tenant_policy_signal_providers_available: boolean;
 }
 
+export type SocCorpusBatch = "learning" | "validation";
+export type SocCorpusValidationTier = "main" | "supplementary";
+
+export interface SocCorpusBatchSelection {
+  plan_id: string;
+  batch: SocCorpusBatch;
+  validation_tier?: SocCorpusValidationTier | null;
+  counts: {
+    learning: number;
+    validation_main: number;
+    validation_supplementary: number;
+    total: number;
+  };
+  selected_count: number;
+  group_count: number;
+  labeled_count: number;
+  first_event_time?: string | null;
+  last_event_time?: string | null;
+  execution_enabled: boolean;
+  existing_results_only: boolean;
+}
+
 export interface SocCorpusWorkbenchState {
+  batch_selection?: SocCorpusBatchSelection | null;
   run_controls?: SocCorpusWorkbenchRunControls | null;
   schema_version: "soc.corpus_dev_workbench.v4";
   safety: {
@@ -1714,6 +1741,8 @@ export interface SocCorpusWorkbenchState {
 }
 
 export interface SocCorpusWorkbenchQuery {
+  batch?: SocCorpusBatch | null;
+  validationTier?: SocCorpusValidationTier | null;
   includeGroupCatalog?: boolean;
   includeRehearsal?: boolean;
   search?: string | null;

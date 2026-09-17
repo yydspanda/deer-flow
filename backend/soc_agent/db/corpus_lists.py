@@ -35,6 +35,8 @@ class CorpusListSummary:
     run_id: str | None = None
     aggregation_key: str | None = None
     semantic_features_applied: bool = False
+    batch: str | None = None
+    validation_tier: str | None = None
 
 
 class SocCorpusListQueries:
@@ -115,9 +117,15 @@ class SocCorpusListQueries:
         active_alert_ids: list[str],
         limit: int,
         offset: int,
+        batch: str | None = None,
+        validation_tier: str | None = None,
     ) -> tuple[int, list[str]]:
         filters = [Item.catalog_id == catalog_id]
         payload = Item.projection_payload
+        if batch:
+            filters.append(payload["batch"].as_string() == batch)
+        if validation_tier:
+            filters.append(payload["validation_tier"].as_string() == validation_tier)
         focused = Item.alert_id == focus_alert_id if focus_alert_id else False
         if search and search.strip():
             filters.append(Item.search_text.contains(search.strip().casefold(), autoescape=True))

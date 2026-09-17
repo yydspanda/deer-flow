@@ -69,6 +69,20 @@ def test_query_more_than_ten_thousand_results_has_exact_filters_and_pages(tmp_pa
     assert queries.page("catalog", **args)[0] == 10_004
 
 
+def test_batch_filter_is_applied_before_count_pagination_and_focus(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'batches.sqlite'}")
+    create_soc_tables(engine)
+    queries = SocCorpusListQueries(sessionmaker(engine))
+    rows = [_row(i) for i in range(20)]
+    for i, row in enumerate(rows):
+        row["projection_payload"].update(batch="learning" if i < 10 else "validation", validation_tier=None if i < 10 else "main" if i < 18 else "supplementary")
+    queries.insert_missing(rows)
+    args = dict(search=None, readiness=None, source_type=None, group_id=None, comparison=None, unprocessed_only=False, focus_alert_id="0", active_alert_ids=[], limit=3, offset=1)
+    assert queries.page("catalog", batch="validation", validation_tier="main", **args) == (8, ["11", "12", "13"])
+    assert queries.page("catalog", batch="validation", validation_tier="supplementary", **{**args, "offset": 0}) == (2, ["18", "19"])
+    assert queries.page("catalog", **{**args, "offset": 0}) == (20, ["0", "1", "2"])
+
+
 def test_source_revision_excludes_unrelated_payloads_and_detects_run_updates(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'revisions.sqlite'}")
     create_soc_tables(engine)

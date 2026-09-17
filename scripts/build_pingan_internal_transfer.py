@@ -265,6 +265,28 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/db/migrations/versions/0027_processing_jobs.py",
     "backend/soc_agent/db/migrations/versions/0028_corpus_list_projection.py",
     "backend/soc_agent/db/corpus_lists.py",
+    "backend/soc_agent/db/migrations/versions/0029_processing_job_scope.py",
+    "backend/soc_agent/db/migrations/versions/0030_corpus_experiments.py",
+    "backend/soc_agent/db/migrations/versions/0031_memory_working_drafts.py",
+    "backend/soc_agent/contracts/memory_drafts.py",
+    "backend/soc_agent/core/memory_working_drafts.py",
+    "backend/soc_agent/core/memory_draft_jobs.py",
+    "backend/soc_agent/application/corpus_experiments.py",
+    "backend/soc_agent/contracts/corpus_experiments.py",
+    "backend/soc_agent/db/corpus_experiments.py",
+    "backend/soc_agent/demo/corpus_batches.py",
+    "backend/soc_agent/demo/corpus_experiment_cli.py",
+    "backend/soc_agent/demo/corpus_experiment_dispatcher.py",
+    "backend/soc_agent/demo/corpus_experiment_reports.py",
+    "backend/soc_agent/demo/corpus_retest_selection.py",
+    "backend/soc_agent/demo/corpus_round_comparison.py",
+    "backend/soc_agent/demo/corpus_experiment_timing.py",
+    "backend/soc_agent/demo/corpus_experiment_runtime.py",
+    "backend/soc_agent/demo/corpus_experiments.py",
+    "backend/app/gateway/routers/soc_corpus_experiments.py",
+    "backend/scripts/soc_corpus_batch_preview.py",
+    "backend/scripts/soc_corpus_experiment.py",
+    ".notes/ai_soc/integrations/pingan-corpus-batch-runbook.md",
     "frontend/scripts/soc-frontend.mjs",
     "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json",
     "backend/soc_agent/integrations/pingan/security_tag.py",
@@ -276,8 +298,11 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/db/migrations/versions/0022_tenant_policy_decisions.py",
     "scripts/build_pingan_macos_offline_bundle.py",
     "scripts/build_pingan_internal_transfer.py",
+    "scripts/build_pingan_corpus_transfer.py",
     "scripts/soc_pingan_macos_host_dev.py",
     "scripts/soc_pingan_host_sidecars.py",
+    "scripts/soc_pingan_dev_database.py",
+    "scripts/test_soc_pingan_dev_database.py",
     "scripts/soc_pingan_stage_internal_corpus.py",
     "scripts/test_build_pingan_macos_offline_bundle.py",
     "scripts/test_soc_pingan_macos_host_dev.py",
@@ -1415,6 +1440,9 @@ validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-ind
 
 三个 PKL 和 Workbench payload SQLite 不在 private overlay；它们已单独保存在内网
 `$HOME/Downloads/source` 与 `$HOME/Downloads/corpus`，必须按下一节校验并落位。
+如果本次另有 `DATA-TO-TRANSFER`，先按其中的数据包说明更新这四个文件；只更新代码而数据hash
+未变时不需要重传数据。可用 `python3.12 scripts/build_pingan_corpus_transfer.py --inspect 数据包路径`
+流式校验数据包，不加载PKL、不连接业务库。它不是源码包或数据库备份。
 
 ## 4. Stage Existing Corpus / 落位内网已有语料
 
@@ -1543,7 +1571,7 @@ Host DEV 驱动会先准备可复用的前端构建，再准备 SOC 数据库，
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
 Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机使用时加 `--local-only`。
 `status` 必须同时显示 `soc_database.status=ready`、
-`soc_database.schema_revision=0028_corpus_list`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
+`soc_database.schema_revision=0031_memory_working_drafts`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
 Runtime、Tenant Policy、ZEUS lifecycle 和 Callback 初始化完成并发布 PID-bound ready 信号后才会显示
 `running`；`stale`、`not_running` 或启动时报 `did not become ready` 都不能继续真实验收。
 
@@ -1757,6 +1785,19 @@ export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ```
+
+## 7.1 Two-Batch Memory Evaluation / 两批经验验证
+
+服务启动且模型 Smoke 通过后，按项目内
+`.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md` 操作。
+它提供第一批5条、同轮续跑50条/全部、仅审核本实验候选、冻结已审核经验后第二批验证、
+补充样本单独统计、共享可编辑草稿/后台起草、暂停/恢复和固定轮次导出命令。
+仅首次从零实验按其第1.1节使用 `reset-dev-data` 预览，明确确认后才备份并重置SOC DEV库；
+常规部署和续跑不清库。无需逐条填写 alert ID，也不要重新运行旧 ZEUS
+live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。
+第一批3,002条、第二批主要验证8,522条、补充3,764条来自本版15,288条语料；旧4,343条
+PKL/载荷库不能与新版索引混用。先完成本手册的数据校验，完整语料仍独立传输，不进入源码包。
+本机外网只完成隔离模拟，不代表内网模型质量或M5吞吐已验收。
 
 ## 8. Promote Runtime To STG / 切换到 STG
 

@@ -1,0 +1,401 @@
+# 内网 DEV：先沉淀经验，再验证效果
+
+本手册用于本项目已经启动的 Mac DEV。不是 ZEUS 上游回写验收，不要提供生产 alert ID。
+历史语料任务只写本地 SOC 数据库，不访问 ZEUS 生命周期/回调，不执行外部动作。
+告警模型调用仅在你执行 `learn`、`validate`、`resume` 或网页启动后发生。
+已明确选择的 `draft-candidates` 和 `draft-retry` 也会启动经验起草模型；`draft-plan`、查询和保存草稿不调用模型。
+外网已用隔离数据库和模拟模型验证流程；内网模型质量、速度和容量仍由本轮验证。
+
+## 1. 前置检查
+
+按交付主 Runbook 完成安装、语料落位、启动和模型 Smoke，不重复安装或启动。
+本版语料应为15,288条，第一批3,002条，第二批主要验证8,522条，补充3,764条。
+新版 PKL、载荷 SQLite、索引必须配套；旧4,343条数据不能与新版索引混用。
+同一份原始数据不拆成两个 PKL，不删除小组或单例。
+独立语料包的生成/校验工具为 `scripts/build_pingan_corpus_transfer.py`。数据包只含
+`source/`和`corpus/`下四个语料文件及hash清单，不包含运行/经验数据库、密钥或源代码。
+新数据需一次性更新到Downloads目录，再按主Runbook落位；以后源码升级复用hash一致的数据。
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py status
+```
+
+应看到 Runtime 为 `dev`、数据库 `ready`、schema `0031_memory_working_drafts`，三个 Core 和
+三个 Sidecar 就绪。页面入口是 `http://localhost:2026/workspace/soc/corpus-validation`。
+可信演示可以沿用 `--demo-no-auth`；有身份验证时，CLI 需在 `SOC_DEV_API_TOKEN` 中提供有效访问令牌。
+这不是修改权限的命令，未授权时返回403，不降级成匿名管理员。
+
+本次从零实验应在指定内网 DEV 空 SOC 库上开始。不要把外网已有经验数据库搬过来，
+也不要为重试而删除库。新建实验不会自动清空已有经验；第一批虽然不读取旧经验，
+已有治理记录仍可能影响候选是否重复，因此有旧 DEV 记录时先完成明确授权的重置。
+普通升级必须保留库，账号库、源语料和密钥不属于实验清理范围。
+
+### 1.1 仅本次从零开始：重置 SOC DEV 数据
+
+这不是每次部署、失败重试或第二批开始时都要执行的步骤。它会移走 SOC DEV 中的
+告警结果、任务、候选、草稿、经验、反馈与实验记录，保留带hash清单的本地备份。
+已有任务先暂停并等在途任务结束；本次尚未开始批跑时直接执行：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+python3.12 scripts/soc_pingan_macos_host_dev.py reset-dev-data
+```
+
+预览应为 `status=preview`、`ready=true`，目标只为当前项目
+`backend/.deer-flow/data/soc_agent_dev.db`。`files` 是将备份的SQLite文件组。
+如提示端口、Worker或文件仍打开，先处理旧服务；不自动kill，也不继续清理。
+确认要从零开始后执行一次：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+mkdir -p backend/.deer-flow/internal-host-dev
+umask 077
+python3.12 scripts/soc_pingan_macos_host_dev.py reset-dev-data \
+  --confirm RESET-SOC-DEV \
+  > backend/.deer-flow/internal-host-dev/dev-reset-receipt.json
+python3.12 -m json.tool backend/.deer-flow/internal-host-dev/dev-reset-receipt.json
+```
+
+成功为 `status=reset`，回执的 `backup_directory` 指向
+`backend/.deer-flow/data/soc-dev-reset-backups/` 下本次备份；原本无库则为 `already_empty`。
+不执行SQL删表，不改账号库、STG库、语料和密钥。重置失败不要继续启动，先看错误；
+常规移动异常会恢复原文件，异常中断时保留 `state=prepared` 的清单供恢复。
+
+然后启动一次，由启动器负责迁移空库，不需要手动执行 `db upgrade`：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
+python3.12 scripts/soc_pingan_macos_host_dev.py status
+```
+
+确认schema为 `0031_memory_working_drafts`、服务就绪后进入第2节。旧备份不会被运行或检索。
+不要在浏览器中恢复先前未发送的候选编辑草稿；新实验只审核新的候选。
+
+需要撤销本次重置且尚未启动/创建新库时，可以恢复刚才的回执：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+BACKUP_NAME="$(python3.12 - <<'PY'
+import json
+from pathlib import Path
+receipt = json.loads(Path("backend/.deer-flow/internal-host-dev/dev-reset-receipt.json").read_text(encoding="utf-8"))
+print(Path(receipt["backup_directory"]).name)
+PY
+)"
+python3.12 scripts/soc_pingan_macos_host_dev.py restore-dev-data \
+  --backup-name "$BACKUP_NAME" --confirm RESTORE-SOC-DEV
+```
+
+恢复会验证文件hash；目标已有新库时拒绝覆盖。先保留当前新库自己的重置备份，再选定旧备份恢复。
+恢复旧库用于撤销/排错，不适合作为本次“从零实验”的起点。
+
+## 2. 初始化命令与本轮路径
+
+在同一终端执行以下整段；重新打开终端时只需重新执行本段，不会启动或重跑告警。
+它定义两个小函数，后面的命令不需要手填轮次 ID。
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+export SOC_EXPERIMENT_ID="EXP-CORPUS-MAC-01"
+export SOC_EXPERIMENT_OUTPUT="$TARGET_REPO/backend/.deer-flow/soc-validation/memory-batch/$SOC_EXPERIMENT_ID"
+mkdir -p "$SOC_EXPERIMENT_OUTPUT"
+chmod 700 "$SOC_EXPERIMENT_OUTPUT"
+umask 077
+
+soc() {
+  "$TARGET_REPO/backend/.venv/bin/python" \
+    "$TARGET_REPO/backend/scripts/soc_corpus_experiment.py" "$@"
+}
+round_id() {
+  "$TARGET_REPO/backend/.venv/bin/python" - "$SOC_EXPERIMENT_OUTPUT/$1-receipt.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+receipt = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(receipt["round_id"])
+PY
+}
+```
+
+准备并固定名单，不调用模型：
+
+```bash
+soc prepare --experiment "$SOC_EXPERIMENT_ID" --name "内网两批经验验证"
+soc learn --experiment "$SOC_EXPERIMENT_ID" --dry-run
+```
+
+重复 `prepare` 回读相同名单；源文件/Profile/划分规则不同则拒绝复用同一实验 ID。
+`--dry-run` 只查看选择范围。页面切换第一批/第二批只取当前批次的分页数据，同类组浏览保留。
+
+## 3. 第一批：5条，再50条，再全部
+
+第一批不读取任何历史 Memory，保留语义核对及正常研判，目的是产生可审核的经验候选。
+`--purpose memory` 只对本轮关闭企业策略，不修改服务的默认开关；否则企业策略直接转交
+可能跳过主研判及观察，无法形成你要审核的候选。
+本轮按实际行为模式统一积累，保留真实事件时间，不受普通30天窗口分隔。
+不同真实行为仍分开计数，静态同类组有10条不保证同一个实际模式有5条。
+
+```bash
+soc learn --experiment "$SOC_EXPERIMENT_ID" --purpose memory \
+  --limit 5 --concurrency 3 --request-key "$SOC_EXPERIMENT_ID-learning" \
+  > "$SOC_EXPERIMENT_OUTPUT/learning-receipt.json"
+soc status --round "$(round_id learning)" --watch
+```
+
+正常完成应显示 `completed_count=5`、`active_count=0`、`state=completed`。
+这里 completed 表示本轮当前额度完成，不是全部3,002条都完成。确认无失败后继续同轮：
+
+`status` 的 `timing` 与页面计时同源：运行计时指允许调度期间的墙钟时间，包含等待或服务离线；
+暂停累计单列。至少5条任务结束后才估算当前额度的剩余时间，含失败任务，不保证内网模型吞吐。
+暂停/未启动/变更阻断时不估算；已完成轮次计时停止。任务的排队、首次领取后耗时及总耗时在导出 CSV 中分列，
+不把暂停、准备额度和重试全部算成模型耗时。
+
+```bash
+soc resume --round "$(round_id learning)" --limit 50
+soc status --round "$(round_id learning)" --watch
+```
+
+确认50条的耗时、失败和候选情况，再执行：
+
+```bash
+soc resume --round "$(round_id learning)" --limit all
+soc status --round "$(round_id learning)" --watch
+```
+
+退出终端或关闭网页不取消后台任务。已经完成的告警不会再次调用模型。
+网络中断导致第一条提交没有收到回执时，可重复原 `learn` 命令及相同 request-key；
+相同参数回读原轮次，不新建一批。收到有效回执后用 `resume`，不要反复新建 `learn`。
+
+## 4. 只审核本实验经验
+
+页面点击“审核本实验经验”，或直接打开：
+
+```text
+http://localhost:2026/workspace/soc/review/memory-candidates?experiment=EXP-CORPUS-MAC-01
+```
+
+CLI 可分页查看待审名单：
+
+```bash
+soc candidates --experiment "$SOC_EXPERIMENT_ID" --stage pending
+soc candidates --experiment "$SOC_EXPERIMENT_ID" --stage pending --offset 20
+```
+
+运营选择最终判断，补充已知业务事实，点击 AI 生成经验或人工编辑，确认适用条件及未来用途，
+再确认启用。AI 起草需要额外模型调用；它不替人作最终判断，也不自动批准经验。
+第一批继续运行不会使用刚确认的经验，不以自己的复用结果增加独立样本。
+可选择网页逐候选生成/编辑，也可按下面步骤后台批量起草；不支持批量代填最终判断或自动审核。
+同类候选按实际模式汇总，经验数不会等于第一批告警数。少于阈值时可以人工提炼，但仍需审核。
+
+### 4.1 后台起草、网页编辑
+
+1. 在本实验的候选审核页选择最终判断，业务事实可留空，点击“保存草稿”。这不是确认经验。
+2. 只为已保存运营判断、尚无经验文字的候选生成一份固定名单，默认最多5条，不调用模型：
+
+```bash
+soc draft-plan --experiment "$SOC_EXPERIMENT_ID" --limit 5 \
+  --output "$SOC_EXPERIMENT_OUTPUT/draft-plan-01.json"
+```
+
+3. 查看命令返回的 `selected_count` 和排除原因，确认后提交后台起草：
+
+```bash
+soc draft-candidates --plan "$SOC_EXPERIMENT_OUTPUT/draft-plan-01.json"
+soc draft-status --experiment "$SOC_EXPERIMENT_ID"
+```
+
+重复提交同一文件会回读相同任务，不再次调用。CLI退出后任务继续；服务重启会恢复未完成任务。
+已保存模型结果不会重新调用；若进程中断导致无法确认远端调用结果，任务标明
+`generation_uncertain`，需明确重试，不会自动反复扣费。失败任务的 `version` 与 `job_id`
+可用于 `draft-retry --experiment ... --job ... --version ...`，最多3次领取尝试。
+`draft-status --experiment ... --job ...` 可查看保留的生成结果及用量；未知用量不填0。
+待后台起草任务结束后单独导出，避免把经验生成成本算成告警研判成本：
+
+```bash
+soc draft-export --experiment "$SOC_EXPERIMENT_ID" \
+  --output-dir "$SOC_EXPERIMENT_OUTPUT/drafting-report-01"
+```
+
+输出 `REPORT.md`、`report.json`、`draft-jobs.csv` 和hash清单。已有目录不会覆盖。
+仅统计本实验后台起草，不含网页同步起草；失败或恢复前未保存的调用可能无法取得用量，
+报告显式标记，不声称这是完整账单。任务尚未结束或导出中发生变化时拒绝输出，稍后重新执行。
+
+4. 回到对应候选，读取共享草稿，七项经验内容仍可编辑；确认业务结论、适用条件和未来用途后，
+再走原来的“确认并沉淀经验”。后台起草绝不自动审核或启用。
+
+生成期间人工编辑、候选来源更新都会阻止覆盖；旧草稿与已生成结果保留，运营核对后再保存。
+确实需要重生成已有文字时，生成新名单文件并加 `draft-plan --regenerate`，不要改写旧回执。
+确认5条生成质量后，可用新文件、`--limit 50` 或 `--limit all` 分批扩大；并发仍与批跑共享额度。
+
+## 5. 第二批：冻结已审核经验后验证
+
+建议第一批和审核结束后开始第二批。创建时固定本实验第一批已确认且可使用的经验及版本。
+第二批只记使用和结果，不自动积累 Pattern 或产生新经验，避免边测边改变答案。
+只测同类经验效果：
+
+```bash
+soc validate --experiment "$SOC_EXPERIMENT_ID" --purpose memory --scope reuse \
+  --limit 5 --concurrency 3 --request-key "$SOC_EXPERIMENT_ID-validation" \
+  > "$SOC_EXPERIMENT_OUTPUT/validation-receipt.json"
+soc status --round "$(round_id validation)" --watch
+```
+
+没有可用第一批经验会直接拒绝创建，不会偷偷转为无经验实验。
+核对5条的参考使用/直接复用/新行为和结果，确认后依次续跑：
+
+```bash
+soc resume --round "$(round_id validation)" --limit 50
+soc status --round "$(round_id validation)" --watch
+```
+
+50条通过后：
+
+```bash
+soc resume --round "$(round_id validation)" --limit all
+soc status --round "$(round_id validation)" --watch
+```
+
+可选补充测试另建轮次，带 `explore` 分类，不混入同类复用效果的分母：
+
+```bash
+soc validate --experiment "$SOC_EXPERIMENT_ID" --purpose memory --scope explore \
+  --limit 5 --request-key "$SOC_EXPERIMENT_ID-exploration" \
+  > "$SOC_EXPERIMENT_OUTPUT/exploration-receipt.json"
+soc status --round "$(round_id exploration)" --watch
+```
+
+后续是否扩到全部由你决定。主要验证并不保证每条都有精确 Memory；行为不同、经验未批准、
+只允许参考等都会进入正常研判。探索样本包括2～5条的小组和单例，不是无价值数据。
+
+## 6. 暂停、失败与恢复
+
+以第二批为例，第一批只需把函数参数换成 learning：
+
+```bash
+soc pause --round "$(round_id validation)"
+soc status --round "$(round_id validation)" --watch
+```
+
+暂停只停止新领取；在途任务完成后 active_count 归零。恢复用：
+
+```bash
+soc resume --round "$(round_id validation)"
+```
+
+可恢复的失败需要显式重试，不重复成功任务：
+
+```bash
+soc retry-failed --round "$(round_id validation)"
+soc resume --round "$(round_id validation)"
+```
+
+配置、代码、数据或已冻结经验发生变化时，旧轮次会 blocked，不能通过继续点击 resume 忽略。
+已保存结果保留。先检查错误，确需使用新配置/经验时建立新轮次，不覆盖旧回执或旧报告。
+服务进程异常停止后，持久租约恢复原任务；远端完成但本地未保存的崩溃无法保证零重复计费，
+报告保留尝试次数与已记录的模型用量，未知 Token 不计作0。
+
+## 7. 导出结果与比较
+
+轮次完成，或 pause 且在途数归零后导出：
+
+```bash
+soc export --round "$(round_id learning)" --output-dir "$SOC_EXPERIMENT_OUTPUT/learning-report"
+soc export --round "$(round_id validation)" --output-dir "$SOC_EXPERIMENT_OUTPUT/validation-report"
+```
+
+输出包括 `REPORT.md`、`report.json`、逐条结果 CSV、Memory使用和失败 CSV。
+报告按该轮固定 Run 读取；后来重跑同一个 alert 不会改写本轮报告。
+按实际 Rule Code 和 Memory 使用关系统计，不让一条 Memory 强制只能属于一个规则。
+名单/配置/经验版本、真实或Mock、每阶段耗时、总时间、模型调用和 Token 均可追踪。
+处置标签只能比较忽略/转交，不当作攻击真假的准确率；未反馈不算人工确认正确。
+
+第一批和第二批不是相同告警，不能直接用两批比例差声称经验提升。
+需要无经验对照时，另选少量同一第二批告警，显式 `--memory none` 新建对照轮；
+这会额外调用模型，先确认范围。两轮报告可用 `soc compare --help` 查看比较参数。
+经验停用/修订会阻止旧快照继续派发，不会被冻结副本重新启用。
+
+## 8. 修订后只复测相关告警
+
+先导出第7节固定报告。以下只生成失败项名单，不调用模型、不创建任务；没有失败项会明确提示，
+这时无需继续本节。不要覆盖旧报告或回执。
+
+```bash
+soc retest-plan --report "$SOC_EXPERIMENT_OUTPUT/validation-report" \
+  --failed --output "$SOC_EXPERIMENT_OUTPUT/retest-plan.json"
+soc validate --experiment "$SOC_EXPERIMENT_ID" \
+  --selection-file "$SOC_EXPERIMENT_OUTPUT/retest-plan.json" --dry-run
+```
+
+确认数量与范围后，才执行新轮次，初始仍只跑5条：
+
+```bash
+soc validate --experiment "$SOC_EXPERIMENT_ID" --purpose memory \
+  --selection-file "$SOC_EXPERIMENT_OUTPUT/retest-plan.json" \
+  --limit 5 --request-key "$SOC_EXPERIMENT_ID-retest-01" \
+  > "$SOC_EXPERIMENT_OUTPUT/retest-receipt.json"
+soc status --round "$(round_id retest)" --watch
+```
+
+如需复测某条经验实际用过的告警，改用下面这段生成另一份名单。输入经验详情或报告里的Memory技术编号，
+不需要编辑JSON。这里包括精确复用和参考使用，不包括“仅存在于经验库存、从未被使用”。
+
+```bash
+printf '输入要复测的 Memory 编号：'
+IFS= read -r SOC_RETEST_MEMORY_ID
+if [ -n "$SOC_RETEST_MEMORY_ID" ]; then
+  soc retest-plan --report "$SOC_EXPERIMENT_OUTPUT/validation-report" \
+    --used-memory "$SOC_RETEST_MEMORY_ID" \
+    --output "$SOC_EXPERIMENT_OUTPUT/memory-retest-plan.json"
+fi
+```
+
+然后将上面 `--selection-file` 指向 `memory-retest-plan.json`，使用新的request-key和回执名。
+`retest-plan`也支持`--rule`、`--group`、`--alert`，同类参数可重复；不同参数条件同时满足，
+或单用`--all`选旧报告全部成员。名单保留补充测试标签，不能用`--scope`覆盖原范围。
+服务端仍检查实验/数据/批次/父轮次；此轮冻结当前已审核经验，不静默沿用已被修订的旧快照。
+
+修订扩大/缩小了适用范围时，不能只跑旧经验用过的告警；另选范围内外的组检查，避免漏掉新覆盖或被排除的告警。
+第一批的失败项同理，但使用learning报告和`learn --selection-file`，不把第二批倒灌为积累数据。
+
+结束或暂停且在途任务归零后，再导出和比较：
+
+```bash
+soc export --round "$(round_id retest)" --output-dir "$SOC_EXPERIMENT_OUTPUT/retest-report"
+soc compare --before "$SOC_EXPERIMENT_OUTPUT/validation-report" \
+  --after "$SOC_EXPERIMENT_OUTPUT/retest-report" \
+  --output "$SOC_EXPERIMENT_OUTPUT/retest-comparison.json"
+```
+
+比较保留旧/新Run ID和任务状态。失败变成功有单独计数；只有两边都有效的结论才参与结论变化比较。
+复测是调优后的检查，不再称为首次未见样本验证。
+
+### 网页查看前后对照
+
+在告警演练中切到对应批次，选择本实验的复测轮次，再点「前后对照」。CLI创建的复测轮次也在此处。
+每页最多20条，展示旧/新处置、实际使用的经验及版本、耗时和Token；点击「查看旧结果」或「查看复测结果」
+打开对应Run，不会再次研判。配置不同会明确标注，不能把全部差异都归功于Memory。
+
+网页手动复测时，先选已完成或已暂停且没有在途任务的旧轮次，再点「准备本批轮次」，勾选
+「作为当前轮次的复测，保留旧结果对照」。核对本次范围并准备后，还要显式点击「开始运行」。
+只能比较同实验、同批次；新选告警不在旧轮次时显示「旧轮次无此告警」，不伪造基线。
+旧结果在准备复测时冻结，之后重试旧任务不会改写这个对照。旧版轮次没有保存基线时显示「旧结果未留存」。
+CLI固定报告生成的复测名单还会校验所选旧结果摘要；旧任务在导出后变化，需要重新导出和生成名单。
+
+## 9. 批跑时人工操作
+
+在页面明确选一条告警并准备、启动轮次，或CLI用单个`--alert`，会优先使用下一个空闲任务位置。
+单纯打开页面或准备轮次不会运行。已在运行的模型调用不打断，同一告警不能并发执行两次。
+经验页同步AI起草也优先等待模型空位；后台批量起草和批跑共用原来的容量，不各自再开3个。
+持续人工操作会推迟后台进度，属于预期；此优先级不代表对普通聊天或其他独立系统的全局限流。
+本地调用超时但底层尚未退出时，会保留占用的模型名额，后续请求等待或按预算超时；
+不是把运行失败当成算力已经释放。不要因此反复重启服务或提高并发，先看模型网关与调用日志。

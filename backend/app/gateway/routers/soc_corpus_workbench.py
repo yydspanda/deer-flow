@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query, Request
 
+from app.gateway.routers import soc_corpus_experiments
 from app.gateway.routers.soc_transport import create_soc_router
 from app.gateway.soc_dependencies import soc_service_context_from_request
 from app.gateway.soc_dev_workbench import resolve_soc_dev_workbench_runtime, strict_env_bool
@@ -16,6 +17,7 @@ from soc_agent.application.analysis import build_soc_analysis_service
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
+from soc_agent.demo.corpus_batches import CorpusBatch, CorpusValidationTier
 from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
     CorpusComparisonFilter,
@@ -140,6 +142,8 @@ def get_corpus_workbench_state(
     focus_alert_id: Annotated[str | None, Query(max_length=128)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    batch: CorpusBatch | None = None,
+    validation_tier: CorpusValidationTier | None = None,
 ) -> SocCorpusWorkbenchState:
     return service.get_state(
         search=search,
@@ -153,6 +157,8 @@ def get_corpus_workbench_state(
         focus_alert_id=focus_alert_id,
         limit=limit,
         offset=offset,
+        batch=batch,
+        validation_tier=validation_tier,
     )
 
 
@@ -162,8 +168,10 @@ def get_corpus_workbench_groups(
     search: Annotated[str | None, Query(max_length=256)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    batch: CorpusBatch | None = None,
+    validation_tier: CorpusValidationTier | None = None,
 ) -> SocCorpusGroupPage:
-    return service.get_groups(search=search, limit=limit, offset=offset)
+    return service.get_groups(search=search, limit=limit, offset=offset, batch=batch, validation_tier=validation_tier)
 
 
 @router.get(
@@ -201,6 +209,7 @@ def get_corpus_workbench_audit(
     alert_id: str,
     request: Request,
     service: CorpusWorkbenchServiceDep,
+    run_id: str | None = None,
 ) -> SocCorpusWorkbenchAuditBundle:
     context = soc_service_context_from_request(request, include_soc_roles=True)
     if "soc_admin" not in context.actor.roles:
@@ -209,6 +218,8 @@ def get_corpus_workbench_audit(
             detail="SOC DEV corpus audit requires an administrator account",
         )
     try:
+        if run_id is not None:
+            return service.get_audit_bundle(alert_id, context=context, run_id=run_id)
         return service.get_audit_bundle(alert_id, context=context)
     except SocCorpusWorkbenchError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -243,5 +254,7 @@ def process_corpus_workbench_alert(
     except SocCorpusWorkbenchError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+router.include_router(soc_corpus_experiments.router)
 
 __all__ = ["router"]

@@ -2,6 +2,21 @@ import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
 import type {
+  SocCorpusExperiment,
+  SocCorpusExperimentConfiguration,
+  SocCorpusRound,
+  SocCorpusRoundBrief,
+  SocCorpusRoundCommand,
+  SocCorpusRoundProgress,
+  SocCorpusRoundResults,
+  SocCorpusRoundComparison,
+} from "./corpus-experiments";
+import type {
+  SocMemoryDraftContent,
+  SocMemoryWorkingDraft,
+  SocMemoryWorkingDraftView,
+} from "./memory-working-draft";
+import type {
   SocAgentActionResult,
   SocAgentApprovalGrant,
   SocAgentApprovalRequest,
@@ -189,6 +204,84 @@ export async function getSocOperationsSnapshot(
   );
 }
 
+async function corpusExperimentRequest<T>(
+  path: string,
+  body?: unknown,
+  idempotencyKey?: string,
+): Promise<T> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/${path}`,
+    {
+      method: body === undefined ? "GET" : "POST",
+      headers: buildSocHeaders(
+        { surface: "web", idempotencyKey },
+        { json: body !== undefined, stateChanging: body !== undefined },
+      ),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    },
+  );
+  return readJson<T>(response, "批次验证请求失败");
+}
+
+export const getSocCorpusExperiments = (offset = 0) =>
+  corpusExperimentRequest<SocCorpusExperiment[]>(
+    `experiments?limit=50&offset=${offset}`,
+  );
+export const getSocCorpusExperimentConfiguration = () =>
+  corpusExperimentRequest<SocCorpusExperimentConfiguration>(
+    "experiments/configuration",
+  );
+export const prepareSocCorpusExperiment = (
+  experimentId: string,
+  name: string,
+) =>
+  corpusExperimentRequest<SocCorpusExperiment>("experiments", {
+    experiment_id: experimentId,
+    name,
+  });
+export const getSocCorpusRounds = (
+  experimentId: string,
+  batch: "learning" | "validation",
+  offset = 0,
+) =>
+  corpusExperimentRequest<SocCorpusRoundBrief[]>(
+    `experiments/${encodeURIComponent(experimentId)}/rounds?batch=${batch}&limit=50&offset=${offset}`,
+  );
+export const createSocCorpusRound = (
+  command: SocCorpusRoundCommand,
+  key: string,
+) => corpusExperimentRequest<SocCorpusRound>("rounds", command, key);
+export const getSocCorpusRound = (roundId: string) =>
+  corpusExperimentRequest<SocCorpusRoundProgress>(
+    `rounds/${encodeURIComponent(roundId)}`,
+  );
+export const getSocCorpusRoundResults = (roundId: string, offset = 0) =>
+  corpusExperimentRequest<SocCorpusRoundResults>(
+    `rounds/${encodeURIComponent(roundId)}/results?limit=20&offset=${offset}`,
+  );
+export const getSocCorpusRoundComparison = (roundId: string, offset = 0) =>
+  corpusExperimentRequest<SocCorpusRoundComparison>(
+    `rounds/${encodeURIComponent(roundId)}/comparison?limit=20&offset=${offset}`,
+  );
+export const startSocCorpusRound = (
+  roundId: string,
+  options: { execution_limit?: number; concurrency?: number } = {},
+) =>
+  corpusExperimentRequest<SocCorpusRound>(
+    `rounds/${encodeURIComponent(roundId)}/start`,
+    options,
+  );
+export const pauseSocCorpusRound = (roundId: string) =>
+  corpusExperimentRequest<SocCorpusRound>(
+    `rounds/${encodeURIComponent(roundId)}/pause`,
+    {},
+  );
+export const retrySocCorpusRound = (roundId: string) =>
+  corpusExperimentRequest<{ retried: number; not_retryable: number }>(
+    `rounds/${encodeURIComponent(roundId)}/retry-failed`,
+    {},
+  );
+
 export async function getSocEffectivenessSnapshot(
   options: {
     windowDays?: number;
@@ -269,6 +362,8 @@ export async function getSocCorpusWorkbenchState(
   context?: SocRequestContext,
 ): Promise<SocCorpusWorkbenchState> {
   const params = new URLSearchParams();
+  if (query.batch) params.set("batch", query.batch);
+  if (query.validationTier) params.set("validation_tier", query.validationTier);
   if (query.search?.trim()) params.set("search", query.search.trim());
   if (query.readiness) params.set("readiness", query.readiness);
   if (query.sourceType) params.set("source_type", query.sourceType);
@@ -300,12 +395,16 @@ export async function getSocCorpusGroups(
   search: string,
   offset: number,
   context?: SocRequestContext,
+  selection: Pick<SocCorpusWorkbenchQuery, "batch" | "validationTier"> = {},
 ): Promise<SocCorpusGroupPage> {
   const params = new URLSearchParams({
     search,
     offset: String(offset),
     limit: "50",
   });
+  if (selection.batch) params.set("batch", selection.batch);
+  if (selection.validationTier)
+    params.set("validation_tier", selection.validationTier);
   const response = await fetch(
     `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/groups?${params}`,
     {
@@ -367,9 +466,11 @@ export async function getSocCorpusWorkbenchExecution(
 export async function getSocCorpusWorkbenchAudit(
   alertId: string,
   context?: SocRequestContext,
+  runId?: string | null,
 ): Promise<SocCorpusWorkbenchAuditBundle> {
+  const suffix = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
   const response = await fetch(
-    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/alerts/${encodeURIComponent(alertId)}/audit`,
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/alerts/${encodeURIComponent(alertId)}/audit${suffix}`,
     { headers: buildSocHeaders(context) },
   );
   return readJson<SocCorpusWorkbenchAuditBundle>(
@@ -858,6 +959,26 @@ export async function listSocMemoryCandidates({
   return data.items;
 }
 
+export async function getSocCorpusExperimentCandidates(
+  experimentId: string,
+  reviewStage: SocMemoryCandidateReviewStage,
+  offset = 0,
+  context?: SocRequestContext,
+): Promise<{ total: number; items: SocMemoryCandidate[] }> {
+  const params = new URLSearchParams({
+    review_stage: reviewStage,
+    offset: String(offset),
+    limit: "20",
+  });
+  return readJson(
+    await fetch(
+      `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/experiments/${encodeURIComponent(experimentId)}/candidates?${params}`,
+      { headers: buildSocHeaders(context) },
+    ),
+    "未能读取本实验的经验候选",
+  );
+}
+
 export async function getSocMemoryCenterOverview(
   {
     tenantId,
@@ -1079,6 +1200,36 @@ export async function supersedeSocMemoryCandidate(
     response,
     "Failed to supersede SOC memory candidate",
   );
+}
+
+export async function getSocMemoryWorkingDraft(
+  candidateId: string,
+): Promise<SocMemoryWorkingDraftView> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}/working-draft`,
+    { headers: buildSocHeaders(undefined) },
+  );
+  return readJson<SocMemoryWorkingDraftView>(response, "共享草稿读取失败");
+}
+
+export async function saveSocMemoryWorkingDraft(
+  candidateId: string,
+  request: {
+    expected_version: number;
+    candidate_revision: string;
+    content: SocMemoryDraftContent;
+  },
+  context?: SocRequestContext,
+): Promise<SocMemoryWorkingDraft> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}/working-draft`,
+    {
+      method: "PUT",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryWorkingDraft>(response, "共享草稿保存失败");
 }
 
 export async function draftSocMemoryBusinessLesson(

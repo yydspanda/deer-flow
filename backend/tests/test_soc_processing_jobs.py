@@ -53,6 +53,37 @@ def _submission(
     )
 
 
+def test_bulk_submission_matches_single_job_audit_and_rejects_conflicts():
+    repository = _repository()
+    submissions = [_submission(idempotency_key=f"batch:{i}", alert_id=str(i)) for i in range(25)]
+    result = repository.submit_many(submissions)
+    assert all(created for _, created in result)
+    replay = repository.submit_many(submissions)
+    assert [job.job_id for job, _ in replay] == [job.job_id for job, _ in result]
+    assert not any(created for _, created in replay)
+    for job, _ in result:
+        assert job.status is ProcessingJobStatus.QUEUED and job.attempt_count == 0
+        assert len(repository.list_events(job.job_id)) == 1
+    changed = submissions[0].model_copy(update={"input_payload": {"different": True}})
+    with pytest.raises(ProcessingJobConflictError):
+        repository.submit_many([changed])
+    with pytest.raises(ValueError):
+        repository.submit_many([submissions[0], submissions[0]])
+
+
+def test_bulk_conflict_does_not_leave_partial_jobs_or_events():
+    repository = _repository()
+    existing = _submission(idempotency_key="existing", alert_id="old")
+    repository.submit(existing)
+    new = _submission(idempotency_key="new", alert_id="new")
+    with pytest.raises(ProcessingJobConflictError):
+        repository.submit_many([new, existing.model_copy(update={"input_payload": {"changed": True}})])
+    job, created = repository.submit(new)
+    assert created is True
+    assert len(repository.list_events(job.job_id)) == 1
+    assert repository.list_events(job.job_id)[0].sequence == 1
+
+
 def test_submit_is_idempotent_but_rejects_key_reuse_with_changed_payload() -> None:
     repository = _repository()
     now = datetime(2026, 9, 1, 1, 0, tzinfo=UTC)
@@ -116,6 +147,53 @@ def test_claim_uses_priority_then_fifo_and_records_queryable_fields() -> None:
 
     event_types = [event.event_type for event in repository.list_events(high.job_id)]
     assert event_types == ["submitted", "claimed"]
+
+
+def test_claim_and_recovery_never_cross_workload_boundaries() -> None:
+    repository = _repository()
+    now = datetime(2026, 9, 18, tzinfo=UTC)
+    corpus, _ = repository.submit(
+        _submission(idempotency_key="corpus", alert_id="A-corpus", priority=0).model_copy(update={"workload_kind": "corpus_experiment"}),
+        now=now,
+    )
+    legacy, _ = repository.submit(_submission(idempotency_key="legacy", alert_id="A-legacy"), now=now)
+    claimed = repository.claim_next(queue_name="deepseek-v4-flash", workload_kind="alert_analysis", worker_id="legacy", lease_seconds=30, now=now)
+    assert claimed.job_id == legacy.job_id
+    assert repository.claim_next(queue_name="deepseek-v4-flash", workload_kind="alert_analysis", worker_id="legacy", lease_seconds=30, now=now) is None
+    corpus_claim = repository.claim_next(queue_name="deepseek-v4-flash", workload_kind="corpus_experiment", worker_id="corpus", lease_seconds=30, now=now)
+    assert corpus_claim.job_id == corpus.job_id
+    assert repository.recover_expired_leases(workload_kind="corpus_experiment", queue_name="deepseek-v4-flash", now=now + timedelta(seconds=31)) == [corpus.job_id]
+    assert repository.get(legacy.job_id).status is ProcessingJobStatus.CLAIMED
+
+
+def test_claim_can_be_limited_to_a_running_rounds_selected_jobs() -> None:
+    repository = _repository()
+    now = datetime(2026, 9, 18, tzinfo=UTC)
+    paused, _ = repository.submit(_submission(idempotency_key="paused", alert_id="A-paused", priority=0), now=now)
+    running, _ = repository.submit(_submission(idempotency_key="running", alert_id="A-running"), now=now)
+    assert repository.claim_next(queue_name="deepseek-v4-flash", worker_id="worker", lease_seconds=30, job_ids=[], now=now) is None
+    claimed = repository.claim_next(queue_name="deepseek-v4-flash", worker_id="worker", lease_seconds=30, job_ids=[running.job_id], now=now)
+    assert claimed.job_id == running.job_id
+    assert repository.get(paused.job_id).status is ProcessingJobStatus.QUEUED
+
+
+def test_same_alert_exclusive_scope_serializes_batch_and_interactive_jobs():
+    repository = _repository()
+    now = datetime(2026, 9, 18, tzinfo=UTC)
+    first, _ = repository.submit(_submission(idempotency_key="batch", alert_id="A-1").model_copy(update={"concurrency_key": "dev:tenant:A-1"}), now=now)
+    second, _ = repository.submit(_submission(idempotency_key="web", alert_id="A-1").model_copy(update={"concurrency_key": "dev:tenant:A-1", "priority": 0}), now=now)
+    assert repository.claim_next(queue_name="deepseek-v4-flash", worker_id="batch", lease_seconds=30, job_ids=[first.job_id], now=now).job_id == first.job_id
+    assert repository.claim_next(queue_name="deepseek-v4-flash", worker_id="web", lease_seconds=30, job_ids=[second.job_id], now=now) is None
+    repository.recover_expired_leases(now=now + timedelta(seconds=31))
+    assert repository.claim_next(queue_name="deepseek-v4-flash", worker_id="web", lease_seconds=30, job_ids=[second.job_id], now=now + timedelta(seconds=31)).job_id == second.job_id
+
+
+def test_old_submission_hash_does_not_change_when_exclusive_scope_is_absent():
+    from soc_agent.contracts import stable_processing_payload_sha256, stable_processing_submission_sha256
+
+    submission = _submission(idempotency_key="legacy", alert_id="A-1")
+    old_payload = submission.model_dump(mode="json", exclude={"available_at", "expires_at", "concurrency_key"})
+    assert stable_processing_submission_sha256(submission) == stable_processing_payload_sha256(old_payload)
 
 
 def test_postgresql_claim_query_uses_skip_locked_for_multi_worker_safety() -> None:

@@ -108,6 +108,42 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > SQL filters/pagination read small state, while page details load the complete records.
 > Source changes invalidate affected entries; confirmed experience is never cached as
 > authority. The first historical backfill is preparation work, not recurring navigation.
+> Two-batch preparation is available as a read-only draft:
+> `backend/.venv/bin/python backend/scripts/soc_corpus_batch_preview.py`.
+> It verifies the PKL/index/payload-store identities, partitions each static group by
+> event time (five to ten learning members, at least one holdout), and writes
+> `preview.md`, CSVs and `manifest.json` under ignored
+> `backend/.deer-flow/soc-validation/corpus-batch-preview/`. Existing outputs are not
+> overwritten. It does not change the Web UI, run alerts or create Memory; real learning
+> and validation runs are reserved for internal Mac DEV after operator confirmation.
+> The two-batch execution service now uses durable experiment/round records (`0030`)
+> and the shared SOC processing queue. The page retains group browsing; preparing a
+> round is separate from starting it. The HTTP CLI is
+> `backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py --help`.
+> It supports filters, limits, concurrency, pause/resume, explicit retries and fixed-run
+> exports. Learning uses no existing Memory and accumulates within the experiment;
+> validation freezes reviewed learning Memory and does not automatically create new
+> observations. Ordinary 30-day aggregation is unchanged.
+> `retest-plan` selects failed items or actual Memory uses from a saved report;
+> `learn/validate --selection-file` creates a linked new round, preserving dataset,
+> batch and exploration boundaries. Explicit single-alert rounds take the next free
+> dispatcher slot before bulk work. Linked reruns expose a paginated before/after
+> tab with fixed old/new Run records, Memory use, timing and Token measurements.
+> Unknown measurements and failed results remain distinct from zero or unchanged.
+> Interactive model waiters precede background
+> waiters without preempting active calls or increasing the shared concurrency limit.
+> Candidate detail supports shared, versioned drafts (`0031`); saving is not approval.
+> After reviewers save their final verdicts, `draft-plan` / `draft-candidates` can queue
+> AI drafting for learning candidates. Generated text remains editable and unapproved;
+> concurrent edits are never overwritten. `draft-status` exposes results and usage.
+> `draft-export` saves a separate background-drafting cost report, including unknown
+> usage; it does not inflate alert-analysis totals. For a fresh internal DEV experiment,
+> the Host wrapper's explicit `reset-dev-data` previews and archives only the SOC DEV
+> database. Ordinary deployment never resets it; accounts, corpus and secrets remain intact.
+> Isolated mock full-loop, browser and synthetic capacity checks have passed; the updated internal handoff remains
+> in progress. Real model batches remain internal-only. Copyable Mac commands are in the
+> [batch runbook](.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md).
+> See the [two-batch plan](.notes/ai_soc/architecture/corpus-memory-batch-validation-design.md).
 > A browser-driven local lifecycle is available for the reviewed 14-alert
 > `GalaxyLab_T1003-SAM-Dumping` cohort. For a trusted shared demonstration, run
 > `./scripts/soc-memory-dev.sh demo-start`, then open

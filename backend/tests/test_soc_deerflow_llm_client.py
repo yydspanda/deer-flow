@@ -145,6 +145,38 @@ def test_deerflow_client_reuses_model_and_bounds_metadata() -> None:
     assert second.model_name == "provider-model-id"
 
 
+def test_client_timeout_does_not_free_a_still_running_provider_slot():
+    from threading import Event
+
+    release = Event()
+    admission = SocLLMAdmissionController(max_concurrency=1, acquire_timeout_seconds=0)
+    slow_calls = []
+
+    class SlowModel(_FakeModel):
+        def invoke(self, *args, **kwargs):
+            slow_calls.append("invoked")
+            assert release.wait(3)
+            return super().invoke(*args, **kwargs)
+
+    slow = SlowModel()
+    fast = _FakeModel()
+    client = DeerFlowLLMChatClient(app_config=_FakeConfig("mock"), thinking_enabled=False, model_factory=lambda **_: slow, admission_controller=admission, call_timeout_seconds=0.03)
+    peer = DeerFlowLLMChatClient(app_config=_FakeConfig("mock"), thinking_enabled=False, model_factory=lambda **_: fast, admission_controller=admission)
+    try:
+        with pytest.raises(TimeoutError, match="exceeded"):
+            client.complete([{"role": "user", "content": "slow"}], model_name="mock")
+        assert slow_calls == ["invoked"]
+        with pytest.raises(SocLLMAdmissionError):
+            peer.complete([{"role": "user", "content": "must wait"}], model_name="mock")
+        assert fast.calls == []
+    finally:
+        release.set()
+        client._executor.shutdown(wait=True)
+        peer._executor.shutdown(wait=True)
+    with admission.admit():
+        pass  # Completion released the held slot exactly once.
+
+
 def test_deerflow_client_accepts_bounded_call_trace_identity() -> None:
     model = _FakeModel()
     client = DeerFlowLLMChatClient(

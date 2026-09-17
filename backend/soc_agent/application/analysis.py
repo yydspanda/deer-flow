@@ -59,6 +59,7 @@ def build_soc_analysis_service(
     pattern_observation_enabled: bool | None = None,
     execute_authorized_actions: bool | None = None,
     execution_options: SocAnalysisExecutionOptions | None = None,
+    memory_record_ids: frozenset[str] | None = None,
 ) -> SocAnalysisService:
     """Build the one analysis service shared by CLI and offline batch entry points."""
 
@@ -87,6 +88,7 @@ def build_soc_analysis_service(
     analysis_request_enricher = _build_analysis_request_enricher(
         repository,
         memory_environment=resolved_environment,
+        memory_record_ids=memory_record_ids,
     )
     assist_mode = execution_options.normalization_review_mode if execution_options is not None else os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower()
     if assist_mode not in {"off", "shadow", "apply"}:
@@ -113,7 +115,7 @@ def build_soc_analysis_service(
         profiles = build_soc_memory_profile_registry()
         direct_resolution = SocDirectResolutionService(
             tenant_policy_service=next((observer for observer in post_analysis_observers if isinstance(observer, SocTenantPolicyEvaluationService)), None),
-            memory_service=SocMemoryService(record_repository=repository, profile_registry=profiles) if repository is not None else None,
+            memory_service=SocMemoryService(record_repository=repository, profile_registry=profiles, retrieval_record_ids=memory_record_ids) if repository is not None else None,
             profile_registry=profiles,
             environment=resolved_environment,
         )
@@ -141,6 +143,7 @@ def _build_analysis_request_enricher(
     repository: SqlAlchemyAlertRepository | None,
     *,
     memory_environment: str | None,
+    memory_record_ids: frozenset[str] | None = None,
 ) -> CompositeAnalysisRequestEnricher:
     enrichers = [
         TenantKnowledgeAnalysisRequestEnricher(
@@ -154,6 +157,7 @@ def _build_analysis_request_enricher(
                 SocMemoryService(
                     record_repository=repository,
                     profile_registry=profile_registry,
+                    retrieval_record_ids=memory_record_ids,
                 ),
                 profile_registry=profile_registry,
                 environment=memory_environment,

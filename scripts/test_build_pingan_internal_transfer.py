@@ -111,6 +111,8 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "backend/soc_agent/integrations/pingan/zeus_target.py" in required
     assert "backend/soc_agent/integrations/pingan/runtime_environment.py" in required
     assert "scripts/soc_pingan_host_sidecars.py" in required
+    assert "scripts/soc_pingan_dev_database.py" in required
+    assert "scripts/test_soc_pingan_dev_database.py" in required
     assert "scripts/soc_pingan_stage_internal_corpus.py" in required
     assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
 
@@ -265,7 +267,9 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "确认 Core 全部为 `true`、三个 Sidecar 都为 `running`" in runbook
     assert "首次提交这份\n新请求" in runbook
     assert "`soc_database.status=ready`" in runbook
-    assert "`soc_database.schema_revision=0028_corpus_list`" in runbook
+    assert "`soc_database.schema_revision=0031_memory_working_drafts`" in runbook
+    assert "pingan-corpus-batch-runbook.md" in runbook
+    assert "历史语料任务不查询/回写 ZEUS" in runbook
     assert "--frontend-mode dev" in runbook
     assert all("unset SOC_DATABASE_URL" not in block for block in local_env_blocks)
     assert (

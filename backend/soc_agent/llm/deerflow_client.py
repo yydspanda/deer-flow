@@ -87,7 +87,7 @@ class DeerFlowLLMChatClient:
         model = self._get_model(model_name)
         transport_mode = "buffered_stream" if self._streaming_enabled(model_name) else "non_streaming"
         admission_started = time.monotonic()
-        with self._admission.admit():
+        with self._admission.admit() as admission_slot:
             admission_wait_duration_ms = round(
                 (time.monotonic() - admission_started) * 1000,
                 3,
@@ -107,6 +107,7 @@ class DeerFlowLLMChatClient:
                 [dict(message) for message in messages],
                 **invoke_kwargs,
             )
+            admission_slot.release_after(future)
             try:
                 response = future.result(timeout=self._call_timeout_seconds)
             except concurrent.futures.TimeoutError as exc:

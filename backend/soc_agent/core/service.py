@@ -2008,6 +2008,7 @@ class SocMemoryService:
         event_sink: SocEventSink | None = None,
         analysis_run_repository: AlertRepository | None = None,
         profile_registry: SocMemoryProfileRegistry | None = None,
+        retrieval_record_ids: frozenset[str] | None = None,
         now_provider: Callable[[], datetime] | None = None,
         _transaction_active: bool = False,
     ) -> None:
@@ -2017,6 +2018,7 @@ class SocMemoryService:
         self._event_sink = event_sink or NoopEventSink()
         self._analysis_run_repository = analysis_run_repository
         self._profile_registry = profile_registry or SocMemoryProfileRegistry()
+        self._retrieval_record_ids = retrieval_record_ids
         self._mutation_uow = mutation_uow or mutation_uow_from(
             candidate_repository,
             record_repository,
@@ -2178,6 +2180,7 @@ class SocMemoryService:
             mutation_uow=self._mutation_uow,
             analysis_run_repository=repository if self._analysis_run_repository is not None else None,
             profile_registry=self._profile_registry,
+            retrieval_record_ids=self._retrieval_record_ids,
             event_sink=event_sink,
             now_provider=self._now_provider,
             _transaction_active=True,
@@ -3861,6 +3864,8 @@ class SocMemoryService:
         now = self._now_provider()
 
         for record in deduped_records.values():
+            if self._retrieval_record_ids is not None and record.memory_id not in self._retrieval_record_ids:
+                continue
             if query.statuses and record.status not in query.statuses:
                 skipped_status += 1
                 continue

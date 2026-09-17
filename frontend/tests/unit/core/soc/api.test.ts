@@ -19,8 +19,13 @@ import {
   expireSocApprovalRequest,
   executeSocApprovedAction,
   getSocAlertInvestigationContext,
+  getSocCorpusWorkbenchState,
+  getSocCorpusGroups,
+  getSocCorpusExperimentCandidates,
   getSocMemoryCenterOverview,
   getSocMemoryLineage,
+  getSocMemoryWorkingDraft,
+  saveSocMemoryWorkingDraft,
   getSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
   getSocEffectivenessSnapshot,
@@ -46,8 +51,45 @@ import {
   updateSocMemoryRetrievalActivation,
   updateSocNormalizationIssue,
 } from "@/core/soc/api";
+import { type SocMemoryCandidate } from "@/core/soc/types";
 
 const mockedFetch = rs.mocked(fetcher);
+
+test("working-draft requests preserve version and never call review or activation", async () => {
+  mockedFetch.mockResolvedValueOnce(jsonResponse(200, { draft: null }));
+  await getSocMemoryWorkingDraft("MC/one");
+  expect(mockedFetch.mock.calls[0]?.[0]).toBe(
+    "/api/soc/memory/candidates/MC%2Fone/working-draft",
+  );
+  mockedFetch.mockClear();
+  const { workingDraftContent } =
+    await import("@/core/soc/memory-working-draft");
+  const { defaultMemoryCandidateReviewDraft } =
+    await import("@/core/soc/memory-review-draft");
+  const body = {
+    expected_version: 2,
+    candidate_revision: "a".repeat(64),
+    content: workingDraftContent(
+      defaultMemoryCandidateReviewDraft({
+        candidate_id: "MC-one",
+      } as SocMemoryCandidate),
+    ),
+  };
+  mockedFetch.mockResolvedValueOnce(
+    jsonResponse(200, { version: 3, authority: "draft_only" }),
+  );
+  await saveSocMemoryWorkingDraft("MC-one", body, {
+    actorId: "reviewer",
+    surface: "web",
+    idempotencyKey: "draft-save",
+  });
+  expect(mockedFetch).toHaveBeenCalledTimes(1);
+  expect(firstFetchInit().method).toBe("PUT");
+  expect(firstFetchInit().body).toBe(JSON.stringify(body));
+  expect(new Headers(firstFetchInit().headers).get("Idempotency-Key")).toBe(
+    "draft-save",
+  );
+});
 
 function jsonResponse(
   status: number,
@@ -73,6 +115,24 @@ beforeEach(() => {
 });
 
 describe("SOC corpus process API", () => {
+  test("scopes alert and group reads to the same batch and tier", async () => {
+    mockedFetch.mockImplementation(async () => jsonResponse(200, {}));
+    const selection = {
+      batch: "validation" as const,
+      validationTier: "supplementary" as const,
+    };
+    await getSocCorpusWorkbenchState({
+      ...selection,
+      includeGroupCatalog: false,
+    });
+    await getSocCorpusGroups("RULE", 50, undefined, selection);
+    for (const [url] of mockedFetch.mock.calls) {
+      const target = url instanceof Request ? url.url : url;
+      const params = new URL(target, "http://localhost").searchParams;
+      expect(params.get("batch")).toBe("validation");
+      expect(params.get("validation_tier")).toBe("supplementary");
+    }
+  });
   test.each([true, false])(
     "declares JSON when submitting run settings (policy enabled: %s)",
     async (enabled) => {
@@ -707,6 +767,18 @@ describe("SOC approval API", () => {
 });
 
 describe("SOC memory API", () => {
+  test("reads a bounded experiment candidate page through the DEV endpoint", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { total: 41, items: [] }),
+    );
+    await expect(
+      getSocCorpusExperimentCandidates("EXP one", "pending", 20),
+    ).resolves.toEqual({ total: 41, items: [] });
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/dev/corpus-workbench/experiments/EXP%20one/candidates?review_stage=pending&offset=20&limit=20",
+      expect.any(Object),
+    );
+  });
   test("filters Memory Center by lifecycle stage and future use", async () => {
     mockedFetch.mockResolvedValueOnce(
       jsonResponse(200, { items: [], total: 0 }),

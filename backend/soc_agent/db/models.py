@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from soc_agent.db.base import SocBase
@@ -68,6 +68,61 @@ class SocCorpusListProjectionRow(SocBase):
     source_type: Mapped[str] = mapped_column(String(64), nullable=False)
     labeled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     projection_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocCorpusExperimentRow(SocBase):
+    """Immutable dataset identity; raw logs remain in the original payload store."""
+
+    __tablename__ = "soc_corpus_experiments"
+    experiment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    record_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocCorpusExperimentMemberRow(SocBase):
+    __tablename__ = "soc_corpus_experiment_members"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "sequence_number", name="uq_soc_corpus_member_sequence"),
+        Index("ix_soc_corpus_member_batch", "experiment_id", "batch", "validation_tier", "sequence_number"),
+        Index("ix_soc_corpus_member_group", "experiment_id", "group_id", "sequence_number"),
+    )
+    experiment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    group_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    batch: Mapped[str] = mapped_column(String(32), nullable=False)
+    validation_tier: Mapped[str | None] = mapped_column(String(32))
+    rule_code: Mapped[str | None] = mapped_column(String(256))
+    record_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocCorpusRoundRow(SocBase):
+    __tablename__ = "soc_corpus_rounds"
+    __table_args__ = (Index("ix_soc_corpus_round_state", "state", "created_at"),)
+    round_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    batch: Mapped[str] = mapped_column(String(32), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    record_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocCorpusRoundItemRow(SocBase):
+    """Fixed Run references are read through the durable job; no latest-alert lookup."""
+
+    __tablename__ = "soc_corpus_round_items"
+    __table_args__ = (
+        UniqueConstraint("round_id", "sequence_number", name="uq_soc_corpus_round_sequence"),
+        Index("ix_soc_corpus_round_group", "round_id", "group_id", "sequence_number"),
+    )
+    round_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    group_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
 
 
 class SocDecisionAuditLogRow(SocBase):
@@ -428,6 +483,18 @@ class SocMemoryCandidateRow(SocBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     candidate_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocMemoryWorkingDraftRow(SocBase):
+    """Shared work-in-progress; Memory retrieval never reads this table."""
+
+    __tablename__ = "soc_memory_working_drafts"
+    candidate_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    draft_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
 class SocMemoryRecordRow(SocBase):
@@ -1090,6 +1157,13 @@ class SocProcessingJobRow(SocBase):
     __tablename__ = "soc_processing_jobs"
     __table_args__ = (
         Index(
+            "uq_soc_processing_jobs_active_scope",
+            "concurrency_key",
+            unique=True,
+            sqlite_where=text("concurrency_key IS NOT NULL AND status IN ('claimed', 'prechecking', 'analyzing', 'projecting')"),
+            postgresql_where=text("concurrency_key IS NOT NULL AND status IN ('claimed', 'prechecking', 'analyzing', 'projecting')"),
+        ),
+        Index(
             "ix_soc_processing_jobs_claim",
             "queue_name",
             "status",
@@ -1113,6 +1187,7 @@ class SocProcessingJobRow(SocBase):
     tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
     workload_kind: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     queue_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    concurrency_key: Mapped[str | None] = mapped_column(String(256))
     status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
     submission_sha256: Mapped[str] = mapped_column(String(64), nullable=False)

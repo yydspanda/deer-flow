@@ -102,6 +102,7 @@ class MemoryPatternCohortQuality(BaseModel):
     applicability_facets: dict[str, list[str]] = Field(default_factory=dict)
     strong_anchor_facets: dict[str, list[str]] = Field(default_factory=dict)
     quality_gate_passed: bool
+    review_kind: Literal["consistent_conclusions", "mixed_conclusions"] = "consistent_conclusions"
     reason_codes: list[str] = Field(default_factory=list)
     representative_observation_ids: list[str] = Field(default_factory=list)
 
@@ -250,6 +251,24 @@ class MemoryPatternObservationCreateCommand(BaseModel):
         return normalized
 
 
+class MemoryPatternAccumulationScope(BaseModel):
+    """Server-owned experiment grouping; never a Memory applicability condition."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    experiment_id: str = Field(min_length=1, max_length=128)
+    configuration_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    event_start: datetime
+    event_end: datetime
+    review_mixed_conclusions: bool = True
+
+    @model_validator(mode="after")
+    def check_event_range(self) -> MemoryPatternAccumulationScope:
+        if self.event_start.utcoffset() is None or self.event_end.utcoffset() is None or self.event_end <= self.event_start:
+            raise ValueError("experiment accumulation requires an ordered timezone-aware event range")
+        return self
+
+
 class MemoryPatternObservation(BaseModel):
     """Immutable alert recurrence observation used only by deterministic aggregation."""
 
@@ -283,6 +302,7 @@ class MemoryPatternObservation(BaseModel):
     window_start: datetime
     window_end: datetime
     aggregation_policy: MemoryPatternAggregationPolicy
+    accumulation_scope: MemoryPatternAccumulationScope | None = None
     evidence_refs: list[str] = Field(min_length=1, max_length=200)
     metadata: dict[str, str] = Field(default_factory=dict)
     mocked: bool
@@ -292,6 +312,8 @@ class MemoryPatternObservation(BaseModel):
 
     @model_validator(mode="after")
     def validate_observation_boundaries(self) -> MemoryPatternObservation:
+        if self.accumulation_scope is not None and (self.window_start != self.accumulation_scope.event_start or self.window_end != self.accumulation_scope.event_end):
+            raise ValueError("experiment accumulation boundaries must match the frozen scope")
         if self.window_start.tzinfo is None or self.window_start.utcoffset() is None:
             raise ValueError("memory pattern window_start must be timezone-aware")
         if self.window_end.tzinfo is None or self.window_end.utcoffset() is None:

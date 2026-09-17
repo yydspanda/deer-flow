@@ -15,6 +15,22 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 ## API And Navigation
 
+- Two-batch controls use the server experiment/round API; preparing membership or a
+  round does not start inference. CLI-created rounds appear in the same paginated list.
+  Keep static sample browsing separate from the selected round's saved results.
+  Round/audit queries include the fixed Run ID; do not silently select a later rerun.
+  Linked retest rounds expose an on-demand, paginated before/after tab. Render server
+  comparison status, actual Memory versions/use, timing and unknown usage; failures
+  are not unchanged conclusions. Only explicit result inspection fetches full audit.
+  Preparing a retest preserves old results and still does not start model execution.
+  Preserve scope and round selection when returning from candidate governance.
+  Round lists use the lightweight `/experiments/{id}/rounds` projection, filtered by
+  batch before pagination, not full configuration or Memory snapshots for every row.
+  The old untracked process endpoint must not be used once experiments are prepared.
+  Show server-owned round timing and current-budget ETA only when available. Runtime
+  wall time, operator pause, queue wait and model duration are different measures;
+  never infer an ETA or convert unknown measurements into zero on the client.
+
 - Corpus list requests set `include_group_catalog=false&include_rehearsal=false`. Keep
   the selected group in that lightweight response; open the group picker to fetch
   `/dev/corpus-workbench/groups` with server search and bounded pagination. Do not
@@ -215,6 +231,13 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   terminal state or candidate revision changes. Invalid/unavailable browser storage must
   not break editing; show a failure warning if refresh recovery is unavailable. This is
   not a shared server draft, and does not survive closing the tab or changing browsers.
+  Focused candidate detail additionally offers explicit shared draft save/read commands.
+  The server working copy is versioned and never activates Memory. Load it automatically
+  only when there are no local edits; otherwise require explicit replacement confirmation.
+  Keep the version the editor actually loaded, not the newest background query version.
+  Save acknowledgement may update that base version but must preserve edits typed in flight.
+  Source changes require explicit rechecking; show the old shared text rather than deleting
+  it. Do not mount one shared-draft query for every inventory row.
 - Candidate applicability controls must distinguish server-locked required facets from
   reviewer-selectable core behavior and optional narrowing. Extra selections go into `reuse_conditions`,
   not required/optional/context facet groups; clearing removes only unsaved extra limits. Arbitrary
@@ -341,10 +364,9 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 - The user-facing corpus route is the **告警研判演练** workspace. Keep the stable
   `/corpus-validation` route for compatibility, but do not expose “语料验证” as the
   primary analyst concept.
-- Its recommended rehearsal manifest contains exactly two server-owned, result-oriented
-  stories over the same vendor rule: one context-only Memory use and one exact-match
-  Decision reuse. Keep full-corpus search below those recommendations; do not turn the
-  recommendation panel back into a general capability catalog.
+- Historical recommended rehearsal manifests remain API compatibility data only. The
+  page uses learning/validation batches and the existing group browser, not fixed demo
+  stories. Candidate inventory and detail links preserve the experiment query scope.
 - Rehearsal metadata may only set existing filters and selected alert. It must not run an
   alert, seed Candidate/Memory state, predict a verdict, or hide a server-reported
   missing/regrouped target. Full behavior-group selectors keep the stable Group ID and

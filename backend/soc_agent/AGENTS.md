@@ -11,6 +11,75 @@ file for SOC code. The authoritative product and engineering documents are:
 
 ## Ownership Boundaries
 
+- `demo/corpus_batches.py` owns the pure, label-blind per-group chronological split;
+  `demo/corpus_batch_preview.py` verifies existing corpus artifacts and exports a private
+  draft only. No model, Runtime, application DB or task calls belong in preparation.
+  Groups with at least six usable event times split about 70/30 with five learning
+  members and one holdout minimum, capped at ten learning members per group; all
+  remaining members are holdouts. Small groups and unknown times remain supplementary.
+  Bind source/index/store hashes and static profile; preserve raw row identities, reject
+  duplicates rather than silently dropping them, and never rebuild an index implicitly.
+  Static navigation groups are not the semantic-reviewed Runtime Memory patterns.
+  Preview alone is not execution authorization. `demo/corpus_experiments.py` owns
+  immutable experiments/rounds and dispatches `corpus_experiment` Processing Jobs;
+  the legacy worker consumes only `alert_analysis`. The HTTP CLI never starts a
+  second Runtime loop. Gateway dispatch survives client disconnect and lease recovery.
+  Learning uses an empty Memory allowlist and an experiment/config/actual-pattern
+  accumulation scope; ordinary windows and event times stay unchanged. Validation
+  freezes eligible reviewed learning Memory, checks current governance, and disables
+  automatic Pattern learning. Dataset/config/snapshot drift blocks further claims.
+  `0029/0030` persist shared alert concurrency and rounds; do not create tables on reads.
+  DEV owns one Gateway; finish legacy interactive work before preparing experiments.
+  Once an experiment exists, manual runs must use durable round controls too.
+  Round result/audit reads pin Run ID and source hash, never the latest alert result.
+  Reports separate matched-group validation from sparse exploration and unknown usage.
+  Prepare jobs/events and round references in bounded chunks within one transaction;
+  a failed later chunk must roll back the entire unstarted round. Candidate inventory
+  filters by learning-source runs/experiment before pagination; it does not clone review
+  authority. Private CSV exports include per-alert results, actual Memory uses and failures.
+  Timing projections use persisted round transitions and first-claim/job-end timestamps,
+  not model inference. Queue wait excludes paused and not-yet-admitted intervals; task
+  processing wall time includes retries/recovery. An estimate needs five terminal tasks,
+  covers only the admitted budget, and is withheld while paused/blocked. Missing history
+  remains unknown. Report consistency ignores moving read-time clocks, never state/version
+  or result counters; no polling scan of full Run records for these estimates.
+  `core/memory_working_drafts.py` owns versioned draft-only working copies (`0031`),
+  independent of approved Memory. `core/memory_draft_jobs.py` queues reviewer-selected
+  verdicts through the existing `memory_lesson_draft` workload and lesson service.
+  The same dispatcher and locked three-slot budget cover corpus and drafting jobs;
+  model admission remains shared with interactive SOC calls. No LLM runs while a DB
+  write transaction is held. Save generation checkpoints before projection; source or
+  draft changes retain results without overwriting edits. Uncertain remote completion
+  requires explicit retry. Only the existing review command can publish/enable Memory.
+  `draft-export` reads bounded job pages twice and rejects changing or nonterminal
+  jobs before writing a private immutable report. It accounts only for saved background
+  generations, not synchronous web drafts or alert-analysis cost. Missing usage and
+  potentially unmeasured recovery attempts remain explicit; saved call counts are not
+  claimed to be complete billing totals.
+  `demo/corpus_retest_selection.py` creates label-blind local plans from fixed report
+  rows, selecting actual Memory uses rather than snapshot inventory. Persist report
+  hash/selection hash/source identity on the new round; check its same-experiment
+  parent, source identity and batch before submitting jobs. The local plan retains old
+  Run IDs and exploration tags; it is operator-supplied selection, not review authority.
+  Retest creation requires a quiescent same-batch parent. Capture a minimal previous
+  job result in each child job's metadata in the same transaction; later retries must
+  not rewrite that baseline. New report plans also hash selected result projections;
+  reject drift before committing jobs. `/rounds/{id}/comparison` reads only the current
+  page of saved baselines and child outcomes, never latest-alert results or raw logs.
+  Dispatcher priority is server-derived from an explicit one-alert selection; paused
+  or merely prepared rounds never qualify. Query queued, available, unoccupied jobs
+  before the bulk fallback, then use ordinary fenced claims. Model admission uses
+  scoped interactive/background FIFO tickets, never caller-chosen numeric priority;
+  interactive waiters take free slots first, active calls are not interrupted. Bulk
+  analysis and background drafts carry background context; synchronous web calls and
+  selected single-alert rounds remain interactive. This is local SOC capacity, not a
+  global guarantee over other clients/processes, and sustained manual traffic can
+  delay background work. No new queue, DB migration or action authority is introduced.
+  SOC LLM invocation attaches its future to the admission slot. An outer timeout
+  returns promptly but an uncancellable local invocation retains capacity until the
+  future terminates; completion/cancellation and context exit release it exactly once.
+  This does not prove that a disconnected remote server has stopped computing.
+
 - DEV Corpus group search is a static, paginated directory under the existing
   Workbench service. `include_group_catalog=false` keeps list payloads bounded by
   page/selected-guide data; default true preserves existing script clients. Group

@@ -49,6 +49,7 @@ from soc_agent.core.operator_language import operator_text
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.db.corpus_lists import EMPTY_REVISION, CorpusListSummary
+from soc_agent.demo.corpus_batches import CorpusBatch, CorpusBatchCase, CorpusBatchSelection, CorpusValidationTier, build_corpus_batch_plan
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
 from soc_agent.demo.leadership_guide import (
     SocLeadershipDemoGuide,
@@ -536,6 +537,10 @@ class SocCorpusWorkbenchAlert(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     alert_id: str
+    batch: CorpusBatch | None = None
+    validation_tier: CorpusValidationTier | None = None
+    batch_reason: str | None = None
+    batch_group_alert_count: int | None = None
     source_index: int
     sequence_number: int = Field(ge=1)
     observed_at: str
@@ -640,6 +645,7 @@ class SocCorpusWorkbenchState(BaseModel):
     schema_version: Literal["soc.corpus_dev_workbench.v4"] = "soc.corpus_dev_workbench.v4"
     safety: SocCorpusWorkbenchSafety
     run_controls: SocCorpusWorkbenchRunControls | None = None
+    batch_selection: CorpusBatchSelection | None = None
     source: SocCorpusWorkbenchSource
     model: SocCorpusWorkbenchModelConfig
     readiness: SocCorpusWorkbenchReadiness
@@ -748,12 +754,30 @@ class SocCorpusWorkbenchService:
         self._payload_cache_lock = Lock()
         self._payload_store_path, self._payload_store_sha256 = _resolve_payload_store(self._index_path) if self._index_path.is_file() else (None, None)
         self._index_sha256 = _sha256_file(self._index_path) if self._index_path.is_file() else None
+        # Derive once from the same verified static catalog as the preparation CLI.
+        batch_rows = [_case_index_record(case) for case in self._cases.values()]
+        batch_identity = {"source": {"sha256": self._source_sha256}, "memory_profile": asdict(PingAnSocMemoryProfile.identity)}
+        if self._index_path.is_file():
+            document = json.loads(self._index_path.read_text(encoding="utf-8"))
+            batch_rows = document["cases"]
+            batch_identity = {
+                "source": document["source"],
+                "payload_store": document["payload_store"],
+                "memory_profile": document["memory_profile"],
+                "index": {"file_name": self._index_path.name, "sha256": self._index_sha256, "size_bytes": self._index_path.stat().st_size, "schema_version": document["schema_version"]},
+            }
+        self._batch_plan = build_corpus_batch_plan(
+            [CorpusBatchCase.model_validate({k: v for k, v in row.items() if k in CorpusBatchCase.model_fields}) for row in batch_rows],
+            source_identity=batch_identity,
+        )
+        self._batch_members = {m.alert_id: m for m in self._batch_plan.members}
         self._execution_lock = Lock()
         self._list_lock = Lock()
         self._list_queries = repository.corpus_list_queries()
         self._list_catalog_id = stable_hash(
             {
-                "projection": "soc.corpus_list.v2",
+                "projection": "soc.corpus_list.v3",
+                "batch_plan": self._batch_plan.plan_id,
                 "source": self._source_sha256,
                 "index": self._index_sha256,
                 "workbench": CORPUS_WORKBENCH_VERSION,
@@ -763,10 +787,47 @@ class SocCorpusWorkbenchService:
         self._active_executions: dict[str, _ActiveExecutionClaim] = {}
         self._max_concurrent_executions = settings.max_concurrency
         self._group_catalog = [SocCorpusGroupDirectoryItem.model_validate(item.model_dump(exclude={"processed_count", "memory_hit_count"})) for item in _group_views(self._cases.values(), [])]
+        self._batch_group_catalog = {
+            (batch, tier): [SocCorpusGroupDirectoryItem.model_validate(g.model_dump(exclude={"processed_count", "memory_hit_count"})) for g in _group_views(self._selected_cases(batch, tier), [])]
+            for batch, tier in (("learning", None), ("validation", None), ("validation", "main"), ("validation", "supplementary"))
+        }
         self._execution_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self._max_concurrent_executions,
             thread_name_prefix="soc-corpus-workbench",
         )
+
+    @property
+    def batch_plan(self):
+        return self._batch_plan.model_copy(deep=True)
+
+    @property
+    def batch_plan_id(self) -> str:
+        return self._batch_plan.plan_id
+
+    @property
+    def run_controls(self):
+        return self._run_controls
+
+    def load_experiment_payload(self, member) -> dict[str, Any]:
+        case = self._cases.get(member.alert_id)
+        if case is None or case.payload_hash != member.payload_hash or case.source_index != member.source_index:
+            raise SocCorpusWorkbenchError("fixed experiment member identity does not match the configured corpus")
+        return copy.deepcopy(self._payload_for_case(case))
+
+    def experiment_label(self, member, *, decision_available: bool) -> dict[str, Any]:
+        case = self._cases.get(member.alert_id)
+        if case is None or case.payload_hash != member.payload_hash:
+            raise SocCorpusWorkbenchError("experiment label identity no longer matches the fixed corpus")
+        available = case.operational_label_available
+        scorable = available and case.label_temporal_status == "valid" and case.operational_label is not None
+        return {
+            "available": available,
+            "scorable": bool(scorable and decision_available),
+            "expected_handling": ("ignore" if case.operational_label == "忽略" else "transfer") if scorable and decision_available else None,
+            "source": "historical_operational_disposition",
+            "temporal_status": case.label_temporal_status,
+            "method": case.operational_label_method if decision_available else None,
+        }
 
     def get_state(
         self,
@@ -782,6 +843,8 @@ class SocCorpusWorkbenchService:
         offset: int = 0,
         include_group_catalog: bool = True,
         include_rehearsal: bool = True,
+        batch: CorpusBatch | None = None,
+        validation_tier: CorpusValidationTier | None = None,
     ) -> SocCorpusWorkbenchState:
         if limit < 1 or limit > 500:
             raise SocCorpusWorkbenchError("corpus workbench limit must be between 1 and 500")
@@ -799,9 +862,16 @@ class SocCorpusWorkbenchService:
             offset=offset,
             include_group_catalog=include_group_catalog,
             include_rehearsal=include_rehearsal,
+            batch=batch,
+            validation_tier=validation_tier,
         )
 
-    def get_groups(self, *, search: str | None = None, limit: int = 50, offset: int = 0) -> SocCorpusGroupPage:
+    def _selected_cases(self, batch: CorpusBatch | None, validation_tier: CorpusValidationTier | None) -> list[_CorpusCase]:
+        if batch not in (None, "learning", "validation") or validation_tier not in (None, "main", "supplementary") or (validation_tier and batch != "validation"):
+            raise SocCorpusWorkbenchError("validation_tier requires the validation batch")
+        return [case for case in self._cases.values() if (batch is None or self._batch_members[case.alert_id].batch == batch) and (validation_tier is None or self._batch_members[case.alert_id].validation_tier == validation_tier)]
+
+    def get_groups(self, *, search: str | None = None, limit: int = 50, offset: int = 0, batch: CorpusBatch | None = None, validation_tier: CorpusValidationTier | None = None) -> SocCorpusGroupPage:
         if not 1 <= limit <= 100 or offset < 0:
             raise SocCorpusWorkbenchError("group page requires limit 1..100 and non-negative offset")
         # These are display/search aliases, never Memory matching rules.
@@ -818,10 +888,14 @@ class SocCorpusWorkbenchService:
         for label, value in aliases.items():
             query = query.replace(label.casefold(), value)
         terms = query.split()
+        selected_ids = {case.alert_id for case in self._selected_cases(batch, validation_tier)}
         case = self._cases.get((search or "").strip())
+        if case is not None and case.alert_id not in selected_ids:
+            return SocCorpusGroupPage(groups=[], total=0, limit=limit, offset=offset, has_next=False)
+        catalog = self._group_catalog if batch is None else self._batch_group_catalog[(batch, validation_tier)]
         matches = [
             group
-            for group in self._group_catalog
+            for group in catalog
             if (case is not None and group.group_id == case.group_id)
             or (case is None and all(term in " ".join([group.group_id, group.rule_name or "", group.rule_code or "", group.detection_key or "", group.source_type, *group.behavior_components]).casefold() for term in terms))
         ]
@@ -842,10 +916,15 @@ class SocCorpusWorkbenchService:
         exclude_active_alert_id: str | None = None,
         include_group_catalog: bool = True,
         include_rehearsal: bool = True,
+        batch: CorpusBatch | None = None,
+        validation_tier: CorpusValidationTier | None = None,
     ) -> SocCorpusWorkbenchState:
+        selected_cases = self._selected_cases(batch, validation_tier)
+        selected_ids = {case.alert_id for case in selected_cases}
+        group_counts = Counter(case.group_id for case in selected_cases)
         active_ids = [item.alert_id for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id]
         summaries = self._list_summaries()
-        dynamic_alerts = [replace(item, workflow_state="running") if item.alert_id in active_ids else item for item in summaries.values()]
+        dynamic_alerts = [replace(item, workflow_state="running") if item.alert_id in active_ids else item for item in summaries.values() if item.alert_id in selected_ids]
         alert_cache: dict[str, SocCorpusWorkbenchAlert] = {}
 
         def alert_view(case: _CorpusCase) -> SocCorpusWorkbenchAlert:
@@ -853,6 +932,9 @@ class SocCorpusWorkbenchService:
             if cached is not None:
                 return cached
             projected = self._get_alert_view(case.alert_id, exclude_active_alert_id=exclude_active_alert_id)
+            if batch:
+                member = self._batch_members[case.alert_id]
+                projected = projected.model_copy(update={"batch": member.batch, "validation_tier": member.validation_tier, "batch_reason": member.reason, "batch_group_alert_count": group_counts[case.group_id], "can_process": False})
             alert_cache[case.alert_id] = projected
             return projected
 
@@ -860,7 +942,7 @@ class SocCorpusWorkbenchService:
             build_soc_leadership_demo_guide(
                 alert_groups={alert_id: case.group_id for alert_id, case in self._cases.items()},
             )
-            if include_rehearsal
+            if include_rehearsal and batch is None
             else None
         )
         rehearsal_alert_ids = {alert_id for chapter in leadership_demo.chapters for target in chapter.targets for alert_id in target.rehearsal_alert_ids} if leadership_demo is not None else set()
@@ -880,15 +962,30 @@ class SocCorpusWorkbenchService:
             active_alert_ids=active_ids,
             limit=limit,
             offset=offset,
+            batch=batch,
+            validation_tier=validation_tier,
         )
         page_cases = [self._cases[item] for item in page_ids]
         visible_group_ids = {group_id} | {self._cases[item].group_id for item in rehearsal_alert_ids if item in self._cases}
-        group_cases = self._cases.values() if include_group_catalog else [case for case in self._cases.values() if case.group_id in visible_group_ids]
+        group_cases = selected_cases if include_group_catalog else [case for case in selected_cases if case.group_id in visible_group_ids]
         groups = [item for item in _group_views(group_cases, dynamic_alerts) if item.alert_count >= 2 or item.group_id == group_id]
         labeled_count = sum(item.operational_label_available for item in self._cases.values())
         first_case = cases[0]
         last_case = cases[-1]
         return SocCorpusWorkbenchState(
+            batch_selection=CorpusBatchSelection(
+                plan_id=self._batch_plan.plan_id,
+                batch=batch,
+                validation_tier=validation_tier,
+                counts=self._batch_plan.counts,
+                selected_count=len(selected_cases),
+                group_count=len(group_counts),
+                labeled_count=sum(c.operational_label_available for c in selected_cases),
+                first_event_time=min((c.observed_at_value for c in selected_cases), default=None).isoformat() if selected_cases else None,
+                last_event_time=max((c.observed_at_value for c in selected_cases), default=None).isoformat() if selected_cases else None,
+            )
+            if batch
+            else None,
             run_controls=self._run_controls,
             safety=SocCorpusWorkbenchSafety(
                 database_file=self._database_file,
@@ -916,11 +1013,11 @@ class SocCorpusWorkbenchService:
                 role_verifier_enabled=self._settings.role_verifier_enabled,
                 role_verifier_model_name=self._settings.role_verifier_model_name,
             ),
-            readiness=_readiness(self._cases.values(), dynamic_alerts),
-            evaluation=_evaluation(self._cases.values(), dynamic_alerts),
+            readiness=_readiness(selected_cases, dynamic_alerts),
+            evaluation=_evaluation(selected_cases, dynamic_alerts),
             leadership_demo=leadership_demo,
             source_types=sorted(
-                {item.source_type for item in self._cases.values()},
+                {item.source_type for item in selected_cases},
             ),
             groups=groups,
             rehearsal_alerts=[
@@ -1015,6 +1112,8 @@ class SocCorpusWorkbenchService:
                 workflow_state = "analysis_only"
         return CorpusListSummary(
             alert_id=case.alert_id,
+            batch=self._batch_members[case.alert_id].batch,
+            validation_tier=self._batch_members[case.alert_id].validation_tier,
             group_id=case.group_id,
             behavior_fingerprint=feature_case.behavior_fingerprint,
             decision_eligible=feature_case.decision_eligible,
@@ -1175,6 +1274,14 @@ class SocCorpusWorkbenchService:
         finally:
             self._release_execution(claim)
 
+    @contextmanager
+    def experiment_preparation_guard(self):
+        """DEV has one Gateway: finish old in-process runs before adopting durable rounds."""
+        with self._execution_lock:
+            if self._active_executions:
+                raise SocCorpusWorkbenchError("仍有旧交互入口的告警正在运行，请完成后再准备实验名单")
+            yield
+
     def _reserve_execution(
         self,
         alert_id: str,
@@ -1190,6 +1297,8 @@ class SocCorpusWorkbenchService:
             started_at=datetime.now(UTC),
         )
         with self._execution_lock:
+            if self._repository.corpus_experiments().list_experiments(limit=1):
+                raise SocCorpusWorkbenchError("当前已进入两批验证，请通过批次轮次运行；不能使用旧入口绕过固定经验与配置")
             existing = self._active_executions.get(alert_id)
             if existing is not None:
                 raise SocCorpusWorkbenchBusyError(
@@ -1461,6 +1570,7 @@ class SocCorpusWorkbenchService:
         alert_id: str,
         *,
         context: ServiceRequestContext,
+        run_id: str | None = None,
     ) -> SocCorpusWorkbenchAuditBundle:
         """Return the complete persisted DEV audit trail without re-running Runtime."""
 
@@ -1469,7 +1579,7 @@ class SocCorpusWorkbenchService:
         case = self._cases.get(alert_id)
         if case is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id!r} is not part of the configured DEV corpus")
-        run = self._run_for_case(case)
+        run = self._audit_run_for_case(case, run_id)
         if run is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id} has no persisted Runtime run to audit")
 
@@ -1522,6 +1632,14 @@ class SocCorpusWorkbenchService:
             decision_transitions=decision_transitions,
             memory_uses=memory_uses,
         )
+
+    def _audit_run_for_case(self, case: _CorpusCase, run_id: str | None) -> AnalysisRun | None:
+        if run_id is None:
+            return self._run_for_case(case)
+        run = self._repository.get_run(run_id)
+        if run is None or run.alert_id != case.alert_id or not _matches_corpus_run(run, case):
+            raise SocCorpusWorkbenchError(f"run {run_id} does not belong to this corpus alert")
+        return run
 
     def _run_for_case(self, case: _CorpusCase) -> AnalysisRun | None:
         # A newer foreign-scope run must not hide a valid older corpus result.

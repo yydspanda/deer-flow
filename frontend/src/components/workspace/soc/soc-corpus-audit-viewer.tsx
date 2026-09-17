@@ -306,6 +306,7 @@ export function SocCorpusAuditViewer({
   );
   const query = useSocCorpusWorkbenchAudit(alertId, {
     enabled: open && !!runId,
+    runId,
   });
 
   useEffect(() => {

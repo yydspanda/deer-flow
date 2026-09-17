@@ -6,7 +6,7 @@
 - **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。新交付同时把 PingAn DeerFlow chat 固定为 buffered non-streaming，并将模型网关与 Runtime 并发统一为 `3`；SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
 - **Next Gate:** 部署 buffered chat / `3 + 3` 并发配置，验证普通聊天不再发送 `stream=true`、三条不同告警可同时研判；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-17`
+- **Last Updated:** `2026-09-18`
 ## Current Constraints / 当前约束
 | Boundary | Current fact |
 |---|---|
@@ -17,6 +17,7 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+09-18 `PI-03E` 两批验证实施中：15,288条固定为第一批3,002、验证同类经验8,522、探索少样本3,764。持久轮次、共享队列、隔离积累、冻结经验、CLI和固定Run报告已接入。聚焦后端90项、打包/数据42项、浏览器5项及前端检查通过；此前前端组件44项通过。15,288模拟任务创建从66.94秒降至7.58秒，进度分页P95 37.64ms；非内网吞吐承诺。候选按本实验分页/回跳，Mac实操手册与0031清单已补；独立4文件数据包约1.04GB已校验。后续计时/API/CLI/报告22项、打包35项通过；共享版本化草稿与后台批量起草已接入，任务/API/CLI/迁移26项、前端55项及桌面/手机浏览器3项通过。再补受控DEV备份重置/恢复与独立起草成本导出：Host/打包102项、报告/API/CLI19项、集中后端70项通过；真实临时空库0031迁移通过。最新补齐固定报告定向复测、人工单条优先、模型超时占位：集中后端101项、随后定向39项及打包35项通过（重叠不累加）。网页固定基线对照已补齐，后端30项、前端51项、浏览器2项、打包清单35项及完整前端check通过；发布版本与校验以生成清单为准。最新upstream检查落后138提交，本专项未合并，另需同步回归。无真实模型调用或外网清库；模拟审核仅临时DB。见[方案](architecture/corpus-memory-batch-validation-design.md)与月度记录，PI-01指针不变。
 09-17 `PI-03E` 完成本机导航提速、列表轻量索引和 Mac Host 预构建接入：保留同类组浏览，移除固定推荐演练与归一化运营导航。迁移0028只新增可重建查询表；SQL分页、增量更新及10,005条合成结果容量回归通过，完整页详情即时读治理状态。最终只读首开经验中心566ms、演练1466ms，20次切换P95 166ms，列表约29KB；保留热重载引起的首开失败记录。Mac启动/Runbook模板已改并测试，真实Mac性能仍待验。未调用模型、改经验、清库或打包；两批后台验证尚未实施。见[方案3.5](architecture/corpus-memory-batch-validation-design.md)和月度 `EXP-20260917-soc-navigation`，PI-01指针不变。
 本日 `PI-03E` 收尾补验：修复1984510当前进程/目标文件归属及六条HIDS的detail字段消费，旧210条指纹覆盖恢复到197条；271项聚焦后端回归通过。v47两次主研判、v10一次经验起草真实调用完成，共86236Token、无额外调用；但2488604解释和草稿仍弱化未覆盖检测，质量门禁未关闭。未修改审核经验、清库、重跑语义模型或打包。完整记录见月度 `EXP-20260917-closure`，下文当日先前验证保留其时间口径。
 09-17 `PI-03E` 完成 [Memory 范围整改](architecture/memory-reuse-scope-remediation.md)：Profile 9/v7、审核覆盖 v4、宽窄优先、暂停边界、分页实体和细分候选已接入。用户闭环后修复身份任选与草稿刷新：Prompt v9 保留 rule/sig 命名空间，相同输入复用事实但重评当前经验/策略，显式重新核对可比对变化。2480991 真实补充正确绑定两条检测，同输入复跑特征一致、核对调用为0；旧经验未覆盖新增 Nmap，仍参考使用，不自动扩张授权。详见月度 `EXP-20260917-normalization-stability`。同项主研判 Prompt v46 区分匹配差异与业务影响，190 项回归通过；固定事实两次新版调用，一次正确解释未覆盖检测、一次连接失败，非两次稳定通过，见 `EXP-20260917-memory-difference-explanation`。后续将系统匹配说明与模型依据分开，来源事实进入新候选和经验起草；132 项后端回归、10 项前端组件与两告警各两尺寸只读检查通过，v47/v10 未新增真实模型调用，详见 `EXP-20260917-memory-matching-facts`。批量质量、PostgreSQL 并发和内网验收仍开放，PI-01 指针不变。

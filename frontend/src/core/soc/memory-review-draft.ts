@@ -31,6 +31,8 @@ const draftSchema = z.object({
   lessonDraftProvenance: z.string(),
   lessonDraftUncertainties: z.array(z.string()),
   lessonEditing: z.boolean(),
+  sharedVersion: z.number().int().nonnegative().nullable().default(null),
+  sharedCandidateRevision: z.string().nullable().default(null),
   replacement: z
     .object({ memoryId: z.string(), version: z.number().int() })
     .nullable(),
@@ -68,6 +70,8 @@ export function defaultMemoryCandidateReviewDraft(
     lessonDraftProvenance: "",
     lessonDraftUncertainties: [],
     lessonEditing: false,
+    sharedVersion: null,
+    sharedCandidateRevision: null,
     replacement: null,
   };
 }

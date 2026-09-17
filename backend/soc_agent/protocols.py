@@ -108,6 +108,7 @@ from soc_agent.contracts import (
     TenantPolicySignalResolution,
     Verdict,
 )
+from soc_agent.contracts.memory_drafts import MemoryWorkingDraft
 from soc_agent.contracts.schemas import SocDirectResolution
 
 
@@ -149,12 +150,16 @@ class ProcessingJobRepository(Protocol):
         queue_name: str,
         worker_id: str,
         lease_seconds: int,
+        workload_kind: str | None = None,
+        job_ids: Sequence[str] | None = None,
         now: datetime | None = None,
     ) -> SocProcessingJob | None: ...
 
     def recover_expired_leases(
         self,
         *,
+        queue_name: str | None = None,
+        workload_kind: str | None = None,
         now: datetime | None = None,
     ) -> list[str]: ...
 
@@ -1233,12 +1238,21 @@ class SocMutationAuditRepository(Protocol):
     ) -> list[SocMutationAuditRecord]: ...
 
 
+class MemoryWorkingDraftRepository(Protocol):
+    """Versioned working copies, deliberately separate from Memory retrieval."""
+
+    def get_memory_working_draft(self, candidate_id: str, *, version: int | None = None) -> MemoryWorkingDraft | None: ...
+
+    def append_memory_working_draft(self, draft: MemoryWorkingDraft, *, expected_version: int) -> bool: ...
+
+
 class SocMutationRepository(
     AlertRepository,
     AlertSummaryRepository,
     DecisionAuditRepository,
     ReviewQueueRepository,
     MemoryCandidateRepository,
+    MemoryWorkingDraftRepository,
     MemoryRecordRepository,
     SocExternalDispositionRepository,
     SocDispositionProposalRepository,

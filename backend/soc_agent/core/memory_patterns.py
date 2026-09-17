@@ -39,6 +39,7 @@ from soc_agent.contracts import (
     SocMemoryTargetArtifact,
     SocMutationOperation,
 )
+from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
 from soc_agent.memory.learning import resolve_learning_candidate
 from soc_agent.memory.patterns import (
     MemoryPatternIneligibleError,
@@ -96,6 +97,7 @@ class SocMemoryPatternService:
         event_sink: SocEventSink | None = None,
         now_provider: Callable[[], datetime] | None = None,
         profile_registry: SocMemoryProfileRegistry | None = None,
+        accumulation_scope: MemoryPatternAccumulationScope | None = None,
         _transaction_active: bool = False,
     ) -> None:
         self._repository = repository
@@ -111,6 +113,7 @@ class SocMemoryPatternService:
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._profile_registry = profile_registry or SocMemoryProfileRegistry()
         self._transaction_active = _transaction_active
+        self._accumulation_scope = accumulation_scope
 
     @property
     def policy(self) -> MemoryPatternAggregationPolicy:
@@ -132,6 +135,8 @@ class SocMemoryPatternService:
         profile = self._profile_registry.resolve_run(run)
         effective_policy = self._policy_for_profile(profile)
         policy_fingerprint = stable_hash(effective_policy.model_dump(mode="json"))
+        if self._accumulation_scope is not None:
+            policy_fingerprint = stable_hash({"policy": policy_fingerprint, "accumulation_scope": self._accumulation_scope.model_dump(mode="json")})
         command = memory_pattern_command_from_run(
             run,
             source_type=source_type,
@@ -174,6 +179,7 @@ class SocMemoryPatternService:
                 event_sink=self._event_sink,
                 now_provider=self._now_provider,
                 profile_registry=self._profile_registry,
+                accumulation_scope=self._accumulation_scope,
                 _transaction_active=self._transaction_active,
             ).ingest_observation(command, context=context)
         repository = self._require_repository()
@@ -182,7 +188,13 @@ class SocMemoryPatternService:
             command.source.observed_at,
             self._policy.window_seconds,
         )
+        if self._accumulation_scope is not None:
+            window_start, window_end = self._accumulation_scope.event_start, self._accumulation_scope.event_end
+            if not window_start <= command.source.observed_at < window_end:
+                raise SocServiceConflictError("observation falls outside the frozen experiment event range")
         lineage_key = _lineage_key(command, self._policy)
+        if self._accumulation_scope is not None:
+            lineage_key = stable_hash({"lineage_key": lineage_key, "accumulation_scope": self._accumulation_scope.model_dump(mode="json")})
         aggregation_key = _aggregation_key(
             lineage_key=lineage_key,
             window_start=window_start,
@@ -245,6 +257,7 @@ class SocMemoryPatternService:
                     event_sink=buffered_events,
                     now_provider=self._now_provider,
                     profile_registry=self._profile_registry,
+                    accumulation_scope=self._accumulation_scope,
                     _transaction_active=True,
                 ).ingest_observation(command, context=context)
             buffered_events.flush()
@@ -269,6 +282,7 @@ class SocMemoryPatternService:
             window_start=window_start,
             window_end=window_end,
             aggregation_policy=self._policy,
+            accumulation_scope=self._accumulation_scope,
             evidence_refs=command.evidence_refs,
             metadata=command.metadata,
             mocked=command.data_class is MemoryPatternDataClass.SIMULATION,
@@ -872,6 +886,12 @@ def _cohort_quality(
     if not strong_anchor_facets:
         reason_codes.append("missing_reusable_strong_anchor")
 
+    scope = observations[0].accumulation_scope
+    mixed_review = bool(scope is not None and scope.review_mixed_conclusions and reason_codes == ["inconsistent_risk_outcomes"])
+    if mixed_review:
+        reason_codes.clear()
+        dominant = None
+
     representatives = _representative_observations(
         observations,
         dominant=dominant,
@@ -889,6 +909,7 @@ def _cohort_quality(
         applicability_facets=applicability_facets,
         strong_anchor_facets=strong_anchor_facets,
         quality_gate_passed=not reason_codes,
+        review_kind="mixed_conclusions" if mixed_review else "consistent_conclusions",
         reason_codes=reason_codes,
         representative_observation_ids=[item.observation_id for item in representatives],
     )
@@ -982,7 +1003,7 @@ def _candidate_command(
     window_start = first.window_start.isoformat()
     window_end = first.window_end.isoformat()
     dominant = cohort_quality.dominant_risk_class
-    if dominant is None:
+    if dominant is None and cohort_quality.review_kind != "mixed_conclusions":
         raise ValueError("memory lesson candidate requires a dominant risk class")
     lesson_fingerprint = _lesson_fingerprint(first, cohort_quality)
     candidate_type = SocMemoryCandidateType.BENIGN_PATTERN if dominant is MemoryPatternRiskClass.BENIGN else SocMemoryCandidateType.DETECTION_LESSON
@@ -996,7 +1017,11 @@ def _candidate_command(
     return SocMemoryCandidateCreateCommand(
         candidate_type=candidate_type,
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
-        summary=(f"[{_risk_class_label(dominant)}经验候选] {first.signature.label}：{cohort_quality.conclusive_count} 条有效结论，一致率 {cohort_quality.consistency_ratio:.0%}"),
+        summary=(
+            f"[待确认结论] {first.signature.label}：{cohort_quality.conclusive_count} 条有效样本，研判存在分歧"
+            if cohort_quality.review_kind == "mixed_conclusions"
+            else f"[{_risk_class_label(dominant)}经验候选] {first.signature.label}：{cohort_quality.conclusive_count} 条有效结论，一致率 {cohort_quality.consistency_ratio:.0%}"
+        ),
         content=_candidate_content(
             observations,
             representatives=representatives,
@@ -1012,6 +1037,7 @@ def _candidate_command(
             run_id=first.source.run_id,
             alert_id=first.source.alert_id,
             metadata={
+                **({"experiment_id": first.accumulation_scope.experiment_id} if first.accumulation_scope else {}),
                 "aggregation_key": first.aggregation_key,
                 "lineage_key": first.lineage_key,
                 "policy_version": policy.policy_version,
@@ -1057,12 +1083,13 @@ def _candidate_command(
         labels=[
             "repeated-pattern",
             "quality-gated",
-            f"cohort-{dominant.value}",
+            f"cohort-{dominant.value if dominant is not None else 'mixed'}",
             decision_scope.replace("_", "-"),
             "candidate-only",
             *(["simulation"] if first.mocked else ["operational"]),
         ],
         metadata={
+            **({"experiment_id": first.accumulation_scope.experiment_id, "accumulation_scope": first.accumulation_scope.model_dump(mode="json")} if first.accumulation_scope else {}),
             "runtime_decision_allowed": False,
             "direct_alert_memory_write": False,
             "aggregation_key": first.aggregation_key,
@@ -1098,7 +1125,7 @@ def _candidate_content(
 ) -> str:
     first = observations[0]
     dominant = quality.dominant_risk_class
-    if dominant is None:
+    if dominant is None and quality.review_kind != "mixed_conclusions":
         raise ValueError("memory lesson content requires a dominant risk class")
     applicability = _display_applicability_facets(quality.applicability_facets)
     verdicts = ", ".join(f"{key}={value}" for key, value in quality.verdict_counts.items())
@@ -1154,11 +1181,12 @@ def _display_applicability_facets(facets: dict[str, list[str]]) -> str:
     return "; ".join(parts) if parts else "无稳定可复用特征"
 
 
-def _risk_class_label(risk_class: MemoryPatternRiskClass) -> str:
+def _risk_class_label(risk_class: MemoryPatternRiskClass | None) -> str:
     return {
         MemoryPatternRiskClass.RISK: "有风险",
         MemoryPatternRiskClass.BENIGN: "无风险/误报模式",
         MemoryPatternRiskClass.UNRESOLVED: "未决",
+        None: "待运营确认业务结论",
     }[risk_class]
 
 
@@ -1178,13 +1206,13 @@ def _lesson_fingerprint(
     quality: MemoryPatternCohortQuality,
 ) -> str:
     dominant = quality.dominant_risk_class
-    if dominant is None:
+    if dominant is None and quality.review_kind != "mixed_conclusions":
         raise ValueError("memory lesson fingerprint requires a dominant risk class")
     return stable_hash(
         {
             "policy_version": observation.aggregation_policy.policy_version,
             "lineage_key": observation.lineage_key,
-            "risk_class": dominant.value,
+            "risk_class": dominant.value if dominant is not None else "mixed",
             "strong_anchor_facets": quality.strong_anchor_facets,
             "memory_profile_id": observation.profile_id,
             "memory_profile_version": observation.profile_version,

@@ -219,8 +219,13 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   the typed applicability object remains authoritative. Legacy prose may be localized
   only at read time and must not be rewritten in storage.
 - Validate strict JSON/references and permit at most one bounded output-repair call. The
-  generated lesson opens with editable business fields and read-only applicability, and remains
-  non-persisted until the existing review command confirms it.
+  generated lesson opens with editable business fields and read-only applicability.
+  The drafter itself never persists; the reviewed batch workflow may save a separate
+  `soc_memory_working_drafts` version, never a retrieval record. Only the existing review
+  command publishes a confirmed Memory. Incomplete manual drafts are allowed, but
+  generation requires an explicit reviewer verdict. Preserve source revision and draft
+  CAS, append-only versions, bounded retries, provider provenance and usage. Concurrent
+  source/edit changes must not overwrite drafts or automatically approve model output.
 
 ## Reinforcement And Revision
 

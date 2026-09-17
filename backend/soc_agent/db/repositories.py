@@ -274,6 +274,51 @@ class SqlAlchemyAlertRepository:
     def corpus_list_queries(self) -> SocCorpusListQueries:
         return SocCorpusListQueries(self._session_factory)
 
+    def corpus_experiments(self):
+        from soc_agent.db.corpus_experiments import SqlAlchemyCorpusExperimentRepository
+
+        return SqlAlchemyCorpusExperimentRepository(self._session_factory)
+
+    def get_memory_working_draft(self, candidate_id: str, *, version: int | None = None):
+        from soc_agent.contracts.memory_drafts import MemoryWorkingDraft
+        from soc_agent.db.models import SocMemoryWorkingDraftRow
+
+        query = select(SocMemoryWorkingDraftRow).where(SocMemoryWorkingDraftRow.candidate_id == candidate_id)
+        if version is not None:
+            query = query.where(SocMemoryWorkingDraftRow.version == version)
+        with self._session_factory() as session:
+            row = session.scalar(query.order_by(SocMemoryWorkingDraftRow.version.desc()).limit(1))
+            return MemoryWorkingDraft.model_validate(row.draft_payload) if row else None
+
+    def append_memory_working_draft(self, draft, *, expected_version: int) -> bool:
+        from soc_agent.db.models import SocMemoryWorkingDraftRow
+
+        if self._transaction_state is None or not self._transaction_state.memory_governance_locked:
+            raise RuntimeError("draft writes require the shared governance transaction lock")
+        if draft.version != expected_version + 1:
+            raise ValueError("draft versions must be consecutive")
+        with self._session_factory() as session:
+            latest = session.scalar(select(func.max(SocMemoryWorkingDraftRow.version)).where(SocMemoryWorkingDraftRow.candidate_id == draft.candidate_id)) or 0
+            if latest != expected_version:
+                return False
+            session.add(
+                SocMemoryWorkingDraftRow(
+                    candidate_id=draft.candidate_id,
+                    version=draft.version,
+                    candidate_revision=draft.candidate_revision,
+                    updated_by=draft.updated_by,
+                    updated_at=draft.updated_at,
+                    draft_payload=draft.model_dump(mode="json"),
+                )
+            )
+            session.commit()
+            return True
+
+    def processing_jobs(self):
+        from soc_agent.db.jobs import SqlAlchemyProcessingJobRepository
+
+        return SqlAlchemyProcessingJobRepository(self._session_factory)
+
     def save_analysis_bundle(
         self,
         *,
@@ -303,6 +348,54 @@ class SqlAlchemyAlertRepository:
         with self._session_factory() as session:
             result = session.execute(select(SocAnalysisRunRow).order_by(SocAnalysisRunRow.updated_at.desc(), SocAnalysisRunRow.created_at.desc()).limit(limit))
             return [AnalysisRun.model_validate(row.run_payload) for row in result.scalars()]
+
+    def find_journaled_run(self, *, alert_id: str, input_hash: str, idempotency_key_hash: str) -> AnalysisRun | None:
+        """Find the exact durable request, including unfinished pre-provider journals."""
+        with self._session_factory() as session:
+            row = session.scalar(
+                select(SocAnalysisRunRow)
+                .where(
+                    SocAnalysisRunRow.alert_id == alert_id,
+                    SocAnalysisRunRow.input_hash == input_hash,
+                    SocAnalysisRunRow.run_payload["request_journal"]["idempotency_key_hash"].as_string() == idempotency_key_hash,
+                )
+                .order_by(SocAnalysisRunRow.started_at.desc(), SocAnalysisRunRow.run_id.desc())
+                .limit(1)
+            )
+            return AnalysisRun.model_validate(row.run_payload) if row is not None else None
+
+    @staticmethod
+    def _run_measurement_columns():
+        return (
+            SocAnalysisRunRow.provider_call_count,
+            SocAnalysisRunRow.input_tokens,
+            SocAnalysisRunRow.output_tokens,
+            SocAnalysisRunRow.total_tokens,
+            SocAnalysisRunRow.usage_measurement_status,
+            SocAnalysisRunRow.output_quality_status,
+            SocAnalysisRunRow.repair_applied,
+            SocAnalysisRunRow.deterministic_fallback_used,
+            SocAnalysisRunRow.degraded_section_count,
+        )
+
+    def get_run_measurements(self, run_id: str) -> dict[str, Any]:
+        with self._session_factory() as session:
+            row = session.execute(select(*self._run_measurement_columns()).where(SocAnalysisRunRow.run_id == run_id)).mappings().one_or_none()
+            return dict(row) if row is not None else {}
+
+    def journaled_run_measurements(self, *, alert_id: str, input_hash: str, idempotency_key_hash: str) -> list[dict[str, Any]]:
+        row = SocAnalysisRunRow
+        query = (
+            select(row.run_id, row.status, *self._run_measurement_columns())
+            .where(
+                row.alert_id == alert_id,
+                row.input_hash == input_hash,
+                row.run_payload["request_journal"]["idempotency_key_hash"].as_string() == idempotency_key_hash,
+            )
+            .order_by(row.started_at, row.run_id)
+        )
+        with self._session_factory() as session:
+            return [dict(item) for item in session.execute(query).mappings()]
 
     def list_runs_by_alert_id(
         self,

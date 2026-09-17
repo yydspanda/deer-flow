@@ -18,6 +18,7 @@ import {
   expireSocApprovalRequest,
   getSocAlertInvestigationContext,
   getSocCorpusWorkbenchActivity,
+  getSocCorpusExperimentCandidates,
   getSocCorpusGroups,
   getSocCorpusWorkbenchAudit,
   getSocCorpusWorkbenchExecution,
@@ -246,8 +247,13 @@ export const socCorpusWorkbenchQueryKeys = {
   activity: () => [...socCorpusWorkbenchQueryKeys.all, "activity"] as const,
   execution: (alertId: string | null | undefined) =>
     [...socCorpusWorkbenchQueryKeys.all, "execution", alertId] as const,
-  audit: (alertId: string | null | undefined) =>
-    [...socCorpusWorkbenchQueryKeys.all, "audit", alertId] as const,
+  audit: (alertId: string | null | undefined, runId?: string | null) =>
+    [
+      ...socCorpusWorkbenchQueryKeys.all,
+      "audit",
+      alertId,
+      runId ?? null,
+    ] as const,
 };
 
 export const socNormalizationQueryKeys = {
@@ -616,7 +622,15 @@ export function useSocCorpusWorkbench(query: SocCorpusWorkbenchQuery = {}) {
     queryFn: () => getSocCorpusWorkbenchState(query, context),
     retry: false,
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
-    placeholderData: (previous) => previous,
+    placeholderData: (previous) => {
+      if (
+        previous?.batch_selection?.batch !== query.batch ||
+        (previous?.batch_selection?.validation_tier ?? null) !==
+          (query.validationTier ?? null)
+      )
+        return undefined;
+      return previous;
+    },
   });
   return { state: result.data ?? null, ...result };
 }
@@ -625,11 +639,18 @@ export function useSocCorpusGroups(
   search: string,
   offset: number,
   enabled: boolean,
+  selection: Pick<SocCorpusWorkbenchQuery, "batch" | "validationTier"> = {},
 ) {
   const context = useSocWebRequestContext();
   return useQuery({
-    queryKey: [...socCorpusWorkbenchQueryKeys.all, "groups", search, offset],
-    queryFn: () => getSocCorpusGroups(search, offset, context),
+    queryKey: [
+      ...socCorpusWorkbenchQueryKeys.all,
+      "groups",
+      search,
+      offset,
+      selection,
+    ],
+    queryFn: () => getSocCorpusGroups(search, offset, context, selection),
     enabled,
     retry: false,
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
@@ -668,12 +689,12 @@ export function useSocCorpusWorkbenchExecution(
 
 export function useSocCorpusWorkbenchAudit(
   alertId: string | null | undefined,
-  { enabled = false }: { enabled?: boolean } = {},
+  { enabled = false, runId }: { enabled?: boolean; runId?: string | null } = {},
 ) {
   const context = useSocWebRequestContext();
   const query = useQuery({
-    queryKey: socCorpusWorkbenchQueryKeys.audit(alertId),
-    queryFn: () => getSocCorpusWorkbenchAudit(alertId!, context),
+    queryKey: socCorpusWorkbenchQueryKeys.audit(alertId, runId),
+    queryFn: () => getSocCorpusWorkbenchAudit(alertId!, context, runId),
     enabled: enabled && !!alertId,
     retry: false,
     staleTime: Infinity,
@@ -821,6 +842,37 @@ export function useSocMemoryCandidates({
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { candidates: data ?? [], isLoading, isFetching, error, refetch };
+}
+
+export function useSocCorpusExperimentCandidates(
+  experimentId: string | undefined,
+  reviewStage: SocMemoryCandidateReviewStage,
+  offset: number,
+) {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: [
+      ...socMemoryQueryKeys.all,
+      "experiment-candidates",
+      experimentId,
+      reviewStage,
+      offset,
+    ],
+    queryFn: () =>
+      getSocCorpusExperimentCandidates(
+        experimentId!,
+        reviewStage,
+        offset,
+        context,
+      ),
+    enabled: !!experimentId,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
+  return {
+    ...query,
+    candidates: query.data?.items ?? [],
+    total: query.data?.total ?? 0,
+  };
 }
 
 export function useSocMemoryScopeOptions(

@@ -77,6 +77,7 @@ import {
   useSocMemoryRecords,
   useSocMemoryCandidate,
   useSocMemoryCandidates,
+  useSocCorpusExperimentCandidates,
   useSocReviewContext,
   useSocReviewItems,
   useUpdateSocMemoryRetrievalActivation,
@@ -120,6 +121,7 @@ import { SocMemoryGovernancePanel } from "./soc-memory-governance-panel";
 import { SocMemoryRevisionRecovery } from "./soc-memory-revision-recovery";
 import { SocMemoryScope } from "./soc-memory-scope";
 import { SocMemoryScopeRefinement } from "./soc-memory-scope-refinement";
+import { SocMemorySharedDraft } from "./soc-memory-shared-draft";
 
 const STATUS_OPTIONS: { value: SocReviewQueueStatus | "all"; label: string }[] =
   [
@@ -1702,12 +1704,14 @@ function ExternalDispositionSection({
 
 function MemoryCandidateInventory({
   candidates,
+  experimentId,
   status,
   isFetching,
   onStatusChange,
   onRefresh,
 }: {
   candidates: SocMemoryCandidate[];
+  experimentId?: string;
   status: SocMemoryCandidateReviewStage;
   isFetching: boolean;
   onStatusChange: (status: SocMemoryCandidateReviewStage) => void;
@@ -1802,7 +1806,7 @@ function MemoryCandidateInventory({
                   asChild
                 >
                   <Link
-                    href={`/workspace/soc/review/memory-candidates/${candidate.candidate_id}`}
+                    href={`/workspace/soc/review/memory-candidates/${candidate.candidate_id}${experimentId ? `?experiment=${encodeURIComponent(experimentId)}` : ""}`}
                   >
                     {actionable ? (
                       <ShieldCheckIcon className="size-4" />
@@ -1929,6 +1933,7 @@ function MemoryCandidateSection({
   onReviewDraftChange,
   onReview,
   onDraftLesson,
+  sharedDraftCandidateId,
 }: {
   candidates: SocMemoryCandidate[];
   records: SocMemoryRecord[];
@@ -1948,6 +1953,7 @@ function MemoryCandidateSection({
     reason?: string,
   ) => void;
   onDraftLesson: (candidate: SocMemoryCandidate) => void;
+  sharedDraftCandidateId?: string;
 }) {
   const [regenerationTarget, setRegenerationTarget] =
     useState<SocMemoryCandidate | null>(null);
@@ -2210,6 +2216,17 @@ function MemoryCandidateSection({
 
                 {editable ? (
                   <>
+                    {sharedDraftCandidateId === candidate.candidate_id && (
+                      <SocMemorySharedDraft
+                        candidateId={candidate.candidate_id}
+                        current={draft}
+                        hasLocalDraft={!!reviewDrafts[candidate.candidate_id]}
+                        onChange={(patch) =>
+                          onReviewDraftChange(candidate, patch)
+                        }
+                        busy={busy}
+                      />
+                    )}
                     <div className="mt-5 border-t-2 pt-4">
                       <div className="text-sm font-semibold">
                         1. 确认业务判断
@@ -3155,10 +3172,12 @@ export function SocReviewQueueWorkbench({
   initialQueueId,
   initialCandidateId,
   initialView,
+  initialExperimentId,
 }: {
   initialQueueId?: string;
   initialCandidateId?: string;
   initialView?: "queue" | "memory" | "sample";
+  initialExperimentId?: string;
 }) {
   const [workspaceView, setWorkspaceView] = useState<
     "queue" | "memory" | "sample"
@@ -3168,6 +3187,7 @@ export function SocReviewQueueWorkbench({
   >(initialQueueId ? "all" : "open");
   const [memoryCandidateStatusFilter, setMemoryCandidateStatusFilter] =
     useState<SocMemoryCandidateReviewStage>("pending");
+  const [candidateOffset, setCandidateOffset] = useState(0);
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(
     initialQueueId ?? null,
   );
@@ -3227,17 +3247,24 @@ export function SocReviewQueueWorkbench({
     isLoading: focusedMemoryCandidateLoading,
     error: focusedMemoryCandidateError,
   } = useSocMemoryCandidate(initialCandidateId);
+  const generalCandidateQuery = useSocMemoryCandidates({
+    reviewStage: memoryCandidateStatusFilter,
+    limit: 50,
+    enabled:
+      workspaceView === "memory" && !initialCandidateId && !initialExperimentId,
+  });
+  const experimentCandidateQuery = useSocCorpusExperimentCandidates(
+    initialExperimentId,
+    memoryCandidateStatusFilter,
+    candidateOffset,
+  );
   const {
     candidates: listedMemoryCandidates,
     isLoading: listedMemoryCandidatesLoading,
     isFetching: listedMemoryCandidatesFetching,
     error: listedMemoryCandidatesError,
     refetch: refetchListedMemoryCandidates,
-  } = useSocMemoryCandidates({
-    reviewStage: memoryCandidateStatusFilter,
-    limit: 50,
-    enabled: workspaceView === "memory" && !initialCandidateId,
-  });
+  } = initialExperimentId ? experimentCandidateQuery : generalCandidateQuery;
   const standaloneMemoryCandidates = useMemo(
     () =>
       focusedMemoryCandidate
@@ -3773,7 +3800,9 @@ export function SocReviewQueueWorkbench({
                 {initialCandidateId ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <Button variant="ghost" size="sm" asChild>
-                      <Link href="/workspace/soc/review/memory-candidates">
+                      <Link
+                        href={`/workspace/soc/review/memory-candidates${initialExperimentId ? `?experiment=${encodeURIComponent(initialExperimentId)}` : ""}`}
+                      >
                         <ChevronLeftIcon className="size-4" />
                         返回审核列表
                       </Link>
@@ -3782,6 +3811,7 @@ export function SocReviewQueueWorkbench({
                   </div>
                 ) : (
                   <Badge variant="secondary">
+                    {initialExperimentId ? "本实验第一批 · " : ""}
                     {standaloneMemoryCandidates.length} 条审核记录
                   </Badge>
                 )}
@@ -3818,13 +3848,54 @@ export function SocReviewQueueWorkbench({
                   : "待审核经验加载失败"}
               </div>
             ) : !initialCandidateId ? (
-              <MemoryCandidateInventory
-                candidates={standaloneMemoryCandidates}
-                status={memoryCandidateStatusFilter}
-                isFetching={listedMemoryCandidatesFetching}
-                onStatusChange={setMemoryCandidateStatusFilter}
-                onRefresh={() => void refetchListedMemoryCandidates()}
-              />
+              <>
+                {initialExperimentId && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                    <Button variant="outline" asChild>
+                      <Link href="/workspace/soc/corpus-validation">
+                        <ChevronLeftIcon className="size-4" />
+                        返回告警演练
+                      </Link>
+                    </Button>
+                    <div className="flex items-center gap-2">
+                      <span>共 {experimentCandidateQuery.total} 条</span>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        aria-label="上一页经验"
+                        disabled={!candidateOffset}
+                        onClick={() =>
+                          setCandidateOffset(Math.max(0, candidateOffset - 20))
+                        }
+                      >
+                        <ChevronLeftIcon className="size-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        aria-label="下一页经验"
+                        disabled={
+                          candidateOffset + 20 >= experimentCandidateQuery.total
+                        }
+                        onClick={() => setCandidateOffset(candidateOffset + 20)}
+                      >
+                        <ChevronRightIcon className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <MemoryCandidateInventory
+                  candidates={standaloneMemoryCandidates}
+                  experimentId={initialExperimentId}
+                  status={memoryCandidateStatusFilter}
+                  isFetching={listedMemoryCandidatesFetching}
+                  onStatusChange={(value) => {
+                    setMemoryCandidateStatusFilter(value);
+                    setCandidateOffset(0);
+                  }}
+                  onRefresh={() => void refetchListedMemoryCandidates()}
+                />
+              </>
             ) : standaloneMemoryCandidates.length === 0 ? (
               <div className="text-muted-foreground flex min-h-48 items-center justify-center border text-sm">
                 未找到该待审核经验。
@@ -3833,6 +3904,7 @@ export function SocReviewQueueWorkbench({
               <>
                 <MemoryCandidateSection
                   candidates={standaloneMemoryCandidates}
+                  sharedDraftCandidateId={initialCandidateId}
                   records={relatedMemoryRecords}
                   recordsLoading={memoryRecordsLoading}
                   recordsError={memoryRecordsError}
@@ -4212,6 +4284,7 @@ export function SocReviewQueueWorkbench({
 
                 <MemoryCandidateSection
                   candidates={context?.memory_candidates ?? []}
+                  sharedDraftCandidateId={initialCandidateId}
                   records={relatedMemoryRecords}
                   recordsLoading={memoryRecordsLoading}
                   recordsError={memoryRecordsError}

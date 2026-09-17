@@ -56,6 +56,7 @@ from soc_agent.contracts import (
     SocMemoryRunPromotionResult,
     Verdict,
 )
+from soc_agent.contracts.memory_drafts import MemoryDraftSaveCommand, MemoryWorkingDraft, MemoryWorkingDraftView
 from soc_agent.contracts.memory_governance import MemoryGovernancePreview, MemoryScopeBoundaries, MemoryScopeBoundaryReleaseCommand, MemoryScopeRefinementCommand
 from soc_agent.contracts.memory_scope import MemoryScopeView, MemorySourceScopeOptions
 from soc_agent.core import (
@@ -71,6 +72,7 @@ from soc_agent.core import (
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
+from soc_agent.core.memory_working_drafts import SocMemoryWorkingDraftService
 from soc_agent.llm import build_configured_memory_lesson_drafter
 from soc_agent.memory.scope_view import build_memory_scope_view
 
@@ -291,6 +293,36 @@ MemoryLessonDraftServiceDep = Annotated[
     SocMemoryLessonDraftService,
     Depends(get_soc_memory_lesson_draft_service),
 ]
+
+
+def get_soc_memory_working_draft_service(request: Request) -> SocMemoryWorkingDraftService:
+    repository = get_or_create_soc_repository(request)
+    return SocMemoryWorkingDraftService(repository=repository, mutation_uow=repository)
+
+
+WorkingDraftServiceDep = Annotated[SocMemoryWorkingDraftService, Depends(get_soc_memory_working_draft_service)]
+
+
+@router.get("/candidates/{candidate_id}/working-draft", response_model=MemoryWorkingDraftView)
+def get_memory_working_draft(candidate_id: str, request: Request, service: WorkingDraftServiceDep):
+    try:
+        return service.get(candidate_id, context=soc_service_context_from_request(request, include_soc_roles=True))
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/candidates/{candidate_id}/working-draft", response_model=MemoryWorkingDraft)
+def save_memory_working_draft(candidate_id: str, payload: MemoryDraftSaveCommand, request: Request, service: WorkingDraftServiceDep):
+    try:
+        return service.save(candidate_id, payload, context=soc_service_context_from_request(request, include_soc_roles=True))
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def get_soc_memory_evolution_service(request: Request) -> SocMemoryEvolutionService:
