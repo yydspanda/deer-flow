@@ -46,6 +46,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Exact reuse now requires reviewed behavior coverage, not just a matching subset. Uncovered behavior
 > goes to model analysis with relevant Memory and explicit differences. A more-specific reviewed scope
 > takes priority even when reference-only; pausing it never silently restores the broad answer.
+> The main-analysis prompt highlights actual missing/uncovered conditions separately from their
+> business meaning: reaching the same conclusion is not evidence of an exact machine match.
 > Candidate review supports paged source-entity search, source coverage previews and independent
 > scoped candidates without replacing the original cohort. See the
 > [Memory scope design](.notes/ai_soc/architecture/memory-reuse-scope-remediation.md).
@@ -140,6 +142,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > explicitly regenerate the facts; the new run records the comparison without rewriting history.
 > Detector rule/signature identifiers keep their source and namespace instead of depending on
 > which identifier the model happens to choose.
+> Result details separate a server-generated **系统匹配说明** from **模型研判依据**. The former
+> lists the saved Memory use mode and uncovered conditions; the latter explains business impact.
+> New experience candidates carry the same matching facts into lesson drafting. Historical model
+> text remains auditable; this does not change matching, verdicts, or add model calls.
 > SOC model-bound JSON uses compact serialization for analysis, semantic review, role verification,
 > Business Lesson drafting, tenant advice and repair requests. No facts or string whitespace are
 > removed; audit exports/UI formatting and the upstream DeerFlow framework remain unchanged.

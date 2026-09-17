@@ -75,6 +75,11 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 ## Alert Results And Human Intervention
 
+- Render additive server `memory_matching_facts` as **系统匹配说明**, separately from the model's
+  **模型研判依据** in the existing outcome panel. Do not infer matching from the model's prose or
+  implement a browser matcher. Empty legacy comparisons do not prove exact reuse. Keep original
+  model reasoning visible/auditable; these notes neither change the outcome nor create a task.
+
 - Render server `processing_path=tenant_policy|memory` as direct handling with an explicit
   "主模型未调用" explanation. These completed runs have no model result or confidence;
   skipped Base means "未生成判断", never 0% or a failed run. Memory use `direct_reused`

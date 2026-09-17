@@ -14,7 +14,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.utils.model_json import model_json
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v9"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v10"
 MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v3"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000
@@ -249,6 +249,12 @@ Write concise analyst-facing Chinese. A Business Lesson explains what the repeat
 - Final confirmation still belongs to the reviewer, but do not manufacture an uncertainty solely because an external registry was not included.
 - A rule_code/detection_key identifies a detector family; it does not prove every alert with that key has the same outcome.
 - Machine applicability is authoritative for scope. Do not widen it in prose and do not copy it into the model output; Runtime will render the exact applicability conditions.
+- Source material may include 系统匹配事实 / memory_matching_facts, generated from the source run's saved comparisons.
+  These describe the actual matching conditions, not an analyst-confirmed business event.
+  They take precedence over prior model prose about whether that source matched a Memory or contained uncovered behavior.
+- If prior model prose says only IPs differed but the source matching facts list an uncovered detector, retain that difference.
+  Explain its business significance from supplied facts; never turn semantic similarity into a claim that the old machine scope covered it.
+  Missing comparison records do not prove an exact match.
 - Every facet shown as required:* is immutable for this lesson. Never describe a required value as optional, variable, equivalent to another value, or replaceable by a similar service.
 - Distinguish what may vary from what must stay fixed. Prefer stable behavior/service/process/URI characteristics over concrete alert IDs or incidental IP/account values unless those values are machine-required facets.
 - Copy every literal URI, domain, rule key, behavior fingerprint, process, path, account, and other identifier byte-for-byte from one cited D-* value. Never translate, split, autocorrect, approximate, or invent an identifier inside prose.

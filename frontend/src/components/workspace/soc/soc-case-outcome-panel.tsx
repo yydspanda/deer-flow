@@ -55,7 +55,7 @@ function Notes({ title, items }: { title: string; items?: string[] }) {
   return (
     <div>
       <h4 className="text-sm font-medium">{title}</h4>
-      <ul className="text-muted-foreground mt-2 space-y-2 text-sm leading-6">
+      <ul className="text-muted-foreground mt-2 space-y-2 text-sm leading-6 break-words">
         {items.map((item, i) => (
           <li key={i}>{item}</li>
         ))}
@@ -132,8 +132,24 @@ export function SocCaseOutcomePanel({
         )}
       >
         <div className="min-w-0 p-5">
+          {!failed && outcome.memory_matching_facts?.length ? (
+            <div
+              className="mb-4 border-b pb-4"
+              data-testid="memory-matching-facts"
+            >
+              <Notes
+                title="系统匹配说明"
+                items={outcome.memory_matching_facts}
+              />
+            </div>
+          ) : null}
           <h4 className="text-muted-foreground text-xs font-medium">
-            处理依据
+            {outcome.memory_matching_facts?.length &&
+            outcome.processing_path === "model_analysis" &&
+            !outcome.tenant_policy_applied &&
+            !outcome.memory_directive_applied
+              ? "模型研判依据"
+              : "处理依据"}
           </h4>
           <p className="mt-2 text-sm leading-7 break-words">{reason}</p>
           {outcome.processing_path &&

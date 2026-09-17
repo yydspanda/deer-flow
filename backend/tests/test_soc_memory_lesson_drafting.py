@@ -86,6 +86,18 @@ def test_memory_lesson_source_preserves_long_business_context():
     assert next(item.value for item in prompt.source_catalog if item.label == "candidate_content") == candidate.content
 
 
+def test_lesson_draft_preserves_matching_facts_separately_from_model_claims():
+    candidate = _candidate()
+    candidate.content = "系统匹配事实：旧经验未覆盖 process:extra.exe，仅供参考。\nRuntime reason: 差异仅为 IP。"
+    before = candidate.model_dump_json()
+    prompt = build_memory_lesson_draft_prompt(candidate, reviewer_verdict=Verdict.TRUE_POSITIVE, reviewer_context=None)
+    content = next(item.value for item in prompt.source_catalog if item.label == "candidate_content")
+    assert "process:extra.exe" in content and "差异仅为 IP" in content
+    assert "take precedence over prior model prose" in prompt.system
+    assert "not an analyst-confirmed business event" in prompt.system
+    assert candidate.model_dump_json() == before
+
+
 def test_memory_lesson_prompt_uses_bounded_sources_and_tail_contract() -> None:
     candidate = _candidate()
 

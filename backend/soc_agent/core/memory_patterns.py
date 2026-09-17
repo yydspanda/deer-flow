@@ -192,7 +192,9 @@ class SocMemoryPatternService:
 
         existing = repository.find_memory_pattern_observation_by_idempotency_key(command.idempotency_key)
         if existing is not None:
-            if existing.content_hash != content_hash:
+            legacy_explanation = bool(existing.lesson is not None and not existing.lesson.memory_matching_facts and command.lesson is not None)
+            compatible_hash = _observation_content_hash(command, self._policy, omit_matching_facts=True) if legacy_explanation else content_hash
+            if existing.content_hash not in {content_hash, compatible_hash}:
                 raise SocServiceConflictError(f"memory pattern idempotency key {command.idempotency_key} was reused for different content")
             if existing.aggregation_key != aggregation_key:
                 raise SocServiceConflictError(f"memory pattern idempotency key {command.idempotency_key} was reused with a different aggregation policy")
@@ -780,10 +782,16 @@ def _fixed_window(observed_at: datetime, window_seconds: int) -> tuple[datetime,
 def _observation_content_hash(
     command: MemoryPatternObservationCreateCommand,
     policy: MemoryPatternAggregationPolicy,
+    *,
+    omit_matching_facts: bool = False,
 ) -> str:
+    payload = command.model_dump(mode="json", exclude={"idempotency_key"})
+    # Empty additive explanations must retain hashes of historical commands.
+    if payload.get("lesson") and (omit_matching_facts or not payload["lesson"].get("memory_matching_facts")):
+        payload["lesson"].pop("memory_matching_facts", None)
     return stable_hash(
         {
-            "command": command.model_dump(mode="json", exclude={"idempotency_key"}),
+            "command": payload,
             "policy": policy.model_dump(mode="json"),
         }
     )
@@ -938,13 +946,14 @@ def _representative_observations(
         reverse=True,
     )
     selected: list[MemoryPatternObservation] = []
-    seen_conclusions: set[tuple[str, str]] = set()
+    seen_conclusions: set[tuple[str, str, tuple[str, ...]]] = set()
     for item in ranked:
         if item.lesson is None:
             continue
         conclusion_key = (
             " ".join(item.lesson.summary.split()).casefold(),
             " ".join(item.lesson.reason.split()).casefold(),
+            tuple(item.lesson.memory_matching_facts),
         )
         if conclusion_key in seen_conclusions:
             continue
@@ -1107,6 +1116,8 @@ def _candidate_content(
         lesson = item.lesson
         if lesson is None:
             continue
+        for fact in lesson.memory_matching_facts:
+            lines.append(f"- [{item.source.alert_id}] 系统匹配事实：{fact}")
         lines.append(f"- [{item.source.alert_id}] {lesson.summary}；理由：{lesson.reason}")
     minority_count = quality.conclusive_count - max(
         quality.risk_class_counts.get(MemoryPatternRiskClass.RISK.value, 0),

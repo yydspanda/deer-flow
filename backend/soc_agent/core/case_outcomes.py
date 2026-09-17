@@ -31,6 +31,7 @@ from soc_agent.contracts import (
 from soc_agent.core.case_progress import follow_up_reason_codes, progress_text
 from soc_agent.core.handling import concrete_disposition, handling_blockers, policy_requires_follow_up, project_operational_handling, resolve_operational_disposition
 from soc_agent.core.operator_language import operator_text
+from soc_agent.memory.matching_facts import memory_matching_facts
 
 _TERMINAL_DISPOSITIONS = frozenset(
     {
@@ -192,6 +193,7 @@ def project_soc_case_outcome(
         confidence=(effective.confidence if effective is not None else None),
         decision_usable=decision_usable,
         decision_reason=(_bounded_text(decision_reason, limit=8000) if decision_reason is not None else None),
+        memory_matching_facts=memory_matching_facts(run),
         decision_change=decision_change,
         change_summary=change_summary,
         operational_disposition=operational_disposition,

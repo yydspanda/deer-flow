@@ -69,6 +69,7 @@ class MemoryPatternLessonObservation(BaseModel):
     evidence_state: DecisionEvidenceState | None = None
     summary: str = Field(min_length=1, max_length=2000)
     reason: str = Field(min_length=1, max_length=4000)
+    memory_matching_facts: list[str] = Field(default_factory=list, max_length=20)
     recommended_action: str = Field(min_length=1, max_length=2000)
     primary_scenario_key: str | None = Field(default=None, min_length=1, max_length=256)
     primary_scenario_name: str | None = Field(default=None, min_length=1, max_length=512)

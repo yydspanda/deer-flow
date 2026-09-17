@@ -243,6 +243,7 @@ export interface SocConclusionSupport {
 }
 
 export interface SocCaseOutcomeView {
+  memory_matching_facts?: string[];
   processing_path?: "model_analysis" | "tenant_policy" | "memory";
   schema_version: "soc.case_outcome_view.v1";
   event_summary: string;

@@ -962,12 +962,23 @@ alert context comes first in the user message, while the task, exact response sh
 remain at the tail. Scenario/direction/role sections use exact key contracts, and role objects copy only
 the selected catalog item's `evidence_ref` into `entity_ref`. The Prompt Builder selects exactly one
 complete machine-validated synthetic shape example (`context_memory`,
-`context_memory_true_positive`, `network_roles`, `non_network`, or `conflicted`) and
+`context_memory_true_positive`, `context_memory_difference`, `network_roles`, `non_network`, or `conflicted`) and
 records `prompt_example_id`; example-only `EX-*` references are forbidden in the response. It does not
 allow example verdict/scenario/direction/role/confidence/action values to substitute for current-alert
 analysis and never asks the model to copy long stable hash IDs. A separate compact calibration block
 balances false-positive, true-positive, context-only transfer/non-transfer, and later tenant disposition
-semantics; these are decision examples rather than alternate response schemas. Runtime restores
+semantics; these are decision examples rather than alternate response schemas. Scope differences
+take precedence over reviewed verdict when selecting Memory examples. Prompt v46 retains the frozen
+comparison and adds a compact actual-difference focus near the answer contract; missing conditions
+and uncovered behavior must not be described as a complete match. The model explains their business
+significance in the existing reason, without new output fields or automatic scope expansion.
+Prompt v47 further separates responsibilities: server `memory_matching_facts` reports saved matching
+state and explicit differences, while model prose explains their business significance. This additive
+read projection does not infer eligibility from text, rewrite historical reasoning, or block a verdict.
+Manual promotion and automatic Pattern candidates carry the same source matching facts; Business
+Lesson Prompt v10 gives them precedence over old model claims about scope, without confusing them
+with analyst-confirmed business events. Old empty observation explanations retain legacy retry hashes;
+no data migration, profile/authority change, or additional model call is required. Runtime restores
 each alias through the frozen one-to-one request map before validation, then materializes stable
 references, exact evidence path/value tuples and core reasoning `R-00`. Stable IDs remain the only
 persistence/Grounding/replay identity; exact alias restoration is normal hydration and unknown aliases

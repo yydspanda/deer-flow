@@ -197,6 +197,58 @@ def test_replay_unknown_profile_reads_frozen_candidate_without_rebuilding_it() -
     assert repository.get_memory_candidate(candidate.candidate_id) == candidate
 
 
+def test_manual_and_pattern_candidates_retain_source_matching_facts():
+    from soc_agent.contracts import AnalysisContextCatalogItem, AnalysisMemoryContextComparison
+    from soc_agent.memory.sources import memory_candidate_command_from_run_promotion
+
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+    for index in range(1, 4):
+        run = _run(index)
+        run.llm_analysis_request.context_catalog = [
+            AnalysisContextCatalogItem(
+                context_ref="M-000000000001",
+                kind="confirmed_memory",
+                label="Reviewed",
+                source_id="MEM-REFERENCE@v2",
+                summary="Old lesson",
+                memory_comparison=AnalysisMemoryContextComparison(use_mode="context_only", uncovered_behavior_components=["process:unreviewed.exe"]),
+            )
+        ]
+        run.analysis.reason = "差异仅为 IP，全部行为匹配。"
+        result = _observe(service, run, transport_ref=f"matching-facts:{index}")
+        assert "当前新增、旧经验未覆盖：process:unreviewed.exe" in result.observation.lesson.memory_matching_facts[0]
+    assert result.candidate is not None
+    assert "系统匹配事实" in result.candidate.content
+    assert "process:unreviewed.exe" in result.candidate.content
+    assert "差异仅为 IP" in result.candidate.content  # Original model reasoning remains attributable.
+    command = memory_candidate_command_from_run_promotion(run, SocMemoryRunPromotionCommand(run_id=run.run_id))
+    assert "系统匹配事实" in command.content
+    assert "process:unreviewed.exe" in command.content
+
+
+def test_added_matching_explanation_does_not_break_legacy_observation_retry():
+    from soc_agent.core.memory_patterns import _observation_content_hash
+    from soc_agent.utils.hashing import stable_hash
+
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+    run = _run(1)
+    command = memory_pattern_command_from_run(run, source_type=MemoryPatternSourceType.BATCH_ALERT, transport_ref="legacy-explanation", environment="dev", data_class=MemoryPatternDataClass.SIMULATION, policy_fingerprint="legacy-test")
+    payload = command.model_dump(mode="json", exclude={"idempotency_key"})
+    payload["lesson"].pop("memory_matching_facts")
+    assert _observation_content_hash(command, service._policy) == stable_hash({"command": payload, "policy": service._policy.model_dump(mode="json")})
+    old = service.ingest_observation(command, context=_context())
+    command = command.model_copy(deep=True)
+    command.lesson.memory_matching_facts = ["系统匹配事实：仅供参考。"]
+    again = service.ingest_observation(command, context=_context())
+    assert again.observation.observation_id == old.observation.observation_id
+    assert again.observation.lesson.memory_matching_facts == []
+    command.lesson.reason = "A genuinely different model reason must not bypass idempotency."
+    with pytest.raises(SocServiceConflictError):
+        service.ingest_observation(command, context=_context())
+
+
 def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
     repository = InMemoryMemoryPatternRepository()
     service = _service(repository)

@@ -61,6 +61,23 @@ function render(value: Partial<SocCaseOutcomeView> = {}) {
 }
 
 describe("SocCaseOutcomePanel", () => {
+  test("separates server matching facts from the model explanation", () => {
+    const { primary } = render({
+      processing_path: "model_analysis",
+      tenant_policy_applied: false,
+      memory_matching_facts: [
+        "当前新增检测 0x42，目标服务 SIP/5060；仅供参考，没有直接复用。",
+      ],
+      handling_reason: "模型认为服务探测具有真实风险。",
+    });
+    expect(primary).toContain("系统匹配说明");
+    expect(primary).toContain("模型研判依据");
+    expect(primary).toContain("当前新增检测 0x42");
+    expect(primary).toContain("模型认为服务探测具有真实风险");
+    expect(primary.indexOf("系统匹配说明")).toBeLessThan(
+      primary.indexOf("模型研判依据"),
+    );
+  });
   test("direct policy and Memory results name their authority instead of a failed model", () => {
     const policy = render({
       processing_path: "tenant_policy",

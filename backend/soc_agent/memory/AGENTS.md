@@ -198,6 +198,14 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 
 ## Lesson Draft Assistance
 
+- Saved run comparisons, not model wording, own machine matching facts. `matching_facts.py`
+  supplies a read-only explanation to results and manual/automatic candidate sources; lesson
+  Prompt v10 distinguishes these from human business confirmation. Missing old comparisons
+  never imply exact reuse. The additive `MemoryPatternLessonObservation.memory_matching_facts`
+  defaults empty; empty explanations retain old command hashes. A retry against a saved empty
+  explanation may omit only this field for compatibility, never changes the saved observation,
+  and still checks every original command field. Non-empty saved explanations remain hash-checked.
+
 - `SocMemoryLessonDraftService` is reviewer assistance, not authority. It runs only after
   candidate admission and after an authenticated reviewer selects the technical verdict.
 - The prompt receives bounded server-owned `D-*` facts. Optional reviewer business

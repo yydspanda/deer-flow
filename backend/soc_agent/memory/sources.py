@@ -669,6 +669,8 @@ def _run_promotion_content(
     run: AnalysisRun,
     command: SocMemoryRunPromotionCommand,
 ) -> str:
+    from soc_agent.memory.matching_facts import memory_matching_facts
+
     lines = [
         f"Run: {run.run_id}",
         f"Alert: {run.alert_id}",
@@ -680,6 +682,7 @@ def _run_promotion_content(
             [f"Direct handling source: {run.direct_resolution.source_kind}:{run.direct_resolution.source_id}", f"Reviewed handling basis: {run.direct_resolution.summary}", "No independent model judgment was generated in this run."]
         )
     if run.analysis is not None:
+        lines.extend(f"系统匹配事实：{fact}" for fact in memory_matching_facts(run))
         lines.append(f"Runtime summary: {run.analysis.summary}")
         lines.append(f"Runtime reason: {run.analysis.reason}")
     verdict = _run_verdict(run)

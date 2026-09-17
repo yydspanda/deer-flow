@@ -118,6 +118,7 @@ class SocCaseOutcomeView(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     decision_usable: bool = False
     decision_reason: str | None = Field(default=None, max_length=8000)
+    memory_matching_facts: list[str] = Field(default_factory=list, max_length=20)
     decision_change: SocCaseDecisionChange = SocCaseDecisionChange.UNCHANGED
     change_summary: str | None = Field(default=None, max_length=2000)
     operational_disposition: SocOperationalDisposition | None = None

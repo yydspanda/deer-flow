@@ -343,6 +343,16 @@ file for SOC code. The authoritative product and engineering documents are:
   to the bounded analyzer. Fully applicable `exact_context` is a strong semantic prior,
   but remains non-authoritative without a Decision Directive: deviating requires cited
   current evidence, while Tenant Policy and action authority remain separate stages.
+- Analysis Prompt examples select scope differences before historical verdicts. Preserve the
+  frozen comparison and lesson; input-only explanation and a compact near-contract focus repeat
+  actual missing/uncovered conditions, never recalculate relevance or authority. Explain machine
+  scope separately from business significance in the existing `reason`; a semantic agreement
+  must not claim exact reuse. No output-schema expansion, regex verdict rewrite or extra verifier.
+- `memory/matching_facts.py` projects frozen context comparisons/direct resolution into the additive
+  `SocCaseOutcomeView.memory_matching_facts`. It does not recompute retrieval or infer applicability
+  from prose. Prompt v47 delegates machine-match reporting to this projection; the model explains
+  business impact. Preserve model text and original run data, and propagate these source facts into
+  manual/automatic candidate evidence without changing risk, review, or action authority.
 - Journal provider requests before invocation. Recovery may resume only when the frozen
   request and config/model lineage still match; otherwise start a new attempt.
 - Kafka topic `soc.alerts.raw.v1` accepts only

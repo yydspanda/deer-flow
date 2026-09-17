@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from soc_agent.contracts import (
     AnalysisContextCatalogItem,
     AnalysisContextReferenceKind,
@@ -182,8 +184,8 @@ def test_analysis_prompt_exposes_context_only_memory_as_semantic_input_without_d
     )
     prompt = build_analysis_prompt(request.model_copy(update={"context_catalog": [*request.context_catalog, memory]}))
 
-    assert prompt.example_id == "context_memory"
-    assert 'id="context_memory"' in prompt.user
+    assert prompt.example_id == "context_memory_difference"
+    assert 'id="context_memory_difference"' in prompt.user
     memory_projection = next(item for item in prompt.context["reference_catalogs"]["reasoning_context"] if item["kind"] == "confirmed_memory")
     assert memory_projection["context_ref"] == "M-001"
     assert memory_projection["memory_comparison"]["use_mode"] == "context_only"
@@ -261,6 +263,88 @@ def test_analysis_prompt_balances_false_positive_and_true_positive_without_memor
     assert '"case":"true_positive_with_later_benign_disposition"' in prompt.user
 
 
+@pytest.mark.parametrize("verdict", [Verdict.FALSE_POSITIVE, Verdict.TRUE_POSITIVE, None])
+@pytest.mark.parametrize(
+    ("difference", "explanation"),
+    [
+        ({"uncovered_behavior_components": ["network_service:tcp/8443"]}, "当前新增"),
+        ({"missing_behavior_components": ["process:approved-client.exe"]}, "未满足"),
+        ({"missing_required_facet_keys": ["behavior_fingerprint"]}, "未满足"),
+        ({"missing_reuse_conditions": [{"facet_key": "source_type", "values": ["edr"]}]}, "附加限制"),
+        ({"excluded_facet_hits": {"entity": ["host:excluded"]}}, "排除条件"),
+        ({"applicability_status": "partial"}, "未确认完整"),
+        ({"applicability_status": None}, "未确认完整"),
+    ],
+)
+def test_memory_scope_differences_take_precedence_over_reviewed_verdict(verdict, difference, explanation) -> None:
+    request = _analysis_request("pingan_legacy_apt.json")
+    comparison = AnalysisMemoryContextComparison.model_validate(
+        {
+            "use_mode": "context_only",
+            "applicability_status": "applicable",
+            "reviewed_verdict": verdict,
+            "matched_required_facets": {"detection_key": ["sample:rule"]},
+            **difference,
+        }
+    )
+    memory = AnalysisContextCatalogItem(
+        context_ref="M-A1B2C3D4E5F6",
+        kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
+        label="Reviewed lesson",
+        source_id="MEM-DIFFERENCE@v2",
+        summary="Reviewer-owned business explanation.",
+        memory_comparison=comparison,
+    )
+    request = request.model_copy(update={"context_catalog": [*request.context_catalog, memory]})
+    before = request.model_dump(mode="json")
+    prompt = build_analysis_prompt(request)
+
+    assert prompt.example_id == "context_memory_difference"
+    projected = next(item for item in prompt.context["reference_catalogs"]["reasoning_context"] if item["kind"] == "confirmed_memory")
+    assert explanation in projected["memory_use_explanation"]
+    assert projected["memory_comparison"] == comparison.model_dump(mode="json", exclude_none=True)
+    assert projected["summary"] == memory.summary
+    assert request.model_dump(mode="json") == before
+    assert "匹配差异" in prompt.user and "业务影响" in prompt.user
+    assert "不得写成全部行为匹配或差异仅为 IP" in prompt.user
+    for component in comparison.uncovered_behavior_components:
+        assert component in prompt.user
+    focus_start = prompt.user.index('<memory_comparison_focus trust="current_request_data">')
+    focus_end = prompt.user.index("</memory_comparison_focus>")
+    assert prompt.user.index("</output_example>") < focus_start < focus_end < prompt.user.index("<response_contract>")
+    focused = json.loads(prompt.user[focus_start:focus_end].split("\n", 1)[1])
+    assert focused[0]["context_ref"] == "M-001"
+    assert focused[0]["uncovered_behavior_components"] == comparison.uncovered_behavior_components
+    assert focused[0]["missing_behavior_components"] == comparison.missing_behavior_components
+    assert focused[0]["missing_reuse_conditions"] == comparison.model_dump(mode="json", exclude_none=True)["missing_reuse_conditions"]
+    assert "summary" not in focused[0]
+    assert "系统匹配说明由程序" in prompt.user
+    assert "reason 只负责业务研判" in prompt.user
+    assert "不要替程序报告匹配状态" in prompt.user
+
+
+def test_mixed_memory_outcomes_do_not_select_a_single_reviewed_verdict_example() -> None:
+    request = _analysis_request("pingan_legacy_apt.json")
+    memories = [
+        AnalysisContextCatalogItem(
+            context_ref=ref,
+            kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
+            label="Reviewed lesson",
+            source_id=f"MEM-{verdict.value}@v1",
+            summary="Reviewer-owned conclusion.",
+            memory_comparison=AnalysisMemoryContextComparison(
+                use_mode=AnalysisMemoryUseMode.EXACT_CONTEXT,
+                applicability_status=SocMemoryApplicabilityStatus.APPLICABLE,
+                reviewed_verdict=verdict,
+            ),
+        )
+        for ref, verdict in [("M-A1B2C3D4E5F6", Verdict.FALSE_POSITIVE), ("M-B1C2D3E4F5A6", Verdict.TRUE_POSITIVE)]
+    ]
+    request = request.model_copy(update={"context_catalog": [*request.context_catalog, *memories]})
+    assert build_analysis_prompt(request).example_id == "context_memory_difference"
+    assert build_analysis_prompt(request.model_copy(update={"conflict_count": 1})).example_id == "conflicted"
+
+
 def test_all_analysis_output_examples_pass_current_parser_contract() -> None:
     catalog = [
         AnalysisEvidenceCatalogItem(
@@ -306,6 +390,7 @@ def test_all_analysis_output_examples_pass_current_parser_contract() -> None:
     assert set(examples) == {
         "context_memory",
         "context_memory_true_positive",
+        "context_memory_difference",
         "network_roles",
         "non_network",
         "conflicted",

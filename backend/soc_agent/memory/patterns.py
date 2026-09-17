@@ -349,6 +349,8 @@ def memory_pattern_command_from_run(
 
 
 def _lesson_from_run(run: AnalysisRun) -> MemoryPatternLessonObservation:
+    from soc_agent.memory.matching_facts import memory_matching_facts
+
     analysis = run.analysis
     if analysis is None:
         raise MemoryPatternIneligibleError("memory pattern aggregation requires a completed analysis conclusion")
@@ -366,6 +368,7 @@ def _lesson_from_run(run: AnalysisRun) -> MemoryPatternLessonObservation:
         evidence_state=(decision.evidence_state if decision is not None else None),
         summary=analysis.summary,
         reason=analysis.reason,
+        memory_matching_facts=memory_matching_facts(run),
         recommended_action=analysis.recommended_action,
         primary_scenario_key=(primary.scenario_key if primary is not None else None),
         primary_scenario_name=(primary.scenario_name if primary is not None else None),

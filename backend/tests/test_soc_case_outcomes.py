@@ -34,6 +34,37 @@ from soc_agent.contracts import (
 from soc_agent.core.case_outcomes import project_soc_case_outcome
 
 
+def test_memory_matching_explanation_is_independent_of_model_prose():
+    from soc_agent.contracts import AlertClassification, AlertSourceRef, AnalysisContextCatalogItem, AnalysisMemoryContextComparison, DetectionRuleRef, LLMAnalysisRequest
+
+    run = _run()
+    run.analysis.reason = run.decision.reason = "差异仅为 IP，全部行为已覆盖。"
+    run.llm_analysis_request = LLMAnalysisRequest(
+        alert_id=run.alert_id,
+        source=AlertSourceRef(source_type="ndr"),
+        detection=DetectionRuleRef(),
+        classification=AlertClassification(),
+        context_catalog=[
+            AnalysisContextCatalogItem(
+                context_ref="M-000000000001",
+                kind="confirmed_memory",
+                label="Reviewed",
+                source_id="MEM-TEST@v1",
+                summary="Historical conclusion",
+                memory_comparison=AnalysisMemoryContextComparison(use_mode="context_only", uncovered_behavior_components=["network_service:tcp/8443"]),
+            )
+        ],
+    )
+    before = run.model_dump_json()
+    outcome = project_soc_case_outcome(run)
+    assert "当前新增、旧经验未覆盖：目标服务 TCP/8443" in outcome.memory_matching_facts[0]
+    assert "仅供模型参考" in outcome.memory_matching_facts[0]
+    assert outcome.decision_reason == run.analysis.reason
+    assert outcome.recommended_handling == "transfer"
+    assert not outcome.memory_directive_applied
+    assert run.model_dump_json() == before
+
+
 @pytest.mark.parametrize(
     ("reason", "code", "label"),
     [

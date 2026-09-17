@@ -11,8 +11,10 @@ from typing import Any
 from soc_agent.contracts import (
     ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
     AlertSourceType,
+    AnalysisMemoryContextComparison,
     LLMAnalysisRequest,
     RoleCoherenceStatus,
+    SocMemoryApplicabilityStatus,
     Verdict,
 )
 from soc_agent.model_reference_aliases import (
@@ -23,7 +25,7 @@ from soc_agent.pipeline.analysis_context import project_analysis_context
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 from soc_agent.utils.model_json import model_json
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v44"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v47"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -46,6 +48,14 @@ _MEMORY_REASONING_GUIDANCE = (
   If the difference genuinely cannot be resolved, name that concrete uncertainty; do not default to suspicious merely because a scope is partial.
   Your conclusion does not expand the Memory's reviewed scope or confer deterministic reuse authority on future alerts.
   If core behavior and applicability conditions match, deltas are non-material, and no invalidation condition appears, M-* may support any Base verdict. Cite it in decision_context_refs when used.
+- 区分“匹配差异”和“业务影响”：前者读取 memory_comparison 的确定性结果，后者由你结合当前 E-*、经验和企业知识判断。
+  matched_required_facets 全部命中不代表全部行为已被覆盖；uncovered_behavior_components 非空时，不得写成全部行为匹配或差异仅为 IP。
+  missing_behavior_components 是旧经验要求、当前未满足的行为；uncovered_behavior_components 是当前新增、旧经验尚未覆盖的行为，二者不要混淆。
+  页面会由程序单独展示系统匹配说明。reason 只负责业务研判：旧经验解释了什么、当前具体行为有什么意义、为什么这次采纳或不采纳经验结论；引用实际 E-* 和 M-*。
+  不要在 reason、summary、场景说明或 resolved_questions 中代写匹配报告，不总结“全部匹配”“差异仅为 IP”“已精确复用”等程序状态。
+  例如：“当前新增检测对应的仍是相同服务探测，E-* 报文支持与 M-* 相同的业务判断”，而不是“新检测其实已覆盖，所以没有差异”。
+  从对应的检测/对象事实解释差异，不要只复述 hash、规则编码，也不要把未覆盖本身当作攻击证据。相同服务或协议不代表两个检测事件相同。
+  即使判断差异不影响本次业务结论，也必须保留其存在，不能把“可以语义泛化”说成“程序已精确复用”。不要求新增输出字段或重复核实已审核事实。
 - exact_context with applicability_status=applicable, no missing required facets, and no excluded facet hit means every reviewer-approved machine condition matches.
   Start from reviewed_verdict in that case. Depart from it only when exact current E-* evidence establishes a material behavior difference or triggers a stated invalidation condition, and identify that evidence in the reason.
   A changed IP/host/account, repeated connection count, or detector wording already represented by shared facets is not by itself a contradiction.
@@ -176,7 +186,7 @@ _ANALYSIS_OUTPUT_EXAMPLES: dict[str, dict[str, Any]] = {
         },
         "evidence_gaps": [],
         "manual_checks": [],
-        "reason": "该 M-* 虽为 context-only，但确定性比较显示核心条件相同且没有实质差异或失效命中，因此可作为受治理经验支持当前 Base false_positive 判断；无确定性 Directive 权限不等于经验无效。",
+        "reason": "M-* 解释了该内部服务调用的正常业务用途；当前 E-* 所示请求与该用途一致，未出现改变其业务性质的行为，因此本次判断为误报。",
         "recommended_action": "记录本次误触发结论，不执行破坏性响应；若后续出现失效条件则重新研判。",
     },
     "network_roles": {
@@ -363,7 +373,7 @@ _CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE.update(
         "verdict": "true_positive",
         "confidence": 0.9,
         "summary": "当前行为与已复核的恶意活动模式及其适用条件一致，当前证据没有显示失效条件。",
-        "reason": "该 M-* 的人工确认结论为真实风险，确定性比较显示全部必需条件命中且没有实质差异或失效命中；当前 E-* 证据与该经验一致，因此支持 Base true_positive 判断。",
+        "reason": "M-* 解释了该活动为何具有真实风险；当前 E-* 记录了相同性质的活动，没有能够解释其合法业务用途的新事实，因此本次仍判断为真实攻击。",
         "recommended_action": "保留真实风险结论，并由后续 Runtime 根据角色、租户策略和动作权限决定处置。",
         "conclusion_support": {
             "context_refs": ["EX-M-001"],
@@ -383,6 +393,43 @@ _CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE["scenario_assessments"][0].update(
     }
 )
 _ANALYSIS_OUTPUT_EXAMPLES["context_memory_true_positive"] = _CONTEXT_MEMORY_TRUE_POSITIVE_EXAMPLE
+
+# Teach comparison without selecting the answer from the historical verdict.
+_CONTEXT_MEMORY_DIFFERENCE_EXAMPLE = deepcopy(_ANALYSIS_OUTPUT_EXAMPLES["non_network"])
+_CONTEXT_MEMORY_DIFFERENCE_EXAMPLE.update(
+    {
+        "verdict": "true_positive",
+        "confidence": 0.87,
+        "summary": "旧经验解释了正常业务接口访问，但本次另有未覆盖的命令执行及输出，当前证据支持真实攻击。",
+        "decision_evidence_refs": ["EX-E-001", "EX-E-002"],
+        "decision_context_refs": ["EX-M-001"],
+        "reason": (
+            "已审核经验解释了访问业务接口的正常用途，但不能解释当前命令执行及输出。当前记录同时显示执行请求及命令输出，支持攻击行为成立，因此不沿用历史误报结论。依据是当前执行事实，而不是因为找不到完全相同的历史案例就推断存在攻击。"
+        ),
+        "recommended_action": "转交处置，依据当前执行结果核查受影响范围。",
+        "evidence_gaps": [],
+        "manual_checks": [],
+        "conclusion_support": {
+            "context_refs": ["EX-M-001"],
+            "resolved_questions": ["旧经验解释了接口的正常业务用途，但未覆盖本次命令执行。"],
+            "optional_checks": [],
+            "reassessment_triggers": ["取得覆盖该命令执行的有效授权事实时重新研判。"],
+        },
+    }
+)
+_CONTEXT_MEMORY_DIFFERENCE_EXAMPLE["scenario_assessments"][0].update(
+    {
+        "scenario_name": "业务接口访问伴随命令执行",
+        "scenario_key": "service_access_with_command_execution",
+        "confidence": 0.87,
+        "activity_stage": "effect_observed",
+        "evidence_refs": ["EX-E-001", "EX-E-002"],
+        "context_refs": ["EX-M-001"],
+        "rationale": "正常访问解释只适用于接口通信；新增执行结果超出了这段解释，当前事实支持攻击已执行，但不证明更大范围失陷。",
+        "competing_explanations": ["有明确授权覆盖该执行行为时，可支持不同的业务解释。"],
+    }
+)
+_ANALYSIS_OUTPUT_EXAMPLES["context_memory_difference"] = _CONTEXT_MEMORY_DIFFERENCE_EXAMPLE
 
 
 class AnalysisPromptSizeError(ValueError):
@@ -421,10 +468,17 @@ def build_analysis_prompt(request: LLMAnalysisRequest) -> AnalysisPrompt:
         request.evidence_catalog,
         request.context_catalog,
     )
-    context = project_model_reference_aliases(
-        project_analysis_context(request),
-        aliases,
-    )
+    context = project_analysis_context(request)
+    comparisons = {item.context_ref: item.memory_comparison for item in request.context_catalog if item.memory_comparison is not None}
+    for item in context["reference_catalogs"]["reasoning_context"]:
+        if comparison := comparisons.get(item["context_ref"]):
+            differences = _memory_scope_differences(comparison)
+            item["memory_use_explanation"] = (
+                "；".join(differences) + "。请结合对应 E-* 说明具体差异及业务影响；不能直接套用历史结论，也不能仅因匹配差异判定有风险。"
+                if differences
+                else "已审核的机器匹配条件完整满足。经验是否允许程序直接复用仍以 use_mode 和 decision_directive_applicable 为准；模型结合当前证据解释本次结论。"
+            )
+    context = project_model_reference_aliases(context, aliases)
     context["prompt_version"] = ANALYSIS_PROMPT_VERSION
     context["prompt_example_id"] = example_id
     context_chars = len(json.dumps(context, ensure_ascii=False, separators=(",", ":"), default=str))
@@ -452,11 +506,14 @@ def _select_analysis_output_example(request: LLMAnalysisRequest) -> str:
         return "conflicted"
     memory_comparisons = [item.memory_comparison for item in request.context_catalog if item.memory_comparison is not None]
     if memory_comparisons:
+        if any(_memory_scope_differences(item) for item in memory_comparisons):
+            return "context_memory_difference"
         reviewed_verdicts = {item.reviewed_verdict for item in memory_comparisons if item.reviewed_verdict is not None}
         if reviewed_verdicts == {Verdict.TRUE_POSITIVE}:
             return "context_memory_true_positive"
-        if not reviewed_verdicts or reviewed_verdicts == {Verdict.FALSE_POSITIVE}:
+        if reviewed_verdicts == {Verdict.FALSE_POSITIVE}:
             return "context_memory"
+        return "context_memory_difference"
     network = request.canonical_entities.network
     if request.source.source_type in _NETWORK_SOURCE_TYPES or any(
         (
@@ -467,6 +524,22 @@ def _select_analysis_output_example(request: LLMAnalysisRequest) -> str:
     ):
         return "network_roles"
     return "non_network"
+
+
+def _memory_scope_differences(comparison: AnalysisMemoryContextComparison) -> list[str]:
+    """Explain frozen matching results, never recompute relevance or authority."""
+    differences = []
+    if comparison.uncovered_behavior_components:
+        differences.append("当前新增了已审核范围未覆盖的核心行为（uncovered_behavior_components），即使必需条件命中也不等于全部行为相同")
+    if comparison.missing_behavior_components or comparison.missing_required_facet_keys:
+        differences.append("旧经验要求的行为或必需条件未满足（missing_behavior_components / missing_required_facet_keys）")
+    if comparison.missing_reuse_conditions:
+        differences.append("直接复用的附加限制未命中（missing_reuse_conditions）；这本身不否定已经通过检索的业务参考价值")
+    if comparison.excluded_facet_hits:
+        differences.append("命中了经验排除条件（excluded_facet_hits），不得声称处于完整适用范围")
+    if not differences and comparison.applicability_status is not SocMemoryApplicabilityStatus.APPLICABLE:
+        differences.append("确定性比较未确认完整适用；按现有 shared_facets、差异、reason_codes 和业务边界判断，不补称精确匹配")
+    return differences
 
 
 def _system_prompt() -> str:
@@ -560,6 +633,29 @@ def _user_prompt(
 ) -> str:
     example_id = str(context["prompt_example_id"])
     example = _ANALYSIS_OUTPUT_EXAMPLES[example_id]
+    # Repeat only the actual scope differences near the answer contract, not the
+    # full lesson or evidence. Long contexts must not leave synthetic examples last.
+    memory_focus = [
+        {
+            "context_ref": item["context_ref"],
+            **{
+                key: comparison.get(key)
+                for key in (
+                    "use_mode",
+                    "reviewed_verdict",
+                    "applicability_status",
+                    "decision_directive_applicable",
+                    "uncovered_behavior_components",
+                    "missing_behavior_components",
+                    "missing_required_facet_keys",
+                    "missing_reuse_conditions",
+                    "excluded_facet_hits",
+                )
+            },
+        }
+        for item in context.get("reference_catalogs", {}).get("reasoning_context", [])
+        if (comparison := item.get("memory_comparison")) is not None
+    ]
     return "\n".join(
         [
             '<analysis_context trust="untrusted_evidence_data">',
@@ -591,6 +687,13 @@ def _user_prompt(
             "Use only aliases that exist in the current analysis_context catalogs.",
             model_json(example, sort_keys=True),
             "</output_example>",
+            "",
+            '<memory_comparison_focus trust="current_request_data">',
+            model_json(memory_focus, sort_keys=True),
+            "</memory_comparison_focus>",
+            "上面是本次实际经验匹配结果，不是输出示例。它只描述匹配范围，不预设风险结论。",
+            "系统匹配说明由程序根据以上记录生成。reason 只写当前行为的业务意义、经验能解释什么，以及采纳或不采纳结论的证据依据；不要替程序报告匹配状态。",
+            "即使最终与审核结论相同，也只能说经当前证据判断可以采纳，不能把尚未覆盖的检测事件改称已覆盖。",
             "",
             "<response_contract>",
             "Return exactly one JSON object. Do not include markdown fences, comments, preamble, or trailing prose.",
