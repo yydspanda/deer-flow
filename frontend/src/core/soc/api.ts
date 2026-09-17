@@ -36,6 +36,8 @@ import type {
   SocMemoryCandidateListResponse,
   SocMemoryCandidateReviewRequest,
   SocMemoryGovernancePreview,
+  SocMemoryScopeOptions,
+  SocMemoryScopeBoundaries,
   SocVerdict,
   SocMemoryCandidateReviewResult,
   SocMemoryCandidateStatus,
@@ -917,6 +919,81 @@ export async function getSocMemoryCandidate(
     response,
     "Failed to load SOC memory candidate",
   );
+}
+
+export async function getSocMemoryScopeOptions(
+  candidateId: string,
+  params: {
+    facet_key?: string;
+    prefix?: string;
+    search?: string;
+    offset?: number;
+  },
+  context?: SocRequestContext,
+): Promise<SocMemoryScopeOptions> {
+  const query = new URLSearchParams({ limit: "10" });
+  for (const [key, value] of Object.entries(params))
+    if (value !== undefined) query.set(key, String(value));
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}/scope-options?${query}`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocMemoryScopeOptions>(
+    response,
+    "无法加载来源样本中的可选限制",
+  );
+}
+
+export async function getSocMemoryScopeBoundaries(
+  memoryId: string,
+  context?: SocRequestContext,
+): Promise<SocMemoryScopeBoundaries> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/records/${encodeURIComponent(memoryId)}/scope-boundaries`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocMemoryScopeBoundaries>(response, "无法读取细分范围");
+}
+
+export async function releaseSocMemoryScopeBoundary(
+  request: {
+    memory_id: string;
+    expected_version: number;
+    exception_memory_id: string;
+    expected_exception_version: number;
+    reason: string;
+  },
+  context?: SocRequestContext,
+): Promise<SocMemoryRecord> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/records/${encodeURIComponent(request.memory_id)}/scope-boundaries/release`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryRecord>(response, "无法恢复适用范围");
+}
+
+export async function refineSocMemoryScope(
+  request: {
+    candidate_id: string;
+    expected_updated_at: string;
+    promoted_facet_values: Record<string, string[]>;
+    selected_behavior_components?: string[] | null;
+  },
+  context?: SocRequestContext,
+): Promise<SocMemoryCandidate> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(request.candidate_id)}/refinements`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryCandidate>(response, "无法创建细分经验");
 }
 
 export async function previewSocMemoryGovernance(

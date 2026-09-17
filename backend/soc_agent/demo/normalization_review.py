@@ -117,6 +117,8 @@ def build_normalization_review_view(run: AnalysisRun) -> NormalizationReviewView
     elif report.mode == "apply":
         adopted = sum(change.canonical_status == "applied" for change in [*report.changes, *report.observation_changes])
         effect = f"核对完成，已采用 {adopted} 项补充；供后续研判与经验条件构建使用"
+    if report.metadata.get("reused_from_run_id"):
+        effect = "输入与核对配置未变，复用已保存的事实整理结果；本次未再次调用核对模型，经验和策略按当前状态重新匹配"
     usage = report.metadata.get("usage", {})
     tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
     view = NormalizationReviewView(

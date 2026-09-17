@@ -577,10 +577,12 @@ export interface SocMemoryApplicabilitySpec {
   context_only_similarity_facet_keys: string[];
   reuse_conditions?: SocMemoryReuseCondition[];
   selected_behavior_components?: string[] | null;
+  covered_behavior_components?: string[] | null;
   policy_version:
     | "soc.memory_applicability_policy.v1"
     | "soc.memory_applicability_policy.v2"
-    | "soc.memory_applicability_policy.v3";
+    | "soc.memory_applicability_policy.v3"
+    | "soc.memory_applicability_policy.v4";
 }
 
 export interface SocMemoryReuseCondition {
@@ -603,6 +605,8 @@ export interface SocMemoryApplicabilityReport {
   selected_behavior_components?: string[];
   matched_behavior_components?: string[];
   missing_behavior_components?: string[];
+  uncovered_behavior_components?: string[];
+  preferred_memory_ids?: string[];
   excluded_facet_hits: Record<string, string[]>;
   matched_strong_anchor_count: number;
   context_only_allowed: boolean;
@@ -1597,6 +1601,7 @@ export interface SocLeadershipDemoGuide {
 
 export interface SocAnalysisExecutionOptions {
   normalization_review_mode: "off" | "shadow" | "apply";
+  refresh_normalization?: boolean;
   tenant_policy_enabled: boolean;
   tenant_policy_advisor_enabled: boolean;
   tenant_policy_signal_providers_enabled: boolean;
@@ -2175,13 +2180,21 @@ export interface SocMemoryGovernancePreview {
   explanation: string;
   related_count: number;
   source_reason?: string | null;
+  sample_coverage?: Record<string, number>;
+  reviewed_applicability?: SocMemoryApplicabilitySpec | null;
   related_memories: Array<{
     memory_id: string;
     version: number;
     summary: string;
     conclusion: string;
     reviewed_verdict: SocVerdict | null;
-    scope_relation: "same" | "overlap" | "disjoint" | "unknown";
+    scope_relation:
+      | "same"
+      | "overlap"
+      | "disjoint"
+      | "unknown"
+      | "strict_subset"
+      | "strict_superset";
     conclusion_relation: "agrees" | "differs" | "undetermined";
     retrieved_in_source_run: boolean;
     retrieval_enabled: boolean;
@@ -2191,6 +2204,35 @@ export interface SocMemoryGovernancePreview {
       candidate_values: string[];
       memory_values: string[];
     }>;
+  }>;
+}
+
+export interface SocMemoryScopeOptions {
+  groups: Array<{ facet_key: string; value_prefix: string }>;
+  items: Array<{
+    facet_key: string;
+    value_prefix: string;
+    value: string;
+    sample_count: number;
+    from_current_alert: boolean;
+    source_alert_ids: string[];
+  }>;
+  total: number;
+  offset: number;
+  limit: number;
+  source_sample_count: number;
+}
+
+export interface SocMemoryScopeBoundaries {
+  memory_id: string;
+  version: number;
+  active: boolean;
+  exceptions: Array<{
+    memory_id: string;
+    version: number;
+    summary: string;
+    active: boolean;
+    released: boolean;
   }>;
 }
 

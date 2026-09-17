@@ -42,9 +42,17 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > details. Actual failures and material conflicts stay visible; they are not hidden as successful handling.
 > Enabled enterprise rules now run first: a deterministic ignore/transfer match skips model analysis.
 > Otherwise an exact approved Memory override can directly supply the reviewed conclusion; similar
-> Memory remains model context. Results identify the source and skipped model steps without invented
-> confidence. Direct results retain the workbench scope and appear in both the alert list and
+> Memory remains model context. Results identify the source and skipped model steps without invented confidence.
+> Exact reuse now requires reviewed behavior coverage, not just a matching subset. Uncovered behavior
+> goes to model analysis with relevant Memory and explicit differences. A more-specific reviewed scope
+> takes priority even when reference-only; pausing it never silently restores the broad answer.
+> Candidate review supports paged source-entity search, source coverage previews and independent
+> scoped candidates without replacing the original cohort. See the
+> [Memory scope design](.notes/ai_soc/architecture/memory-reuse-scope-remediation.md).
+> Direct results retain the workbench scope and appear in both the alert list and
 > execution trace; early policy-only results can be displayed from their frozen scope without rerunning.
+> Direct Memory reuse also records the factual occurrence, without counting its reused verdict
+> as a new independent confirmation. Policy-only shortcuts remain excluded from sample accumulation.
 > Direct enterprise handling names the matched rule and disposition. Semantic review stays visible
 > as a gray skipped phase when bypassed; audit reads retain the skip reason without inventing a model result.
 > See the [direct-resolution design](.notes/ai_soc/architecture/direct-resolution-design.md)
@@ -98,6 +106,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > before the held-out alert is unlocked. After generation, the candidate view keeps all six final Business Lesson
 > sections visible: conclusion, rationale, boundaries, invalidation conditions, and handling
 > guidance, while clearly separating machine-derived applicability from analyst-owned facts.
+> Unconfirmed review inputs and generated/edited Lessons recover after refresh or return in
+> the same browser tab (up to 24 hours). The cache is isolated by reviewer, tenant and candidate;
+> confirmation, rejection or a changed candidate clears it. It is not shared server storage
+> and never approves or enables Memory automatically.
 > Rejecting a candidate does not permanently suppress that behavior: a new independent
 > aggregation window may qualify for another review. Replays of the rejected window do not
 > duplicate it, and pending or confirmed lessons remain shared across qualifying windows.
@@ -122,8 +134,12 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > each saved run's review mode and matching signature; old shadow reports remain observation-only.
 > Semantic review is prompted to extract readable business addresses from packet content as
 > supplementary facts, keeping per-log attribution without assuming a benign verdict or a new destination.
-> Completed semantic reviews show a checkmark and the adopted supplement count. Review notes
-> remain expandable; the original report and failure details remain available in audit JSON.
+> Completed semantic reviews show a checkmark and the adopted supplement count. Notes and
+> failure details remain expandable in audit JSON. Repeated runs with identical input and review configuration reuse saved
+> semantic facts while evaluating current Memory and policy afresh. Select `重新核对事实` to
+> explicitly regenerate the facts; the new run records the comparison without rewriting history.
+> Detector rule/signature identifiers keep their source and namespace instead of depending on
+> which identifier the model happens to choose.
 > SOC model-bound JSON uses compact serialization for analysis, semantic review, role verification,
 > Business Lesson drafting, tenant advice and repair requests. No facts or string whitespace are
 > removed; audit exports/UI formatting and the upstream DeerFlow framework remain unchanged.

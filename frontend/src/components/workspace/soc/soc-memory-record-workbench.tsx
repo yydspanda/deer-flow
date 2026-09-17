@@ -28,6 +28,7 @@ import { SocMemoryDecisionCapability } from "@/components/workspace/soc/soc-memo
 import { SocMemoryDeprecationAction } from "@/components/workspace/soc/soc-memory-deprecation-action";
 import { SocMemoryPendingRevision } from "@/components/workspace/soc/soc-memory-pending-revision";
 import { SocMemoryScope } from "@/components/workspace/soc/soc-memory-scope";
+import { SocMemoryScopeBoundaries } from "@/components/workspace/soc/soc-memory-scope-boundaries";
 import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useSocMemoryLineage,
@@ -456,6 +457,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                     spec={record.applicability}
                     view={lineage?.scope_view ?? record.scope_view}
                   />
+                  <SocMemoryScopeBoundaries memoryId={record.memory_id} />
                 </div>
               </section>
 

@@ -129,7 +129,7 @@ def test_stale_replacement_version_preserves_both_candidate_and_memory(services)
     assert repository.get_memory_candidate(second.candidate_id).status is SocMemoryCandidateStatus.PENDING_REVIEW
 
 
-def test_another_overlapping_answer_rolls_back_the_entire_replacement(services):
+def test_nested_exception_survives_replacement_of_broad_answer(services):
     from soc_agent.memory.lessons import promote_memory_applicability_facets
 
     service, repository = services
@@ -139,12 +139,10 @@ def test_another_overlapping_answer_rolls_back_the_entire_replacement(services):
     narrowed_spec = promote_memory_applicability_facets(narrower.applicability, [key])
     other = confirm(service, narrower, Verdict.FALSE_POSITIVE, record_applicability=narrowed_spec)
     challenge = candidate(service, 3, Verdict.TRUE_POSITIVE)
-    with pytest.raises(SocServiceConflictError):
-        confirm(service, challenge, Verdict.TRUE_POSITIVE, replaces_memory_id=first.memory_id, expected_replaced_version=first.version)
-    assert repository.get_memory_record(first.memory_id).version == first.version
-    assert repository.get_memory_record(first.memory_id).retrieval_enabled
+    replacement = confirm(service, challenge, Verdict.TRUE_POSITIVE, replaces_memory_id=first.memory_id, expected_replaced_version=first.version)
+    assert not repository.get_memory_record(first.memory_id).retrieval_enabled
     assert repository.get_memory_record(other.memory_id).retrieval_enabled
-    assert repository.get_memory_record_by_candidate_id(challenge.candidate_id) is None
+    assert repository.get_memory_record_by_candidate_id(challenge.candidate_id).memory_id == replacement.memory_id
 
 
 def test_model_suspicion_alone_is_not_a_reviewed_contradiction(services):

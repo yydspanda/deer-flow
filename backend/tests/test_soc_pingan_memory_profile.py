@@ -62,6 +62,13 @@ from soc_agent.normalizers.alert import normalize_alert_payload
 _START = datetime(2026, 8, 15, 1, 0, tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def legacy_feature_mode(monkeypatch):
+    # These fixtures exercise v5 features without semantic assistance. Local DEV
+    # rollout configuration must not silently turn them into v7 request queries.
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", "off")
+
+
 def _context() -> ServiceRequestContext:
     return ServiceRequestContext(
         actor=ActorContext(

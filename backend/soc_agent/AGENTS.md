@@ -80,8 +80,13 @@ file for SOC code. The authoritative product and engineering documents are:
   baselines or missing fingerprints. The rollout flag is default-off; once enabled, every
   supported nonempty selected primary source is reviewed. `NormalizationReviewer` uses a
   distinct `NormalizationAssistRequest` and provider purpose. Persist before invocation;
-  reuse only matching saved recovery results, without charging cached usage again. Explicit
-  replay may run a new measurement. Prompt v7 proposes objects, bound detector events and
+  reuse a matching saved fact review for recovery or same-input service reruns, without
+  charging historical usage/latency again. Match the full input, tenant and versioned request;
+  inspect at most 20 recent runs for that alert. `refresh_normalization=true` explicitly
+  rechecks facts and records before/after hashes. Failed/skipped reviews never seed reuse.
+  This is not a global single-flight cache: concurrent first runs may each call the provider.
+  Rebuild current Memory/policy decisions on every run; never cache a verdict or authority.
+  Prompt v9 proposes objects, bound detector events and
   supplementary facts. Merge into existing canonical observations, not a parallel alert.
   Readable business clues in packet content use existing supplementary facts, not assumed
   connection destinations or benign verdicts. Prompt examples keep cross-log facts under
@@ -93,6 +98,11 @@ file for SOC code. The authoritative product and engineering documents are:
   catalog and source omissions, deduplication and truncation remain visible. Item-level errors
   must not erase valid sibling facts. Existing O* references allow sparse corrections without
   asking the model to copy unchanged fields. Preserve existing IDs/relations and unchanged
+  provenance. Detector identifiers retain kind, source field and value; adapters may declare
+  known source-bound identities. Generic resolution prefers rule, signature, malware then
+  detector; equal-priority ambiguity is not resolved by model order. Vendor field aliases stay
+  in adapters. Existing rule encodings remain readable, other namespaces use explicit prefixes.
+  Preserve all alternate IDs; do not confuse detection IDs with file hashes. Preserve unchanged
   provenance. Event-to-object links cannot cross source IDs; unbound hashes remain supplementary
   facts. File hashes must not move to new paths. `model_input_status=present` checks the exact
   canonical value in the model projection, while matching use remains `not_assessed` until

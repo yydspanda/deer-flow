@@ -73,6 +73,30 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 
 ## Retrieval And Decision Use
 
+- Applicability policy v4 freezes both selected behaviors (required presence) and the
+  complete reviewed behavior coverage. Unchecking a known behavior makes it optional;
+  it does not authorize unreviewed new behaviors. Uncovered current behavior stays
+  context-only with a concrete comparison for the model, never an automatic risk verdict.
+  Query object bindings keep source/destination and process host/account conditions
+  together; an unprovable multi-object match cannot directly reuse a whole-alert verdict.
+- Scope precedence is determined before directive authority and budgets, using proven
+  containment, not score or condition count. Full inventory reads share the governance
+  lock only while loading the snapshot. Previously published narrower scopes remain
+  boundaries after suspension/expiry/deprecation. Restoring a broad answer requires
+  `release_scope_boundary`, both versions and an audited reason; generic metadata cannot
+  grant restoration. No new relational table or unbounded parent-child editor is used.
+- Frozen source observations provide a separate, paged optional-entity directory.
+  The UI does not receive their entire union. Preview, draft and review validate chosen
+  values server-side. Refinement preserves its parent, freezes only covered sources and
+  creates a pending candidate. Lesson drafting must not borrow excluded source narratives.
+- Direct Memory reuse retains a v4 observation with `lesson=None` and
+  `conclusion_origin=memory_reuse`: useful recurrence evidence, never an independent
+  verdict confirmation. Tenant-policy-only direct results still do not create observations.
+  Both DEV Workbenches must forward direct Memory results to the shared Pattern service
+  and expose the persisted observation in trace/audit. Do not blanket-skip direct results
+  in entrypoint or read-side filtering. Historical missing observations stay missing until
+  an explicit subsequent processing action; a read must not backfill them.
+
 - Model-visible reviewed prose preserves the complete business lesson, including tail
   boundaries and invalidation conditions. Compare full facet values before selecting
   bounded comparison items; never compare truncated prefixes. Whole-record retrieval
@@ -130,12 +154,14 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   ephemeral source ports remain occurrence/entity context. Any component-policy change
   requires a feature-schema/Profile bump, fail-closed old records, and a pattern-facet
   projection that stays within the 20-group signature contract.
-  PingAn normalization `apply` selects the opt-in Profile 8 / v6 semantic observation
+  PingAn normalization `apply` selects Profile 9 / v7 semantic observation
   features; `off/shadow` use Profile 7 / v5. The shared Memory kernel does not parse
   detector vendor labels or create semantic facts. Keep old records/indexes untouched;
   the offline corpus index remains an Adapter-only navigation index, not an authority for
   a completed run's Memory scope. Workbench readers use the run's saved review mode and
-  actual signature to select observations; new apply candidates use the actual v6 facets.
+  actual signature to select observations; new apply candidates use the actual v7 facets.
+  New requests freeze `memory_profile`; historical unmarked apply runs use Profile 8 / v6.
+  Restore known historical projectors for read/replay without rewriting or reactivating old Memory.
   Replaying the same alert/signature does not increase support. New semantic signatures
   must not be attached to old observations or silently widen reviewed Memory scopes.
 - Retrieval policy v2 runs exact-facet and text lanes over the complete eligible corpus,

@@ -80,7 +80,10 @@ class SocDirectResolutionService:
         request = run.llm_analysis_request
         if self._environment is not None:
             request = request.model_copy(update={"environment": self._environment})
-        query = memory_query_from_analysis_request(request, profile=self._profiles.resolve_request(request))
+        profile = self._profiles.resolve_request(request)
+        request = request.model_copy(update={"memory_profile": {"profile_id": profile.identity.profile_id, "profile_version": profile.identity.profile_version, "feature_schema_version": profile.identity.feature_schema_version}})
+        run.llm_analysis_request = request
+        query = memory_query_from_analysis_request(request, profile=profile)
         try:
             result = self._memory.find_directive_records(query)
         except Exception as exc:  # noqa: BLE001 - unavailable memory leaves the ordinary analyzer available

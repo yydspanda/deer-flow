@@ -145,6 +145,8 @@ class JsonLLMNormalizationReviewer:
         request.omitted_source_paths = unchecked[:200]
         request.omitted_source_count = len(unchecked)
         request.scope = "selected_evidence_sources" if len(request.sources) > 1 else "selected_primary_evidence"
+        declared = alert.extensions.get("source_detection_identifiers", {})
+        request.source_identifiers = {s.source_id: declared[s.source_path] for s in request.sources if s.source_path in declared}
         omitted_objects = []
         request.object_catalog = build_object_catalog(alert, request.sources, omitted_paths=omitted_objects)
         request.omitted_object_paths = omitted_objects[:200]

@@ -47,6 +47,10 @@ import {
   processSocCorpusWorkbenchAlert,
   promoteSocRunToMemory,
   previewSocMemoryGovernance,
+  getSocMemoryScopeOptions,
+  refineSocMemoryScope,
+  getSocMemoryScopeBoundaries,
+  releaseSocMemoryScopeBoundary,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
@@ -801,6 +805,60 @@ export function useSocMemoryCandidates({
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { candidates: data ?? [], isLoading, isFetching, error, refetch };
+}
+
+export function useSocMemoryScopeOptions(
+  candidateId: string,
+  params: {
+    facet_key?: string;
+    prefix?: string;
+    search?: string;
+    offset?: number;
+  },
+  enabled: boolean,
+) {
+  const context = useSocWebRequestContext();
+  return useQuery({
+    queryKey: [...socMemoryQueryKeys.all, "scope-options", candidateId, params],
+    queryFn: () => getSocMemoryScopeOptions(candidateId, params, context),
+    enabled,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
+}
+
+export function useRefineSocMemoryScope() {
+  const context = useSocWebRequestContext();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (request: Parameters<typeof refineSocMemoryScope>[0]) =>
+      refineSocMemoryScope(request, context),
+    onSuccess: () =>
+      client.invalidateQueries({ queryKey: socMemoryQueryKeys.all }),
+  });
+}
+
+export function useSocMemoryScopeBoundaries(
+  memoryId: string,
+  enabled: boolean,
+) {
+  const context = useSocWebRequestContext();
+  return useQuery({
+    queryKey: [...socMemoryQueryKeys.all, "scope-boundaries", memoryId],
+    queryFn: () => getSocMemoryScopeBoundaries(memoryId, context),
+    enabled,
+  });
+}
+
+export function useReleaseSocMemoryScopeBoundary() {
+  const context = useSocWebRequestContext();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      request: Parameters<typeof releaseSocMemoryScopeBoundary>[0],
+    ) => releaseSocMemoryScopeBoundary(request, context),
+    onSuccess: () =>
+      client.invalidateQueries({ queryKey: socMemoryQueryKeys.all }),
+  });
 }
 
 export function useSocMemoryGovernancePreview(

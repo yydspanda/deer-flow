@@ -1,4 +1,4 @@
-"""Opt-in v6 features from canonical observations, never vendor raw aliases."""
+"""Versioned semantic features from canonical observations and bound subjects."""
 
 import re
 from pathlib import PurePosixPath, PureWindowsPath
@@ -32,32 +32,48 @@ def _subject(entities, path):
         return None
 
 
-def semantic_behavior_components(request: LLMAnalysisRequest) -> tuple[list[str], list[str]]:
+def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = False) -> tuple[list[str], list[str]]:
     entities = request.canonical_entities
     components, strong = set(), set()
     for detection in entities.detections:
-        subjects = [_subject(entities, ref) for ref in detection.subject_refs]
-        subjects = [s for s in subjects if s is not None]
+        if detection.identity_basis == "ambiguous":
+            continue
+        subjects = [(ref.split(".")[1], _subject(entities, ref)) for ref in detection.subject_refs]
+        subjects = [(kind, s) for kind, s in subjects if s is not None]
         if not subjects:
             continue
         label = ":".join([detection.kind, (detection.category or "").casefold(), detection.name.casefold()])
         label = re.sub(r"\s+", "_", label)[:512]
-        for subject in subjects:
+        for subject_kind, subject in subjects:
             binding = None
-            if detection.kind == "file_detection" and (leaf := _leaf(subject.get("file_path") or subject.get("file_name"))):
+            kind = {"file": "file_detection", "network": "network_access", "process": "process_execution", "http": "web_detection"}.get(subject_kind, detection.kind) if stable else detection.kind
+            if kind == "file_detection" and (leaf := _leaf(subject.get("file_path") or subject.get("file_name"))):
                 components.add("detected_file:" + leaf)
                 binding = "file:" + leaf
-            elif detection.kind == "network_access" and subject.get("dst_port"):
-                components.add("target_port:" + str(subject["dst_port"]))
-                binding = "port:" + str(subject["dst_port"])
-            elif detection.kind == "process_execution" and (subject.get("nodes") or subject.get("process_name")):
+            elif kind == "network_access" and subject.get("dst_port"):
+                if stable:
+                    binding = "service:" + str(subject.get("protocol") or "unknown").casefold() + "/" + str(subject["dst_port"])
+                else:
+                    components.add("target_port:" + str(subject["dst_port"]))
+                    binding = "port:" + str(subject["dst_port"])
+            elif kind == "process_execution" and (subject.get("nodes") or subject.get("process_name")):
                 node = subject["nodes"][-1] if subject.get("nodes") else subject
                 binding = "process:" + (_leaf(node.get("process_path") or node.get("process_name")) or "unknown")
-            elif detection.kind == "web_detection" and subject.get("host"):
+            elif kind == "web_detection" and subject.get("host"):
                 components.add("web_detection_target")
                 binding = "http:" + str(subject.get("method") or "unknown").casefold()
             if binding:
-                anchor = "detected_behavior:" + label + "@" + binding
+                identity = label
+                if stable:
+                    # Vendor IDs are scoped by product/source. Without one keep
+                    # the original label; do not invent cross-language aliases.
+                    source = getattr(request, "source", None)
+                    namespace = str(getattr(source, "source_system", None) or "unknown") + ":" + str(getattr(source, "product", None) or "unknown")
+                    detector = "id:" + detection.detector_id if detection.detector_id else (detection.category or "") + ":" + detection.name
+                    if subject_kind == "file" and detection.detector_id:
+                        detector += ":" + (detection.category or "") + ":" + detection.name
+                    identity = re.sub(r"\s+", "_", f"{subject_kind}:{namespace}:{detector}".casefold())
+                anchor = "detected_behavior:" + identity + "@" + binding
                 components.add(anchor)
                 strong.add(anchor)
     # Each observation retains its own ancestry; never join different trees here.
@@ -73,3 +89,22 @@ def semantic_behavior_components(request: LLMAnalysisRequest) -> tuple[list[str]
             if parent and leaf:
                 components.add(f"observed_process_edge:{parent}>{leaf}")
     return sorted(components), sorted(strong)
+
+
+def semantic_projection_gaps(request: LLMAnalysisRequest) -> list[str]:
+    gaps = []
+    for index, detection in enumerate(request.canonical_entities.detections):
+        if detection.identity_basis == "ambiguous":
+            gaps.append(f"entities.detections[{index}]:detector_identity_ambiguous")
+        for ref in detection.subject_refs or [""]:
+            subject = _subject(request.canonical_entities, ref)
+            kind = ref.split(".")[1] if "." in ref else None
+            supported = subject and (
+                (kind == "file" and (subject.get("file_path") or subject.get("file_name")))
+                or (kind == "network" and subject.get("dst_port"))
+                or (kind == "process" and (subject.get("nodes") or subject.get("process_name")))
+                or (kind == "http" and subject.get("host"))
+            )
+            if not supported:
+                gaps.append(f"entities.detections[{index}]:subject_not_projected:{ref or 'unbound'}")
+    return gaps

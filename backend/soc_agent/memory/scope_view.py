@@ -14,6 +14,12 @@ def build_memory_scope_view(
     if spec is None:
         return None
     profile = registry.get(spec.profile_id)
+    restore = getattr(profile, "for_identity", None)
+    if callable(restore):
+        try:
+            profile = restore({"profile_id": spec.profile_id, "profile_version": spec.profile_version, "feature_schema_version": spec.feature_schema_version})
+        except ValueError:
+            profile = None
     details: dict[str, dict[str, list[str]]] = {}
     explain = getattr(profile, "explain_scope_facets", None)
     if profile and callable(explain) and profile.identity.profile_version == spec.profile_version and profile.identity.feature_schema_version == spec.feature_schema_version:

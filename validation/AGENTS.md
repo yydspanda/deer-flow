@@ -37,6 +37,12 @@ sensitive, gitignored evidence and must never become application imports.
 
 ## Canonical Workflows
 
+- `compact_zeus/audits/memory_scope_coverage.py` reads frozen successful apply runs
+  through SQLite `mode=ro` and compares the historical/current PingAn projections.
+  Its reference scope is synthetic, not an approved Memory. It never submits alerts,
+  invokes models, or changes operational records; matching structure is not accuracy.
+  Keep the generated report in ignored validation storage with source-request hashes.
+
 - `normalization_workbench_review.py` submits up to ten explicitly approved alerts to
   the loopback DEV Workbench in shadow mode. These are real operational DEV runs;
   the frozen supplements are applied only in a separate offline consumer comparison.

@@ -36,6 +36,7 @@ def scope_identity(item: SocMemoryCandidate | SocMemoryCandidateCreateCommand) -
             "profile": [spec.profile_id, spec.profile_version, spec.feature_schema_version],
             "required": required_scope(spec),
             **({"selected_behavior_components": sorted(set(spec.selected_behavior_components))} if spec.selected_behavior_components is not None else {}),
+            **({"covered_behavior_components": sorted(set(spec.covered_behavior_components))} if spec.covered_behavior_components is not None else {}),
             "optional": normalized_facets(spec.optional_facets) if spec.minimum_optional_matches else {},
             "minimum_optional_matches": spec.minimum_optional_matches,
             "minimum_strong_anchor_matches": spec.minimum_strong_anchor_matches,
@@ -50,8 +51,12 @@ def scope_relation(left: SocMemoryApplicabilitySpec | None, right: SocMemoryAppl
     if left is None or right is None:
         return "unknown"
     if (left.profile_id, left.profile_version, left.feature_schema_version) != (right.profile_id, right.profile_version, right.feature_schema_version):
-        return "disjoint"
+        return "unknown"
     a, b = required_scope(left), required_scope(right)
+    if (right.covered_behavior_components is not None and not set(left.selected_behavior_components or []) <= set(right.covered_behavior_components)) or (
+        left.covered_behavior_components is not None and not set(right.selected_behavior_components or []) <= set(left.covered_behavior_components)
+    ):
+        return "disjoint"
     ax, bx = normalized_facets(left.excluded_facets), normalized_facets(right.excluded_facets)
     profile = registry.get(left.profile_id)
     # Only a Profile can promise a facet has one value per alert. Entity lists cannot.
@@ -65,14 +70,83 @@ def scope_relation(left: SocMemoryApplicabilitySpec | None, right: SocMemoryAppl
     if (
         a == b
         and ax == bx
-        and left.selected_behavior_components == right.selected_behavior_components
+        and set(left.selected_behavior_components or []) == set(right.selected_behavior_components or [])
+        and left.covered_behavior_components == right.covered_behavior_components
         and reuse_conditions(left) == reuse_conditions(right)
         and left.minimum_optional_matches == right.minimum_optional_matches
         and left.minimum_strong_anchor_matches == right.minimum_strong_anchor_matches
     ):
         if not left.minimum_optional_matches or normalized_facets(left.optional_facets) == normalized_facets(right.optional_facets):
             return "same"
+    if _scope_implies(left, right):
+        return "strict_subset"
+    if _scope_implies(right, left):
+        return "strict_superset"
     return "overlap"
+
+
+def _scope_implies(narrow: SocMemoryApplicabilitySpec, broad: SocMemoryApplicabilitySpec) -> bool:
+    """Prove containment of AND/OR constraints; never infer it from a score."""
+    if narrow.minimum_optional_matches != broad.minimum_optional_matches or narrow.minimum_strong_anchor_matches != broad.minimum_strong_anchor_matches:
+        return False
+    if narrow.minimum_optional_matches and normalized_facets(narrow.optional_facets) != normalized_facets(broad.optional_facets):
+        return False
+    for tighter, wider in ((required_scope(narrow), required_scope(broad)), (reuse_conditions(narrow), reuse_conditions(broad))):
+        if any(not tighter.get(key) or not set(tighter[key]) <= set(values) for key, values in wider.items()):
+            return False
+    if not set(broad.selected_behavior_components or []) <= set(narrow.selected_behavior_components or []):
+        return False
+    if broad.covered_behavior_components is not None:
+        if narrow.covered_behavior_components is None or not set(narrow.covered_behavior_components) <= set(broad.covered_behavior_components):
+            return False
+    a, b = normalized_facets(narrow.excluded_facets), normalized_facets(broad.excluded_facets)
+    return all(set(values) <= set(a.get(key, [])) for key, values in b.items())
+
+
+def prefer_specific_matches(matches, registry: SocMemoryProfileRegistry, *, published_scopes=(), query=None):
+    """Select scope before authority, including a narrower reference-only lesson."""
+    from soc_agent.contracts import SocMemoryApplicabilityStatus
+    from soc_agent.memory.scoring import evaluate_memory_applicability
+
+    exact = [m for m in matches if m.applicability_report and m.applicability_report.status is SocMemoryApplicabilityStatus.APPLICABLE]
+    result = []
+    for match in matches:
+        preferred = [m.memory_id for m in exact if m.memory_id != match.memory_id and scope_relation(m.record.applicability, match.record.applicability, registry) == "strict_subset"]
+        if query is not None:
+            for record in published_scopes:
+                if record.memory_id == match.memory_id or not record.retrieval_updated_at or not record.retrieval_policy_version:
+                    continue
+                if boundary_released(match.record, record):
+                    continue
+                # A suspended/expired exception is not permission to restore the
+                # broader answer. Historical publication remains a scope boundary.
+                if scope_relation(record.applicability, match.record.applicability, registry) == "strict_subset":
+                    report = evaluate_memory_applicability(record, query, {})
+                    uncertain_binding = not report.missing_reuse_conditions and bool({"reuse_object_scope_not_covered", "behavior_projection_incomplete"} & set(report.reason_codes))
+                    if report.status is SocMemoryApplicabilityStatus.APPLICABLE or uncertain_binding:
+                        preferred.append(record.memory_id)
+        if preferred and match in exact:
+            report = match.applicability_report.model_copy(
+                update={
+                    "status": SocMemoryApplicabilityStatus.PARTIAL,
+                    "context_only_allowed": True,
+                    "preferred_memory_ids": sorted(set(preferred)),
+                    "reason_codes": [*match.applicability_report.reason_codes, "more_specific_reviewed_scope"],
+                }
+            )
+            match = match.model_copy(update={"applicability_report": report})
+        result.append(match)
+    return result
+
+
+def boundary_released(parent: SocMemoryRecord, exception: SocMemoryRecord) -> bool:
+    releases = parent.metadata.get("scope_boundary_releases", {})
+    released = releases.get(exception.memory_id) if isinstance(releases, dict) else None
+    return isinstance(released, dict) and released.get("version") == exception.version and released.get("scope_hash") == stable_hash(exception.applicability.model_dump(mode="json") if exception.applicability else None)
+
+
+def active_record(record: SocMemoryRecord, now: datetime) -> bool:
+    return record.status is SocMemoryRecordStatus.CONFIRMED and record.retrieval_enabled and record.validity.valid_from <= now and validity_overlaps(record, valid_from=now, valid_until=None)
 
 
 def governed_records(repository: MemoryRecordRepository, tenant_id: str | None, *, enabled_only: bool = False) -> Iterator[SocMemoryRecord]:
@@ -115,6 +189,10 @@ def preview_governance(candidate: SocMemoryCandidate, records: list[SocMemoryRec
             a["selected_behavior_components"] = candidate.applicability.selected_behavior_components
         if record.applicability and record.applicability.selected_behavior_components is not None:
             b["selected_behavior_components"] = record.applicability.selected_behavior_components
+        if candidate.applicability and candidate.applicability.covered_behavior_components is not None:
+            a["covered_behavior_components"] = candidate.applicability.covered_behavior_components
+        if record.applicability and record.applicability.covered_behavior_components is not None:
+            b["covered_behavior_components"] = record.applicability.covered_behavior_components
         differences = [
             MemoryScopeDifference(facet=key, candidate_values=a.get(key, []), memory_values=b.get(key, [])) for key in sorted(set(a) | set(b)) if normalized_facets({key: a.get(key, [])}) != normalized_facets({key: b.get(key, [])})
         ]
@@ -143,6 +221,8 @@ def preview_governance(candidate: SocMemoryCandidate, records: list[SocMemoryRec
         recommendation, explanation = "reinforce", "相同适用范围已有一致的审核结论。优先补充原经验；有新增业务知识时，可在此确认修订。"
     elif any(item.scope_relation in {"same", "overlap", "unknown"} for item in related):
         recommendation, explanation = "inspect", "已有相关经验。可疑或转交建议不是已确认的相反事实，请结合本次业务事实确定是否需要修订。"
+    elif any(item.scope_relation in {"strict_subset", "strict_superset"} for item in related):
+        recommendation, explanation = "distinguish", "存在宽窄范围关系：完全符合细分范围时，优先使用更具体的经验；即使它仅供参考，也不会被宽经验直接接管。其余告警仍按各自适用范围处理。"
     elif related:
         recommendation, explanation = "distinguish", "相关经验的精确适用范围不同，可以保留分别适用的结论；请在业务描述中解释这些差异。"
     else:

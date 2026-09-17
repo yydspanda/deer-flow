@@ -276,7 +276,12 @@ def memory_pattern_command_from_run(
         )
     except ValueError as exc:
         raise MemoryPatternIneligibleError(str(exc)) from exc
-    lesson = _lesson_from_run(run)
+    from soc_agent.memory.scope_bindings import scope_bindings
+
+    gap_projector = getattr(resolved_profile, "projection_gaps", None)
+    signature = signature.model_copy(update={"scope_bindings": scope_bindings(request), "projection_gaps": gap_projector(request) if gap_projector else []})
+    reused = run.direct_resolution is not None and run.direct_resolution.source_kind == "memory"
+    lesson = None if reused else _lesson_from_run(run)
     input_identity = run.input_hash or stable_hash({"tenant_id": tenant_id, "alert_id": run.alert_id})
     source_id = stable_hash(
         {
@@ -329,6 +334,7 @@ def memory_pattern_command_from_run(
         lesson=lesson,
         evidence_refs=list(dict.fromkeys(evidence_refs)),
         metadata={
+            **({"conclusion_origin": "memory_reuse", "reused_memory_id": run.direct_resolution.source_id} if reused else {}),
             **(source_metadata or {}),
             "pipeline_version": run.pipeline_version,
             "model_name": run.model_name,
@@ -394,6 +400,10 @@ def _common_facets(
             "environment",
             "scenario_key",
             "behavior_component",
+            "behavior_component_core",
+            "network_service",
+            "vulnerability_id",
+            "attack_behavior_family",
             "behavior_component_strong",
             "behavior_component_weak",
             "behavior_fingerprint",

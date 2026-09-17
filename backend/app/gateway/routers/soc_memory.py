@@ -56,8 +56,8 @@ from soc_agent.contracts import (
     SocMemoryRunPromotionResult,
     Verdict,
 )
-from soc_agent.contracts.memory_governance import MemoryGovernancePreview
-from soc_agent.contracts.memory_scope import MemoryScopeView
+from soc_agent.contracts.memory_governance import MemoryGovernancePreview, MemoryScopeBoundaries, MemoryScopeBoundaryReleaseCommand, MemoryScopeRefinementCommand
+from soc_agent.contracts.memory_scope import MemoryScopeView, MemorySourceScopeOptions
 from soc_agent.core import (
     SocMemoryCenterService,
     SocMemoryEvolutionError,
@@ -137,7 +137,7 @@ class MemoryGovernancePreviewRequest(BaseModel):
     reviewer_verdict: Verdict | None = None
     promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
     promoted_facet_values: dict[str, list[str]] = Field(default_factory=dict, max_length=20)
-    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=40)
+    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=100)
 
 
 class MemoryCandidateReviewRequest(BaseModel):
@@ -180,7 +180,7 @@ class MemoryBusinessLessonDraftRequest(BaseModel):
     reviewer_context: str | None = Field(default=None, max_length=4000)
     promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
     promoted_facet_values: dict[str, list[str]] = Field(default_factory=dict, max_length=20)
-    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=40)
+    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=100)
 
     @field_validator("promoted_facet_keys")
     @classmethod
@@ -452,6 +452,49 @@ def promote_run_to_memory_candidate(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/records/{memory_id}/scope-boundaries", response_model=MemoryScopeBoundaries)
+def get_memory_scope_boundaries(memory_id: str, service: MemoryServiceDep) -> MemoryScopeBoundaries:
+    try:
+        return service.scope_boundaries(memory_id)
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/records/{memory_id}/scope-boundaries/release", response_model=SocMemoryRecord)
+def release_memory_scope_boundary(memory_id: str, payload: MemoryScopeBoundaryReleaseCommand, request: Request, service: MemoryServiceDep) -> SocMemoryRecord:
+    if memory_id != payload.memory_id:
+        raise HTTPException(status_code=422, detail="经验编号不一致")
+    context = soc_service_context_from_request(request, include_soc_roles=True)
+    if context.idempotency_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
+    try:
+        return service.release_scope_boundary(payload, context=context)
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/candidates/{candidate_id}/scope-options", response_model=MemorySourceScopeOptions)
+def get_memory_candidate_scope_options(
+    candidate_id: str,
+    service: MemoryServiceDep,
+    facet_key: str | None = Query(default=None, pattern="^(entity|role_entity)$"),
+    prefix: str | None = Query(default=None, max_length=40),
+    search: str = Query(default="", max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=50),
+) -> dict:
+    try:
+        return service.candidate_scope_options(candidate_id, facet_key=facet_key, prefix=prefix, search=search, offset=offset, limit=limit)
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/candidates/{candidate_id}/governance-preview", response_model=MemoryGovernancePreview)
 def preview_memory_candidate_governance(candidate_id: str, payload: MemoryGovernancePreviewRequest, service: MemoryServiceDep) -> MemoryGovernancePreview:
     try:
@@ -462,6 +505,27 @@ def preview_memory_candidate_governance(candidate_id: str, payload: MemoryGovern
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/candidates/{candidate_id}/refinements", response_model=SocMemoryCandidate)
+def refine_memory_candidate_scope(candidate_id: str, payload: MemoryScopeRefinementCommand, request: Request, service: MemoryServiceDep) -> SocMemoryCandidate:
+    if candidate_id != payload.candidate_id:
+        raise HTTPException(status_code=422, detail="候选编号不一致")
+    context = soc_service_context_from_request(request, include_soc_roles=True)
+    if context.idempotency_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
+    try:
+        return service.refine_candidate_scope(payload, context=context)
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

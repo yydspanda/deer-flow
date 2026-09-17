@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .schemas import (
     DecisionEvidenceState,
     SocMemoryCandidate,
+    SocMemoryScopeBinding,
     TriageActivityStage,
     Verdict,
 )
@@ -122,6 +123,8 @@ class MemoryPatternSignature(BaseModel):
     label: str = Field(min_length=1, max_length=512)
     origin: str = Field(min_length=1, max_length=128)
     facets: dict[str, list[str]] = Field(default_factory=dict)
+    scope_bindings: list[SocMemoryScopeBinding] = Field(default_factory=list)
+    projection_gaps: list[str] = Field(default_factory=list)
 
     @field_validator("value", "label", "origin")
     @classmethod
@@ -144,7 +147,7 @@ class MemoryPatternSignature(BaseModel):
             cleaned = [" ".join(value.split()) for value in values]
             if any(not value or len(value) > 512 for value in cleaned):
                 raise ValueError("memory pattern facet values must be 1-512 characters")
-            normalized[facet_key] = list(dict.fromkeys(cleaned))[:20]
+            normalized[facet_key] = list(dict.fromkeys(cleaned))[: 100 if key in {"behavior_component", "behavior_component_core"} else 20]
         return normalized
 
 
@@ -217,7 +220,7 @@ class MemoryPatternObservationCreateCommand(BaseModel):
     occurrence_key: str = Field(pattern=r"^[0-9a-f]{64}$")
     source: MemoryPatternSourceRef
     signature: MemoryPatternSignature
-    lesson: MemoryPatternLessonObservation
+    lesson: MemoryPatternLessonObservation | None = None
     evidence_refs: list[str] = Field(min_length=1, max_length=200)
     metadata: dict[str, str] = Field(default_factory=dict)
 
@@ -255,6 +258,7 @@ class MemoryPatternObservation(BaseModel):
         "soc.memory_pattern_observation.v1",
         "soc.memory_pattern_observation.v2",
         "soc.memory_pattern_observation.v3",
+        "soc.memory_pattern_observation.v4",
     ] = "soc.memory_pattern_observation.v3"
     observation_id: str = Field(default_factory=lambda: f"MPO-{uuid4().hex[:12].upper()}")
     idempotency_key: str = Field(min_length=1, max_length=512)
@@ -305,8 +309,11 @@ class MemoryPatternObservation(BaseModel):
             "soc.memory_pattern_aggregation.v2",
             MEMORY_PATTERN_AGGREGATION_POLICY_VERSION,
         }
-        if requires_lesson and self.lesson is None:
+        neutral_reuse = self.schema_version == "soc.memory_pattern_observation.v4" and self.metadata.get("conclusion_origin") == "memory_reuse"
+        if requires_lesson and self.lesson is None and not neutral_reuse:
             raise ValueError("v2 memory pattern observations require a lesson snapshot")
+        if self.lesson is not None and neutral_reuse:
+            raise ValueError("reused conclusions cannot become independent lesson observations")
         return self
 
 

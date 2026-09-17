@@ -1179,18 +1179,25 @@ test("per-run settings travel with each alert and survive page reload", async ({
   ).toBeChecked();
   await advisorLabel.click();
   await expect(advisorSwitch).toBeChecked();
+  const refreshFacts = controls.getByRole("checkbox", { name: "重新核对事实" });
+  await expect(refreshFacts).not.toBeChecked();
+  await refreshFacts.check();
   await page
     .locator('[data-alert-id="1984426"]')
     .getByRole("button", { name: "运行", exact: true })
     .click();
   await expect.poll(() => submitted.length).toBe(1);
-  expect(submitted[0]).toEqual({ settings: defaults });
+  expect(submitted[0]).toEqual({
+    settings: { ...defaults, refresh_normalization: true },
+  });
   await controls
     .getByRole("switch", { name: "企业策略", exact: true })
     .uncheck();
   await controls
     .getByRole("switch", { name: "语义核对", exact: true })
     .uncheck();
+  await expect(refreshFacts).toBeDisabled();
+  await expect(refreshFacts).not.toBeChecked();
   const savedSettings = page.locator('[aria-label="本次运行配置"]');
   await expect(savedSettings).toContainText("企业策略：开启");
   await expect(savedSettings).toContainText("语义核对：开启");
@@ -1215,7 +1222,9 @@ test("per-run settings travel with each alert and survive page reload", async ({
       tenant_policy_signal_providers_enabled: false,
     },
   });
-  expect(submitted[0]).toEqual({ settings: defaults });
+  expect(submitted[0]).toEqual({
+    settings: { ...defaults, refresh_normalization: true },
+  });
   await page.reload();
   await expect(
     controls.getByRole("switch", { name: "企业策略", exact: true }),

@@ -492,15 +492,16 @@ class SocMemoryApplicabilitySpec(BaseModel):
     optional_facets: dict[str, list[str]] = Field(default_factory=dict)
     excluded_facets: dict[str, list[str]] = Field(default_factory=dict)
     reuse_conditions: list[SocMemoryReuseCondition] = Field(default_factory=list, max_length=40)
-    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=40)
+    selected_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    covered_behavior_components: list[str] | None = Field(default=None, min_length=1, max_length=100)
     minimum_optional_matches: int = Field(default=0, ge=0, le=20)
     minimum_strong_anchor_matches: int = Field(default=1, ge=1, le=20)
     context_only_required_facet_keys: list[str] = Field(default_factory=list, max_length=20)
     context_only_missing_facet_keys: list[str] = Field(default_factory=list, max_length=20)
     context_only_similarity_facet_keys: list[str] = Field(default_factory=list, max_length=20)
-    policy_version: Literal["soc.memory_applicability_policy.v1", "soc.memory_applicability_policy.v2", "soc.memory_applicability_policy.v3"] = "soc.memory_applicability_policy.v1"
+    policy_version: Literal["soc.memory_applicability_policy.v1", "soc.memory_applicability_policy.v2", "soc.memory_applicability_policy.v3", "soc.memory_applicability_policy.v4"] = "soc.memory_applicability_policy.v1"
 
-    @field_validator("selected_behavior_components")
+    @field_validator("selected_behavior_components", "covered_behavior_components")
     @classmethod
     def normalize_selected_behavior(cls, values: list[str] | None) -> list[str] | None:
         if values is None:
@@ -524,7 +525,7 @@ class SocMemoryApplicabilitySpec(BaseModel):
             values = sorted({str(value).strip() for value in raw_values if str(value).strip()})
             if not values or any(len(value) > 512 for value in values):
                 raise ValueError("memory applicability facet values must be 1-512 characters")
-            normalized[key] = values[:20]
+            normalized[key] = values[: 100 if key in {"behavior_component", "behavior_component_core", "entity", "role_entity"} else 20]
         return normalized
 
     @field_validator(
@@ -541,10 +542,17 @@ class SocMemoryApplicabilitySpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_applicability_shape(self) -> SocMemoryApplicabilitySpec:
-        if self.reuse_conditions and self.policy_version not in {"soc.memory_applicability_policy.v2", "soc.memory_applicability_policy.v3"}:
+        if self.reuse_conditions and self.policy_version not in {"soc.memory_applicability_policy.v2", "soc.memory_applicability_policy.v3", "soc.memory_applicability_policy.v4"}:
             raise ValueError("reuse conditions require applicability policy v2")
-        if self.selected_behavior_components is not None and (self.policy_version != "soc.memory_applicability_policy.v3" or not self.required_facets.get("behavior_fingerprint")):
+        if self.selected_behavior_components is not None and (self.policy_version not in {"soc.memory_applicability_policy.v3", "soc.memory_applicability_policy.v4"} or not self.required_facets.get("behavior_fingerprint")):
             raise ValueError("selected behaviors require policy v3 and a source fingerprint")
+        if self.policy_version == "soc.memory_applicability_policy.v4":
+            if not self.covered_behavior_components or not self.selected_behavior_components:
+                raise ValueError("policy v4 requires reviewed behavior coverage and selected behaviors")
+            if not set(self.selected_behavior_components) <= set(self.covered_behavior_components):
+                raise ValueError("selected behaviors must be within reviewed coverage")
+        elif self.covered_behavior_components is not None:
+            raise ValueError("reviewed coverage requires policy v4")
         keys = [item.condition_key for item in self.reuse_conditions]
         if len(keys) != len(set(keys)):
             raise ValueError("reuse condition groups must be unique")
@@ -589,6 +597,8 @@ class SocMemoryApplicabilityReport(BaseModel):
     selected_behavior_components: list[str] = Field(default_factory=list)
     matched_behavior_components: list[str] = Field(default_factory=list)
     missing_behavior_components: list[str] = Field(default_factory=list)
+    uncovered_behavior_components: list[str] = Field(default_factory=list)
+    preferred_memory_ids: list[str] = Field(default_factory=list)
     excluded_facet_hits: dict[str, list[str]] = Field(default_factory=dict)
     matched_strong_anchor_count: int = Field(default=0, ge=0)
     context_only_allowed: bool = False
@@ -611,8 +621,10 @@ class AnalysisMemoryContextComparison(BaseModel):
     applicability_status: SocMemoryApplicabilityStatus | None = None
     reviewed_verdict: Verdict | None = None
     decision_directive_applicable: bool = False
-    selected_behavior_components: list[str] = Field(default_factory=list, max_length=40)
-    missing_behavior_components: list[str] = Field(default_factory=list, max_length=40)
+    selected_behavior_components: list[str] = Field(default_factory=list, max_length=100)
+    missing_behavior_components: list[str] = Field(default_factory=list, max_length=100)
+    uncovered_behavior_components: list[str] = Field(default_factory=list, max_length=100)
+    applicability_explanation: str | None = Field(default=None, max_length=2000)
     shared_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
     current_only_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
     memory_only_facets: dict[str, list[str]] = Field(default_factory=dict, max_length=30)
@@ -644,7 +656,7 @@ class AnalysisMemoryContextExclusion(BaseModel):
     record_facets_hash: str | None = None
     memory_comparison: AnalysisMemoryContextComparison
     preferred_source_ids: list[str] = Field(min_length=1, max_length=100)
-    reason_code: Literal["opposing_partial_superseded_by_exact"] = "opposing_partial_superseded_by_exact"
+    reason_code: Literal["opposing_partial_superseded_by_exact", "broader_scope_superseded"] = "opposing_partial_superseded_by_exact"
     explanation: str = Field(min_length=1, max_length=1000)
 
 
@@ -2303,6 +2315,14 @@ class SocMemoryRetrievalActivationResult(BaseModel):
     changed_at: datetime = Field(default_factory=utc_now)
 
 
+class SocMemoryScopeBinding(BaseModel):
+    """Entity values from one canonical event, never a cross-event union."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_ref: str = Field(min_length=1, max_length=512)
+    facets: dict[str, list[str]] = Field(default_factory=dict)
+
+
 class SocMemoryQuery(BaseModel):
     """Retrieval query for confirmed SOC memory records.
 
@@ -2312,6 +2332,8 @@ class SocMemoryQuery(BaseModel):
     """
 
     schema_version: Literal["soc.memory_query.v2"] = "soc.memory_query.v2"
+    scope_bindings: list[SocMemoryScopeBinding] = Field(default_factory=list)
+    projection_gaps: list[str] = Field(default_factory=list)
     policy_version: Literal[
         "soc.memory_retrieval_policy.v1",
         "soc.memory_retrieval_policy.v2",
@@ -3981,6 +4003,7 @@ class NormalizationAssistRequest(BaseModel):
     adapter_snapshot_hash: str = ""
     sources: list[NormalizationSource] = Field(default_factory=list, max_length=8)
     object_catalog: dict[str, dict] = Field(default_factory=dict, max_length=40)
+    source_identifiers: dict[str, list[dict[str, str]]] = Field(default_factory=dict, max_length=8)
 
 
 class NormalizationFactChange(BaseModel):
@@ -4048,6 +4071,7 @@ class LLMAnalysisRequest(BaseModel):
     alert_id: str
     tenant_id: str | None = None
     environment: str | None = Field(default=None, max_length=128)
+    memory_profile: dict[str, str] = Field(default_factory=dict, max_length=3)
     source: AlertSourceRef = Field(default_factory=AlertSourceRef)
     detection: DetectionRuleRef = Field(default_factory=DetectionRuleRef)
     classification: AlertClassification = Field(default_factory=AlertClassification)

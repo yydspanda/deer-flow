@@ -432,7 +432,7 @@ class SocMemoryWorkbenchService:
             copy.deepcopy(case.payload),
             context=request_context,
         )
-        if run.status is AnalysisRunStatus.FAILED or run.direct_resolution is not None:
+        if run.status is AnalysisRunStatus.FAILED or (run.direct_resolution is not None and run.direct_resolution.source_kind != "memory"):
             state = self.get_state()
             return SocMemoryWorkbenchProcessResult(
                 alert_id=alert_id,

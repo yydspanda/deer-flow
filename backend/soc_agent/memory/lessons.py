@@ -139,7 +139,11 @@ def promote_memory_applicability_facets(
         {
             **applicability.model_dump(),
             "reuse_conditions": [conditions[key] for key in sorted(conditions)],
-            "policy_version": "soc.memory_applicability_policy.v3" if applicability.selected_behavior_components is not None else "soc.memory_applicability_policy.v2",
+            "policy_version": "soc.memory_applicability_policy.v4"
+            if applicability.covered_behavior_components is not None
+            else "soc.memory_applicability_policy.v3"
+            if applicability.selected_behavior_components is not None
+            else "soc.memory_applicability_policy.v2",
         }
     )
 

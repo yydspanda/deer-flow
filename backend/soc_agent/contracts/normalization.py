@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ObjectKind = Literal["host", "user", "container", "process", "file", "network", "http"]
 EventKind = Literal["file_detection", "process_execution", "network_access", "web_detection", "configuration_detection", "statistical_detection", "other_detection"]
@@ -18,6 +18,21 @@ class SourceQuote(BaseModel):
     quote_start: int | None = Field(default=None, ge=0)
 
 
+class DetectionIdentifier(BaseModel):
+    """Identifier namespace within one source-bound detection, never a file hash."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["rule", "signature", "malware", "detector"]
+    source_field: str = Field(min_length=1, max_length=256)
+    value: str = Field(min_length=1, max_length=256)
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def stringify_numeric_identifier(cls, value):
+        return str(value) if isinstance(value, int) and not isinstance(value, bool) else value
+
+
 class NormalizationObjectProposal(SourceQuote):
     id: str = Field(min_length=1, max_length=40)
     kind: ObjectKind
@@ -31,6 +46,7 @@ class NormalizationEventProposal(SourceQuote):
     name: str = Field(min_length=1, max_length=500)
     category: str | None = Field(default=None, max_length=256)
     detector_id: str | None = Field(default=None, max_length=256)
+    identifiers: list[DetectionIdentifier] = Field(default_factory=list, max_length=16)
     reported_result: str | None = Field(default=None, max_length=500)
     action: str | None = Field(default=None, max_length=256)
 
@@ -67,7 +83,9 @@ class DetectionObservationRef(CanonicalObservation):
     subject_refs: list[str] = Field(default_factory=list, max_length=8)
     name: str = Field(min_length=1, max_length=500)
     category: str | None = Field(default=None, max_length=256)
-    detector_id: str | None = Field(default=None, max_length=256)
+    detector_id: str | None = Field(default=None, max_length=280)
+    identifiers: list[DetectionIdentifier] = Field(default_factory=list, max_length=32)
+    identity_basis: Literal["legacy", "adapter_declared", "model_typed", "ambiguous"] = "legacy"
     reported_result: str | None = Field(default=None, max_length=500)
     action: str | None = Field(default=None, max_length=256)
 

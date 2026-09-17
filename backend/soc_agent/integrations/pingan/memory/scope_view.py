@@ -18,7 +18,7 @@ def explain_scope_facets(spec: SocMemoryApplicabilitySpec, facets: dict[str, lis
         if required.get("detection_key") == [f"{source}:rule_code:{code}".casefold()]:
             result["detection_key"] = {"rule_code": [code], "source_system": [source], "entity": [f"rule_code:{code}", rule_entity_key(required["detection_key"][0])]}
     components = sorted(set(facets.get("behavior_component_core") or facets.get("behavior_component", [])))
-    version = {"pingan.soc.memory_features.v5": "v5", "pingan.soc.memory_features.v6": "v6"}.get(spec.feature_schema_version)
+    version = {"pingan.soc.memory_features.v5": "v5", "pingan.soc.memory_features.v6": "v6", "pingan.soc.memory_features.v7": "v7"}.get(spec.feature_schema_version)
     if version is None:
         return result
     fingerprint = stable_hash({"schema_version": f"pingan.soc.memory_behavior_fingerprint.{version}", "components": components})

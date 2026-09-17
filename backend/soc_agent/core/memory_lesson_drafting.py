@@ -70,12 +70,17 @@ class SocMemoryLessonDraftService:
         if candidate.applicability is None:
             raise SocServiceConflictError("business lesson drafting requires reviewed machine applicability")
         try:
+            from soc_agent.memory.scope_options import candidate_with_scope_selections, scope_lesson_sources
+
+            candidate = candidate_with_scope_selections(candidate, self._candidate_repository, promoted_facet_values)
             draft_applicability = promote_memory_applicability_facets(
                 candidate.applicability,
                 promoted_facet_keys or [],
                 promoted_facet_values,
             )
             draft_applicability = select_memory_behavior_components(draft_applicability, candidate.facets, selected_behavior_components, registry=self._profile_registry)
+            if promoted_facet_keys or promoted_facet_values:
+                candidate = scope_lesson_sources(candidate, self._candidate_repository, draft_applicability)
         except ValueError as exc:
             raise SocServiceConflictError(str(exc)) from exc
         metadata = {key: value for key, value in candidate.metadata.items() if key != "governance_comparison"}

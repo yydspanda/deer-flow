@@ -16,7 +16,7 @@ from soc_agent.tenant_policy import InMemoryTenantPolicyDecisionRepository, Stat
 services = _services
 
 
-def memory_case(services, *, directive=True, activate=True, selected=None):
+def memory_case(services, *, directive=True, activate=True, selected=None, environment="prd"):
     from soc_agent.application.memory import build_soc_memory_profile_registry
     from soc_agent.contracts import AlertInput, SocMemoryRunPromotionCommand, Verdict
     from soc_agent.memory.behavior_scope import select_memory_behavior_components
@@ -25,15 +25,15 @@ def memory_case(services, *, directive=True, activate=True, selected=None):
     service, repository = services
     request = memory_sample(1).llm_analysis_request
     payload = AlertInput(tenant_id="pingan", alert_id="direct-test", source=request.source, detection=request.detection, classification=request.classification, entities=request.canonical_entities).model_dump(mode="json")
-    original = analyze_alert(payload)
-    command = memory_candidate_command_from_run_promotion(original, SocMemoryRunPromotionCommand(run_id=original.run_id, metadata={"environment": "prd"}), profile_registry=build_soc_memory_profile_registry())
+    original = analyze_alert(payload, direct_resolution=SocDirectResolutionService(memory_service=service, profile_registry=build_soc_memory_profile_registry(), environment=environment))
+    command = memory_candidate_command_from_run_promotion(original, SocMemoryRunPromotionCommand(run_id=original.run_id, metadata={"environment": environment}), profile_registry=build_soc_memory_profile_registry())
     candidate = service.propose_candidate(command)
     reviewed = select_memory_behavior_components(candidate.applicability, candidate.facets, selected, registry=build_soc_memory_profile_registry()) if selected is not None else None
     record = confirm(service, candidate, Verdict.FALSE_POSITIVE, directive=directive, record_applicability=reviewed)
     if not activate:
         record = record.model_copy(update={"retrieval_enabled": False})
         repository.save_memory_record(record)
-    resolver = SocDirectResolutionService(memory_service=service, profile_registry=build_soc_memory_profile_registry(), environment="prd")
+    resolver = SocDirectResolutionService(memory_service=service, profile_registry=build_soc_memory_profile_registry(), environment=environment)
     return payload, resolver, record
 
 
@@ -103,17 +103,86 @@ def test_direct_memory_can_be_corrected_without_overwriting_the_adopted_snapshot
 
 
 def test_direct_handling_does_not_create_independent_pattern_support(services):
+    from soc_agent.application.memory import build_soc_memory_profile_registry
     from soc_agent.contracts import MemoryPatternDataClass
-    from soc_agent.core import SocMemoryPatternPostAnalysisObserver
+    from soc_agent.core import SocMemoryPatternPostAnalysisObserver, SocMemoryPatternService
 
-    class NoObservation:
-        def observe_run(self, *args, **kwargs):
-            raise AssertionError("direct use is not independent support")
+    payload, resolver, _ = memory_case(services)
+    payload["event"] = {"event_time": "2026-09-16T08:00:00Z"}
+    run = analyze_alert(payload, analyzer=ForbiddenModel(), direct_resolution=resolver)
+    service = SocMemoryPatternService(repository=services[1], candidate_repository=services[1], profile_registry=build_soc_memory_profile_registry())
+    observer = SocMemoryPatternPostAnalysisObserver(service=service, environment="prd", data_class=MemoryPatternDataClass.SIMULATION)
+    observer.observe(run, context=ServiceRequestContext())
+    observations = services[1].list_memory_pattern_observations(limit=10)
+    assert len(observations) == 1
+    assert observations[0].lesson is None
+    assert observations[0].metadata["conclusion_origin"] == "memory_reuse"
+    assert observations[0].schema_version == "soc.memory_pattern_observation.v4"
+
+
+def test_corpus_direct_memory_keeps_factual_observation_and_trace(services, tmp_path, monkeypatch):
+    import pandas as pd
+    from test_soc_corpus_workbench import _admin_context
+
+    from soc_agent.application.memory import build_soc_memory_profile_registry
+    from soc_agent.core import DeterministicAnalysisRuntime, SocAnalysisService, SocMemoryPatternService
+    from soc_agent.demo.corpus_workbench import CORPUS_WORKBENCH_ENVIRONMENT, SocCorpusWorkbenchService
+    from soc_agent.llm import SocAnalyzerMode, SocLLMSettings
+
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", "off")
+    payload, resolver, _ = memory_case(services, environment=CORPUS_WORKBENCH_ENVIRONMENT)
+    payload["event"] = {"event_time": "2026-09-16T08:00:00Z"}
+    repository = services[1]
+    source = tmp_path / "direct-memory-corpus.pkl"
+    with pd.option_context("future.infer_string", False):
+        pd.DataFrame([{"alert_id": payload["alert_id"], "alert_full_data": {"alert_data": payload}}], dtype=object).to_pickle(source)
+    workbench = SocCorpusWorkbenchService(
+        repository=repository,
+        analysis_service=SocAnalysisService(repository=repository, runtime=DeterministicAnalysisRuntime(analyzer=ForbiddenModel(), direct_resolution=resolver)),
+        pattern_service=SocMemoryPatternService(repository=repository, candidate_repository=repository, profile_registry=build_soc_memory_profile_registry()),
+        source_path=source,
+        settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+        database_file="direct-memory.sqlite",
+    )
+    result = workbench.process_alert(payload["alert_id"], context=_admin_context("direct-memory-workbench", actor_id="reviewer"))
+    assert repository.get_run(result.run_id).direct_resolution.source_kind == "memory"
+    assert result.observation_id is not None
+    observation = repository.get_memory_pattern_observation(result.observation_id)
+    assert observation.lesson is None
+    assert observation.metadata["conclusion_origin"] == "memory_reuse"
+    execution = workbench.get_execution(payload["alert_id"])
+    phase = next(p for p in execution.phases if p.phase == "memory")
+    assert phase.status == "success"
+    assert "事实观察" in phase.summary
+    assert phase.metrics["independent_confirmation_added"] is False
+    assert phase.metrics["observation_id"] == observation.observation_id
+    assert execution.status == "completed"
+    replay = workbench.process_alert(payload["alert_id"], context=_admin_context("direct-memory-again", actor_id="reviewer"))
+    assert replay.observation_id == result.observation_id
+
+
+def test_fixed_workbench_forwards_direct_memory_to_pattern_service(services):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from test_soc_corpus_workbench import _admin_context
+
+    from soc_agent.demo.memory_workbench import SocMemoryWorkbenchService
 
     payload, resolver, _ = memory_case(services)
     run = analyze_alert(payload, analyzer=ForbiddenModel(), direct_resolution=resolver)
-    observer = SocMemoryPatternPostAnalysisObserver(service=NoObservation(), environment="prd", data_class=MemoryPatternDataClass.SIMULATION)
-    observer.observe(run, context=ServiceRequestContext())
+    observe = Mock(side_effect=RuntimeError("pattern-observer-reached"))
+    workbench = SimpleNamespace(
+        _cases={run.alert_id: SimpleNamespace(payload=payload)},
+        get_state=lambda: SimpleNamespace(alerts=[SimpleNamespace(alert_id=run.alert_id, workflow_state="ready")], progress=SimpleNamespace(next_alert_id=run.alert_id)),
+        _analysis_idempotency_key=lambda _: "fixed-direct-memory",
+        _analysis_service=SimpleNamespace(analyze=lambda *args, **kwargs: run),
+        _pattern_service=SimpleNamespace(observe_run=observe),
+        _source_sha256="a" * 64,
+    )
+    with pytest.raises(RuntimeError, match="pattern-observer-reached"):
+        SocMemoryWorkbenchService.process_alert(workbench, run.alert_id, context=_admin_context("fixed-direct", actor_id="reviewer"))
+    assert observe.call_args.args[0] is run
 
 
 def test_policy_has_priority_over_memory_inventory():

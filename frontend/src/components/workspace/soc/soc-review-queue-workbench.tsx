@@ -109,11 +109,17 @@ import type {
   SocVerdict,
 } from "@/core/soc";
 import { withMemoryReuseConditions } from "@/core/soc/memory-reuse-scope";
+import {
+  defaultMemoryCandidateReviewDraft,
+  type MemoryCandidateReviewDraft,
+  useMemoryReviewDrafts,
+} from "@/core/soc/memory-review-draft";
 import { cn } from "@/lib/utils";
 
 import { SocMemoryGovernancePanel } from "./soc-memory-governance-panel";
 import { SocMemoryRevisionRecovery } from "./soc-memory-revision-recovery";
 import { SocMemoryScope } from "./soc-memory-scope";
+import { SocMemoryScopeRefinement } from "./soc-memory-scope-refinement";
 
 const STATUS_OPTIONS: { value: SocReviewQueueStatus | "all"; label: string }[] =
   [
@@ -280,52 +286,6 @@ interface MemoryRetrievalDraft {
   reviewAfterDays: string;
 }
 
-interface MemoryCandidateReviewDraft {
-  businessContext: string;
-  applyToFutureMatches: boolean;
-  confirmedVerdict: SocVerdict | null;
-  promotedFacetValues: Record<string, string[]>;
-  selectedBehaviorComponents: string[] | null;
-  lessonDetectionScenario: string;
-  lessonObservedEvent: string;
-  lessonConclusion: string;
-  lessonBusinessRationale: string;
-  lessonGeneralizationBoundary: string;
-  lessonInvalidationCondition: string;
-  lessonHandlingGuidance: string;
-  lessonDraftProvenance: string;
-  lessonDraftUncertainties: string[];
-  lessonEditing: boolean;
-  replacement: { memoryId: string; version: number } | null;
-}
-
-function defaultMemoryCandidateReviewDraft(
-  candidate: SocMemoryCandidate,
-): MemoryCandidateReviewDraft {
-  return {
-    businessContext: "",
-    applyToFutureMatches: false,
-    confirmedVerdict: null,
-    promotedFacetValues: {},
-    selectedBehaviorComponents:
-      candidate.applicability?.selected_behavior_components ??
-      candidate.scope_view?.required_details.behavior_fingerprint
-        ?.behavior_component ??
-      null,
-    lessonDetectionScenario: "",
-    lessonObservedEvent: "",
-    lessonConclusion: "",
-    lessonBusinessRationale: "",
-    lessonGeneralizationBoundary: "",
-    lessonInvalidationCondition: "",
-    lessonHandlingGuidance: "",
-    lessonDraftProvenance: "",
-    lessonDraftUncertainties: [],
-    lessonEditing: false,
-    replacement: null,
-  };
-}
-
 function reviewedMemoryApplicability(
   candidate: SocMemoryCandidate,
   draft: MemoryCandidateReviewDraft,
@@ -341,6 +301,8 @@ function reviewedMemoryApplicability(
     base,
     draft.promotedFacetValues,
     draft.selectedBehaviorComponents,
+    candidate.scope_view?.required_details.behavior_fingerprint
+      ?.behavior_component,
   );
 }
 
@@ -717,6 +679,10 @@ const MEMORY_FACET_VALUE_LABELS: Record<string, Record<string, string>> = {
 };
 
 function memoryFacetLabel(key: string) {
+  if (key === "selected_behavior_components") return "必须出现的核心行为";
+  if (key === "covered_behavior_components") return "已审核覆盖的行为";
+  if (key.startsWith("reuse:"))
+    return `附加限制：${memoryFacetLabel(key.slice(6).split("/")[0]!)}`;
   return MEMORY_FACET_LABELS[key] ?? key;
 }
 
@@ -2209,6 +2175,7 @@ function MemoryCandidateSection({
 
                 <div className="mt-4 border-t pt-4">
                   <SocMemoryScope
+                    candidateId={candidate.candidate_id}
                     spec={applicability}
                     view={candidate.scope_view}
                     promoted={draft.promotedFacetValues}
@@ -2232,6 +2199,14 @@ function MemoryCandidateSection({
                     }
                   />
                 </div>
+
+                {(editable || candidate.status === "confirmed") &&
+                  applicability &&
+                  !candidate.revision_lineage && (
+                    <SocMemoryScopeRefinement
+                      candidate={{ ...candidate, applicability }}
+                    />
+                  )}
 
                 {editable ? (
                   <>
@@ -3215,9 +3190,6 @@ export function SocReviewQueueWorkbench({
     useState<SocAgentApprovalGrant | null>(null);
   const [approvedActionResult, setApprovedActionResult] =
     useState<SocAgentActionResult | null>(null);
-  const [memoryReviewDrafts, setMemoryReviewDrafts] = useState<
-    Record<string, MemoryCandidateReviewDraft>
-  >({});
   const [memoryRetrievalDrafts, setMemoryRetrievalDrafts] = useState<
     Record<string, MemoryRetrievalDraft>
   >({});
@@ -3280,6 +3252,12 @@ export function SocReviewQueueWorkbench({
         : (context?.memory_candidates ?? []),
     [context?.memory_candidates, standaloneMemoryCandidates, workspaceView],
   );
+  const {
+    drafts: memoryReviewDrafts,
+    change: handleMemoryReviewDraftChange,
+    clear: clearMemoryReviewDraft,
+    storageFailed: memoryDraftStorageFailed,
+  } = useMemoryReviewDrafts(activeMemoryCandidates);
   const {
     records: memoryRecords,
     isLoading: memoryRecordsLoading,
@@ -3502,23 +3480,6 @@ export function SocReviewQueueWorkbench({
     }
   };
 
-  const handleMemoryReviewDraftChange = (
-    candidate: SocMemoryCandidate,
-    patch: Partial<MemoryCandidateReviewDraft>,
-  ) => {
-    setMemoryReviewDrafts((current) => ({
-      ...current,
-      [candidate.candidate_id]: {
-        ...(current[candidate.candidate_id] ??
-          defaultMemoryCandidateReviewDraft(candidate)),
-        ...patch,
-        ...(patch.promotedFacetValues || patch.selectedBehaviorComponents
-          ? { replacement: null }
-          : {}),
-      },
-    }));
-  };
-
   const handleReviewMemoryCandidate = async (
     candidate: SocMemoryCandidate,
     decision: SocMemoryCandidateReviewDecision,
@@ -3587,11 +3548,7 @@ export function SocReviewQueueWorkbench({
             : {}),
         },
       });
-      setMemoryReviewDrafts((current) => {
-        const next = { ...current };
-        delete next[candidate.candidate_id];
-        return next;
-      });
+      clearMemoryReviewDraft(candidate);
       toast.success(
         decision === "reopen"
           ? "候选已重新打开，可以继续审核"
@@ -3830,6 +3787,12 @@ export function SocReviewQueueWorkbench({
                 )}
               </div>
             </section>
+
+            {memoryDraftStorageFailed && (
+              <p role="alert" className="text-destructive text-sm">
+                浏览器无法暂存草稿。当前内容仍可编辑，请勿刷新或离开页面。
+              </p>
+            )}
 
             {(
               initialCandidateId

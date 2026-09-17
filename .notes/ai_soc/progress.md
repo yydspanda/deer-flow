@@ -6,8 +6,7 @@
 - **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。新交付同时把 PingAn DeerFlow chat 固定为 buffered non-streaming，并将模型网关与 Runtime 并发统一为 `3`；SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
 - **Next Gate:** 部署 buffered chat / `3 + 3` 并发配置，验证普通聊天不再发送 `stream=true`、三条不同告警可同时研判；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-16`
-
+- **Last Updated:** `2026-09-17`
 ## Current Constraints / 当前约束
 | Boundary | Current fact |
 |---|---|
@@ -18,6 +17,7 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+09-17 `PI-03E` 完成 [Memory 范围整改](architecture/memory-reuse-scope-remediation.md)：Profile 9/v7、审核覆盖 v4、宽窄优先、暂停边界、分页实体和细分候选已接入。用户闭环后修复身份任选与草稿刷新：Prompt v9 保留 rule/sig 命名空间，相同输入复用事实但重评当前经验/策略，显式重新核对可比对变化。2480991 真实补充正确绑定两条检测，同输入复跑特征一致、核对调用为0；旧经验未覆盖新增 Nmap，仍参考使用，不自动扩张授权。详见月度 `EXP-20260917-normalization-stability`；批量质量、PostgreSQL 并发和内网验收仍开放，PI-01 指针不变。
 09-16 `PI-03E` 修复带开关请求头与 GlobalAI 非流式文本兼容，模型显式流式聚合、内网默认不变。2025642 已恢复真实模型研判，见月度 `EXP-20260916-soc-buffered-stream`。Prompt v6 提炼业务地址后解释仍未采用，见 `EXP-20260916-semantic-business-clues`；后续去除 Skill/审核知识静默截断，以类型化线索接通通用知识选择器，PingAn 配置隔离。恢复轮已引用 AskBob 知识，真实攻击/80% 变为可疑/62%，企业策略仍转交；26 项补充采用、方向不变，282+1 项回归通过。首次 DEV 热重载中断/恢复有留痕，不作为误报率验收；见 `EXP-20260916-knowledge-bridge`。后续修复已放弃的旧窗口候选永久阻挡新窗口提炼及跨窗口候选展示遗漏，2484162 同组7条已保存观察补聚合为待审候选，无模型重跑或自动审核；见 `EXP-20260916-pattern-candidate-recovery`，内网指针不变。 同项完成自动/人工经验入口协调、已审核范围覆盖和待审修订导航；无清库、自动启用或模型调用，详见月度 `EXP-20260916-memory-learning-coordination`。
 本次补齐 `PI-03E` 告警演练按次运行开关：语义核对、企业策略及安全路径/LLM 子项；配置随运行保存，不改进程环境、历史结果或外部动作权限。64 项后端与 2 项浏览器回归通过，类型/lint 通过；无付费模型调用、打包或清库。详见[方案](architecture/direct-resolution-design.md)和月度 `EXP-20260915-corpus-run-controls`，内网指针不变。
 09-15 `PI-03E` SOC模型JSON紧凑发送：研判、语义核对、角色复核、经验生成、策略与修复入口共用无损序列化，SOC工具文本同步；不改DeerFlow核心、签名、审计排版或Memory匹配。冻结请求对照去排版后输入33680→24764Token并正常回复；新版2651342完整Web回放21.118秒、2次调用、24项补充进入模型、14条引用通过，已保存观察。三组133/71/5项回归通过（部分重叠）；批量稳定性与远端精确限制仍未验证。见[方案](architecture/normalization-assistance-design.md)与月度归档，PI-01指针不变。

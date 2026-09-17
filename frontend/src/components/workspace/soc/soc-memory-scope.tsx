@@ -15,6 +15,8 @@ import type {
 } from "@/core/soc";
 import { withMemoryReuseConditions } from "@/core/soc/memory-reuse-scope";
 
+import { SocMemoryEntityLimits } from "./soc-memory-entity-limits";
+
 const labels: Record<string, string> = {
   detection_key: "检测规则",
   detection_signature: "规则与产品标识",
@@ -143,6 +145,7 @@ export function SocMemoryScope({
   onSelectBehavior,
   disabled = false,
   compact = false,
+  candidateId,
 }: {
   spec?: SocMemoryApplicabilitySpec | null;
   view?: SocMemoryScopeView | null;
@@ -152,6 +155,7 @@ export function SocMemoryScope({
   onSelectBehavior?: (values: string[]) => void;
   disabled?: boolean;
   compact?: boolean;
+  candidateId?: string;
 }) {
   if (!spec)
     return (
@@ -159,7 +163,12 @@ export function SocMemoryScope({
         这条经验尚未保存结构化匹配范围。
       </p>
     );
-  const reviewed = withMemoryReuseConditions(spec, promoted, selectedBehavior);
+  const reviewed = withMemoryReuseConditions(
+    spec,
+    promoted,
+    selectedBehavior,
+    view?.required_details.behavior_fingerprint?.behavior_component,
+  );
   const rows = new Map<string, string[]>();
   const behaviors = new Map<string, string[]>();
   const checkedBehavior =
@@ -203,7 +212,8 @@ export function SocMemoryScope({
     if (
       option.kind !== "additional" ||
       internalKeys.has(option.key) ||
-      spec.context_only_similarity_facet_keys.includes(option.key)
+      spec.context_only_similarity_facet_keys.includes(option.key) ||
+      (candidateId && ["entity", "role_entity"].includes(option.key))
     )
       continue;
     for (const value of option.values) {
@@ -296,7 +306,7 @@ export function SocMemoryScope({
                           {label}
                           {!checked && (
                             <span className="text-muted-foreground ml-2 text-xs">
-                              不限定
+                              允许有或没有
                             </span>
                           )}
                         </span>
@@ -310,6 +320,7 @@ export function SocMemoryScope({
           {onSelectBehavior && (
             <p className="text-muted-foreground mt-1 text-xs leading-5">
               勾选项必须逐项满足；取消后不再要求该项。至少保留一项核心行为。
+              新增未经审核的核心行为仍由模型研判，不直接套用旧结论。
             </p>
           )}
         </div>
@@ -435,6 +446,14 @@ export function SocMemoryScope({
                   ))}
                 </div>
               </details>
+            )}
+            {candidateId && onPromote && (
+              <SocMemoryEntityLimits
+                candidateId={candidateId}
+                selected={promoted}
+                onChange={onPromote}
+                disabled={disabled}
+              />
             )}
           </div>
           <div className="mt-4 border-l-2 border-emerald-600 pl-3 text-xs leading-6">

@@ -158,6 +158,9 @@ class SocMemoryPatternService:
             operation="ingesting a repeated memory pattern observation",
         )
         profile = self._profile_registry.get(command.profile_id)
+        restore = getattr(profile, "for_identity", None)
+        if callable(restore):
+            profile = restore({"profile_id": command.profile_id, "profile_version": command.profile_version, "feature_schema_version": command.feature_schema_version})
         if profile is not None and (profile.identity.profile_version != command.profile_version or profile.identity.feature_schema_version != command.feature_schema_version):
             profile = None
         effective_policy = self._policy_for_profile(profile)
@@ -246,6 +249,7 @@ class SocMemoryPatternService:
             return result
 
         observation = MemoryPatternObservation(
+            **({"schema_version": "soc.memory_pattern_observation.v4"} if command.lesson is None else {}),
             idempotency_key=command.idempotency_key,
             aggregation_key=aggregation_key,
             lineage_key=lineage_key,
@@ -581,6 +585,9 @@ class SocMemoryPatternService:
         profile = self._profile_registry.get(observation.profile_id)
         if profile is None:
             raise SocServiceConflictError(f"memory profile {observation.profile_id!r} is unavailable for replay")
+        restore = getattr(profile, "for_identity", None)
+        if callable(restore):
+            profile = restore({"profile_id": observation.profile_id, "profile_version": observation.profile_version, "feature_schema_version": observation.feature_schema_version})
         if profile.identity.profile_version != observation.profile_version or profile.identity.feature_schema_version != observation.feature_schema_version:
             raise SocServiceConflictError("memory observation profile version does not match the registered profile")
         return profile
@@ -595,8 +602,11 @@ class SocMemoryPatternService:
         observations = self._cohort(aggregation_key)
         first = observations[0]
         quality = _cohort_quality(observations, policy=first.aggregation_policy, recurrence_threshold_met=False)
-        profile = self._profile_registry.get(first.profile_id)
-        if profile is not None and (profile.identity.profile_version, profile.identity.feature_schema_version) != (first.profile_version, first.feature_schema_version):
+        try:
+            profile = self._profile_for_observation(first)
+        except (SocServiceConflictError, ValueError):
+            # Frozen candidates remain readable even if their old projector is
+            # no longer installed; do not reconstruct new facets on that path.
             profile = None
         incoming = SocMemoryCandidateCreateCommand(
             candidate_type=SocMemoryCandidateType.DETECTION_LESSON,
@@ -728,8 +738,7 @@ class SocMemoryPatternPostAnalysisObserver:
         *,
         context: ServiceRequestContext,
     ) -> None:
-        if run.direct_resolution is not None:
-            # Reusing an answer is a usage event, not independent confirmation.
+        if run.direct_resolution is not None and run.direct_resolution.source_kind != "memory":
             return
         observer_context = ServiceRequestContext(
             request_id=context.request_id,
@@ -896,7 +905,7 @@ def _consensus_facets(
     for key, value_counts in sorted(occurrences.items()):
         accepted = [display_values[(key, value)] for value, count in sorted(value_counts.items()) if count >= minimum_count]
         if accepted:
-            facets[key] = accepted[:20]
+            facets[key] = accepted[: 100 if key in {"behavior_component", "behavior_component_core"} else 20]
 
     first = observations[0]
     signature_key = {

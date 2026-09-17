@@ -214,6 +214,7 @@ def evaluate_memory_scope(
     selected_behavior = set(spec.selected_behavior_components or [])
     current_behavior = query_facets.get("behavior_component_core", query_facets.get("behavior_component", set()))
     missing_behavior = sorted(selected_behavior - current_behavior)
+    uncovered_behavior = sorted(current_behavior - set(spec.covered_behavior_components)) if spec.covered_behavior_components is not None else []
     if spec.selected_behavior_components is not None:
         matched_required.pop("behavior_fingerprint", None)
         missing_required = [key for key in missing_required if key != "behavior_fingerprint"]
@@ -245,6 +246,16 @@ def evaluate_memory_scope(
         reason_codes.append("strong_anchor_threshold_not_met")
 
     base_exact = not reason_codes
+    from soc_agent.memory.scope_bindings import uncovered_binding_conditions
+
+    binding_gap = uncovered_binding_conditions(spec, query)
+    projection_gap = bool(query.projection_gaps)
+    if binding_gap:
+        reason_codes.append("reuse_object_scope_not_covered")
+    if projection_gap:
+        reason_codes.append("behavior_projection_incomplete")
+    if uncovered_behavior:
+        reason_codes.append("uncovered_core_behavior")
     if missing_reuse:
         reason_codes.append("exact_reuse_condition_not_met")
 
@@ -257,13 +268,13 @@ def evaluate_memory_scope(
         excluded_hits=excluded_hits,
     )
     # Exact base evidence is also sufficient context when only a reuse limit fails.
-    context_only_allowed = context_only_allowed or bool(base_exact and missing_reuse)
+    context_only_allowed = context_only_allowed or bool(base_exact and (missing_reuse or uncovered_behavior or binding_gap or projection_gap))
     if selected_behavior and missing_behavior and not profile_reasons and not excluded_hits:
         # A matching stored fingerprint is historical context, not proof that every
         # newly selected component exists in the current typed projection.
         original_strong_count = len(set(memory_strong_anchor_keys(memory_type)) & (set(original_matched_required) | set(matched_optional)))
         context_only_allowed = context_only_allowed or (not original_missing_required and len(matched_optional) >= spec.minimum_optional_matches and original_strong_count >= spec.minimum_strong_anchor_matches)
-    if base_exact and not missing_reuse:
+    if base_exact and not missing_reuse and not uncovered_behavior and not binding_gap and not projection_gap:
         context_only_allowed = False
     if context_only_allowed:
         reason_codes.append("context_only_similarity_satisfied")
@@ -288,6 +299,7 @@ def evaluate_memory_scope(
         selected_behavior_components=sorted(selected_behavior),
         matched_behavior_components=sorted(selected_behavior & current_behavior),
         missing_behavior_components=missing_behavior,
+        uncovered_behavior_components=uncovered_behavior,
         excluded_facet_hits=excluded_hits,
         matched_strong_anchor_count=matched_strong_count,
         context_only_allowed=context_only_allowed,

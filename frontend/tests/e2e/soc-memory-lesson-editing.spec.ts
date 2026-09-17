@@ -129,9 +129,29 @@ for (const revision of [false, true]) {
       reviewer_verdict: "true_positive",
       reviewer_context: null,
     });
+    const businessContext = page.getByRole("textbox", {
+      name: "业务事实（可选）",
+    });
+    await businessContext.fill("运营补充的业务事实，刷新后应保留。");
+    const reuse = page.getByRole("switch", {
+      name: "允许精确匹配时参与最终结论",
+    });
+    await reuse.check();
+    await page.reload();
+    await expect(verdict).toContainText("真实攻击");
+    await expect(businessContext).toHaveValue(
+      "运营补充的业务事实，刷新后应保留。",
+    );
+    await expect(reuse).toBeChecked();
+    for (const [label, , value] of fields) {
+      await expect(
+        page.getByRole("textbox", { name: label, exact: true }),
+      ).toHaveValue(value);
+    }
+    expect(drafts).toHaveLength(1);
     await expect(
       page.getByRole("textbox", { name: "业务事实（可选）" }),
-    ).toHaveValue("");
+    ).toHaveValue("运营补充的业务事实，刷新后应保留。");
     await page.getByRole("button", { name: "预览经验", exact: true }).click();
     await expect(page.getByText(fields[1][2], { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "逐项修改", exact: true }).click();
@@ -199,6 +219,15 @@ for (const revision of [false, true]) {
         schema_version: "soc.memory_business_lesson.v2",
       },
     });
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Object.keys(sessionStorage).filter((key) =>
+            key.startsWith("soc-memory-review-draft:"),
+          ),
+        ),
+      )
+      .toEqual([]);
   });
 }
 

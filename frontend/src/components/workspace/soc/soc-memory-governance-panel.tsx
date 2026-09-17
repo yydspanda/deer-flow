@@ -20,6 +20,8 @@ const scopeLabels = {
   overlap: "适用条件可能重叠",
   disjoint: "精确适用条件不同",
   unknown: "适用条件尚不能比较",
+  strict_subset: "本次范围更具体",
+  strict_superset: "已有经验范围更具体",
 };
 
 export function SocMemoryGovernancePanel({
@@ -75,7 +77,7 @@ export function SocMemoryGovernancePanel({
         </button>
       </div>
     );
-  if (!data || data.related_count === 0) return null;
+  if (!data) return null;
 
   return (
     <section
@@ -87,6 +89,14 @@ export function SocMemoryGovernancePanel({
         与已有经验对照
       </h4>
       <p className="mt-2 text-sm leading-6">{data.explanation}</p>
+      {!!data.sample_coverage?.total && (
+        <p className="mt-2 text-sm font-medium">
+          当前条件覆盖 {data.sample_coverage.applicable ?? 0} /{" "}
+          {data.sample_coverage.total} 条来源样本。
+          {(data.sample_coverage.applicable ?? 0) <
+            data.sample_coverage.total && "其余样本不在本次直接复用范围内。"}
+        </p>
+      )}
       <div className="mt-3 divide-y">
         {data.related_memories.map((memory) => (
           <div key={memory.memory_id} className="py-3">

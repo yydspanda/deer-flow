@@ -124,7 +124,7 @@ def test_semantic_feature_profile_verifies_its_own_fingerprint_version():
     profile = PingAnSocMemoryProfile(semantic_features=True)
     spec.profile_version = profile.identity.profile_version
     spec.feature_schema_version = profile.identity.feature_schema_version
-    spec.required_facets["behavior_fingerprint"] = [stable_hash({"schema_version": "pingan.soc.memory_behavior_fingerprint.v6", "components": sorted(facets["behavior_component"])})]
+    spec.required_facets["behavior_fingerprint"] = [stable_hash({"schema_version": "pingan.soc.memory_behavior_fingerprint.v7", "components": sorted(facets["behavior_component"])})]
     view = build_memory_scope_view(spec, facets, registry=SocMemoryProfileRegistry([profile]))
     assert view.required_details["behavior_fingerprint"]["behavior_component"] == sorted(facets["behavior_component"])
     assert not view.unresolved_fingerprint_keys

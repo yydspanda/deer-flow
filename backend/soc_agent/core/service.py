@@ -134,7 +134,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
-from soc_agent.contracts.memory_governance import MemoryGovernancePreview
+from soc_agent.contracts.memory_governance import MemoryGovernancePreview, MemoryScopeBoundaryReleaseCommand, MemoryScopeRefinementCommand
 from soc_agent.contracts.memory_learning import SocMemoryLearningView
 from soc_agent.core.alert_results import (
     classify_alert_result,
@@ -142,6 +142,7 @@ from soc_agent.core.alert_results import (
     required_human_intervention_reason,
 )
 from soc_agent.core.case_outcomes import project_soc_case_outcome
+from soc_agent.core.normalization_snapshot import NormalizationHistory
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
 from soc_agent.memory import (
     InMemoryMemoryCandidateRepository,
@@ -286,7 +287,7 @@ class DeterministicAnalysisRuntime:
             sensitive_evidence_mode=self._sensitive_evidence_mode,
         )
 
-    def analyze_journaled_with_reuse(self, payload: Mapping[str, Any], *, before_provider: AnalysisBeforeProviderHook, previous_run: AnalysisRun) -> AnalysisRun:
+    def analyze_journaled_with_reuse(self, payload: Mapping[str, Any], *, before_provider: AnalysisBeforeProviderHook, previous_run: AnalysisRun | None = None, normalization_history: NormalizationHistory | None = None) -> AnalysisRun:
         return analyze_alert(
             payload,
             analyzer=self._analyzer,
@@ -295,6 +296,7 @@ class DeterministicAnalysisRuntime:
             direct_resolution=self._direct_resolution,
             execution_options=self._execution_options,
             normalization_reuse=previous_run,
+            normalization_history=normalization_history,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
             analysis_request_enricher=self._analysis_request_enricher,
@@ -585,6 +587,12 @@ class SocAnalysisService:
         analyze_with_reuse = getattr(self._runtime, "analyze_journaled_with_reuse", None)
         if normalization_reuse is not None and callable(analyze_with_reuse):
             return analyze_with_reuse(payload, before_provider=persist_before_provider, previous_run=normalization_reuse)
+        if isinstance(self._runtime, DeterministicAnalysisRuntime) and callable(getattr(self._repository, "list_runs_by_alert_id", None)):
+            return self._runtime.analyze_journaled_with_reuse(
+                payload,
+                before_provider=persist_before_provider,
+                normalization_history=lambda alert_id: self._repository.list_runs_by_alert_id(alert_id, limit=20),
+            )
         return analyze_journaled(payload, before_provider=persist_before_provider)
 
     def _find_existing_idempotent_run(self, context: ServiceRequestContext, *, action: AuditAction) -> AnalysisRun | None:
@@ -2031,6 +2039,9 @@ class SocMemoryService:
     ) -> SocMemoryCandidate:
         """Persist candidate knowledge as pending review only."""
 
+        if "scope_boundary_releases" in command.metadata or "scope_boundary_releases" in command.source.metadata:
+            raise SocServiceError("范围恢复不能作为候选附加元数据提交")
+
         if self._candidate_repository is None:
             raise SocServiceNotImplementedError("propose_candidate requires a MemoryCandidateRepository")
 
@@ -2176,6 +2187,10 @@ class SocMemoryService:
         self, candidate_id: str, *, reviewer_verdict: Verdict | None = None, promoted_facet_keys: list[str] | None = None, promoted_facet_values: dict[str, list[str]] | None = None, selected_behavior_components: list[str] | None = None
     ) -> MemoryGovernancePreview:
         candidate = self.get_candidate(candidate_id)
+        from soc_agent.memory.scope_options import candidate_with_scope_selections, preview_sample_coverage
+
+        candidate = self._candidate_reviewed_scope(candidate)
+        candidate = candidate_with_scope_selections(candidate, self._candidate_repository, promoted_facet_values)
         if candidate.applicability is not None:
             candidate = candidate.model_copy(update={"applicability": promote_memory_applicability_facets(candidate.applicability, promoted_facet_keys or [], promoted_facet_values)})
             candidate = candidate.model_copy(update={"applicability": select_memory_behavior_components(candidate.applicability, candidate.facets, selected_behavior_components, registry=self._profile_registry)})
@@ -2192,7 +2207,148 @@ class SocMemoryService:
                 source_reason = run.analysis.reason
                 context_refs = sorted({ref for item in run.analysis.reasoning for ref in item.context_refs if ref.startswith("M-")})
         report = preview_governance(candidate, list(governed_records(self._record_repository, candidate.tenant_id)), registry=self._profile_registry, reviewer_verdict=reviewer_verdict, used_ids=used_ids)
-        return report.model_copy(update={"source_reason": source_reason, "source_memory_refs": context_refs})
+        coverage = preview_sample_coverage(candidate, self._candidate_repository, candidate.applicability) if candidate.applicability else {}
+        return report.model_copy(update={"source_reason": source_reason, "source_memory_refs": context_refs, "sample_coverage": coverage, "reviewed_applicability": candidate.applicability})
+
+    def candidate_scope_options(self, candidate_id: str, *, facet_key: str | None = None, prefix: str | None = None, search: str = "", offset: int = 0, limit: int = 10) -> dict:
+        from soc_agent.memory.scope_options import option_page
+
+        return option_page(self.get_candidate(candidate_id), self._candidate_repository, facet_key=facet_key, prefix=prefix, search=search, offset=max(0, offset), limit=min(50, max(1, limit)))
+
+    def _candidate_reviewed_scope(self, candidate: SocMemoryCandidate) -> SocMemoryCandidate:
+        if candidate.status is SocMemoryCandidateStatus.CONFIRMED and self._record_repository is not None:
+            record = self._record_repository.get_memory_record_by_candidate_id(candidate.candidate_id)
+            if record is not None:
+                return candidate.model_copy(update={"applicability": record.applicability})
+        return candidate
+
+    def refine_candidate_scope(self, command: MemoryScopeRefinementCommand, *, context: ServiceRequestContext) -> SocMemoryCandidate:
+        """Keep the cohort intact and propose a source-backed strict sub-scope."""
+        require_actor_roles(context, self.REVIEWER_ROLES, operation="refining SOC memory scope")
+        if self._mutation_uow is not None and not self._transaction_active:
+            events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                repository.lock_memory_governance()
+                result = self._governance_clone(repository, events).refine_candidate_scope(command, context=context)
+            events.flush()
+            return result
+        parent = self.get_candidate(command.candidate_id)
+        if parent.updated_at != command.expected_updated_at:
+            raise SocServiceConflictError("候选范围已变化，请刷新后重新选择")
+        if parent.status not in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE, SocMemoryCandidateStatus.CONFIRMED}:
+            raise SocServiceConflictError("只能细分待审或已确认经验")
+        parent = self._candidate_reviewed_scope(parent)
+        preview = self.preview_candidate_governance(
+            parent.candidate_id, promoted_facet_keys=list(command.promoted_facet_values), promoted_facet_values=command.promoted_facet_values, selected_behavior_components=command.selected_behavior_components
+        )
+        spec = preview.reviewed_applicability
+        if spec is None or parent.applicability is None:
+            raise SocServiceConflictError("来源经验没有可细分的结构化范围")
+        base = select_memory_behavior_components(parent.applicability, parent.facets, parent.applicability.selected_behavior_components, registry=self._profile_registry)
+        relation = scope_relation(spec, base, self._profile_registry)
+        if relation == "same":
+            return parent
+        if relation != "strict_subset":
+            raise SocServiceConflictError("细分必须收窄现有范围；扩大或替换范围请修订原经验")
+        if not preview.sample_coverage.get("applicable"):
+            raise SocServiceConflictError("所选条件没有共同覆盖任何来源样本，请调整限制")
+        from soc_agent.memory.scope_options import sample_matches, scope_lesson_sources, scope_samples
+
+        samples = [sample for sample in scope_samples(parent, self._candidate_repository) if sample_matches(sample, spec)]
+        scoped_parent = scope_lesson_sources(parent, self._candidate_repository, spec)
+        observations = [sample["observation_id"] for sample in samples if sample.get("observation_id")]
+        excluded = {"cohort_quality", "cohort_size", "support_count", "distinct_source_count", "governance_scope_key", "governance_observations", "representative_run_ids", "representative_alert_ids"}
+        source = parent.source.model_copy(
+            update={"alert_id": samples[0]["alert_id"], "run_id": samples[0]["run_id"], "metadata": {**{k: v for k, v in parent.source.metadata.items() if k not in excluded}, "observation_ids": observations, "support_count": len(samples)}}
+        )
+        metadata = {key: value for key, value in parent.metadata.items() if key not in excluded}
+        metadata.update(
+            {
+                "scope_refinement_parent_id": parent.candidate_id,
+                "observation_ids": observations,
+                "scope_sample_coverage": preview.sample_coverage,
+                "scoped_source_alert_ids": [s["alert_id"] for s in samples],
+                "support_count": len(samples),
+                "distinct_source_count": len(samples),
+            }
+        )
+        proposed = SocMemoryCandidateCreateCommand(
+            **{key: getattr(scoped_parent, key) for key in ("candidate_type", "target_artifact", "tenant_scope", "tenant_id", "evidence_refs", "validity", "facets", "decision_impact", "confidence", "labels")},
+            source=source,
+            applicability=spec,
+            metadata=metadata,
+            summary=f"细分经验：{len(samples)} 条来源样本，待确认业务结论",
+            content=scoped_parent.content,
+        )
+        proposed.idempotency_key = "memory-scope-refinement:" + str(scope_identity(proposed))
+        return self.propose_candidate(proposed, context=context)
+
+    def scope_boundaries(self, memory_id: str):
+        from soc_agent.contracts.memory_governance import MemoryScopeBoundaries, MemoryScopeException
+        from soc_agent.memory.governance import active_record, boundary_released
+
+        record = self.get_record(memory_id)
+        query = SocMemoryQuery(tenant_id=record.tenant_id, tenant_scope=record.tenant_scope)
+        now = self._now_provider()
+        items = [
+            MemoryScopeException(memory_id=other.memory_id, version=other.version, summary=other.summary, active=active_record(other, now), released=boundary_released(record, other))
+            for other in self._scope_inventory(query)
+            if other.memory_id != memory_id and other.retrieval_updated_at and other.retrieval_policy_version and scope_relation(other.applicability, record.applicability, self._profile_registry) == "strict_subset"
+        ]
+        return MemoryScopeBoundaries(memory_id=memory_id, version=record.version, active=active_record(record, now), exceptions=items)
+
+    def release_scope_boundary(self, command: MemoryScopeBoundaryReleaseCommand, *, context: ServiceRequestContext) -> SocMemoryRecord:
+        require_actor_roles(context, self.REVIEWER_ROLES, operation="restoring a reviewed broad Memory scope")
+        if self._mutation_uow is not None and not self._transaction_active:
+            events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                repository.lock_memory_governance()
+                result = self._governance_clone(repository, events).release_scope_boundary(command, context=context)
+            events.flush()
+            return result
+        if self._mutation_audit_repository is None or not self._transaction_active:
+            raise SocServiceNotImplementedError("恢复范围需要事务和治理审计")
+        operation = SocMutationOperation.MEMORY_SCOPE_BOUNDARY_RELEASE
+        payload = command.model_dump(mode="json")
+        prior = self._mutation_audit_repository.find_mutation_audit_by_idempotency_key(operation, mutation_idempotency_key(context))
+        if prior:
+            validate_mutation_retry(prior, command=payload, target_type="memory_record", target_id=command.memory_id)
+            return self.get_record(command.memory_id)
+        view = self.scope_boundaries(command.memory_id)
+        exception = next((item for item in view.exceptions if item.memory_id == command.exception_memory_id), None)
+        if view.version != command.expected_version or not exception or exception.version != command.expected_exception_version:
+            raise SocServiceConflictError("经验或细分范围已变化，请刷新后核对")
+        if not view.active or exception.active:
+            raise SocServiceConflictError("只有原经验有效且细分经验未使用时，才能明确恢复原范围")
+        parent, child = self.get_record(command.memory_id), self.get_record(command.exception_memory_id)
+        releases = dict(parent.metadata.get("scope_boundary_releases", {}))
+        releases[child.memory_id] = {"version": child.version, "scope_hash": stable_hash(child.applicability.model_dump(mode="json")), "reason": command.reason, "actor_id": context.actor.actor_id}
+        updated = parent.model_copy(update={"version": parent.version + 1, "updated_at": self._now_provider(), "metadata": {**parent.metadata, "scope_boundary_releases": releases}})
+        if not self._record_repository.compare_and_set_memory_record(updated, expected_version=parent.version):
+            raise SocServiceConflictError("经验已被其他审核人修改，请刷新")
+        audit = build_mutation_audit(
+            operation=operation,
+            target_type="memory_record",
+            target_id=parent.memory_id,
+            run_id=parent.source.run_id,
+            alert_id=parent.source.alert_id,
+            queue_id=parent.source.queue_id,
+            context=context,
+            reason=command.reason,
+            command=payload,
+            result_ref=f"{parent.memory_id}:v{updated.version}",
+            payload={"exception_memory_id": child.memory_id, "exception_version": child.version, "result_record_version": updated.version},
+        )
+        self._mutation_audit_repository.append_mutation_audit(audit)
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.MEMORY_UPDATED,
+                request_id=context.request_id,
+                actor=context.actor,
+                payload={"operation": operation.value, "memory_id": parent.memory_id, "exception_memory_id": child.memory_id, "audit_id": audit.audit_id},
+            )
+        )
+        return updated
 
     def _check_memory_publication(self, record: SocMemoryRecord, *, now: datetime, valid_until: datetime | None) -> None:
         if self._record_repository is None or record.applicability is None:
@@ -2733,6 +2889,8 @@ class SocMemoryService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> SocMemoryCandidateReviewResult:
+        if "scope_boundary_releases" in command.metadata:
+            raise SocServiceError("范围恢复必须使用专门的审核命令")
         request_context = context or ServiceRequestContext()
         require_actor_roles(
             request_context,
@@ -2824,6 +2982,16 @@ class SocMemoryService:
             )
         elif command.decision is SocMemoryCandidateReviewDecision.CONFIRM:
             _validate_memory_candidate_transition(candidate.status, command.decision)
+            from soc_agent.memory.scope_options import candidate_with_scope_selections
+
+            if command.record_applicability is not None:
+                selections: dict[str, list[str]] = {}
+                for condition in command.record_applicability.reuse_conditions:
+                    selections.setdefault(condition.facet_key, []).extend(condition.values)
+                try:
+                    candidate = candidate_with_scope_selections(candidate, self._candidate_repository, selections)
+                except ValueError as exc:
+                    raise SocServiceError(str(exc)) from exc
             _validate_memory_record_applicability(
                 candidate,
                 command.record_applicability,
@@ -3417,6 +3585,8 @@ class SocMemoryService:
         """Apply one governed, version-controlled retrieval transition."""
 
         request_context = context or ServiceRequestContext()
+        if "scope_boundary_releases" in command.metadata:
+            raise SocServiceError("范围恢复必须通过独立的版本化治理命令")
         require_actor_roles(
             request_context,
             self.RETRIEVAL_GOVERNOR_ROLES,
@@ -3614,18 +3784,29 @@ class SocMemoryService:
         """Evaluate complete enabled inventory, not a prompt-budgeted shortlist."""
         if self._record_repository is None:
             raise SocServiceNotImplementedError("direct retrieval requires a MemoryRecordRepository")
+        return self._retrieve_records(query, records=self._scope_inventory(query), apply_budget=False)
+
+    def _scope_inventory(self, query: SocMemoryQuery) -> list[SocMemoryRecord]:
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("scope inventory requires a MemoryRecordRepository")
+        if self._mutation_uow is not None and not self._transaction_active:
+            # Only inventory loading is fenced; scoring and model work happen
+            # after releasing the lock, against immutable record snapshots.
+            with self._mutation_uow.mutation_transaction() as repository:
+                repository.lock_memory_governance()
+                return self._governance_clone(repository, self._event_sink)._scope_inventory(query)
         records = []
         offset = 0
         while True:
-            page = self._record_repository.list_memory_records(status=SocMemoryRecordStatus.CONFIRMED, tenant_scope=query.tenant_scope, tenant_id=query.tenant_id, retrieval_enabled=True, limit=200, offset=offset)
-            records.extend(item for item in page if item.decision_directive is not None)
+            page = self._record_repository.list_memory_records(status=None, tenant_scope=query.tenant_scope, tenant_id=query.tenant_id, retrieval_enabled=None, limit=200, offset=offset)
+            records.extend(page)
             if len(page) < 200:
                 break
             offset += len(page)
-        return self._retrieve_records(query, records=records, apply_budget=False)
+        return records
 
     def find_relevant_records(self, query: SocMemoryQuery) -> SocMemoryRetrievalResult:
-        return self._retrieve_records(query)
+        return self._retrieve_records(query, records=self._scope_inventory(query))
 
     def _retrieve_records(self, query: SocMemoryQuery, *, records: list[SocMemoryRecord] | None = None, apply_budget: bool = True) -> SocMemoryRetrievalResult:
         """Return retrieval-enabled confirmed memory records with scoring metadata."""
@@ -3737,7 +3918,12 @@ class SocMemoryService:
                 if profile is not None
                 else []
             )
-            if profile_conflicts and not (record.applicability is not None and record.applicability.selected_behavior_components is not None and applicability_report.status is SocMemoryApplicabilityStatus.APPLICABLE):
+            coverage_reference = record.applicability is not None and record.applicability.covered_behavior_components is not None and applicability_report.context_only_allowed and bool(applicability_report.uncovered_behavior_components)
+            if (
+                profile_conflicts
+                and not coverage_reference
+                and not (record.applicability is not None and record.applicability.selected_behavior_components is not None and applicability_report.status is SocMemoryApplicabilityStatus.APPLICABLE)
+            ):
                 skipped_not_applicable += 1
                 continue
             exact_or_legacy = applicability_report.status in {
@@ -3769,6 +3955,9 @@ class SocMemoryService:
                 )
             )
 
+        from soc_agent.memory.governance import prefer_specific_matches
+
+        scored_matches = prefer_specific_matches(scored_matches, self._profile_registry, published_scopes=deduped_records.values(), query=query)
         selected_matches: list[SocMemoryMatch] = []
         token_total = 0
         for match in sorted(
@@ -4019,7 +4208,7 @@ def _validate_memory_record_applicability(
     base_optional = _normalized_applicability_values(base.optional_facets)
     reviewed_required = _normalized_applicability_values(reviewed.required_facets)
     reviewed_optional = _normalized_applicability_values(reviewed.optional_facets)
-    if reviewed.policy_version in {"soc.memory_applicability_policy.v2", "soc.memory_applicability_policy.v3"}:
+    if reviewed.policy_version in {"soc.memory_applicability_policy.v2", "soc.memory_applicability_policy.v3", "soc.memory_applicability_policy.v4"}:
         preserved = (
             "context_only_required_facet_keys",
             "context_only_missing_facet_keys",
@@ -4031,7 +4220,9 @@ def _validate_memory_record_applicability(
             raise SocServiceError("reuse-only review must preserve candidate base and reference scope")
     if reviewed.selected_behavior_components is not None:
         try:
-            select_memory_behavior_components(base, candidate.facets, reviewed.selected_behavior_components, registry=registry or SocMemoryProfileRegistry())
+            expected = select_memory_behavior_components(base, candidate.facets, reviewed.selected_behavior_components, registry=registry or SocMemoryProfileRegistry())
+            if reviewed.policy_version == "soc.memory_applicability_policy.v4" and reviewed.covered_behavior_components != expected.covered_behavior_components:
+                raise ValueError("reviewed coverage must retain the verified source behavior")
         except ValueError as exc:
             raise SocServiceError(str(exc)) from exc
     elif base.selected_behavior_components is not None:

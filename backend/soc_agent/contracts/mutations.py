@@ -23,6 +23,7 @@ class SocMutationOperation(StrEnum):
     MEMORY_REVISION_CANDIDATE_CREATE = "memory.revision_candidate_create"
     MEMORY_REVISION_REVIEW = "memory.revision_review"
     MEMORY_RETRIEVAL_ACTIVATION = "memory.retrieval_activation"
+    MEMORY_SCOPE_BOUNDARY_RELEASE = "memory.scope_boundary_release"
     MEMORY_PATTERN_OBSERVATION_INGEST = "memory_pattern_observation.ingest"
     APPROVAL_REQUEST_SUBMIT = "approval.request.submit"
     APPROVAL_REQUEST_APPROVE = "approval.request.approve"

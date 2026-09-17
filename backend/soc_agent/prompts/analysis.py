@@ -23,7 +23,7 @@ from soc_agent.pipeline.analysis_context import project_analysis_context
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 from soc_agent.utils.model_json import model_json
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v43"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v44"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
@@ -40,6 +40,11 @@ _MEMORY_REASONING_GUIDANCE = (
 - memory_comparison is deterministic: shared_facets are exact common conditions; current_only_facets and memory_only_facets are deltas; excluded_facet_hits and lesson invalidation conditions are blockers.
 - reviewed_verdict is the human-confirmed outcome of the historical lesson. It is a strong prior when the typed applicability contract is fully satisfied, but it is not proof that an uncited current event occurred.
 - context_only forbids a deterministic Memory directive, not semantic use.
+  uncovered_behavior_components lists current behavior not covered by the reviewed scope. It is NOT proof of maliciousness or a contradiction.
+  Explain which current business question the lesson answers, then judge whether the uncovered behavior changes that explanation.
+  If it does not, you may reach the same reviewed verdict, including false_positive. If it does, identify the decisive E-* difference and decide independently.
+  If the difference genuinely cannot be resolved, name that concrete uncertainty; do not default to suspicious merely because a scope is partial.
+  Your conclusion does not expand the Memory's reviewed scope or confer deterministic reuse authority on future alerts.
   If core behavior and applicability conditions match, deltas are non-material, and no invalidation condition appears, M-* may support any Base verdict. Cite it in decision_context_refs when used.
 - exact_context with applicability_status=applicable, no missing required facets, and no excluded facet hit means every reviewer-approved machine condition matches.
   Start from reviewed_verdict in that case. Depart from it only when exact current E-* evidence establishes a material behavior difference or triggers a stated invalidation condition, and identify that evidence in the reason.
@@ -79,8 +84,17 @@ _MEMORY_REASONING_GUIDANCE = (
                 "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001"], "decision_context_refs": ["EX-M-001"]},
             },
             {
+                "case": "uncovered_behavior_with_current_benign_explanation",
+                "observed": (
+                    "Memory explains a reviewed internal client-service workflow. A new service port is outside its frozen coverage, so Runtime forbids direct reuse. "
+                    "Current E-* facts and governed C-* context identify that port as the same application's health endpoint. "
+                    "Explain this concrete difference; conclude benign from current evidence plus the relevant lesson, not from a wildcard Memory match."
+                ),
+                "output": {"verdict": "false_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-M-001", "EX-C-001"]},
+            },
+            {
                 "case": "context_only_does_not_generalize",
-                "observed": "Some facets match, but the current alert adds a different service, exploit payload, malicious result, authorization scope, or explicit invalidation condition.",
+                "observed": "Some facets match, but current exploit payload and returned malicious effect contradict the reviewed benign workflow. A changed service alone would not prove maliciousness.",
                 "output": {"verdict": "true_positive", "decision_evidence_refs": ["EX-E-001", "EX-E-002"], "decision_context_refs": ["EX-M-001"]},
             },
             {

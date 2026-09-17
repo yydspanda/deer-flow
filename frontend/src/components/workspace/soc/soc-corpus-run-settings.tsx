@@ -19,6 +19,11 @@ export function availableCorpusRunSettings(
   const policyEnabled =
     value.tenant_policy_enabled && controls.tenant_policy_available;
   return {
+    ...(value.refresh_normalization &&
+    controls.normalization_review_available &&
+    value.normalization_review_mode !== "off"
+      ? { refresh_normalization: true }
+      : {}),
     normalization_review_mode: controls.normalization_review_available
       ? value.normalization_review_mode
       : "off",
@@ -59,6 +64,9 @@ export function readCorpusRunSettings(): SocAnalysisExecutionOptions | null {
     )
       return null;
     return {
+      ...(fields.refresh_normalization === true
+        ? { refresh_normalization: true }
+        : {}),
       normalization_review_mode:
         fields.normalization_review_mode as SocAnalysisExecutionOptions["normalization_review_mode"],
       tenant_policy_enabled: fields.tenant_policy_enabled as boolean,
@@ -181,6 +189,30 @@ export function SocCorpusRunSettings({
                     ? "企业策略已关闭"
                     : item.detail}
               </p>
+              {index === 0 && (
+                <label
+                  className="mt-2 flex cursor-pointer items-center gap-2 text-xs"
+                  title="勾选后重新调用语义核对模型；不勾选时，同输入和同配置复用已保存事实，仍重新匹配最新经验与策略。"
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-primary size-4 shrink-0"
+                    aria-label="重新核对事实"
+                    checked={value.refresh_normalization === true}
+                    disabled={
+                      !item.available ||
+                      value.normalization_review_mode === "off"
+                    }
+                    onChange={(event) =>
+                      onChange({
+                        ...value,
+                        refresh_normalization: event.target.checked,
+                      })
+                    }
+                  />
+                  重新核对事实
+                </label>
+              )}
             </div>
           </div>
         ))}
@@ -208,6 +240,7 @@ export function SocRunOptionsSummary({
             ? "仅对比"
             : "关闭"}
       </span>
+      {value.refresh_normalization && <span>事实整理：重新核对</span>}
       <span>企业策略：{value.tenant_policy_enabled ? "开启" : "关闭"}</span>
       <span>
         安全路径：

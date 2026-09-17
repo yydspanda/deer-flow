@@ -226,6 +226,44 @@ for (const width of [1440, 390]) {
         json: { ...memoryCandidate(state), ...fixture },
       }),
     );
+    await page.route(
+      "**/api/soc/memory/candidates/MC-ALPHA-001/scope-options**",
+      (route) => {
+        const prefix = new URL(route.request().url()).searchParams.get(
+          "prefix",
+        );
+        const values: Record<string, string> = {
+          asset: "asset:未知资产组",
+          source: "source:10.0.0.1",
+          destination: "destination:10.0.0.2",
+        };
+        return route.fulfill({
+          json: {
+            groups: Object.keys(values).map((value) => ({
+              facet_key: value === "asset" ? "entity" : "role_entity",
+              value_prefix: value,
+            })),
+            items:
+              prefix && values[prefix]
+                ? [
+                    {
+                      facet_key: prefix === "asset" ? "entity" : "role_entity",
+                      value_prefix: prefix,
+                      value: values[prefix],
+                      sample_count: 1,
+                      from_current_alert: true,
+                      source_alert_ids: [],
+                    },
+                  ]
+                : [],
+            total: prefix ? 1 : 0,
+            offset: 0,
+            limit: 10,
+            source_sample_count: 5,
+          },
+        });
+      },
+    );
     await page.goto("/workspace/soc/review/memory-candidates/MC-ALPHA-001");
     const scope = page.getByRole("region", { name: "经验适用范围" }).first();
     await expect(
@@ -256,7 +294,7 @@ for (const width of [1440, 390]) {
     await scope.getByText("增加直接复用限制", { exact: true }).click();
     await expect(
       scope.locator("[data-memory-scope-options]").getByRole("checkbox"),
-    ).toHaveCount(5);
+    ).toHaveCount(1);
     await expect(
       scope.locator("[data-memory-scope-options]"),
     ).not.toContainText("规则内部标识");
@@ -274,9 +312,12 @@ for (const width of [1440, 390]) {
     await expect(
       scope.getByText("网络检测与响应（NDR）", { exact: true }),
     ).toBeVisible();
-    const asset = scope.getByRole("checkbox", {
-      name: "限制直接复用 资产组 未知资产组",
-    });
+    await scope.getByRole("button", { name: "添加适用范围限制" }).click();
+    const picker = scope.locator("[data-memory-entity-limits]");
+    await picker
+      .getByRole("combobox", { name: "限制维度" })
+      .selectOption("entity/asset");
+    const asset = picker.getByRole("checkbox");
     await asset.check();
     await scope
       .getByText("技术详情：指纹与完整匹配条件", { exact: true })
@@ -289,8 +330,8 @@ for (const width of [1440, 390]) {
     expect(audited.required_facets).toEqual(
       fixture.applicability.required_facets,
     );
-    expect(audited.optional_facets).toEqual(
-      fixture.applicability.optional_facets,
+    expect(new Set(audited.optional_facets.entity)).toEqual(
+      new Set(fixture.applicability.optional_facets.entity),
     );
     expect(audited.context_only_required_facet_keys).toEqual(
       fixture.applicability.context_only_required_facet_keys,
@@ -303,13 +344,15 @@ for (const width of [1440, 390]) {
       },
     ]);
     expect(audited.selected_behavior_components).toEqual(selectedBehavior);
-    expect(audited.policy_version).toBe("soc.memory_applicability_policy.v3");
-    await scope
-      .getByRole("checkbox", { name: "限制直接复用 来源 IP 10.0.0.1" })
-      .check();
-    await scope
-      .getByRole("checkbox", { name: "限制直接复用 目标 IP 10.0.0.2" })
-      .check();
+    expect(audited.policy_version).toBe("soc.memory_applicability_policy.v4");
+    await picker
+      .getByRole("combobox", { name: "限制维度" })
+      .selectOption("role_entity/source");
+    await picker.getByRole("checkbox").check();
+    await picker
+      .getByRole("combobox", { name: "限制维度" })
+      .selectOption("role_entity/destination");
+    await picker.getByRole("checkbox").check();
     const split = JSON.parse(await scope.locator("pre").innerText());
     expect(split.reuse_conditions).toContainEqual({
       facet_key: "role_entity",
@@ -323,6 +366,9 @@ for (const width of [1440, 390]) {
     });
     await scope.getByRole("button", { name: "移除来源 IP限制" }).click();
     await scope.getByRole("button", { name: "移除目标 IP限制" }).click();
+    await picker
+      .getByRole("combobox", { name: "限制维度" })
+      .selectOption("entity/asset");
     await asset.uncheck();
     await asset.check();
     await scope
@@ -367,8 +413,8 @@ for (const width of [1440, 390]) {
     expect(reviewed.required_facets).toEqual(
       fixture.applicability.required_facets,
     );
-    expect(reviewed.optional_facets).toEqual(
-      fixture.applicability.optional_facets,
+    expect(new Set(reviewed.optional_facets.entity)).toEqual(
+      new Set(fixture.applicability.optional_facets.entity),
     );
     expect(reviewed.context_only_required_facet_keys).toEqual(
       fixture.applicability.context_only_required_facet_keys,

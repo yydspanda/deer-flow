@@ -8,6 +8,7 @@ export function withMemoryReuseConditions(
   base: SocMemoryApplicabilitySpec,
   selected: Record<string, string[]>,
   selectedBehavior?: string[] | null,
+  verifiedBehavior?: string[] | null,
 ): SocMemoryApplicabilitySpec {
   const conditions = new Map<string, SocMemoryReuseCondition>();
   for (const item of base.reuse_conditions ?? []) {
@@ -33,9 +34,21 @@ export function withMemoryReuseConditions(
     }
   }
   const behavior = selectedBehavior ?? base.selected_behavior_components;
+  const coverage = base.covered_behavior_components ?? verifiedBehavior;
+  const optional = { ...base.optional_facets };
+  for (const key of ["entity", "role_entity"]) {
+    if (selected[key]?.length)
+      optional[key] = [
+        ...new Set([...(optional[key] ?? []), ...selected[key]]),
+      ].sort();
+  }
   if (!conditions.size && behavior == null) return base;
   return {
     ...base,
+    optional_facets: optional,
+    ...(behavior != null && coverage != null
+      ? { covered_behavior_components: [...new Set(coverage)].sort() }
+      : {}),
     ...(behavior != null
       ? { selected_behavior_components: [...new Set(behavior)].sort() }
       : {}),
@@ -44,7 +57,9 @@ export function withMemoryReuseConditions(
       .map(([, item]) => item),
     policy_version:
       behavior != null
-        ? "soc.memory_applicability_policy.v3"
+        ? coverage != null
+          ? "soc.memory_applicability_policy.v4"
+          : "soc.memory_applicability_policy.v3"
         : "soc.memory_applicability_policy.v2",
   };
 }

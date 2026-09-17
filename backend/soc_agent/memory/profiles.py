@@ -289,15 +289,19 @@ class SocMemoryProfileRegistry:
         self._by_id = {profile.identity.profile_id: profile for profile in (*self._profiles, self._fallback)}
 
     def resolve_request(self, request: LLMAnalysisRequest) -> SocMemoryProfile:
-        return next(
+        profile = next(
             (profile for profile in self._profiles if profile.matches_request(request)),
             self._fallback,
         )
+        restore = getattr(profile, "for_identity", None)
+        return restore(request.memory_profile) if request.memory_profile and callable(restore) else profile
 
     def resolve_run(self, run: AnalysisRun) -> SocMemoryProfile:
         if run.llm_analysis_request is None:
             return self._fallback
-        return self.resolve_request(run.llm_analysis_request)
+        profile = self.resolve_request(run.llm_analysis_request)
+        historical = getattr(profile, "for_run", None)
+        return historical(run) if not run.llm_analysis_request.memory_profile and callable(historical) else profile
 
     def get(self, profile_id: str) -> SocMemoryProfile | None:
         return self._by_id.get(profile_id)

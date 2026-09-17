@@ -19,7 +19,7 @@ from soc_agent.memory.sources import memory_candidate_command_from_run_promotion
 def test_shadow_to_apply_preserves_history_and_projects_real_memory_conditions(tmp_path, monkeypatch):
     repository = _repository(tmp_path)
     text, output = file_output()
-    output["events"][0]["detector_id"] = "vendor-event-123"
+    output["events"][0]["identifiers"] = [{"kind": "rule", "source_field": "rule_id", "value": "vendor-rule-123"}]
     output["additional_facts"] = [{"name": "uuid", "value": "unique-event-123", "meaning": "原始事件编号。", "source_quote": text}]
     alert = source(text)
     alert.tenant_id = "pingan"
@@ -81,9 +81,10 @@ def test_shadow_to_apply_preserves_history_and_projects_real_memory_conditions(t
     assert not applied_workbench.get_state(unprocessed_only=False, readiness="fingerprint_missing").alerts
     assert applied_workbench.get_state(unprocessed_only=False, readiness="fingerprint_missing", focus_alert_id=alert.alert_id).alerts[0].run_id == after.run_id
     assert applied_workbench.get_state(unprocessed_only=False, readiness="singleton_strong").alerts[0].alert_id == alert.alert_id
-    assert all(value not in " ".join(facets["behavior_component_core"]) for value in ["vendor-event-123", "unique-event-123", "a" * 32])
+    assert "vendor-rule-123" in " ".join(facets["behavior_component_core"])
+    assert all(value not in " ".join(facets["behavior_component_core"]) for value in ["unique-event-123", "a" * 32])
     command = memory_candidate_command_from_run_promotion(run, SocMemoryRunPromotionCommand(run_id=run.run_id), profile_registry=profiles)
-    assert command.applicability.profile_version == "8"
+    assert command.applicability.profile_version == "9"
     assert command.applicability.required_facets["behavior_fingerprint"] == facets["behavior_fingerprint"]
     assert "detected_file:yak.exe" in command.facets["behavior_component_core"]
     replayed = applied_workbench.process_alert(alert.alert_id, context=context.model_copy(update={"request_id": "repeat-semantic-apply"}))

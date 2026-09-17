@@ -36,6 +36,10 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   Place each switch immediately before its associated clickable label, with wider spacing between
   options. Never distribute a label and switch to opposite ends of a column; this makes switches
   appear to belong to the next option on wide screens. Preserve the pairing at responsive widths.
+  A separate default-off `重新核对事实` checkbox sends `refresh_normalization=true`; it is
+  disabled and cleared while semantic review is off/unavailable. Otherwise identical inputs
+  reuse compatible saved facts, but current Memory and policy still run. Show the frozen refresh
+  option and server-owned reuse explanation in the trace; never imply a cached final verdict.
 
 - Candidate governance comparison is server-owned. Show the old business conclusion,
   scope relation/differences and an explicit replacement selection in the existing review
@@ -182,9 +186,16 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   Optional business facts remain human input; never fill them from the selected verdict.
   Applicability is server-derived. The browser may select a nonempty subset of verified core
   behaviors and add known optional values as direct-reuse limits; it submits the complete
-  reviewed contract. It cannot change fixed scope, persist the draft automatically, enable
+  reviewed contract. It cannot change fixed scope, persist a Memory automatically, enable
   retrieval, or infer directive eligibility. Removing a core behavior widens only that reviewed
   direct-use requirement and must pass the same governance/confirmation checks.
+- Unsubmitted review forms are cached in tab-scoped session storage for up to 24 hours,
+  keyed by authenticated user, tenant, candidate and its server revision. Restore verdict,
+  business facts, edited/generated Lesson and matching/use choices on refresh or return;
+  restoration never calls the LLM or submits a review. Clear after successful governance,
+  terminal state or candidate revision changes. Invalid/unavailable browser storage must
+  not break editing; show a failure warning if refresh recovery is unavailable. This is
+  not a shared server draft, and does not survive closing the tab or changing browsers.
 - Candidate applicability controls must distinguish server-locked required facets from
   reviewer-selectable core behavior and optional narrowing. Extra selections go into `reuse_conditions`,
   not required/optional/context facet groups; clearing removes only unsaved extra limits. Arbitrary
@@ -202,6 +213,13 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   groups even when stored under role_entity. Limits affect direct verdict reuse only, not otherwise
   eligible reference recall. Saved v1 shared scope limits retain their meaning and are marked.
   Similarity/core/strong/weak aliases stay internal. Never mutate scope on read or invent values.
+- Entity reuse limits load only after `添加适用范围限制`, with dimension/search and ten
+  values per page. Show source counts and current-source priority; never render the full
+  cohort entity union. The coverage preview is server-owned. `为部分告警建立细分经验`
+  preserves its parent and creates a pending, source-backed scope through the shared
+  service, including after automatic recurrence thresholds. No automatic approval.
+  Record scope-boundary restoration is a separate explicit, versioned, audited action;
+  pausing a specific Memory must not make the UI promise broad automatic reuse.
 - Retrieval activation sends current record version, reason, idempotency key, and
   validity/review settings. Refresh server state after mutation. Render context-only
   matches separately from applicable decision directives.

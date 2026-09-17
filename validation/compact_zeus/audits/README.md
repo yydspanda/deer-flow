@@ -207,3 +207,38 @@ Reports separate `adapter_v5`, `adapter_v6`, and `supplemented_v6`: a Profile-on
 fingerprint is not a successful LLM extraction. `model_input_present` checks the entire
 structured model projection, not only the primary raw evidence string.
 Tests: `PYTHONPATH=backend:. backend/.venv/bin/pytest validation/compact_zeus/audits/test_normalization_workbench_review.py -q`.
+
+## Saved Memory Scope Coverage
+
+`memory_scope_coverage.py` compares saved apply-mode runs for 2457581, 2457177,
+2480991 and 2488405 using historical and current production PingAn projectors.
+It opens the database read-only and creates a synthetic reference scope from
+2457581; it does not approve a Memory, submit an alert, or invoke a model.
+
+```bash
+backend/.venv/bin/python validation/compact_zeus/audits/memory_scope_coverage.py \
+  --database backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite \
+  --output backend/.deer-flow/soc-validation/memory-scope-remediation-20260916/saved-run-comparison.json
+```
+
+The ignored private report includes saved request hashes, old/new core features,
+scope outcomes, upstream revision and command. These checks validate matching
+structure, not live extraction consistency or operational risk accuracy.
+# Stable semantic identities and saved facts
+
+`normalization_identity_stability.py` opens the operator database read-only and writes
+test runs only to a temporary SQLite. It compares saved LLM ID choices, identical-input
+fact reuse, explicit recheck and current Memory applicability. `--live` makes one real
+semantic-review call plus a cached rerun; the primary analyzer remains a Stub. A passing
+report is not a primary-analysis accuracy or internal-connectivity acceptance.
+
+```bash
+backend/.venv/bin/python validation/compact_zeus/audits/normalization_identity_stability.py \
+  --database backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite \
+  --before-run RUN-38035FBF0935 --after-run RUN-CD776CCF86B2 \
+  --memory-id MEM-2E214287F75A \
+  --output backend/.deer-flow/soc-validation/normalization-stability-20260917/saved-choices.json
+```
+
+These IDs refer to the saved local experiment. Use reviewed IDs from the target database
+for a different dataset; the script does not recreate missing records or approve Memory.

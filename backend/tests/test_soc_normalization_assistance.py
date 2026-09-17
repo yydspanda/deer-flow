@@ -315,6 +315,93 @@ def test_recovery_reuses_saved_review_only_with_identical_input_and_configuratio
     assert len(client.calls) == 2
 
 
+def test_service_rerun_reuses_facts_but_executes_current_analysis(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
+    from soc_agent.core.service import DeterministicAnalysisRuntime, SocAnalysisService
+    from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
+    from soc_agent.demo.normalization_review import build_normalization_review_view
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'runs.db'}")
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine))
+    client = Client([fact()])
+    reviewer = JsonLLMNormalizationReviewer(client=client, model_name="test")
+
+    def service(refresh=False):
+        return SocAnalysisService(runtime=DeterministicAnalysisRuntime(normalization_reviewer=reviewer, execution_options=SocAnalysisExecutionOptions(normalization_review_mode="apply", refresh_normalization=refresh)), repository=repository)
+
+    original = payload(alert())
+    first = service().analyze(original)
+    second = service().analyze(original)
+    assert len(client.calls) == 1
+    assert first.run_id != second.run_id
+    assert second.analysis is not None
+    assert second.normalization_assistance.metadata["reused_from_run_id"] == first.run_id
+    assert second.normalization_assistance.metadata["provider_call_count"] == 0
+    assert second.normalization_assistance.metadata["usage"] == {}
+    assert second.normalization_assistance.metadata["reference_validation_enabled"] is False
+    assert "复用" in build_normalization_review_view(second).effect_label
+    refreshed = service(True).analyze(original)
+    assert len(client.calls) == 2
+    assert refreshed.normalization_assistance.metadata["fact_snapshot_comparison"]["changed"] is False
+    client.facts.append(fact("entities.host.host_name", "example", 'host="example"'))
+    new = service(True).analyze(original)
+    assert len(client.calls) == 3
+    assert new.normalization_assistance.metadata["fact_snapshot_comparison"]["changed"] is True
+    assert service().analyze(original).normalization_assistance.metadata["reused_from_run_id"] == new.run_id
+    changed = payload(alert('host="other" file="D:\\tools\\yak.exe"'))
+    service().analyze(changed)
+    assert len(client.calls) == 4
+
+
+def test_cache_never_reuses_another_input_or_failed_review():
+    client = Client([fact()])
+    reviewer = JsonLLMNormalizationReviewer(client=client, model_name="test")
+    original = payload(alert())
+    first = analyze_alert(original, normalization_reviewer=reviewer)
+    first.input_hash = "a-different-complete-input"
+    analyze_alert(original, normalization_reviewer=reviewer, normalization_reuse=first)
+    assert len(client.calls) == 2
+    first.input_hash = analyze_alert(original).input_hash
+    first.normalization_assistance.status = "failed"
+    analyze_alert(original, normalization_reviewer=reviewer, normalization_reuse=first)
+    assert len(client.calls) == 3
+
+
+def test_cached_review_does_not_rebill_historical_latency_or_usage():
+    from soc_agent.core.normalization_snapshot import reused_report
+
+    run = analyze_alert(payload(alert()), normalization_reviewer=JsonLLMNormalizationReviewer(client=Client(), model_name="test"))
+    timings = {"admission_wait_duration_ms": 2, "client_total_duration_ms": 10500, "provider_duration_ms": 10498}
+    run.normalization_assistance.metadata.update(timings)
+    cached = reused_report(run)
+    assert not (timings.keys() & cached.metadata.keys())
+    assert cached.metadata["provider_call_count"] == 0
+    assert cached.metadata["usage"] == {}
+    assert all(run.normalization_assistance.metadata[key] == value for key, value in timings.items())
+
+
+@pytest.mark.parametrize("variation", ["tenant", "shadow", "model", "configuration", "adapter"])
+def test_snapshot_scope_and_version_changes_invalidate_reuse(variation):
+    client = Client([fact()])
+    reviewer = JsonLLMNormalizationReviewer(client=client, model_name="test")
+    original = payload(alert())
+    first = analyze_alert(original, normalization_reviewer=reviewer)
+    if variation == "tenant":
+        original["tenant_id"] = "other"
+    elif variation == "adapter":
+        original["entities"]["host"]["host_name"] = "adapter-correction"
+    else:
+        reviewer = JsonLLMNormalizationReviewer(
+            client=client, model_name="other" if variation == "model" else "test", mode="shadow" if variation == "shadow" else "apply", configuration_hash="changed" if variation == "configuration" else "injected-client"
+        )
+    analyze_alert(original, normalization_reviewer=reviewer, normalization_reuse=first)
+    assert len(client.calls) == 2
+
+
 def test_explicit_replay_is_a_new_measurement_not_a_cache_hit():
     client = Client()
     reviewer = JsonLLMNormalizationReviewer(client=client, model_name="test")

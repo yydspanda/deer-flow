@@ -41,6 +41,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core.decision_policy import SocDecisionPolicy
+from soc_agent.core.normalization_snapshot import NormalizationHistory, compare_snapshots, find_snapshot, reused_report
 from soc_agent.core.validator import validate_analysis_result
 from soc_agent.llm.errors import SocLLMResponseProtocolError
 from soc_agent.llm.normalization import apply_normalization_changes
@@ -129,6 +130,7 @@ def analyze_alert(
     role_verifier: RoleAdjudicationVerifier | None = None,
     normalization_reviewer: NormalizationReviewer | None = None,
     normalization_reuse: AnalysisRun | None = None,
+    normalization_history: NormalizationHistory | None = None,
     direct_resolution: DirectResolutionResolver | None = None,
     execution_options: SocAnalysisExecutionOptions | None = None,
     decision_policy: DecisionPolicy | None = None,
@@ -178,7 +180,7 @@ def analyze_alert(
             if resolution is not None:
                 return _finish_direct_run(run, resolution)
         if normalization_reviewer is not None:
-            alert = _apply_semantic_review(run, alert, normalization_reviewer, before_provider=before_provider, previous=normalization_reuse)
+            alert = _apply_semantic_review(run, alert, normalization_reviewer, before_provider=before_provider, previous=normalization_reuse, history=normalization_history)
             run.normalized_alert = alert
             run.normalization_report = _normalization_report(alert)
         entities = _run_step(run, "entity_extract", alert, extract_entities)
@@ -204,6 +206,7 @@ def analyze_alert(
                 resolution = _run_step(run, "direct_memory", analysis_request, lambda _: direct_resolution.resolve_memory(run))
             if resolution is not None:
                 return _finish_direct_run(run, resolution)
+            analysis_request = run.llm_analysis_request
         skill_context = _run_step(
             run,
             "skill_context",
@@ -517,14 +520,17 @@ def _normalize_alert(
     return normalize_alert_payload(payload)
 
 
-def _apply_semantic_review(run: AnalysisRun, alert: AlertInput, reviewer: NormalizationReviewer, *, before_provider: AnalysisBeforeProviderHook | None, previous: AnalysisRun | None) -> AlertInput:
+def _apply_semantic_review(
+    run: AnalysisRun, alert: AlertInput, reviewer: NormalizationReviewer, *, before_provider: AnalysisBeforeProviderHook | None, previous: AnalysisRun | None, history: NormalizationHistory | None = None
+) -> AlertInput:
     request = None
     stage = "build_normalization_input"
     try:
         request = _run_step(run, stage, alert, reviewer.prepare)
         run.normalization_assist_request = request
-        cached = previous.normalization_assistance if previous is not None else None
-        reuse = cached is not None and cached.status not in {"failed", "skipped"} and cached.request_hash == stable_hash(request.model_dump(mode="json"))
+        previous = find_snapshot(run, request, previous, history)
+        refresh = bool(run.execution_options and run.execution_options.refresh_normalization)
+        reuse = previous is not None and not refresh
         if before_provider is not None and request.skip_reason is None and not reuse:
             try:
                 before_provider(
@@ -536,8 +542,7 @@ def _apply_semantic_review(run: AnalysisRun, alert: AlertInput, reviewer: Normal
                 raise SocRuntimeLifecycleError("failed to persist normalization request journal before provider invocation") from exc
         stage = "normalization_assist"
         if reuse:
-            report = cached.model_copy(deep=True)
-            report.metadata = {"reused_from_run_id": previous.run_id, "usage": {}, "provider_call_count": 0}
+            report = reused_report(previous)
             report = _run_step(run, stage, request, lambda _: report)
         else:
             report = _run_step(run, stage, request, lambda _: reviewer.review(alert, request))
@@ -548,7 +553,10 @@ def _apply_semantic_review(run: AnalysisRun, alert: AlertInput, reviewer: Normal
         elif report.status == "skipped":
             run.steps[-1].status = PipelineStepStatus.SKIPPED
         stage = "apply_normalization"
-        return _run_step(run, stage, report, lambda _: apply_normalization_changes(alert, request, report))
+        updated = _run_step(run, stage, report, lambda _: apply_normalization_changes(alert, request, report))
+        if refresh and previous is not None and report.mode == "apply" and report.status not in {"failed", "skipped"}:
+            report.metadata["fact_snapshot_comparison"] = compare_snapshots(previous, updated)
+        return updated
     except SocRuntimeLifecycleError:
         # No provider may run without its durable invocation journal.
         raise

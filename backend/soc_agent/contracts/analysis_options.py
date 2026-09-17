@@ -9,6 +9,7 @@ class SocAnalysisExecutionOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     normalization_review_mode: Literal["off", "shadow", "apply"] = "off"
+    refresh_normalization: StrictBool = False
     tenant_policy_enabled: StrictBool = False
     tenant_policy_advisor_enabled: StrictBool = False
     tenant_policy_signal_providers_enabled: StrictBool = False

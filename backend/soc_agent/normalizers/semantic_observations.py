@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from soc_agent.contracts import AlertInput, CanonicalFieldProvenance, FileObservationRef, HttpObservationRef, NetworkObservationRef, NormalizationAssistRequest, NormalizationAssistResult, ProcessNodeRef, ProcessObservationRef
 from soc_agent.contracts.normalization import (
     ContextObservationRef,
+    DetectionIdentifier,
     DetectionObservationRef,
     NormalizationAdditionalFactProposal,
     NormalizationEventProposal,
@@ -24,6 +25,7 @@ from soc_agent.contracts.normalization import (
     NormalizationSource,
     SupplementaryFactRef,
 )
+from soc_agent.normalizers.detection_identity import resolve_detection_identity
 from soc_agent.utils.hashing import stable_hash
 
 OBJECT_FIELDS = {
@@ -287,6 +289,18 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
     for group, cls, target in (("events", NormalizationEventProposal, "detections"), ("additional_facts", NormalizationAdditionalFactProposal, "supplementary_facts")):
         for index, item in enumerate(payload.get(group, [])):
             try:
+                if group == "events" and isinstance(item, dict):
+                    item = dict(item)
+                    raw_identifiers = item.get("identifiers", [])
+                    item["identifiers"] = []
+                    if not isinstance(raw_identifiers, list):
+                        report.issues.append(f"检测记录 {index + 1} 的标识不是列表，保留事件其余内容。")
+                        raw_identifiers = []
+                    for identifier in raw_identifiers[:16]:
+                        try:
+                            item["identifiers"].append(DetectionIdentifier.model_validate(identifier))
+                        except ValidationError:
+                            report.issues.append(f"检测记录 {index + 1} 的一项标识类型未识别，保留事件其余内容。")
                 proposal = cls.model_validate(item)
                 source, start = _quote(proposal, request)
                 if group == "events":
@@ -297,6 +311,11 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                     )
                     attrs = proposal.model_dump(exclude={"source_id", "source_quote", "quote_start"})
                     attrs["subject_refs"] = [subject(ref, source) for ref in proposal.subject_refs]
+                    _check_values([item.value for item in proposal.identifiers], proposal.source_quote, reference_validation_enabled=request.reference_validation_enabled)
+                    declared = [DetectionIdentifier.model_validate(item) for item in request.source_identifiers.get(source.source_id, [])]
+                    attrs.update(resolve_detection_identity(proposal.identifiers, declared, proposal.detector_id))
+                    if attrs["identity_basis"] == "ambiguous":
+                        report.issues.append(f"检测记录 {index + 1} 存在多个同类标识，全部保留，不任选一个作为匹配标识。")
                     cls_out = DetectionObservationRef
                 else:
                     _check_values([proposal.value], proposal.source_quote, reference_validation_enabled=request.reference_validation_enabled)

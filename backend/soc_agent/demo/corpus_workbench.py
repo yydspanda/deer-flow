@@ -671,7 +671,7 @@ def _matches_corpus_run(run: AnalysisRun, case: _CorpusCase) -> bool:
 
 
 def _observation_matches_run(observation: Any, run: AnalysisRun | None) -> bool:
-    if run is None or run.llm_analysis_request is None or run.direct_resolution is not None:
+    if run is None or run.llm_analysis_request is None or (run.direct_resolution is not None and run.direct_resolution.source_kind != "memory"):
         return False
     profile = PingAnSocMemoryProfile.for_run(run)
     identity = profile.identity
@@ -1253,7 +1253,7 @@ class SocCorpusWorkbenchService:
                 context=request_context,
             )
 
-        if run.status is not AnalysisRunStatus.FAILED and run.direct_resolution is None:
+        if run.status is not AnalysisRunStatus.FAILED and (run.direct_resolution is None or run.direct_resolution.source_kind == "memory"):
             # Replays may acquire new semantic features. The Pattern service deduplicates
             # the same alert within the same signature; never pin a new run to old facets.
             aggregation = self._pattern_service.observe_run(
@@ -2291,10 +2291,10 @@ def _execution_view(
         )
 
     pattern_status: CorpusExecutionPhaseStatus
-    if run is not None and run.direct_resolution is not None:
-        pattern_status = "skipped"
-    elif observation is not None:
+    if observation is not None:
         pattern_status = "success"
+    elif run is not None and run.direct_resolution is not None:
+        pattern_status = "skipped"
     elif run is not None and run.status is AnalysisRunStatus.FAILED:
         pattern_status = "skipped"
     elif run is not None and run.status is not AnalysisRunStatus.RUNNING:
@@ -2432,7 +2432,7 @@ def _phase_status(
     execution_status: CorpusExecutionStatus,
 ) -> CorpusExecutionPhaseStatus:
     statuses = {item.status for item in steps}
-    if phase == "memory" and run is not None and run.direct_resolution is not None:
+    if phase == "memory" and run is not None and run.direct_resolution is not None and "success" not in statuses:
         return "skipped"
     if "failed" in statuses:
         return "failed"
@@ -2460,6 +2460,8 @@ def _phase_summary(
     if run is not None and run.direct_resolution is not None:
         policy_direct = run.direct_resolution.source_kind == "tenant_policy"
         if phase == "memory":
+            if not policy_direct and observation is not None:
+                return "已记录本次告警的事实观察与经验复用来源；复用结论不计为新的独立确认样本。"
             return "企业规则已确定处置，本次未检索或复用 Memory，也不累计为新的经验确认样本。" if policy_direct else "已记录审核经验的直接复用；不把复用结果累计为独立确认样本。"
         if phase == "decision":
             if policy_direct:
@@ -2541,6 +2543,8 @@ def _phase_metrics(
     if run.direct_resolution is not None:
         if phase == "decision":
             return _direct_decision_metrics(run)
+        if phase == "memory" and observation is not None and run.direct_resolution.source_kind == "memory":
+            return {"observation_id": observation.observation_id, "independent_confirmation_added": False}
         if phase in {"context", "validation", "memory"}:
             return {}
         if phase == "reasoning":

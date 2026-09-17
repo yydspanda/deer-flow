@@ -25,7 +25,8 @@ def select_memory_behavior_components(
         {
             **spec.model_dump(),
             "selected_behavior_components": values,
-            "policy_version": "soc.memory_applicability_policy.v3",
+            "covered_behavior_components": spec.covered_behavior_components or sorted({value.casefold() for value in allowed}),
+            "policy_version": "soc.memory_applicability_policy.v4",
         }
     )
 

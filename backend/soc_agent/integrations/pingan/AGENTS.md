@@ -40,7 +40,13 @@ generic `soc_agent` code.
   scope, not only parser failures. PingAn continues to own evidence selection and field
   semantics; no model call belongs in a parser or the offline index. The generic v2 kernel
   merges typed observations and source-bound detector events into the same AlertInput.
-  PingAn semantic feature consumption is Profile 8 / v6 only in `apply`; `off/shadow`
+  `normalizers/pingan_identity.py` declares known `rule_id`, `_origin.sig_id`, `virus_id`
+  identities per parsed message. They are different namespaces, never alternatives the model
+  may swap on rerun. Generic resolution and saved-fact reuse live outside PingAn; unknown
+  vendor fields can still arrive as typed model proposals. Do not infer detector IDs from hashes
+  or copy one message's identity to another message. Newly discovered behavior stays visible
+  even if an older reviewed Memory does not cover it.
+  PingAn semantic feature consumption is Profile 9 / v7 only in `apply`; `off/shadow`
   retain Profile 7 / v5. Detector category/name plus the detected file can differentiate
   events sharing a parent process; hashes, IPs and user-specific directories are not these
   new feature anchors. Do not claim full coverage or migrate old Memory automatically.

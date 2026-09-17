@@ -87,6 +87,7 @@ class ConfirmedMemoryAnalysisRequestEnricher:
             # let an alert payload select a broader or different memory scope.
             request = request.model_copy(update={"environment": self._environment})
         profile = self._profile_registry.resolve_request(request)
+        request = request.model_copy(update={"memory_profile": {"profile_id": profile.identity.profile_id, "profile_version": profile.identity.profile_version, "feature_schema_version": profile.identity.feature_schema_version}})
         query = memory_query_from_analysis_request(request, profile=profile)
         try:
             result = self._retriever.find_relevant_records(query)
@@ -132,6 +133,23 @@ def _select_memory_reasoning_context(
     exclusions: list[AnalysisMemoryContextExclusion] = []
     for item in items:
         comparison = item.memory_comparison
+        report = item.metadata.get("applicability_report", {})
+        preferred_ids = set(report.get("preferred_memory_ids", [])) if isinstance(report, dict) else set()
+        scoped = [other for other in exact if other.metadata.get("memory_id") in preferred_ids]
+        if scoped:
+            exclusions.append(
+                AnalysisMemoryContextExclusion(
+                    source_id=item.source_id,
+                    summary=item.summary[:2000],
+                    record_content_hash=item.metadata.get("record_content_hash"),
+                    record_facets_hash=item.metadata.get("record_facets_hash"),
+                    memory_comparison=comparison,
+                    preferred_source_ids=sorted({other.source_id for other in scoped}),
+                    reason_code="broader_scope_superseded",
+                    explanation="当前告警完整落在更具体的审核范围，优先采用该经验；宽经验仅保留在差异审计中。",
+                )
+            )
+            continue
         if comparison is None or comparison.applicability_status is not SocMemoryApplicabilityStatus.PARTIAL or comparison.reviewed_verdict not in definite:
             selected.append(item)
             continue
@@ -169,6 +187,9 @@ def memory_query_from_analysis_request(
 
     resolved_profile = profile or GenericSocMemoryProfile()
     facets = resolved_profile.project_query_facets(request)
+    from soc_agent.memory.scope_bindings import scope_bindings
+
+    gap_projector = getattr(resolved_profile, "projection_gaps", None)
 
     text_terms: list[str] = []
     for value in (
@@ -181,6 +202,8 @@ def memory_query_from_analysis_request(
     tenant_scope = request.tenant_id or "global"
     return SocMemoryQuery(
         policy_version=policy_version,
+        scope_bindings=scope_bindings(request),
+        projection_gaps=gap_projector(request) if gap_projector else [],
         tenant_scope=tenant_scope,
         tenant_id=request.tenant_id,
         facets=facets,
@@ -321,6 +344,18 @@ def _memory_context_comparison(
 ) -> AnalysisMemoryContextComparison:
     record_facets = _normalized_facets(match.record.facets)
     current_facets = _normalized_facets(query_facets)
+    spec = match.record.applicability
+    if spec is not None and spec.covered_behavior_components is not None:
+        record_facets = _normalized_facets({key: values for key, values in spec.required_facets.items() if key != "behavior_fingerprint"})
+        record_facets["behavior_component_core"] = list(spec.covered_behavior_components)
+        for condition in spec.reuse_conditions:
+            values = record_facets.setdefault(condition.facet_key, [])
+            values.extend(value.casefold() for value in condition.values)
+        current_facets = {key: values for key, values in current_facets.items() if key in record_facets}
+        for key in ("entity", "role_entity"):
+            prefixes = {v.split(":", 1)[0] for v in record_facets.get(key, [])}
+            if key in current_facets:
+                current_facets[key] = [v for v in current_facets[key] if v.split(":", 1)[0] in prefixes]
     shared: dict[str, list[str]] = {}
     current_only: dict[str, list[str]] = {}
     memory_only: dict[str, list[str]] = {}
@@ -339,8 +374,18 @@ def _memory_context_comparison(
         reviewed_verdict=match.record.reviewed_verdict,
         decision_directive_applicable=directive_applicable,
         shared_facets=shared,
-        selected_behavior_components=(report.selected_behavior_components if report else [])[:40],
-        missing_behavior_components=(report.missing_behavior_components if report else [])[:40],
+        selected_behavior_components=(report.selected_behavior_components if report else [])[:100],
+        missing_behavior_components=(report.missing_behavior_components if report else [])[:100],
+        uncovered_behavior_components=(report.uncovered_behavior_components if report else [])[:100],
+        applicability_explanation=(
+            "旧经验与当前条件相关，但未覆盖列出的新增核心行为。本次仅供参考，请判断差异是否改变业务性质；未覆盖不等于已证明恶意。"
+            if report and report.uncovered_behavior_components
+            else "当前范围已被更具体的审核经验划分，本经验不再直接决定结论；若细分经验暂停或过期，仍需正常研判，不能恢复套用宽经验。"
+            if report and report.preferred_memory_ids
+            else "当前检测的对象绑定或行为覆盖尚不能完整核对，本次仅参考旧经验，由模型结合当前事实判断。"
+            if report and {"reuse_object_scope_not_covered", "behavior_projection_incomplete"} & set(report.reason_codes)
+            else None
+        ),
         current_only_facets=current_only,
         memory_only_facets=memory_only,
         missing_reuse_conditions=[item.model_copy(update={"values": item.values[:_MAX_MODEL_COMPARISON_VALUES]}) for item in (report.missing_reuse_conditions[:_MAX_MODEL_COMPARISON_FACETS] if report is not None else [])],

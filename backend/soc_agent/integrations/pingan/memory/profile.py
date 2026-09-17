@@ -67,16 +67,32 @@ class PingAnSocMemoryProfile:
         aggregation_window_seconds=30 * 24 * 60 * 60,
     )
 
-    def __init__(self, *, semantic_features: bool = False) -> None:
+    def __init__(self, *, semantic_features: bool = False, stable_semantics: bool = True) -> None:
         self.semantic_features = semantic_features
+        self.stable_semantics = stable_semantics
         if semantic_features:
-            self.identity = SocMemoryProfileIdentity(profile_id="pingan.soc", profile_version="8", feature_schema_version="pingan.soc.memory_features.v6", aggregation_window_seconds=30 * 24 * 60 * 60)
+            self.identity = SocMemoryProfileIdentity(
+                profile_id="pingan.soc",
+                profile_version="9" if stable_semantics else "8",
+                feature_schema_version="pingan.soc.memory_features.v7" if stable_semantics else "pingan.soc.memory_features.v6",
+                aggregation_window_seconds=30 * 24 * 60 * 60,
+            )
 
     @classmethod
     def for_run(cls, run: AnalysisRun) -> PingAnSocMemoryProfile:
         """Read historical features using the run's saved mode, not today's rollout."""
         report = run.normalization_assistance
-        return cls(semantic_features=report is not None and report.mode == "apply")
+        saved = run.llm_analysis_request.memory_profile if run.llm_analysis_request else {}
+        return cls(semantic_features=report is not None and report.mode == "apply", stable_semantics=saved.get("profile_version") == "9")
+
+    def for_identity(self, identity: dict[str, str]):
+        version = identity.get("profile_version")
+        if version not in {"7", "8", "9"}:
+            raise ValueError("unsupported saved PingAn Memory profile")
+        restored = type(self)(semantic_features=version != "7", stable_semantics=version == "9")
+        if identity.get("profile_id") != restored.identity.profile_id or identity.get("feature_schema_version") != restored.identity.feature_schema_version:
+            raise ValueError("saved PingAn Memory feature schema does not match its profile version")
+        return restored
 
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
         integration = (request.source.integration_name or "").strip().casefold()
@@ -93,6 +109,7 @@ class PingAnSocMemoryProfile:
             memory_facets_from_analysis_request(request),
             request=request,
             semantic_features=self.semantic_features,
+            stable_semantics=self.stable_semantics,
         )
 
     def project_run_facets(
@@ -106,7 +123,18 @@ class PingAnSocMemoryProfile:
             memory_facets_from_analysis_run(run),
             request=request,
             semantic_features=self.semantic_features,
+            stable_semantics=self.stable_semantics,
         )
+
+    def projection_gaps(self, request: LLMAnalysisRequest) -> list[str]:
+        if not self.semantic_features or not self.stable_semantics:
+            return []
+        from soc_agent.integrations.pingan.memory.semantic_features import semantic_projection_gaps
+
+        gaps = semantic_projection_gaps(request)
+        if len(self.project_query_facets(request).get("behavior_component_core", [])) > 100:
+            gaps.append("core_behavior_exceeds_review_capacity")
+        return gaps
 
     def build_pattern_signature(
         self,
@@ -291,6 +319,7 @@ class PingAnSocMemoryProfile:
         context_only_required = sorted(set(required) - {"behavior_fingerprint"}) if decision_eligible and detection_key and optional.get("behavior_component_strong") else []
         context_only_missing = ["behavior_fingerprint"] if context_only_required else []
         context_only_similarity = ["behavior_component_strong"] if context_only_required else []
+        coverage = consensus_facets.get("behavior_component_core", []) if decision_eligible and self.identity.profile_version == "9" else []
         return SocMemoryApplicabilitySpec(
             profile_id=self.identity.profile_id,
             profile_version=self.identity.profile_version,
@@ -309,6 +338,7 @@ class PingAnSocMemoryProfile:
             context_only_required_facet_keys=context_only_required,
             context_only_missing_facet_keys=context_only_missing,
             context_only_similarity_facet_keys=context_only_similarity,
+            **({"selected_behavior_components": coverage, "covered_behavior_components": coverage, "policy_version": "soc.memory_applicability_policy.v4"} if coverage and len(coverage) <= 100 else {}),
         )
 
     def retrieval_conflict_reasons(
@@ -513,6 +543,7 @@ def _project_pingan_facets(
     *,
     request: LLMAnalysisRequest,
     semantic_features: bool = False,
+    stable_semantics: bool = True,
 ) -> dict[str, list[str]]:
     projected = {key: list(values) for key, values in facets.items()}
     signature = _detection_signature(request)
@@ -527,7 +558,7 @@ def _project_pingan_facets(
 
         base_components = [c for c in base_components if valid_component(c)]
         projected["behavior_component"] = list(base_components)
-        semantic_core, semantic_strong = semantic_behavior_components(request)
+        semantic_core, semantic_strong = semantic_behavior_components(request, stable=stable_semantics)
         tenant_components.extend(semantic_core)
         tenant_core_components.extend(semantic_core)
     for family in _pingan_attack_behavior_families(request, projected):
@@ -546,7 +577,7 @@ def _project_pingan_facets(
         projected["behavior_fingerprint"] = [
             stable_hash(
                 {
-                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v6" if semantic_features else "pingan.soc.memory_behavior_fingerprint.v5",
+                    "schema_version": ("pingan.soc.memory_behavior_fingerprint.v7" if stable_semantics else "pingan.soc.memory_behavior_fingerprint.v6") if semantic_features else "pingan.soc.memory_behavior_fingerprint.v5",
                     "components": fingerprint_components,
                 }
             )

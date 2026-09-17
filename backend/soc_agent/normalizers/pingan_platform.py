@@ -48,6 +48,7 @@ from soc_agent.normalizers.pingan_hids import (
     hids_primary_process,
     hids_primary_username,
 )
+from soc_agent.normalizers.pingan_identity import source_detection_identifiers
 from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
 from soc_agent.normalizers.pingan_ndr import (
     build_ndr_canonical_field_provenance,
@@ -224,6 +225,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         "extensions": {
             "legacy_platform": _legacy_platform_context(original, alert, hit_log, evidence_event, soar_asset),
             "parsed_raw_messages": [item.model_dump(mode="json", exclude_none=True) for item in parsed_messages],
+            "source_detection_identifiers": source_detection_identifiers(parsed_messages),
             "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in role_claims],
             "scenario_signals": [item.model_dump(mode="json", exclude_none=True) for item in scenario_signals],
             "field_importance_rules": _field_importance_rules(source_type),

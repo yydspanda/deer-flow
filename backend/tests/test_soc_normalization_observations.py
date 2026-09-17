@@ -403,7 +403,7 @@ def test_detection_features_keep_label_and_file_pairing():
     assert features[0] != features[1]
 
 
-@pytest.mark.parametrize("mode,version", [("off", "7"), ("shadow", "7"), ("apply", "8")])
+@pytest.mark.parametrize("mode,version", [("off", "7"), ("shadow", "7"), ("apply", "9")])
 def test_semantic_profile_rollout_does_not_change_off_or_shadow(monkeypatch, mode, version):
     from soc_agent.application.memory import build_soc_memory_profile_registry
 
