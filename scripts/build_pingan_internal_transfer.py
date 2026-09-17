@@ -1476,7 +1476,7 @@ python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
 第二次必须看到 `ready=true`、`applied=true`，且四个文件均为
 `target_verified=true`。校验基准来自 private overlay 中随包冻结的 corpus manifest/index；
 任何文件缺失、错版本、大小或 SHA-256 不一致都会 fail closed，并且不会覆盖已有目标文件。
-完成后语料 Workbench 可直接使用，不需要在内网重建 4343 条索引。
+完成后语料 Workbench 可直接使用，不需要在内网重新生成配套索引。
 
 ## 5. Host Check And Install / 主机检查与依赖安装
 
@@ -1601,6 +1601,7 @@ backend/.venv/bin/python backend/scripts/soc_pingan_model_gateway_smoke.py \\
 
 到这里，Web 演示、Fake E2E 和真实模型连通性已经完成。只需要页面演示或本地研判时在此停止，
 **不需要提供告警 ID，也不要切换 internal Provider**。
+本次“沉淀经验 / 验证效果”请直接进入第7.1节，不执行后面的 ZEUS 真实回写验收。
 
 只有要验证真实旧 ZEUS `submit -> precheck -> Runtime -> status -> callback` 闭环时，才运行请求
 准备器，并在提示后输入一个获批且当前仍处于“待审阅”的 ZEUS `alert_id`：
@@ -1791,7 +1792,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 服务启动且模型 Smoke 通过后，按项目内
 `.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md` 操作。
 它提供第一批5条、同轮续跑50条/全部、仅审核本实验候选、冻结已审核经验后第二批验证、
-补充样本单独统计、共享可编辑草稿/后台起草、暂停/恢复和固定轮次导出命令。
+补充样本单独统计、共享可编辑草稿/后台起草、暂停/恢复、固定轮次导出、定向复测和网页前后对照。
 仅首次从零实验按其第1.1节使用 `reset-dev-data` 预览，明确确认后才备份并重置SOC DEV库；
 常规部署和续跑不清库。无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。
