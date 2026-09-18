@@ -20,6 +20,14 @@ file for SOC code. The authoritative product and engineering documents are:
   Bind source/index/store hashes and static profile; preserve raw row identities, reject
   duplicates rather than silently dropping them, and never rebuild an index implicitly.
   Static navigation groups are not the semantic-reviewed Runtime Memory patterns.
+  PingAn's `integrations/pingan/corpus_validation.py` owns exact detector/source/topic
+  exclusions shared by Web and CLI. Apply them after the chronological split so other
+  members retain their batch and source position; omit excluded rows from batch lists,
+  groups, totals and dispatch without new UI states. Keep the full source catalog and
+  payload identity verification, and reject excluded manual/payload execution before
+  model calls. The filtered plan changes its identity; old rounds remain immutable and
+  their existing configuration fence blocks resume. No database migration or raw-data
+  rewrite belongs in this scope change.
   Preview alone is not execution authorization. `demo/corpus_experiments.py` owns
   immutable experiments/rounds and dispatches `corpus_experiment` Processing Jobs;
   the legacy worker consumes only `alert_analysis`. The HTTP CLI never starts a
@@ -35,6 +43,26 @@ file for SOC code. The authoritative product and engineering documents are:
   This is readiness inspection, never implicit migration or reset. Host startup owns migrations.
   DEV owns one Gateway; finish legacy interactive work before preparing experiments.
   Once an experiment exists, manual runs must use durable round controls too.
+  Corpus list `run_status` filtering applies before SQL counts/pagination. Successful
+  execution includes completed and analysis-only runs; active reruns override earlier
+  terminal rows. Activity merges local claims with durable claimed/prechecking/analyzing/
+  projecting jobs scoped to the immutable corpus plan, tenant and environment, including
+  manual work in paused rounds. Queued/terminal jobs are excluded; read only compact
+  job columns, and reuse one activity snapshot for list counts and visible row projections.
+  If batch schema is unavailable, retain legacy activity/browsing while batch APIs return
+  the existing actionable upgrade error. Cache only successful schema readiness checks.
+  Also overlay the latest scoped durable job failure before list counts/pagination,
+  including failures before Runtime saves an AnalysisRun. Rank attempts before filtering
+  failures so superseded errors cannot hide a newer success; active claims take priority.
+  Use compact job fields and one failure snapshot for summaries and visible rows, without
+  rewriting cached Run projections or loading audit bundles. A failed attempt with no Run
+  must not present an earlier successful Run's conclusion as its result.
+  Detail/execution reads filter the failure query to the selected alert before ranking.
+  Execution reports a durable failure even without a Run; fixed historical audit reads
+  continue to use their explicit Run ID and are never rewritten by the live overlay.
+  This browse filter never enters quick-validation dispatch commands.
+  Corpus alert projections omit operator outcomes while a run is pending/running or an
+  active execution owns the alert; absent intermediate analysis is not a terminal failure.
   Round result/audit reads pin Run ID and source hash, never the latest alert result.
   Reports separate matched-group validation from sparse exploration and unknown usage.
   Offline comparisons require the same experiment, dataset identity and explicit batch;
@@ -52,7 +80,7 @@ file for SOC code. The authoritative product and engineering documents are:
   `core/memory_working_drafts.py` owns versioned draft-only working copies (`0031`),
   independent of approved Memory. `core/memory_draft_jobs.py` queues reviewer-selected
   verdicts through the existing `memory_lesson_draft` workload and lesson service.
-  The same dispatcher and locked three-slot budget cover corpus and drafting jobs;
+  The same dispatcher and locked server-configured budget cover corpus and drafting jobs;
   model admission remains shared with interactive SOC calls. No LLM runs while a DB
   write transaction is held. Save generation checkpoints before projection; source or
   draft changes retain results without overwriting edits. Uncertain remote completion
@@ -80,6 +108,23 @@ file for SOC code. The authoritative product and engineering documents are:
   history. Browser filters never enter execution commands.
   No new table or migration is needed. Queued jobs keep their original configuration;
   drift blocks dispatch and only an explicit rerun may capture new settings.
+  Quick batch start/continue refreshes the existing round's concurrency from the current
+  server limit. Capacity is a resource control excluded from the behavior snapshot;
+  this does not replace job identities, options or Memory snapshots. Single-alert manual
+  dispatch must still leave unrelated bulk work paused.
+  Host DEV may restrict configuration changes to its deployment machine. The Gateway
+  derives this capability from the trusted client address, never caller headers or UI
+  state. LAN users retain start/pause/rerun access using the last saved options for the
+  current plan's selected batch, or deployment defaults before its first round. Read
+  only that options projection; do not load Memory snapshots for configuration polling.
+  Compare submitted options and admit new work under the same governance transaction
+  for quick commands and explicit round creation, so a stale remote request cannot
+  overwrite a newer local selection. Pause never depends on current option equality.
+  Resolve explicit-round settings through the current plan's canonical experiment,
+  matching configuration GET and quick commands, rather than the caller-selected
+  experiment's latest round. Read-only callers cannot create new rounds for historical
+  plans; existing idempotent round replies and historical reads remain available.
+  Workbench permission projections are request-local copies, not cached service state.
   Dispatcher priority is server-derived from an explicit one-alert selection or a
   persisted `manual_dispatch` job intent. Paused/prepared rounds may dispatch only
   explicitly requested manual jobs; Gateway lifespan also detects their queued/active

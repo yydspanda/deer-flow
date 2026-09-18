@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException, Query, Request
 
 from app.gateway.routers import soc_corpus_experiments
 from app.gateway.routers.soc_transport import create_soc_router
+from app.gateway.soc_corpus_control import can_configure_corpus, require_saved_corpus_options
 from app.gateway.soc_dependencies import soc_service_context_from_request
 from app.gateway.soc_dev_workbench import resolve_soc_dev_workbench_runtime, strict_env_bool
 from soc_agent.application.analysis import build_soc_analysis_service
@@ -22,6 +23,7 @@ from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
     CorpusComparisonFilter,
     CorpusReadiness,
+    CorpusRunStatusFilter,
     SocCorpusGroupPage,
     SocCorpusWorkbenchActivity,
     SocCorpusWorkbenchAuditBundle,
@@ -131,11 +133,13 @@ CorpusWorkbenchServiceDep = Annotated[
 )
 def get_corpus_workbench_state(
     service: CorpusWorkbenchServiceDep,
+    request: Request,
     search: Annotated[str | None, Query(max_length=256)] = None,
     readiness: CorpusReadiness | None = None,
     source_type: Annotated[str | None, Query(max_length=64)] = None,
     group_id: Annotated[str | None, Query(max_length=512)] = None,
     comparison: CorpusComparisonFilter | None = None,
+    run_status: CorpusRunStatusFilter | None = None,
     unprocessed_only: bool = True,
     include_group_catalog: bool = True,
     include_rehearsal: bool = True,
@@ -145,12 +149,13 @@ def get_corpus_workbench_state(
     batch: CorpusBatch | None = None,
     validation_tier: CorpusValidationTier | None = None,
 ) -> SocCorpusWorkbenchState:
-    return service.get_state(
+    state = service.get_state(
         search=search,
         readiness=readiness,
         source_type=source_type,
         group_id=group_id,
         comparison=comparison,
+        run_status=run_status,
         unprocessed_only=unprocessed_only,
         include_group_catalog=include_group_catalog,
         include_rehearsal=include_rehearsal,
@@ -160,6 +165,9 @@ def get_corpus_workbench_state(
         batch=batch,
         validation_tier=validation_tier,
     )
+    if getattr(state, "run_controls", None) is not None:
+        state = state.model_copy(update={"run_controls": state.run_controls.model_copy(update={"can_configure": can_configure_corpus(request)})})
+    return state
 
 
 @router.get("/groups", response_model=SocCorpusGroupPage, response_model_exclude_none=True)
@@ -245,6 +253,9 @@ def process_corpus_workbench_alert(
         )
     try:
         if body is not None and body.settings is not None:
+            if not can_configure_corpus(request):
+                defaults = service.run_controls.defaults if service.run_controls else SocAnalysisExecutionOptions()
+                require_saved_corpus_options(request, body.settings, defaults)
             return service.start_alert(alert_id, context=context, settings=body.settings)
         return service.start_alert(alert_id, context=context)
     except (SocCorpusWorkbenchBusyError, SocCorpusWorkbenchCapacityError) as exc:

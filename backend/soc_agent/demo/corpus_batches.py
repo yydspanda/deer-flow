@@ -1,7 +1,7 @@
 """Label-blind, group-wise corpus partitions; no Runtime or persistence side effects."""
 
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -103,12 +103,13 @@ def _time(value: str | None) -> tuple[datetime | None, str | None]:
         return None, "event_time_invalid"
 
 
-def build_corpus_batch_plan(cases: Iterable[CorpusBatchCase], *, source_identity: dict[str, Any]) -> CorpusBatchPlan:
+def build_corpus_batch_plan(cases: Iterable[CorpusBatchCase], *, source_identity: dict[str, Any], excluded_alert_ids: Collection[str] = ()) -> CorpusBatchPlan:
     cases = list(cases)
     if not cases:
         raise ValueError("empty corpus cannot form a batch preview")
     if len({row.alert_id for row in cases}) != len(cases):
         raise ValueError("duplicate alert identity; reconcile source records before splitting")
+    excluded = frozenset(excluded_alert_ids)
     grouped: dict[str, list[CorpusBatchCase]] = defaultdict(list)
     for row in cases:
         grouped[row.group_id].append(row)
@@ -135,6 +136,12 @@ def build_corpus_batch_plan(cases: Iterable[CorpusBatchCase], *, source_identity
                     position_in_group=position + 1,
                 )
             )
+        # Apply scope after the split: exclusions must not promote holdouts into
+        # learning or change the original position of any remaining source row.
+        group_members = [row for row in group_members if row.alert_id not in excluded]
+        if not group_members:
+            continue
+        rows = group_members
         learning_rows = [row for row in group_members if row.batch == "learning"]
         validation_rows = [row for row in group_members if row.validation_tier == "main"]
         last = learning_rows[-1] if learning_rows else None
@@ -145,7 +152,7 @@ def build_corpus_batch_plan(cases: Iterable[CorpusBatchCase], *, source_identity
             warnings.append("fingerprint_missing")
         if any(not row.decision_eligible for row in rows):
             warnings.append("direct_reuse_not_ready")
-        if valid_count != len(rows):
+        if any(row.event_time_utc is None for row in group_members):
             warnings.append("event_time_unusable")
         groups.append(
             CorpusBatchGroup(
@@ -154,9 +161,9 @@ def build_corpus_batch_plan(cases: Iterable[CorpusBatchCase], *, source_identity
                 rule_names=sorted({row.rule_name for row in rows if row.rule_name}),
                 behavior_components=sorted({component for row in rows for component in row.behavior_components}),
                 total=len(rows),
-                learning_count=cut,
+                learning_count=len(learning_rows),
                 validation_main_count=len(validation_rows),
-                validation_supplementary_count=len(rows) - cut - len(validation_rows),
+                validation_supplementary_count=len(rows) - len(learning_rows) - len(validation_rows),
                 learning_last_id=last.alert_id if last else None,
                 learning_last_at=last.event_time_utc if last else None,
                 validation_first_id=first.alert_id if first else None,

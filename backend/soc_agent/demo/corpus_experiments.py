@@ -21,6 +21,14 @@ CORPUS_WORKLOAD = "corpus_experiment"
 CORPUS_QUEUE = "deepseek-v4-flash"
 
 
+def _require_saved_options(store, experiment_id: str, batch: str, submitted: SocAnalysisExecutionOptions, defaults: SocAnalysisExecutionOptions | None) -> None:
+    # Call only under the admission transaction's governance lock. Otherwise a
+    # remote request can publish an older setting after the owner saves a new one.
+    saved = store.latest_run_options(experiment_id, batch) or defaults or SocAnalysisExecutionOptions()
+    if submitted != saved:
+        raise PermissionError("运行配置仅限部署本机修改；请刷新后沿用已保存配置运行。")
+
+
 class CorpusExecutionError(RuntimeError):
     def __init__(self, message: str, *, retryable: bool = False, run_id: str | None = None, block_round: bool = False):
         super().__init__(message)
@@ -76,7 +84,15 @@ class SocCorpusExperimentService:
             tx.corpus_experiments().prepare(experiment, members)
         return self.store.get_experiment(experiment_id)
 
-    def create_round(self, command: CorpusRoundCreateCommand, *, context: ServiceRequestContext) -> CorpusRound:
+    def create_round(
+        self,
+        command: CorpusRoundCreateCommand,
+        *,
+        context: ServiceRequestContext,
+        allow_options_override: bool = True,
+        default_options: SocAnalysisExecutionOptions | None = None,
+        current_plan_id: str | None = None,
+    ) -> CorpusRound:
         _require_admin(context)
         if command.concurrency > self._max_concurrency:
             raise ValueError(f"concurrency exceeds the server limit {self._max_concurrency}")
@@ -94,6 +110,15 @@ class SocCorpusExperimentService:
             experiment = store.get_experiment(command.experiment_id)
             if experiment is None:
                 raise ValueError("experiment not found; prepare the fixed dataset first")
+            if not allow_options_override:
+                if current_plan_id is not None and experiment.plan_id != current_plan_id:
+                    raise PermissionError("仅能按当前语料的已保存配置运行；请刷新后重试。")
+                # Match the configuration read/quick entry's canonical experiment.
+                # A caller-created fork must not reset or retain its own authority.
+                canonical = store.find_plan_experiment(experiment.plan_id)
+                if canonical is None:
+                    raise PermissionError("当前语料配置不可用；请刷新后重试。")
+                _require_saved_options(store, canonical.experiment_id, command.selection.batch, command.options, default_options)
             parent = None
             if command.parent_round_id:
                 parent = store.get_round(command.parent_round_id)

@@ -340,8 +340,9 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   operational outcomes rather than independent detection truth.
 - Corpus filter continuity may be retained in tab-scoped browser storage, but selected
   alert detail is page-local and must not be restored or auto-opened on navigation. The
-  unprocessed-only switch defaults off. Ignore its legacy saved default without clearing
-  other filters; preserve subsequent explicit choices across navigation and refresh. The
+  run-status dropdown replaces the unprocessed-only switch and defaults to all. Migrate
+  explicit version-2 unprocessed preferences to not-run, ignoring the older implicit
+  default. Preserve the status across reload and group navigation. The
   list query is server-filtered and paginated; React must not fetch the complete corpus
   and repeat those filters locally. When a processed alert creates a
   Pattern Candidate, keep the current page visible and render a persistent review link;
@@ -358,7 +359,10 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 - Do not use one mutation's global pending state to lock the corpus table. Keep local
   pending state by alert ID and poll the server's lightweight `/activity` projection so
   different alerts can run concurrently while duplicate clicks across browser sessions
-  remain disabled. Poll quickly only while executions are active and back off while the
+  remain disabled. The header counts active claims across the current corpus, including
+  durable batch jobs outside the visible page/status filter. Its denominator is the
+  concurrency limit, not an expected constant number of running jobs.
+  Poll quickly only while executions are active and back off while the
   workbench is idle. A process response is only a `202 Accepted` claim acknowledgement;
   it does not contain the final analysis. Keep the alert visibly running, use
   `/activity` and `/execution` for progress, and refetch the authoritative page after the
@@ -366,9 +370,23 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   A fresh terminal execution also triggers one final page refresh if activity polling missed
   the claim. Compare with the pre-submit Run ID so an old completed Run cannot finish a rerun.
   Terminal status must not remain a local spinner merely because the row is absent or the
-  final list read fails. Keep the explicitly focused result through readiness/comparison changes
-  caused by processing; changing the user's filters clears that temporary focus.
+  final list read fails. For externally started runs, retry unsuccessful final reads while
+  that alert/run remains selected and show the terminal execution status with a loading-error
+  notice. A failed refetch can retain stale query data; it never satisfies refresh deduplication.
+  Treat `analysis_complete` as terminal once durable activity clears: validation does not
+  require a Pattern observation. The cached running row may have no Run ID yet or retain
+  the prior Run ID. After activity clears, explicitly reread execution before using a
+  terminal trace for completion handling, cancelling older in-flight execution reads.
+  A different cached row Run ID alone never completes a final refresh that still reads running.
+  A durable task can fail before any Run is saved. Accept an explicit `failed` trace
+  with a null Run ID under the same post-activity fresh-read fence; do not persist a
+  Run-based deduplication key for it, since another attempt can fail before saving a Run too.
+  Cancel retries on selection/run changes or unmount. Keep the explicitly focused result
+  through readiness/comparison changes caused by processing; changing the user's filters
+  clears that temporary focus.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
+  Batch progress and quick-command invalidation target only lightweight workbench
+  state/activity/execution keys; pinned audit bundles remain cached even as unrelated jobs finish.
   The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,
   canonical normalization, bounded model context/output, validation, Decision, and
   Pattern/Memory artifacts for demonstrations and engineering review. Render only the
@@ -498,3 +516,23 @@ old results remain in alert details. Counts come from the server's latest-per-al
 batch projection, including manual tasks across internal rounds. Preserve `experiment`
 and `return_batch` through candidate list/detail navigation. Running settings apply to
 new jobs; do not expose experiment, round, budget, concurrency or comparison controls.
+
+Host DEV can restrict run-setting edits to the deployment Mac. Honor the server's
+`can_configure=false` by disabling all switches, fact refresh and reset, while keeping
+start, pause, single-alert run and rerun available. Batch commands use `saved_options`
+from the batch-scoped configuration read, ignoring browser preferences; the legacy
+single-alert surface uses `run_controls.defaults`. Refresh read-only batch settings
+every 10 seconds, on window focus and after a command failure without automatically
+replaying the command. Missing permission fields retain older deployment behavior.
+The backend enforces this boundary; never derive authority from the browser hostname.
+
+Running corpus details display a neutral waiting message and suppress stale outcome cards
+until the server reports a terminal state. Missing intermediate analysis must not appear
+as a failed conclusion; actual terminal failures remain visible.
+Execution polling also follows a server-reported running trace without a local submit
+or legacy activity claim; matching terminal Run IDs trigger a final list refresh.
+
+Run status is a server-side list filter (all/success/running/failed/not-run), applied
+before count and pagination, independent of batch execution scope. Success means a
+finished analysis, not an ignored alert or reviewed Memory. Batch progress changes
+refresh lists even when the selected status currently has no visible rows.

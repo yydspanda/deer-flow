@@ -1,6 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
+
+async function selectRunStatus(page: Page, name: string) {
+  await page.getByRole("combobox", { name: "运行状态", exact: true }).click();
+  await page.getByRole("option", { name, exact: true }).click();
+}
 
 function corpusState(processed = false, replayed = false) {
   const candidateAlert = {
@@ -43,8 +48,8 @@ function corpusState(processed = false, replayed = false) {
     prompt_version: processed ? "soc-analysis-v35" : null,
     total_duration_ms: processed ? 1200 : null,
     output_quality: processed ? "accepted" : null,
-    failure_kind: null,
-    failure_message: null,
+    failure_kind: null as string | null,
+    failure_message: null as string | null,
     base_verdict: processed ? "suspicious" : null,
     base_confidence: processed ? 0.72 : null,
     base_needs_review: processed ? true : null,
@@ -434,11 +439,20 @@ function corpusStateForRequest(
   const sourceType = params.get("source_type");
   const groupId = params.get("group_id");
   const comparison = params.get("comparison");
+  const runStatus = params.get("run_status");
   const focusAlertId = params.get("focus_alert_id");
   const unprocessedOnly = params.get("unprocessed_only") !== "false";
   const limit = Number(params.get("limit") ?? 20);
   const offset = Number(params.get("offset") ?? 0);
   const alerts = state.alerts
+    .filter(
+      (alert) =>
+        !runStatus ||
+        (runStatus === "success"
+          ? ["completed", "analysis_only"].includes(alert.workflow_state)
+          : alert.workflow_state ===
+            (runStatus === "not_run" ? "ready" : runStatus)),
+    )
     .filter((alert) => !readiness || alert.readiness === readiness)
     .filter((alert) => !sourceType || alert.source_type === sourceType)
     .filter((alert) => !groupId || alert.group_id === groupId)
@@ -986,23 +1000,26 @@ for (const legacyFilters of [false, true]) {
       });
     });
     await page.goto("/workspace/soc/corpus-validation");
-    const toggle = page.getByLabel("仅显示未运行告警");
+    const toggle = page.getByRole("combobox", {
+      name: "运行状态",
+      exact: true,
+    });
     const completedRow = page.locator('tbody tr[data-alert-id="1984426"]');
-    await expect(toggle).not.toBeChecked();
+    await expect(toggle).toHaveText("全部状态");
     await expect(completedRow).toBeVisible();
     if (legacyFilters) {
       await expect(page.locator("#corpus-search")).toHaveValue("1984426");
     }
-    await toggle.check();
+    await selectRunStatus(page, "未运行");
     await expect(completedRow).toHaveCount(0);
     await page.reload();
-    await expect(toggle).toBeChecked();
+    await expect(toggle).toHaveText("未运行");
     await expect(completedRow).toHaveCount(0);
-    await toggle.uncheck();
+    await selectRunStatus(page, "全部状态");
     await expect(completedRow).toBeVisible();
-    await toggle.check();
+    await selectRunStatus(page, "未运行");
     await page.getByRole("button", { name: "重置筛选" }).click();
-    await expect(toggle).not.toBeChecked();
+    await expect(toggle).toHaveText("全部状态");
     await expect(completedRow).toBeVisible();
   });
 }
@@ -1150,7 +1167,7 @@ test("shows semantic review JSON without a dedicated comparison view", async ({
   await expect(page.getByText("语义核对 · 仅对比，未用于研判")).toBeVisible({
     timeout: 60_000,
   });
-  await page.getByLabel("仅显示未运行告警").uncheck();
+  await selectRunStatus(page, "全部状态");
   await page.getByRole("button", { name: "查看 Alert 1984426 结果" }).click();
   await page.getByRole("button", { name: "打开完整审计" }).click();
   await page.getByRole("button", { name: /语义核对记录/ }).click();
@@ -1224,17 +1241,30 @@ test("opens the searched alert's complete group and restores original filters wi
     .click();
   await expect(page.getByLabel("当前行为模式组")).toContainText("14 条");
   await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(2);
-  await expect(page.getByLabel("仅显示未运行告警")).not.toBeChecked();
+  await expect(
+    page.getByRole("combobox", { name: "运行状态", exact: true }),
+  ).toHaveText("全部状态");
   await expect(page.locator("#corpus-search")).toHaveValue("");
   await page.getByRole("button", { name: "返回原筛选" }).click();
   await expect(page.locator("#corpus-search")).toHaveValue("1984426");
   await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(1);
-  await expect(page.getByLabel("仅显示未运行告警")).toBeChecked();
+  await expect(
+    page.getByRole("combobox", { name: "运行状态", exact: true }),
+  ).toHaveText("未运行");
   expect(
     await page.evaluate(() =>
       JSON.parse(sessionStorage.getItem("soc.corpus-validation.filters.v1")!),
     ),
-  ).toEqual(initialFilters);
+  ).toEqual({
+    batch: "learning",
+    validationTier: "main",
+    search: "1984426",
+    readiness: "candidate_window",
+    comparison: "not_run",
+    sourceType: "edr",
+    groupId: "all",
+    runStatus: "not_run",
+  });
   expect(writes).toBe(0);
   expect(detailCalls).toBe(0);
 });
@@ -1539,6 +1569,76 @@ test("returns from a small group to the original paginated results", async ({
   await expect(page.locator("tbody tr[data-alert-id]")).toHaveCount(2);
 });
 
+test("LAN single-alert runs use deployment settings despite stored preferences", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const defaults = {
+    normalization_review_mode: "apply",
+    tenant_policy_enabled: true,
+    tenant_policy_advisor_enabled: true,
+    tenant_policy_signal_providers_enabled: true,
+  };
+  await page.addInitScript(() => {
+    sessionStorage.setItem(
+      "soc.corpus-validation.run-settings.v1",
+      JSON.stringify({
+        normalization_review_mode: "off",
+        tenant_policy_enabled: false,
+        tenant_policy_advisor_enabled: false,
+        tenant_policy_signal_providers_enabled: false,
+        refresh_normalization: true,
+      }),
+    );
+  });
+  const current = {
+    ...corpusState(),
+    run_controls: {
+      defaults,
+      can_configure: false,
+      normalization_review_available: true,
+      tenant_policy_available: true,
+      tenant_policy_advisor_available: true,
+      tenant_policy_signal_providers_available: true,
+    },
+  };
+  const submitted: unknown[] = [];
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    if (url.endsWith("/execution"))
+      return route.fulfill({ json: corpusExecution(false) });
+    if (route.request().method() === "POST") {
+      submitted.push(route.request().postDataJSON());
+      return route.fulfill({ status: 202, json: corpusStart("1984426") });
+    }
+    return route.fulfill({ json: corpusStateForRequest(current, url) });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  const controls = page.getByRole("region", { name: "后续运行设置" });
+  await expect(controls.getByRole("switch")).toHaveCount(4);
+  for (const input of await controls.getByRole("switch").all()) {
+    await expect(input).toBeDisabled();
+    await expect(input).toBeChecked();
+  }
+  await expect(
+    controls.getByRole("checkbox", { name: "重新核对事实" }),
+  ).toBeDisabled();
+  await expect(
+    controls.getByRole("checkbox", { name: "重新核对事实" }),
+  ).not.toBeChecked();
+  await expect(
+    controls.getByRole("button", { name: "恢复默认" }),
+  ).toBeDisabled();
+  await page
+    .locator('[data-alert-id="1984426"]')
+    .getByRole("button", { name: "运行", exact: true })
+    .click();
+  await expect.poll(() => submitted.length).toBe(1);
+  expect(submitted[0]).toEqual({ settings: defaults });
+});
+
 test("per-run settings travel with each alert and survive page reload", async ({
   page,
 }, testInfo) => {
@@ -1711,6 +1811,103 @@ test("per-run settings travel with each alert and survive page reload", async ({
   ).toBeChecked();
 });
 
+test("counts durable batch activity outside the visible status-filtered page", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const current = corpusState(true);
+  const options = {
+    normalization_review_mode: "apply",
+    tenant_policy_enabled: false,
+    tenant_policy_advisor_enabled: false,
+    tenant_policy_signal_providers_enabled: false,
+  };
+  let activeAlertIds = [
+    "BATCH-OFF-PAGE-1",
+    "BATCH-OFF-PAGE-2",
+    "BATCH-OFF-PAGE-3",
+  ];
+  let posts = 0;
+  const pageRequests: URL[] = [];
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "POST") posts++;
+    if (url.pathname.endsWith("/activity"))
+      return route.fulfill({
+        json: corpusActivity(activeAlertIds, "corpus-dispatcher"),
+      });
+    if (url.pathname.endsWith("/experiments/configuration"))
+      return route.fulfill({
+        json: {
+          defaults: options,
+          full_flow_defaults: options,
+          max_concurrency: 3,
+          dispatcher_running: true,
+        },
+      });
+    if (url.pathname.endsWith("/quick-validation"))
+      return route.fulfill({
+        json: {
+          experiment_id: "EXP-durable-batch",
+          total: 10,
+          completed: 10 - activeAlertIds.length,
+          active: activeAlertIds.length,
+          remaining: 0,
+          failed: 0,
+          pending_candidates: 0,
+          running: activeAlertIds.length > 0,
+          blocked_reason: null,
+          items: [],
+        },
+      });
+    pageRequests.push(url);
+    return route.fulfill({
+      json: {
+        ...corpusStateForRequest(current, url.toString()),
+        batch_selection: {
+          plan_id: "fixture-plan",
+          batch: "learning",
+          validation_tier: "all",
+          counts: {
+            learning: 10,
+            validation_main: 2,
+            validation_supplementary: 1,
+            total: 13,
+          },
+          selected_count: 10,
+          group_count: 1,
+          labeled_count: 0,
+          execution_enabled: false,
+          existing_results_only: true,
+        },
+      },
+    });
+  });
+
+  await page.goto("/workspace/soc/corpus-validation");
+  await selectRunStatus(page, "运行成功");
+  await expect(page.locator("[data-alert-id]")).toHaveCount(1);
+  await expect(page.locator('[data-alert-id="1984426"]')).toBeVisible();
+  await expect(page.getByText("运行中 3/3", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-alert-id^="BATCH-OFF-PAGE-"]')).toHaveCount(
+    0,
+  );
+
+  for (const active of [1, 0]) {
+    activeAlertIds = activeAlertIds.slice(0, active);
+    await expect(
+      page.getByText(`运行中 ${active}/3`, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "运行状态", exact: true }),
+    ).toHaveText("运行成功");
+    await expect(page.locator("[data-alert-id]")).toHaveCount(1);
+  }
+  expect(pageRequests.at(-1)?.searchParams.get("run_status")).toBe("success");
+  expect(pageRequests.at(-1)?.searchParams.get("offset")).toBe("0");
+  expect(posts).toBe(0);
+});
+
 test("runs distinct alerts concurrently without enabling a duplicate click", async ({
   page,
 }) => {
@@ -1839,7 +2036,7 @@ test("does not treat a previous completed run as the rerun result", async ({
     }
   });
   await page.goto("/workspace/soc/corpus-validation");
-  await page.getByLabel("仅显示未运行告警").uncheck();
+  await selectRunStatus(page, "全部状态");
   await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
   await page
     .locator('[data-alert-id="1984426"]')
@@ -2483,10 +2680,7 @@ test("direct resolution shows its source and skipped model on desktop and mobile
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.goto("/workspace/soc/corpus-validation");
-    const unprocessedOnly = page.getByRole("switch", {
-      name: "仅显示未运行告警",
-    });
-    if (await unprocessedOnly.isChecked()) await unprocessedOnly.click();
+    await selectRunStatus(page, "全部状态");
     await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
     await page.locator('[data-alert-id="1984426"]').click();
     await expect(
@@ -2571,7 +2765,7 @@ test("opens a used Memory correction and creates a governed revision candidate",
   });
 
   await page.goto("/workspace/soc/corpus-validation");
-  await page.getByRole("switch", { name: "仅显示未运行告警" }).uncheck();
+  await selectRunStatus(page, "全部状态");
   await page.getByPlaceholder("告警编号 / 规则 / 主机 / IP").fill("1984426");
   await page.getByRole("button", { name: "查看 Alert 1984426 结果" }).click();
   await page.getByRole("link", { name: "不适用？发起修订" }).click();
@@ -2739,4 +2933,474 @@ test("searches confirmed Memory records and opens their usage history", async ({
     "/workspace/soc/review/memory-candidates/MC-GALAXY",
   );
   await expect(page.getByText("来源候选审核", { exact: true })).toHaveCount(0);
+});
+
+for (const terminal of ["completed", "analysis_complete", "failed"] as const) {
+  for (const refreshFailure of ["none", "once", "until-recovered"] as const) {
+    test(`running detail waits for the actual ${terminal} outcome with ${refreshFailure} final refresh failure`, async ({
+      page,
+    }) => {
+      mockLangGraphAPI(page, { threads: [] });
+      let finished = false;
+      let posts = 0;
+      let finalRequests = 0;
+      let recovered = false;
+      await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+        const url = route.request().url();
+        if (route.request().method() === "POST") posts++;
+        if (url.endsWith("/activity"))
+          return route.fulfill({
+            json: corpusActivity(),
+          });
+        if (url.endsWith("/execution"))
+          return route.fulfill({
+            json: {
+              ...corpusExecution(finished),
+              status: finished ? terminal : "running",
+            },
+          });
+        if (finished) {
+          finalRequests++;
+          if (
+            (refreshFailure === "once" && finalRequests === 1) ||
+            (refreshFailure === "until-recovered" && !recovered)
+          ) {
+            return route.fulfill({
+              status: 503,
+              json: { detail: "Temporary list failure" },
+            });
+          }
+        }
+        const state = corpusState(true);
+        state.alerts[0]!.workflow_state = finished
+          ? terminal === "analysis_complete"
+            ? "analysis_only"
+            : terminal
+          : "running";
+        state.alerts[0]!.analysis_status = finished
+          ? terminal === "failed"
+            ? "failed"
+            : "success"
+          : "running";
+        // A stale/incomplete outcome must not override an authoritative running state.
+        if (!finished || terminal === "failed")
+          state.alerts[0]!.operator_outcome!.closure_status = "failed";
+        return route.fulfill({ json: corpusStateForRequest(state, url) });
+      });
+      await page.goto("/workspace/soc/corpus-validation");
+      await page.locator('[data-alert-id="1984426"]').click();
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("region", { name: "处理结论", exact: true }),
+      ).toHaveCount(0);
+      finished = true;
+      if (refreshFailure === "until-recovered") {
+        await expect(
+          page.getByText(
+            terminal === "failed"
+              ? "本次研判失败，结果加载失败，正在重试。"
+              : "本次研判已完成，结果加载失败，正在重试。",
+            { exact: true },
+          ),
+        ).toBeVisible();
+        await expect.poll(() => finalRequests).toBeGreaterThanOrEqual(2);
+        await expect(
+          page.getByRole("region", { name: "处理结论", exact: true }),
+        ).toHaveCount(0);
+        recovered = true;
+      }
+      const outcome = page.getByRole("region", {
+        name: "处理结论",
+        exact: true,
+      });
+      await expect(outcome).toBeVisible({ timeout: 15000 });
+      await expect(
+        outcome
+          .getByRole("heading")
+          .getByText(terminal === "failed" ? "运行失败" : "忽略", {
+            exact: true,
+          }),
+      ).toBeVisible();
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toHaveCount(0);
+      expect(posts).toBe(0);
+      if (refreshFailure !== "none") expect(finalRequests).toBeGreaterThan(1);
+    });
+  }
+}
+
+for (const cachedRunId of [null, "RUN-PREVIOUS"] as const) {
+  for (const terminal of ["completed", "analysis_complete"] as const) {
+    test(`recovers ${terminal} detail after a durable claim with cached Run ${cachedRunId ?? "null"}`, async ({
+      page,
+    }) => {
+      mockLangGraphAPI(page, { threads: [] });
+      let finished = false;
+      let recovered = false;
+      let finalRequests = 0;
+      let successfulFinalRequests = 0;
+      let posts = 0;
+      await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+        const url = route.request().url();
+        if (route.request().method() === "POST") posts++;
+        if (url.endsWith("/activity"))
+          return route.fulfill({
+            json: corpusActivity(
+              finished ? [] : ["1984426"],
+              "corpus-dispatcher",
+            ),
+          });
+        if (url.endsWith("/execution"))
+          return route.fulfill({
+            json: {
+              ...corpusExecution(finished),
+              run_id: "RUN-NEW",
+              status: finished ? terminal : "running",
+              observation_id:
+                finished && terminal === "completed" ? "MPO-NEW" : null,
+            },
+          });
+        if (finished) {
+          finalRequests++;
+          if (!recovered)
+            return route.fulfill({
+              status: 503,
+              json: { detail: "Temporary final list failure" },
+            });
+          successfulFinalRequests++;
+        }
+        // The first successful read can still carry the durable claim projection.
+        const settled = finished && successfulFinalRequests > 1;
+        const state = corpusState(true);
+        const row = state.alerts[0]!;
+        row.run_id = settled ? "RUN-NEW" : cachedRunId;
+        row.workflow_state = settled
+          ? terminal === "analysis_complete"
+            ? "analysis_only"
+            : "completed"
+          : "running";
+        if (!settled) row.operator_outcome = null;
+        return route.fulfill({ json: corpusStateForRequest(state, url) });
+      });
+      await page.goto("/workspace/soc/corpus-validation");
+      await page.locator('[data-alert-id="1984426"]').click();
+      await expect(page.getByText("运行中 1/3", { exact: true })).toBeVisible();
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toBeVisible();
+
+      finished = true;
+      await expect(page.getByText("运行中 0/3", { exact: true })).toBeVisible();
+      await expect(
+        page.getByText("本次研判已完成，结果加载失败，正在重试。", {
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect.poll(() => finalRequests).toBeGreaterThanOrEqual(2);
+      await expect(
+        page.getByRole("region", { name: "处理结论", exact: true }),
+      ).toHaveCount(0);
+      // Neither activity nor batch progress changes again after this recovery.
+      recovered = true;
+      const outcome = page.getByRole("region", {
+        name: "处理结论",
+        exact: true,
+      });
+      await expect(outcome).toBeVisible({ timeout: 10_000 });
+      await expect(
+        outcome.getByRole("heading").getByText("忽略", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toHaveCount(0);
+      expect(posts).toBe(0);
+      expect(successfulFinalRequests).toBeGreaterThanOrEqual(2);
+    });
+  }
+}
+
+for (const cachedRunId of [null, "RUN-PREVIOUS"] as const) {
+  test(`recovers repeated pre-Runtime failures with cached Run ${cachedRunId ?? "null"}`, async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { threads: [] });
+    let finished = false;
+    let recovered = false;
+    let attempt = 1;
+    let finalRequests = 0;
+    let successfulFinalRequests = 0;
+    let blockedExecutionRequests = 0;
+    let blockFreshExecution = false;
+    let posts = 0;
+    await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+      const url = route.request().url();
+      if (route.request().method() === "POST") posts++;
+      if (url.endsWith("/activity"))
+        return route.fulfill({
+          json: corpusActivity(
+            finished ? [] : ["1984426"],
+            "corpus-dispatcher",
+          ),
+        });
+      if (url.endsWith("/execution")) {
+        if (blockFreshExecution && finished) {
+          blockedExecutionRequests++;
+          return route.fulfill({
+            status: 503,
+            json: { detail: "Temporary post-claim execution failure" },
+          });
+        }
+        return route.fulfill({
+          json: {
+            ...corpusExecution(false),
+            status: finished || blockFreshExecution ? "failed" : "running",
+            run_id: null,
+            run_status: null,
+            started_at: null,
+            ended_at: null,
+            observation_id: null,
+            phases: [],
+          },
+        });
+      }
+      if (finished) {
+        finalRequests++;
+        if (!recovered)
+          return route.fulfill({
+            status: 503,
+            json: { detail: "Temporary final list failure" },
+          });
+        successfulFinalRequests++;
+      }
+      const settled = finished && successfulFinalRequests > 1;
+      const state = corpusState(true);
+      const row = state.alerts[0]!;
+      row.run_id = settled ? null : cachedRunId;
+      row.workflow_state = settled ? "failed" : "running";
+      row.operator_outcome = null;
+      row.analysis_status = settled ? "failed" : null;
+      row.failure_kind = settled ? "runtime_precheck_failed" : null;
+      row.failure_message = settled
+        ? `Fixture pre-Runtime failure ${attempt}`
+        : null;
+      state.alerts = [row];
+      return route.fulfill({
+        json: corpusStateForRequest(state, url),
+      });
+    });
+    await page.goto("/workspace/soc/corpus-validation");
+    await page.locator('[data-alert-id="1984426"]').click();
+    for (attempt = 1; attempt <= 2; attempt++) {
+      await expect(page.getByText("运行中 1/3", { exact: true })).toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toBeVisible();
+      finished = true;
+      await expect(page.getByText("运行中 0/3", { exact: true })).toBeVisible();
+      if (blockFreshExecution) {
+        // The previous failed list read must not complete this later claim while
+        // its fresh execution read is unavailable, even with the same null Run.
+        await expect.poll(() => blockedExecutionRequests).toBeGreaterThan(0);
+        await expect(
+          page.getByText("本次研判失败，结果加载失败，正在重试。", {
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await expect(
+          page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+        ).toBeVisible();
+        blockFreshExecution = false;
+      }
+      await expect(
+        page.getByText("本次研判失败，结果加载失败，正在重试。", {
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect.poll(() => finalRequests).toBeGreaterThanOrEqual(2);
+      if (attempt === 1 && cachedRunId === null) {
+        // Another operator retries before the first failure's list recovers.
+        finished = false;
+        blockFreshExecution = true;
+        finalRequests = 0;
+        continue;
+      }
+      recovered = true;
+      await expect(
+        page.getByText(
+          `runtime_precheck_failed: Fixture pre-Runtime failure ${attempt}`,
+          {
+            exact: true,
+          },
+        ),
+      ).toBeVisible({ timeout: 10_000 });
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page
+          .getByRole("region", { name: "SOC Runtime 运行轨迹" })
+          .getByText("Run 尚未创建"),
+      ).toBeVisible();
+      expect(successfulFinalRequests).toBeGreaterThanOrEqual(2);
+      if (attempt === 1) {
+        finished = false;
+        recovered = false;
+        finalRequests = 0;
+        successfulFinalRequests = 0;
+      }
+    }
+    expect(posts).toBe(0);
+  });
+}
+
+for (const previousRunId of ["RUN-PREVIOUS", null] as const) {
+  test(`keeps a delayed previous ${previousRunId ? "terminal trace" : "pre-Runtime failure"} behind the durable claim completion fence`, async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { threads: [] });
+    let claimed = true;
+    let recovered = false;
+    let executionRequests = 0;
+    let finalRequests = 0;
+    let releaseOldTrace: () => void = () => undefined;
+    const oldTraceGate = new Promise<void>((resolve) => {
+      releaseOldTrace = resolve;
+    });
+    let releaseNewTrace: () => void = () => undefined;
+    const newTraceGate = new Promise<void>((resolve) => {
+      releaseNewTrace = resolve;
+    });
+    await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+      const url = route.request().url();
+      if (url.endsWith("/activity"))
+        return route.fulfill({
+          json: corpusActivity(claimed ? ["1984426"] : [], "corpus-dispatcher"),
+        });
+      if (url.endsWith("/execution")) {
+        executionRequests++;
+        const previousRun = executionRequests <= 2;
+        if (executionRequests === 2) await oldTraceGate;
+        if (executionRequests === 3)
+          return route.fulfill({
+            status: 503,
+            json: { detail: "Temporary post-claim execution failure" },
+          });
+        if (!previousRun) await newTraceGate;
+        return route.fulfill({
+          json: {
+            ...corpusExecution(true),
+            run_id: previousRun ? previousRunId : "RUN-NEW",
+            status: previousRun && !previousRunId ? "failed" : "completed",
+          },
+        });
+      }
+      if (!claimed) {
+        finalRequests++;
+        if (!recovered)
+          return route.fulfill({
+            status: 503,
+            json: { detail: "Temporary final list failure" },
+          });
+      }
+      const state = corpusState(true);
+      state.alerts[0]!.run_id = recovered ? "RUN-NEW" : "RUN-PREVIOUS";
+      state.alerts[0]!.workflow_state = recovered ? "completed" : "running";
+      return route.fulfill({ json: corpusStateForRequest(state, url) });
+    });
+    try {
+      await page.goto("/workspace/soc/corpus-validation");
+      await page.locator('[data-alert-id="1984426"]').click();
+      await expect(page.getByText("运行中 1/3", { exact: true })).toBeVisible();
+      await expect.poll(() => executionRequests).toBe(2);
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toBeVisible();
+      expect(finalRequests).toBe(0);
+
+      claimed = false;
+      await expect(page.getByText("运行中 0/3", { exact: true })).toBeVisible();
+      releaseOldTrace();
+      await expect.poll(() => executionRequests).toBeGreaterThanOrEqual(4);
+      await expect.poll(() => finalRequests).toBeGreaterThan(0);
+      await expect(
+        page.getByText("本次研判已完成，结果加载失败，正在重试。", {
+          exact: true,
+        }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByText("本次研判失败，结果加载失败，正在重试。", {
+          exact: true,
+        }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByText("正在研判，完成后显示处理结论。", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("region", { name: "处理结论", exact: true }),
+      ).toHaveCount(0);
+
+      releaseNewTrace();
+      await expect(
+        page.getByText("本次研判已完成，结果加载失败，正在重试。", {
+          exact: true,
+        }),
+      ).toBeVisible();
+      recovered = true;
+      await expect(
+        page.getByRole("region", { name: "处理结论", exact: true }),
+      ).toBeVisible({ timeout: 10_000 });
+    } finally {
+      releaseOldTrace();
+      releaseNewTrace();
+    }
+  });
+}
+
+test("filters successful and running alerts on the server and retains selection on reload", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const requests: URL[] = [];
+  let posts = 0;
+  const state = corpusState(true);
+  state.alerts[1]!.workflow_state = "running";
+  state.alerts[2]!.workflow_state = "failed";
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "POST") posts++;
+    if (url.pathname.endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    requests.push(url);
+    return route.fulfill({
+      json: corpusStateForRequest(state, url.toString()),
+    });
+  });
+  await page.goto("/workspace/soc/corpus-validation");
+  const filter = page.getByRole("combobox", { name: "运行状态", exact: true });
+  await filter.click();
+  await page.getByRole("option", { name: "运行成功", exact: true }).click();
+  await expect
+    .poll(() => requests.at(-1)?.searchParams.get("run_status"))
+    .toBe("success");
+  await expect(page.locator("[data-alert-id]")).toHaveCount(1);
+  await expect(page.locator('[data-alert-id="1984426"]')).toBeVisible();
+  await page.reload();
+  await expect(filter).toHaveText("运行成功");
+  await expect(page.locator("[data-alert-id]")).toHaveCount(1);
+  await filter.click();
+  await page.getByRole("option", { name: "运行中", exact: true }).click();
+  await expect(page.locator('[data-alert-id="1965449"]')).toBeVisible();
+  await expect(page.locator('[data-alert-id="1984426"]')).toHaveCount(0);
+  await filter.click();
+  await page.getByRole("option", { name: "运行失败", exact: true }).click();
+  await expect(page.locator('[data-alert-id="2480991"]')).toBeVisible();
+  await filter.click();
+  await page.getByRole("option", { name: "未运行", exact: true }).click();
+  await expect(page.locator("[data-alert-id]")).toHaveCount(0);
+  expect(posts).toBe(0);
 });

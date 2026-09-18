@@ -130,3 +130,30 @@ def test_corpus_projection_migration_preserves_existing_database(tmp_path):
         assert connection.exec_driver_sql("SELECT value FROM retained_marker").scalar_one() == "preserved"
     actual = {column["name"] for column in inspect(engine).get_columns("soc_corpus_list_projections")}
     assert actual == set(SocCorpusListProjectionRow.__table__.columns.keys())
+
+
+def test_run_status_filters_all_pages_and_active_reruns(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'statuses.sqlite'}")
+    create_soc_tables(engine)
+    queries = SocCorpusListQueries(sessionmaker(engine))
+    states = ["completed", "analysis_only", "failed", "running", "ready", "completed"]
+    rows = [_row(i) for i in range(len(states))]
+    for row, state in zip(rows, states, strict=True):
+        row["projection_payload"].update(workflow_state=state)
+        row["search_text"] = f"alert:{row['alert_id']}:end"
+    queries.insert_missing(rows)
+    args = dict(search=None, readiness=None, source_type=None, group_id=None, comparison=None, unprocessed_only=False, focus_alert_id=None, active_alert_ids=["5"], limit=1, offset=0)
+    assert queries.page("catalog", run_status="success", **args) == (2, ["0"])
+    assert queries.page("catalog", run_status="success", **{**args, "offset": 1}) == (2, ["1"])
+    assert queries.page("catalog", run_status="running", **{**args, "limit": 20}) == (2, ["3", "5"])
+    assert queries.page("catalog", run_status="failed", **args) == (1, ["2"])
+    assert queries.page("catalog", run_status="not_run", **args) == (1, ["4"])
+    assert queries.page("catalog", run_status="success", **{**args, "search": "alert:1:end"}) == (1, ["1"])
+    # A job can fail before it writes a Runtime run, or after a prior success.
+    # Durable activity wins even if a failure snapshot was read concurrently.
+    failures = {**args, "failed_alert_ids": ["0", "3", "4", "5"]}
+    assert queries.page("catalog", run_status="failed", **failures) == (4, ["0"])
+    assert queries.page("catalog", run_status="failed", **{**failures, "offset": 3}) == (4, ["4"])
+    assert queries.page("catalog", run_status="running", **failures) == (1, ["5"])
+    assert queries.page("catalog", run_status="success", **failures) == (1, ["1"])
+    assert queries.page("catalog", run_status="not_run", **failures) == (0, [])

@@ -284,7 +284,9 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/demo/corpus_experiment_runtime.py",
     "backend/soc_agent/demo/corpus_experiments.py",
     "backend/soc_agent/demo/corpus_quick_validation.py",
+    "backend/soc_agent/integrations/pingan/corpus_validation.py",
     "backend/app/gateway/routers/soc_corpus_experiments.py",
+    "backend/app/gateway/soc_corpus_control.py",
     "backend/scripts/soc_corpus_batch_preview.py",
     "backend/scripts/soc_corpus_experiment.py",
     ".notes/ai_soc/integrations/pingan-corpus-batch-runbook.md",
@@ -852,10 +854,10 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         "SOC_PINGAN_MODEL_GATEWAY_PORT": "4001",
         "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
         "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
-        "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "3",
+        "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "8",
         "SOC_ANALYZER_MODE": "llm",
         "SOC_LLM_MODEL": "deepseek-v4-flash",
-        "SOC_LLM_MAX_CONCURRENCY": "3",
+        "SOC_LLM_MAX_CONCURRENCY": "8",
         "SOC_PINGAN_COMPAT_ENABLED": "true",
         "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
         "SOC_PINGAN_COMPAT_PORT": "8090",
@@ -1545,7 +1547,7 @@ grep -E '^export (SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY|SOC_LLM_MAX_CONCURREN
 grep -n 'disable_streaming: true' config.pingan-dev.local
 ```
 
-三个权限必须都是 `600`，两个 mode 必须都是 `fake`，两个并发值必须都是 `3`，并且模型配置必须
+三个权限必须都是 `600`，两个 mode 必须都是 `fake`，两个并发值必须都是 `8`，并且模型配置必须
 包含 `disable_streaming: true`。该设置让 EAGW 完整响应通过 LangChain 作为一个 buffered chat message
 返回，避免聊天向 loopback gateway 发送不支持的 `stream=true`。初始项目 DEV 已同时激活 ZEUS PRD 和
 Agent Platform PRD；私有 env 保存 ZEUS PRD/STG 两套受保护 profile，以及 Agent Platform PRD profile
@@ -1754,10 +1756,12 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 `--demo-no-auth` 仅用于可信内网演示：页面跳过注册/登录，所有访问者共享一个合成管理员身份，
 因此不能区分个人审计 actor。需要验收账号与权限时，先停止服务，再去掉该参数启动；无需改代码或数据库：
 
-Host DEV 默认允许 3 条不同告警并行研判；同一告警的重复点击不会再次进入 Runtime/LLM。
+Host DEV 默认允许最多 8 条不同告警并行研判；同一告警的重复点击不会再次进入 Runtime/LLM。
 `SOC_LLM_MAX_CONCURRENCY` 和 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` 必须同步调整，后者是所有
 聊天与研判共享的最终容量门。SQLite 下的 `SOC_PINGAN_LEGACY_WORKER_CONCURRENCY` 仍固定为 `1`，它只
 控制 ZEUS 持久任务取件速度，不限制前端告警演练并发。
+配置更新后完整重启 Host；已有批次点击“继续”时采用当前服务端并发上限，保留原任务及运行开关。
+同类组的顺序执行和共享模型容量可能使实际运行数小于 8；页面显示的是当前占用与上限。
 
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
@@ -1795,10 +1799,14 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 网页第一批点击“开始积累”覆盖全批，支持暂停、继续和“审核经验”；第二批默认“全部”，
 也可选择“验证经验复用”或“其他测试告警”再开始验证。单条直接运行，批量暂停后仍可单独运行；
 重复提交去重，重跑保留旧结果，批次统计按唯一告警汇总。CLI固定运行记录与导出继续保留。
+运行配置仅部署 Mac 本机可修改，请在本机通过 `http://localhost:2026` 操作。
+同事通过局域网地址仍可启动、暂停或重跑，沿用该批次最后保存的配置；无运行记录时使用部署默认值。
+本机新选择随提交运行保存，已排队任务保留原配置。Host DEV 自动限制内部服务监听，正常启动命令不变。
 仅首次从零实验按其第1.1节使用 `reset-dev-data` 预览，明确确认后才备份并重置SOC DEV库；
 常规部署和续跑不清库。无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。
-第一批3,002条、第二批主要验证8,522条、补充3,764条来自本版15,288条语料；旧4,343条
+第一批2,997条、第二批主要验证8,520条、补充3,764条；原始15,288条语料保留，
+其中7条 `RPAADM_002192` SIEM 邮件告警不参加两批验证。旧4,343条
 PKL/载荷库不能与新版索引混用。先完成本手册的数据校验，完整语料仍独立传输，不进入源码包。
 本机外网只完成隔离模拟，不代表内网模型质量或M5吞吐已验收。
 
@@ -1955,7 +1963,7 @@ manifest/index before copying them into the checkout. Large PKL and Workbench
 payload SQLite files are not part of either transfer archive.
 
 `--demo-no-auth` 仅用于可信 DEV 演示；全部访问者共享一个合成管理员身份。正式身份与权限验收时去掉该参数。
-告警演练默认支持 3 条不同告警并行，同一告警由服务端防重；调整容量时必须同步修改
+告警演练默认支持最多 8 条不同告警并行，同一告警由服务端防重；调整容量时必须同步修改
 `.env.soc-dev.local` 的 `SOC_LLM_MAX_CONCURRENCY` 与
 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY`。PingAn model profile 使用
 `disable_streaming: true` 适配 EAGW 的完整响应，聊天可用但不提供 token-by-token 输出。

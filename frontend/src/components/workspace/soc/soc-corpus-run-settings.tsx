@@ -96,6 +96,7 @@ export function SocCorpusRunSettings({
   resetTitle?: string;
 }) {
   const controlId = useId();
+  const readOnly = controls.can_configure === false;
   const items = [
     {
       label: "语义核对",
@@ -154,9 +155,15 @@ export function SocCorpusRunSettings({
           <SlidersHorizontalIcon className="size-4" />
           {title}
         </h3>
+        {readOnly && (
+          <span className="text-muted-foreground text-xs">
+            仅部署主机可修改
+          </span>
+        )}
         <Button
           variant="ghost"
           size="sm"
+          disabled={readOnly}
           onClick={() =>
             onChange(availableCorpusRunSettings(controls.defaults, controls))
           }
@@ -175,7 +182,7 @@ export function SocCorpusRunSettings({
               aria-label={item.label}
               aria-describedby={`${controlId}-${index}-detail`}
               checked={item.checked}
-              disabled={!item.available || item.disabled}
+              disabled={readOnly || !item.available || item.disabled}
               onCheckedChange={item.change}
             />
             <div className="min-w-0">
@@ -206,6 +213,7 @@ export function SocCorpusRunSettings({
                     aria-label="重新核对事实"
                     checked={value.refresh_normalization === true}
                     disabled={
+                      readOnly ||
                       !item.available ||
                       value.normalization_review_mode === "off"
                     }

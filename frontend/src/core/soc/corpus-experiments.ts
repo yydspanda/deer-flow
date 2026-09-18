@@ -93,6 +93,8 @@ export function corpusDuration(
 
 export interface SocCorpusExperimentConfiguration {
   defaults: SocAnalysisExecutionOptions;
+  can_configure?: boolean;
+  saved_options?: SocAnalysisExecutionOptions;
   full_flow_defaults: SocAnalysisExecutionOptions;
   max_concurrency: number;
   dispatcher_running: boolean;

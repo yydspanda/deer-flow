@@ -3,8 +3,8 @@
 ## Current Pointer / 当前指针
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。新交付同时把 PingAn DeerFlow chat 固定为 buffered non-streaming，并将模型网关与 Runtime 并发统一为 `3`；SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
-- **Next Gate:** 部署 buffered chat / `3 + 3` 并发配置，验证普通聊天不再发送 `stream=true`、三条不同告警可同时研判；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
+- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。PingAn DeerFlow chat 固定为 buffered non-streaming；09-18按用户确认将源码中的模型网关与 Runtime 默认并发从 `3` 统一改为 `8`，配套交付与内网容量验收待完成。SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
+- **Next Gate:** 交付新版代码及配套 `8 + 8` 私有并发配置，完整重启Host，验证普通聊天不再发送 `stream=true`、批次在上限8内调度且旧批次继续采用新容量；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-18`
 ## Current Constraints / 当前约束
@@ -17,6 +17,11 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+09-18 按用户确认将内网Host默认并发、profile生成与transfer校验统一为8，显式已有配置继续保留。旧批次点击“继续”更新资源容量，不替换任务ID、运行开关或快照；隔离模拟证明8条同时占用、第9条等待，业务配置漂移仍阻断。Host58、profile4、transfer38、快捷/优先级17及配置/权限14项共131项回归通过，Ruff/格式/进度检查通过；同步README、模块指南和两份手册。未修改私有配置、重打包、部署或调用真实模型，内网容量尚待验收。
+09-18 按用户确认限制Mac DEV运行配置：部署本机用localhost修改，局域网同事仍可开始/暂停/重跑，沿用当前批次最近保存配置；浏览器旧选择不再参与远端提交。Host自动把Gateway/Next限制到loopback并固定可信代理，nginx继续提供局域网入口；无新增启动步骤或数据库迁移。配置比较与任务准备共用治理事务，防止远端旧提交覆盖本机新配置，旧单条入口保持批次防绕过。后端25项初验及最终16项专项（有重叠）、86项Host/启动回归、35项交付清单、57项前端单测、2项浏览器及格式/类型检查通过；同步手册与源码清单。未重新打包、部署内网或调用真实模型，PI-01指针不变。
+同轮审查修复：显式轮次在事务内按当前计划的主实验读取已保存配置，拦截同计划空/旧分支以及历史计划的新任务绕过，保留幂等历史回放。失败筛选在SQL计数分页前覆盖最新持久任务，包含尚无Run的失败；明细/轨迹不误用旧成功，重跑时隐藏旧错误，固定历史审计不变。前端无Run失败沿用活动清除后的新轨迹校验并重试最终读取，重复失败不永久去重，新活动清旧提示。74项后端回归、最终增强断言后的2项复跑（含在74项内）、6项浏览器及前端lint/type-check、Ruff/格式检查通过；临时前端已停止。未迁移数据库、修改私有配置、打包、部署或调用真实模型。
+09-18 用户确认内网两批尚未开始后，直接排除 `RPAADM_002192 / siem / T_GBD_zeus_data` 的7条邮件，不增加页面状态或说明。原始15,288条语料及身份校验保留；第一批2,997、第二批主要8,520、补充3,764，其他成员分批/位置不变。Web/CLI名单一致，批次计数不含邮件，单条和旧成员载荷入口在模型前拒绝。20项邮件专项、42项分批/预览/工作台回归、48项旧入口/快捷调度/架构回归、35项交付与56项Host/语料落位回归及Ruff通过；实际索引只读核对数量和剩余成员一致性。同步手册与必需源码清单，无数据库迁移、真实模型调用、清库或重新打包；邮件处置专项仍暂缓，PI-01指针不变。
+09-18 内网反馈与审查修复：运行中的语料详情不再把缺失中间结果投影为失败；持久任务领取/预检即进入运行中，按当前语料计划/租户/环境查询，列表计数与明细共用活动快照。以运行状态下拉替换“仅未运行”；外部启动的任务完成后，最终结果读取失败会提示终态并自动重试，覆盖analysis_complete及列表Run ID为空/仍为旧值的情况；活动领取消失后重新读取执行轨迹，隔离延迟旧响应，成功读到仍运行的旧行也继续重试。批次进度只刷新轻量列表/轨迹而不重读审计。保留旧数据库浏览和升级后恢复。后端40项专项（39项整组及最终8项批次回归有重叠）、快捷/优先级16项、接口5项、前端17项、本轮新增完成路径8项及lint/type-check通过；整页41项中40项首次通过，1项经验审核跳转因DEV路由首次编译5秒超时，预热复跑通过，增强的旧轨迹读取503回归亦单独通过；额外合跑恢复用例曾一次领取为空，单独复跑通过，保留偶发失败记录。未重新打包或部署，下一步同步内网交付，PI-01指针不变。
 09-18 快速验证审查修复：完成额度或限定范围后，单条请求原子恢复为批量暂停并复用原任务；当前停止原因仅统计未被替代的任务，保留历史阻断审计。新增4个生命周期回归用例覆盖并发去重、服务恢复与部分/全部替代，36项后端回归及Ruff通过；下一步沿用既有内网验收门禁，PI-01指针不变。
 09-18 用户审查清单15项已修复：Kafka失败重试/DLQ确认/有界历史、审批原子消费与前端幂等/凭证保留、轮次终态结果刷新、Memory冻结评估样本及契约/测试基线。Kafka125、审批48、Memory集中70与双模式范围12、前端118项及lint/type-check通过（组间有重叠）；扩大Memory335项通过后的两处旧断言已补齐，相关26项通过。阻塞I/O前后均119项通过；全仓回归结果与既有/环境失败单列至[月度归档](../archive/ai_soc/progress/2026-09.md)。无部署、清库或真实模型/外部动作调用；Kafka/PostgreSQL真实集成和内网门禁保持开放，PI-01指针不变。
 最新授权操作：09-18用户选择“升级表结构，清空数据”；已停前后端，备份本机Docker独立SOC库并重建到0031，重启服务与预热索引。14条运行、3条经验、3个候选、8条观察已从当前库清空；原始15,288样本和8个账号保留。接口200、活动0，未创建实验、运行模型或打包。备份和验收见月度 `EXP-20260918-dev-clean-reset`。

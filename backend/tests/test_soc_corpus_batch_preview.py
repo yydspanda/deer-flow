@@ -92,6 +92,33 @@ def test_preview_verifies_all_sources_without_mutation_or_label_export(source, t
     assert again.plan_id == result.plan_id
 
 
+@pytest.mark.parametrize("excluded_ids", [{"0", "5"}, {str(i) for i in range(6)}])
+def test_preview_excludes_upstream_email_without_changing_source_inventory(source, tmp_path, excluded_ids):
+    _, _, index, document = source
+    for row in document["cases"]:
+        if row["alert_id"] in excluded_ids:
+            row.update(rule_code="RPAADM_002192", source_type="siem", topic="T_GBD_zeus_data")
+    index.write_text(json.dumps(document), encoding="utf-8")
+    originals = {p: digest(p) for p in source[:3]}
+    result = prepare(source, tmp_path / "filtered-preview")
+
+    assert {m.alert_id for m in result.members} == {str(i) for i in range(6)} - excluded_ids
+    assert result.counts["total"] == 6 - len(excluded_ids)
+    assert result.source_identity["source"]["alert_count"] == 6
+    assert {p: digest(p) for p in source[:3]} == originals
+    assert all(m.batch == "learning" for m in result.members)
+    if result.members:
+        assert [m.position_in_group for m in result.members] == [2, 3, 4, 5]
+
+
+def test_preview_still_verifies_excluded_email_payload_identity(source, tmp_path):
+    _, _, index, document = source
+    document["cases"][0].update(rule_code="RPAADM_002192", source_type="siem", topic="T_GBD_zeus_data", payload_hash="f" * 64)
+    index.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match="payload identity"):
+        prepare(source, tmp_path / "invalid-preview")
+
+
 @pytest.mark.parametrize("fault", ["source_hash", "source_size", "store_hash", "profile", "payload_identity", "store_source", "count", "filename_escape", "duplicate", "schema"])
 def test_invalid_sources_fail_before_creating_preview(source, tmp_path, fault):
     pkl, store, index, document = source

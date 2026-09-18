@@ -2,12 +2,14 @@
 
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import func, inspect, or_, select, update
 from sqlalchemy.orm import Session, aliased
 
 from soc_agent.contracts import SocMemoryCandidate, SocMemoryCandidateReviewStage, SocMemoryRecord
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.contracts.corpus_experiments import (
     CorpusCandidatePage,
     CorpusExperiment,
@@ -33,6 +35,23 @@ class CorpusExperimentConflict(ValueError):
 
 class CorpusExperimentSchemaNotReady(RuntimeError):
     """Batch persistence needs deployment migrations, not an empty inventory."""
+
+
+@dataclass(frozen=True)
+class CorpusActiveJob:
+    job_id: str
+    alert_id: str
+    actor_id: str
+    started_at: datetime
+
+
+@dataclass(frozen=True)
+class CorpusFailedJob:
+    job_id: str
+    alert_id: str
+    run_id: str | None
+    error_code: str | None
+    error_message: str | None
 
 
 class SqlAlchemyCorpusExperimentRepository:
@@ -239,6 +258,68 @@ class SqlAlchemyCorpusExperimentRepository:
         with self._session_factory() as session:
             row = session.scalar(select(SocCorpusExperimentRow).where(SocCorpusExperimentRow.plan_id == plan_id).order_by(SocCorpusExperimentRow.created_at, SocCorpusExperimentRow.experiment_id).limit(1))
             return CorpusExperiment.model_validate(row.record_payload) if row else None
+
+    def latest_run_options(self, experiment_id: str, batch: str) -> SocAnalysisExecutionOptions | None:
+        row = SocCorpusRoundRow
+        query = select(row.record_payload["options"]).where(row.experiment_id == experiment_id, row.batch == batch).order_by(row.created_at.desc(), row.round_id).limit(1)
+        with self._session_factory() as session:
+            payload = session.scalar(query)
+            return SocAnalysisExecutionOptions.model_validate(payload) if payload is not None else None
+
+    def active_jobs(self, *, plan_id: str, tenant_id: str, environment: str) -> list[CorpusActiveJob]:
+        """Small activity projection, including claims before Runtime saves a Run.
+
+        The immutable plan binds the source/index identity. A paused round may still
+        own active manual work, so job status, not round state, governs visibility.
+        """
+        job, item, round_, experiment = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocCorpusExperimentRow
+        query = (
+            select(job.job_id, item.alert_id, round_.record_payload["created_by"].as_string(), func.coalesce(job.started_at, job.created_at))
+            .join(item, item.job_id == job.job_id)
+            .join(round_, round_.round_id == item.round_id)
+            .join(experiment, experiment.experiment_id == round_.experiment_id)
+            .where(
+                experiment.plan_id == plan_id,
+                experiment.record_payload["tenant_id"].as_string() == tenant_id,
+                experiment.record_payload["environment"].as_string() == environment,
+                job.tenant_id == tenant_id,
+                job.alert_id == item.alert_id,
+                job.workload_kind == "corpus_experiment",
+                job.status.in_([status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]),
+            )
+            .order_by(job.started_at, job.job_id)
+        )
+        with self._session_factory() as session:
+            return [CorpusActiveJob(job_id, alert_id, actor_id, started_at.replace(tzinfo=UTC) if started_at.tzinfo is None else started_at) for job_id, alert_id, actor_id, started_at in session.execute(query)]
+
+    def latest_failed_jobs(self, *, plan_id: str, tenant_id: str, environment: str, alert_id: str | None = None) -> list[CorpusFailedJob]:
+        """Current member failures, without reading saved model results or configurations.
+
+        Rank all attempts before filtering status, matching the batch latest-member
+        projection. A queued, active or successful rerun supersedes an older failure.
+        The immutable plan fixes each member's source identity and batch.
+        """
+        job, item, round_, experiment = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocCorpusExperimentRow
+        ranked = (
+            select(item.alert_id, item.job_id, func.row_number().over(partition_by=item.alert_id, order_by=(round_.created_at.desc(), round_.round_id.desc())).label("rank"))
+            .join(round_, round_.round_id == item.round_id)
+            .join(experiment, experiment.experiment_id == round_.experiment_id)
+            .where(
+                experiment.plan_id == plan_id,
+                experiment.record_payload["tenant_id"].as_string() == tenant_id,
+                experiment.record_payload["environment"].as_string() == environment,
+            )
+        )
+        if alert_id is not None:
+            ranked = ranked.where(item.alert_id == alert_id)
+        ranked = ranked.subquery()
+        query = (
+            select(job.job_id, ranked.c.alert_id, job.run_id, job.error_code, job.error_message)
+            .join(ranked, ranked.c.job_id == job.job_id)
+            .where(ranked.c.rank == 1, job.status == "failed", job.workload_kind == "corpus_experiment", job.tenant_id == tenant_id, job.alert_id == ranked.c.alert_id)
+        )
+        with self._session_factory() as session:
+            return [CorpusFailedJob(*row) for row in session.execute(query)]
 
     def set_dispatch_scope(self, round_id: str, alert_ids: list[str]) -> None:
         with self._session_factory() as session:

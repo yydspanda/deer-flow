@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Query, Request
 
 from app.gateway.routers.soc_transport import create_soc_router
+from app.gateway.soc_corpus_control import can_configure_corpus
 from app.gateway.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
 from app.gateway.soc_dev_workbench import resolve_soc_dev_workbench_runtime, strict_env_bool
 from soc_agent.application.corpus_experiments import CorpusExperimentApplication, build_corpus_experiment_application
@@ -130,13 +131,29 @@ def _round(application, round_id):
     return result
 
 
+def _saved_run_options(application, batch: Batch):
+    store = application.service.store
+    try:
+        store.require_schema()
+    except CorpusExperimentSchemaNotReady:
+        return application.defaults
+    if application.workbench is None:
+        return application.defaults
+    experiment = store.find_plan_experiment(application.workbench.batch_plan_id)
+    if experiment is None:
+        return application.defaults
+    return store.latest_run_options(experiment.experiment_id, batch) or application.defaults
+
+
 @router.get("/experiments/configuration")
-def configuration(application: ConfigurationDep):
+def configuration(application: ConfigurationDep, request: Request, batch: Batch = "learning"):
     return {
         "defaults": application.defaults.model_dump(mode="json"),
         "full_flow_defaults": application.full_flow_defaults.model_dump(mode="json"),
         "max_concurrency": application.max_concurrency,
         "dispatcher_running": application.dispatcher.is_running,
+        "can_configure": can_configure_corpus(request),
+        "saved_options": _saved_run_options(application, batch).model_dump(mode="json"),
     }
 
 
@@ -177,7 +194,13 @@ def create_round(body: CorpusRoundCreateCommand, request: Request, application: 
     if not context.idempotency_key:
         raise HTTPException(status_code=400, detail="创建轮次需要 Idempotency-Key，重复提交不会创建第二批任务")
     with _command_errors():
-        return application.service.create_round(body, context=context)
+        return application.service.create_round(
+            body,
+            context=context,
+            allow_options_override=can_configure_corpus(request),
+            default_options=application.defaults,
+            current_plan_id=application.workbench.batch_plan_id if application.workbench is not None else None,
+        )
 
 
 @router.get("/experiments/{experiment_id}/rounds", response_model=list[CorpusRoundBrief])
@@ -408,7 +431,7 @@ def quick_validation_command(body: CorpusQuickCommand, request: Request, applica
 
     with _command_errors():
         with application.workbench.experiment_preparation_guard():
-            result = CorpusQuickValidation(application.service, application.workbench.batch_plan).command(body, context=_admin(request))
+            result = CorpusQuickValidation(application.service, application.workbench.batch_plan).command(body, context=_admin(request), allow_options_override=can_configure_corpus(request), default_options=application.defaults)
         application.dispatcher.start()
         return result
 

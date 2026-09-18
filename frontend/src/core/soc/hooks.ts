@@ -685,7 +685,8 @@ export function useSocCorpusWorkbenchExecution(
     queryFn: () => getSocCorpusWorkbenchExecution(alertId!, context),
     enabled: !!alertId,
     retry: false,
-    refetchInterval: live ? 800 : false,
+    refetchInterval: (query) =>
+      live || query.state.data?.status === "running" ? 800 : false,
     staleTime: live ? 0 : SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { execution: query.data ?? null, ...query };

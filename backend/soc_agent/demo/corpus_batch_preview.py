@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from soc_agent.demo.corpus_batches import CorpusBatchCase, CorpusBatchPlan, build_corpus_batch_plan
+from soc_agent.integrations.pingan.corpus_validation import is_corpus_validation_excluded
 
 INDEX_SCHEMA = "soc.corpus_workbench_index.v3"
 STORE_SCHEMA = "soc.corpus_workbench_payload_store.v1"
@@ -85,10 +86,11 @@ def prepare_batch_preview(
         "memory_profile": expected_profile,
         "index": {"file_name": index_path.name, "sha256": hashlib.sha256(index_bytes).hexdigest(), "size_bytes": len(index_bytes), "schema_version": INDEX_SCHEMA},
     }
-    plan = build_corpus_batch_plan(cases, source_identity=identity)
+    excluded_ids = {row["alert_id"] for row in raw_cases if is_corpus_validation_excluded(rule_code=row.get("rule_code"), source_type=row.get("source_type"), topic=row.get("topic"))}
+    plan = build_corpus_batch_plan(cases, source_identity=identity, excluded_alert_ids=excluded_ids)
     expected = {row.alert_id: (row.source_index, row.payload_hash) for row in cases}
-    if set(example_alert_ids) - expected.keys():
-        raise ValueError("an example alert ID is absent from this corpus")
+    if set(example_alert_ids) - {member.alert_id for member in plan.members}:
+        raise ValueError("an example alert ID is absent from this validation scope")
     connection = sqlite3.connect(store_path.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         metadata = dict(connection.execute("SELECT key, value FROM metadata"))
@@ -114,7 +116,7 @@ def _cell(value: object) -> str:
 
 def _csv(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("x", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]) if rows else [])
         writer.writeheader()
         writer.writerows({key: _cell(value) for key, value in row.items()} for row in rows)
 
@@ -193,7 +195,7 @@ def render_preview(plan: CorpusBatchPlan, example_ids: tuple[str, ...] = ()) -> 
         f"| 第一批：沉淀经验 | {counts['learning']:,} | {sum(g.learning_count > 0 for g in groups):,} |",
         f"| 第二批：主要验证 | {counts['validation_main']:,} | {sum(g.validation_main_count > 0 for g in groups):,} |",
         f"| 第二批：补充测试 | {counts['validation_supplementary']:,} | {sum(g.validation_supplementary_count > 0 for g in groups):,} |",
-        f"| 全部（不删数据） | {counts['total']:,} | {len(groups):,} |",
+        f"| 两批合计 | {counts['total']:,} | {len(groups):,} |",
         "",
         "组内按 UTC 事件时间、告警 ID、载荷 Hash 排序；至少6条有效时间样本才分两批。",
         "第一批取约70%，至少5条、每组最多10条，且为第二批留至少1条；其余组内样本全部用于主要验证。",

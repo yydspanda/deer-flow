@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -79,6 +80,75 @@ def test_subset_resume_never_dispatches_outside_selected_scope(tmp_path):
     assert svc.execute_one(round_.round_id)
     assert not svc.execute_one(round_.round_id)
     assert [call[1] for call in calls] == ["0"]
+
+
+def test_resume_adopts_eight_server_slots_without_replacing_saved_jobs_or_options(tmp_path):
+    from test_soc_corpus_experiment_repository import members
+
+    from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
+    from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome
+    from soc_agent.demo.corpus_experiments import SocCorpusExperimentService
+
+    repo = repository(tmp_path)
+    # Independent groups let the scheduler use the full server budget while retaining
+    # its existing in-group ordering rule.
+    repo.corpus_experiments().prepare(experiment(), [member.model_copy(update={"group_id": f"group-{member.alert_id}"}) for member in members()])
+    entered, release, lock = Event(), Event(), Lock()
+    observed = []
+    behavior = {"model": "fake"}
+
+    def execute(round_, member, request):
+        with lock:
+            observed.append((member.alert_id, round_.options, request.idempotency_key))
+            if len(observed) == 8:
+                entered.set()
+        assert release.wait(20), "test did not release the simulated model calls"
+        return CorpusExecutionOutcome(run_id=f"RUN-{member.alert_id}")
+
+    def configuration(options):
+        return {**behavior, "options": options.model_dump(mode="json")}
+
+    old_service = SocCorpusExperimentService(repository=repo, execute=execute, configuration_provider=configuration, max_concurrency=3)
+    plan = SimpleNamespace(plan_id=experiment().plan_id)
+    old_quick = CorpusQuickValidation(old_service, plan)
+    saved_options = SocAnalysisExecutionOptions(normalization_review_mode="apply", refresh_normalization=True)
+    old_quick.command(CorpusQuickCommand(batch="learning", options=saved_options), context=context())
+    old_quick.command(CorpusQuickCommand(batch="learning", action="pause"), context=context())
+    old = old_service.store.list_rounds()[0]
+    old_jobs = old_service.store.list_round_items(old.round_id).items
+    assert old.concurrency == 3
+
+    upgraded = SocCorpusExperimentService(repository=repo, execute=execute, configuration_provider=configuration, max_concurrency=8)
+    quick = CorpusQuickValidation(upgraded, plan)
+    quick.command(CorpusQuickCommand(batch="learning"), context=context())
+    resumed = upgraded.store.get_round(old.round_id)
+    assert resumed.concurrency == 8
+    assert resumed.options == saved_options
+    assert resumed.config_hash == old.config_hash
+    assert resumed.config_snapshot == old.config_snapshot
+    assert [item.job_id for item in upgraded.store.list_round_items(old.round_id).items] == [item.job_id for item in old_jobs]
+    assert len(upgraded.store.list_rounds()) == 1
+
+    with ThreadPoolExecutor(8) as pool:
+        futures = [pool.submit(upgraded.execute_one, old.round_id) for _ in range(8)]
+        try:
+            assert entered.wait(15), "the resumed round did not admit eight simultaneous jobs"
+            assert upgraded.store.active_job_count() == 8
+            assert upgraded.execute_one(old.round_id) is False
+            assert len(observed) == 8
+            assert all(options == saved_options for _, options, _ in observed)
+            assert len({request_id for _, _, request_id in observed}) == 8
+        finally:
+            release.set()
+        assert all(future.result(timeout=10) for future in futures)
+    progress = upgraded.store.round_progress(old.round_id)
+    assert progress.completed_count == 8
+    assert progress.counts["queued"] == 2
+    behavior["model"] = "changed-model"
+    with pytest.raises(ValueError, match="configuration_changed"):
+        quick.command(CorpusQuickCommand(batch="learning"), context=context())
+    assert upgraded.store.get_round(old.round_id).state == "blocked"
+    assert upgraded.store.get_round(old.round_id).config_hash == old.config_hash
 
 
 def test_new_corpus_query_is_read_only_and_start_prepares_automatically(tmp_path):

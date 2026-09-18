@@ -1626,6 +1626,7 @@ export interface SocAnalysisExecutionOptions {
 
 export interface SocCorpusWorkbenchRunControls {
   defaults: SocAnalysisExecutionOptions;
+  can_configure?: boolean;
   normalization_review_available: boolean;
   tenant_policy_available: boolean;
   tenant_policy_advisor_available: boolean;
@@ -1740,7 +1741,14 @@ export interface SocCorpusWorkbenchState {
   alerts: SocCorpusWorkbenchAlert[];
 }
 
+export type SocCorpusRunStatusFilter =
+  | "success"
+  | "running"
+  | "failed"
+  | "not_run";
+
 export interface SocCorpusWorkbenchQuery {
+  runStatus?: SocCorpusRunStatusFilter | null;
   batch?: SocCorpusBatch | null;
   validationTier?: SocCorpusValidationTier | null;
   includeGroupCatalog?: boolean;

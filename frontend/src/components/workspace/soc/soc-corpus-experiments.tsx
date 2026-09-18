@@ -1,6 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -28,6 +33,15 @@ import {
 
 const QUERY = ["soc-corpus-quick"] as const;
 const SETTINGS_KEY = "soc.corpus.experiment.run-settings.v1";
+
+async function invalidateWorkbenchProgress(cache: QueryClient) {
+  // Audit bundles are explicit, run-pinned reads and must not follow batch progress.
+  await Promise.all(
+    ["state", "activity", "execution"].map((kind) =>
+      cache.invalidateQueries({ queryKey: ["soc-corpus-workbench", kind] }),
+    ),
+  );
+}
 
 export function SocCorpusExperiments({
   batch,
@@ -65,8 +79,13 @@ export function SocCorpusExperiments({
         ? "reuse"
         : "explore";
   const configuration = useQuery({
-    queryKey: ["soc-corpus-experiments", "configuration"],
-    queryFn: getSocCorpusExperimentConfiguration,
+    queryKey: ["soc-corpus-experiments", "configuration", batch],
+    queryFn: () => getSocCorpusExperimentConfiguration(batch),
+    refetchInterval: (query) =>
+      query.state.data?.can_configure === false ||
+      controls?.can_configure === false
+        ? 10000
+        : false,
     retry: false,
   });
   const state = useQuery({
@@ -80,13 +99,18 @@ export function SocCorpusExperiments({
         : 10000,
     retry: false,
   });
+  const canConfigure =
+    configuration.data?.can_configure !== false &&
+    controls?.can_configure !== false;
   const options = configuration.data
-    ? controls
-      ? availableCorpusRunSettings(
-          settings ?? configuration.data.defaults,
-          controls,
-        )
-      : configuration.data.defaults
+    ? !canConfigure
+      ? (configuration.data.saved_options ?? configuration.data.defaults)
+      : controls
+        ? availableCorpusRunSettings(
+            settings ?? configuration.data.defaults,
+            controls,
+          )
+        : configuration.data.defaults
     : null;
   useEffect(() => {
     setSettings(readCorpusRunSettings(SETTINGS_KEY));
@@ -112,9 +136,13 @@ export function SocCorpusExperiments({
     },
     onSuccess: async () => {
       await cache.invalidateQueries({ queryKey: QUERY });
-      await cache.invalidateQueries({ queryKey: ["soc-corpus-workbench"] });
+      await invalidateWorkbenchProgress(cache);
+      await configuration.refetch();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => {
+      toast.error(error.message);
+      void configuration.refetch();
+    },
   });
   const submit = mutation.mutate;
   useEffect(() => {
@@ -133,10 +161,10 @@ export function SocCorpusExperiments({
   const data = state.data;
   useEffect(() => {
     if (!data) return;
-    const revision = `${batch}:${data.items.map((item) => `${item.job_id}:${item.status}`).join(",")}`;
+    const revision = `${batch}:${data.running}:${data.active}:${data.completed}:${data.failed}:${data.remaining}:${data.items.map((item) => `${item.job_id}:${item.status}`).join(",")}`;
     if (completion.current !== revision) {
       completion.current = revision;
-      void cache.invalidateQueries({ queryKey: ["soc-corpus-workbench"] });
+      void invalidateWorkbenchProgress(cache);
     }
   }, [data, batch, cache]);
   const finished =
@@ -151,9 +179,14 @@ export function SocCorpusExperiments({
         <SocCorpusRunSettings
           title="运行设置"
           resetTitle="恢复默认设置"
-          controls={{ ...controls, defaults: configuration.data.defaults }}
+          controls={{
+            ...controls,
+            defaults: configuration.data.defaults,
+            can_configure: canConfigure,
+          }}
           value={options}
           onChange={(value) => {
+            if (!canConfigure) return;
             setSettings(value);
             try {
               sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(value));

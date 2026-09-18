@@ -55,6 +55,10 @@ generic `soc_agent` code.
   Inspection is an
   on-demand read of per-run facts, not an analyst maintenance prerequisite. Phishing-email
   specialization remains deferred by user decision; trust the upstream ML/LLM detection.
+  `corpus_validation.py` excludes only `RPAADM_002192` from source type `siem` and
+  topic `T_GBD_zeus_data` from both Memory-validation batches and corpus manual runs.
+  Match reviewed identity, never a phishing keyword or display title. Preserve source
+  records; this evaluation exclusion is not a Runtime verdict or a disposition policy.
 - Adapters emit generic role claims, scenario signals, typed observations, source-field
   semantics, trust, and provenance. Do not infer attacker/victim globally from aliases
   such as `sip`, `source_ip`, `dst_addr`, or `str_attack_ip`.
@@ -245,7 +249,9 @@ generic `soc_agent` code.
   Lifecycle/callback provider modes must be switched together by the governed mode command.
 - The model gateway uses one process-local capacity semaphore; launch exactly one gateway
   process. The PingAn Host profile keeps the gateway and SOC Runtime limits aligned at
-  three concurrent model calls. The SQLite-backed legacy compatibility Worker remains
+  eight concurrent model calls. Refresh both values in the private profile for a new
+  handoff; an explicit existing value is not overridden by the Host's fallback.
+  The SQLite-backed legacy compatibility Worker remains
   single-worker and is a separate queue boundary.
 - The EAGW route returns complete, non-streaming completions. The PingAn DeerFlow model
   profile therefore requires `disable_streaming=True`, so ordinary chat, tool calling and

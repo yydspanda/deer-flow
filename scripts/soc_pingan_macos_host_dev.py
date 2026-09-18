@@ -628,7 +628,8 @@ def build_start_command(
         + auth_setup
         + f"export SOC_DEV_MEMORY_WORKBENCH_ENABLED={workbench_enabled}; "
         f"export SOC_DEV_CORPUS_WORKBENCH_ENABLED={workbench_enabled}; "
-        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-3}"; '
+        f"export SOC_DEV_CORPUS_LOCAL_CONTROL_ONLY={workbench_enabled}; "
+        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-8}"; '
         'export SOC_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"; '
         'export SOC_DEV_MEMORY_CORPUS_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"; '
         'export SOC_DEV_CORPUS_WORKBENCH_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"; '
@@ -657,9 +658,12 @@ def build_start_command(
             '"$SOC_HOST_DEV_ROOT/frontend/scripts/soc-frontend.mjs" build'
         )
     else:
+        internal_binding = (
+            "--loopback-internal " if selected_environment == "dev" else ""
+        )
         shell_command += (
             f'exec "$SOC_HOST_DEV_ROOT/scripts/serve.sh" {service_mode} --skip-install --skip-env '
-            '--frontend-entry="$SOC_HOST_DEV_ROOT/frontend/scripts/soc-frontend.mjs" "$@"'
+            f'{internal_binding}--frontend-entry="$SOC_HOST_DEV_ROOT/frontend/scripts/soc-frontend.mjs" "$@"'
         )
     command = [
         "/bin/bash",
@@ -725,7 +729,7 @@ def prepare_soc_database(
     database_path = (root / SOC_DATABASE_RELATIVE_PATHS[runtime_environment]).resolve()
     database_url = f"sqlite+pysqlite:///{database_path}"
     resolved = dict(environment)
-    resolved.setdefault("SOC_LLM_MAX_CONCURRENCY", "3")
+    resolved.setdefault("SOC_LLM_MAX_CONCURRENCY", "8")
     resolved.setdefault("SOC_LLM_ADMISSION_TIMEOUT_SECONDS", "180")
     resolved.update(
         {

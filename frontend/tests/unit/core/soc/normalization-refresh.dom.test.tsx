@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "@rstest/core";
+import { afterEach, expect, rs, test } from "@rstest/core";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 
@@ -85,4 +85,25 @@ test("batch settings do not inherit old single-alert policy preferences", () => 
     availableCorpusRunSettings(readCorpusRunSettings()!, controls)
       .tenant_policy_enabled,
   ).toBe(false);
+});
+
+test("read-only host controls disable toggles, reset and fact refresh", () => {
+  const onChange = rs.fn();
+  render(
+    <SocCorpusRunSettings
+      controls={{ ...controls, can_configure: false }}
+      value={{ ...defaults, refresh_normalization: true }}
+      onChange={onChange}
+    />,
+  );
+  const inputs = [
+    ...screen.getAllByRole("switch"),
+    screen.getByRole("checkbox", { name: "重新核对事实" }),
+    screen.getByRole("button", { name: "恢复默认" }),
+  ];
+  for (const input of inputs) {
+    expect(input.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(input);
+  }
+  expect(onChange).not.toHaveBeenCalled();
 });

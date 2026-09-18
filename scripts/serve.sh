@@ -15,6 +15,7 @@
 #   --skip-frontend-build With --prod, reuse the existing .next build via `next start`
 #                         instead of `next build` (opt-in; fails if no build exists)
 #   --frontend-entry=PATH Operator-owned Node launcher, called with `start`
+#   --loopback-internal   Bind Gateway/frontend to loopback; nginx remains the public entry
 #   --skip-env            Caller already resolved the operator environment
 #   --stop                Stop all running services and exit
 #   --restart             Stop all services, then start with the given mode flags
@@ -70,6 +71,7 @@ DEV_MODE=true
 DAEMON_MODE=false
 SKIP_INSTALL=false
 SKIP_FRONTEND_BUILD=false
+LOOPBACK_INTERNAL=false
 DEERFLOW_FRONTEND_ENTRY=""
 ACTION="start"   # start | stop | restart
 
@@ -82,11 +84,12 @@ for arg in "$@"; do
         --skip-env) ;;
         --skip-frontend-build) SKIP_FRONTEND_BUILD=true ;;
         --frontend-entry=*) DEERFLOW_FRONTEND_ENTRY="${arg#*=}" ;;
+        --loopback-internal) LOOPBACK_INTERNAL=true ;;
         --stop)    ACTION="stop" ;;
         --restart) ACTION="restart" ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: $0 [--dev|--prod] [--daemon] [--skip-install] [--skip-frontend-build] [--frontend-entry=PATH] [--stop|--restart]"
+            echo "Usage: $0 [--dev|--prod] [--daemon] [--skip-install] [--skip-frontend-build] [--frontend-entry=PATH] [--loopback-internal] [--stop|--restart]"
             exit 1
             ;;
     esac
@@ -341,19 +344,33 @@ fi
 DEERFLOW_PNPM_RUNNER="$REPO_ROOT/scripts/pnpm.py"
 export DEERFLOW_PNPM_PYTHON DEERFLOW_PNPM_RUNNER
 
+# Internal listener bindings
+GATEWAY_BIND_HOST=0.0.0.0
+GATEWAY_PROXY_FLAGS=""
+FRONTEND_BIND_ARGS=""
+if $LOOPBACK_INTERNAL; then
+    GATEWAY_BIND_HOST=127.0.0.1
+    # Pin trust even if the operator environment has FORWARDED_ALLOW_IPS=*.
+    # nginx appends the real connection address to the forwarded chain.
+    GATEWAY_PROXY_FLAGS="--forwarded-allow-ips=127.0.0.1,::1"
+    FRONTEND_BIND_ARGS=" --hostname 127.0.0.1"
+    # An operator-owned frontend entry must honor this binding contract too.
+    export DEERFLOW_FRONTEND_HOST=127.0.0.1
+fi
+
 # Frontend command
 if [ -n "$DEERFLOW_FRONTEND_ENTRY" ]; then
     FRONTEND_CMD='env PORT=3000 "$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" exec node "$DEERFLOW_FRONTEND_ENTRY" start'
 elif $DEV_MODE; then
-    FRONTEND_CMD='env PORT=3000 "$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" run dev'
+    FRONTEND_CMD='env PORT=3000 "$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" run dev'"$FRONTEND_BIND_ARGS"
     if $SKIP_FRONTEND_BUILD; then
         echo "  Note: --skip-frontend-build is ignored in dev mode (next dev does not build)."
     fi
 elif $SKIP_FRONTEND_BUILD; then
     # The BUILD_ID preflight above already guarantees a reusable build exists.
-    FRONTEND_CMD="env PORT=3000 BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run start"
+    FRONTEND_CMD="env PORT=3000 BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run start$FRONTEND_BIND_ARGS"
 else
-    FRONTEND_CMD="env PORT=3000 BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run preview"
+    FRONTEND_CMD="env PORT=3000 BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run preview$FRONTEND_BIND_ARGS"
 fi
 
 # Runtime path defaults. Local `make dev` launches Gateway from `backend/`,
@@ -514,7 +531,7 @@ mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp
 
 # 1. Gateway API
 run_service "Gateway" \
-    "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
+    "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host $GATEWAY_BIND_HOST --port 8001 $GATEWAY_PROXY_FLAGS $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
     8001 30
 
 # 2. Frontend

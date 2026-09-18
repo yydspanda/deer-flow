@@ -1,9 +1,9 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-09-03
+> Reconciled: 2026-09-18
 > Status: `Active internal acceptance / model, lifecycle and Worker proven; ZEUS-originated callback pending`
-> Resume action: deploy the buffered chat and bounded-concurrency profile, verify chat plus three-alert concurrency, then have ZEUS originate a fresh compatibility Job so callback and old-page readback can be accepted
+> Resume action: deploy the buffered chat and eight-slot concurrency profile, verify chat and bounded batch dispatch, then have ZEUS originate a fresh compatibility Job so callback and old-page readback can be accepted
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -168,10 +168,11 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 因此无法按同事区分审计 actor。真实外部动作仍保持关闭。需要验收真实账号和权限时，先停止服务，
 再去掉该参数启动；无需修改代码或数据库：
 
-Host DEV 默认允许 3 条不同告警并行研判，同一 `alert_id` 的重复点击由服务端占用直接拒绝，不会重复调用
-Runtime/LLM。需要按内网模型容量调整时，在 `.env.soc-dev.local` 设置
-`SOC_LLM_MAX_CONCURRENCY`；不要取消并发上限。该占用是单进程 DEV 演示边界，不替代生产 Kafka/API 的
-持久化幂等和多副本租约。
+Host DEV 默认允许最多8条不同告警并行研判，同一 `alert_id` 的重复点击不会重复调用Runtime/LLM。
+在 `.env.soc-dev.local` 同步设置 `SOC_LLM_MAX_CONCURRENCY=8` 与
+`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY=8`，完整重启Host后生效。
+已有网页批次点击“继续”会采用服务端当前并发上限，原任务及运行开关保留。
+同类组顺序和聊天/经验起草共享容量可能使实际告警运行数小于8；SQLite兼容Worker仍保持1。
 
 ```bash
 python3.12 scripts/soc_pingan_macos_host_dev.py stop

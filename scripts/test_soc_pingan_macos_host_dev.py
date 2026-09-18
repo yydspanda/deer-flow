@@ -295,7 +295,7 @@ def test_start_plan_skips_install_and_enables_governed_policy_without_network_si
     assert "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true" in command[2]
     assert "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true" in command[2]
     assert (
-        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-3}"' in command[2]
+        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-8}"' in command[2]
     )
     assert (
         'export SOC_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"'
@@ -328,6 +328,21 @@ def test_demo_no_auth_start_is_explicit_and_does_not_change_secure_default() -> 
 
     secure_command = build_start_command(daemon=True, runtime_environment="dev")
     assert "export DEER_FLOW_AUTH_DISABLED=1" not in secure_command[2]
+
+
+@pytest.mark.parametrize("frontend_mode", ["prebuilt", "dev"])
+def test_host_dev_locks_control_to_the_deployment_host(frontend_mode: str) -> None:
+    command = build_start_command(daemon=True, frontend_mode=frontend_mode)
+
+    assert "--loopback-internal" in command[2]
+    assert "export SOC_DEV_CORPUS_LOCAL_CONTROL_ONLY=true" in command[2]
+
+
+def test_host_stg_does_not_enable_dev_control_authority() -> None:
+    command = build_start_command(daemon=True, runtime_environment="stg")
+
+    assert "export SOC_DEV_CORPUS_LOCAL_CONTROL_ONLY=false" in command[2]
+    assert "--loopback-internal" not in command[2]
 
 
 def test_stg_start_is_isolated_and_rejects_dev_only_auth_bypass() -> None:
@@ -523,6 +538,26 @@ def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations
             },
         )
     ]
+
+
+@pytest.mark.parametrize("configured", [None, "3", "12"])
+def test_host_concurrency_defaults_to_eight_and_preserves_operator_overrides(
+    tmp_path: Path, configured: str | None
+) -> None:
+    environment = {"SOC_PINGAN_ENV": "dev"}
+    if configured is not None:
+        environment["SOC_LLM_MAX_CONCURRENCY"] = configured
+        environment["SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY"] = configured
+    resolved = prepare_soc_database(
+        environment,
+        root=tmp_path,
+        run=lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+
+    assert resolved["SOC_LLM_MAX_CONCURRENCY"] == (configured or "8")
+    # The protected model profile owns the shared gateway capacity; Host must
+    # neither invent nor overwrite it while preparing the database/worker env.
+    assert resolved.get("SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY") == configured
 
 
 def test_prepare_soc_database_uses_isolated_stg_path(tmp_path: Path) -> None:

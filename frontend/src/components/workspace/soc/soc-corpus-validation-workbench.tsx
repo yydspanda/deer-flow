@@ -49,7 +49,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
@@ -150,6 +149,15 @@ const READINESS: Record<
   },
 };
 
+type RunStatusFilter = "all" | "success" | "running" | "failed" | "not_run";
+const RUN_STATUS_LABELS: Record<RunStatusFilter, string> = {
+  all: "全部状态",
+  success: "运行成功",
+  running: "运行中",
+  failed: "运行失败",
+  not_run: "未运行",
+};
+
 type ReadinessFilter = SocCorpusWorkbenchReadiness | "all";
 type ComparisonFilter = SocCorpusComparisonStatus | "all" | "labeled";
 
@@ -159,9 +167,9 @@ interface CorpusFilterSnapshot {
   search: string;
   readiness: ReadinessFilter;
   comparison: ComparisonFilter;
+  runStatus: RunStatusFilter;
   sourceType: string;
   groupId: string;
-  unprocessedOnly: boolean;
 }
 
 interface RunFeedback {
@@ -232,17 +240,20 @@ function readStoredFilters(): Partial<CorpusFilterSnapshot> | null {
       readiness: isReadinessFilter(parsed.readiness)
         ? parsed.readiness
         : undefined,
+      runStatus:
+        typeof parsed.runStatus === "string" &&
+        Object.hasOwn(RUN_STATUS_LABELS, parsed.runStatus)
+          ? (parsed.runStatus as RunStatusFilter)
+          : parsed.unprocessedFilterVersion === 2 &&
+              parsed.unprocessedOnly === true
+            ? "not_run"
+            : "all",
       comparison: isComparisonFilter(parsed.comparison)
         ? parsed.comparison
         : undefined,
       sourceType:
         typeof parsed.sourceType === "string" ? parsed.sourceType : undefined,
       groupId: typeof parsed.groupId === "string" ? parsed.groupId : undefined,
-      unprocessedOnly:
-        parsed.unprocessedFilterVersion === 2 &&
-        typeof parsed.unprocessedOnly === "boolean"
-          ? parsed.unprocessedOnly
-          : undefined,
     };
   } catch {
     return null;
@@ -398,6 +409,22 @@ const EXECUTION_STATUS_LABELS: Record<
   completed: "完整链路完成",
   failed: "运行失败",
 };
+
+function isTerminalExecution(status: SocCorpusWorkbenchExecution["status"]) {
+  return ["analysis_complete", "completed", "failed"].includes(status);
+}
+
+function terminalExecutionRefreshKey(
+  execution: SocCorpusWorkbenchExecution | null,
+) {
+  if (!execution || !isTerminalExecution(execution.status)) return null;
+  if (execution.run_id)
+    return `${execution.alert_id}:${execution.run_id}:${execution.status}`;
+  // A durable task may fail during prechecks, before Runtime saves a Run.
+  return execution.status === "failed"
+    ? `${execution.alert_id}:pre-runtime:failed`
+    : null;
+}
 
 const EXECUTION_METRIC_LABELS: Record<string, string> = {
   review_changes: "对象 / 字段调整",
@@ -631,11 +658,13 @@ function AlertDetail({
   execution,
   executionLoading,
   patternWindowDays,
+  completionRefreshFailed,
 }: {
   alert: SocCorpusWorkbenchAlert | null;
   execution: SocCorpusWorkbenchExecution | null;
   executionLoading: boolean;
   patternWindowDays: number;
+  completionRefreshFailed: boolean;
 }) {
   const promoteMutation = usePromoteSocRunToMemory();
   const [promotionOpen, setPromotionOpen] = useState(false);
@@ -653,6 +682,8 @@ function AlertDetail({
       </section>
     );
   }
+  const isRunning =
+    alert.workflow_state === "running" || execution?.status === "running";
   const readiness = READINESS[alert.readiness];
   const candidateId =
     alert.learning?.candidate_id ??
@@ -674,6 +705,7 @@ function AlertDetail({
   );
   const canPromote =
     !!alert.run_id &&
+    !isRunning &&
     alert.workflow_state !== "failed" &&
     (alert.learning
       ? alert.learning.action === "promote"
@@ -751,14 +783,22 @@ function AlertDetail({
         </div>
       </div>
 
-      {alert.operator_outcome ? (
+      {isRunning ? (
+        <p role="status" className="text-muted-foreground px-5 py-4 text-sm">
+          {completionRefreshFailed
+            ? execution?.status === "failed"
+              ? "本次研判失败，结果加载失败，正在重试。"
+              : "本次研判已完成，结果加载失败，正在重试。"
+            : "正在研判，完成后显示处理结论。"}
+        </p>
+      ) : alert.operator_outcome ? (
         <SocCaseOutcomePanel
           outcome={alert.operator_outcome}
           className="border-x-0"
         />
       ) : null}
 
-      {alert.run_id && !alert.operator_outcome ? (
+      {!isRunning && alert.run_id && !alert.operator_outcome ? (
         <p className="text-muted-foreground px-5 py-4 text-sm">
           处理结论暂不可用，请刷新后查看。
         </p>
@@ -1121,6 +1161,7 @@ export function SocCorpusValidationWorkbench() {
   }
   const [search, setSearch] = useState("");
   const [readiness, setReadiness] = useState<ReadinessFilter>("all");
+  const [runStatus, setRunStatus] = useState<RunStatusFilter>("all");
   const [comparison, setComparison] = useState<ComparisonFilter>("all");
   const [sourceType, setSourceType] = useState("all");
   const [groupId, setGroupId] = useState("all");
@@ -1128,7 +1169,6 @@ export function SocCorpusValidationWorkbench() {
     (CorpusFilterSnapshot & { page: number }) | null
   >(null);
   const restoredPage = useRef<number | null>(null);
-  const [unprocessedOnly, setUnprocessedOnly] = useState(false);
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [focusAlertId, setFocusAlertId] = useState<string | null>(null);
   const [runFeedbackByAlert, setRunFeedbackByAlert] = useState<
@@ -1142,6 +1182,9 @@ export function SocCorpusValidationWorkbench() {
   const detailRef = useRef<HTMLDivElement>(null);
   const completionNoticeRunIds = useRef(new Set<string>());
   const terminalRefreshRunIds = useRef(new Set<string>());
+  const [terminalRefreshFailedKey, setTerminalRefreshFailedKey] = useState<
+    string | null
+  >(null);
   const deferredSearch = useDeferredValue(search.trim());
   const query = useSocCorpusWorkbench({
     batch,
@@ -1156,7 +1199,7 @@ export function SocCorpusValidationWorkbench() {
     sourceType: sourceType === "all" ? null : sourceType,
     groupId: groupId === "all" ? null : groupId,
     comparison: comparison === "all" ? null : comparison,
-    unprocessedOnly,
+    runStatus: runStatus === "all" ? null : runStatus,
     focusAlertId,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
@@ -1166,10 +1209,12 @@ export function SocCorpusValidationWorkbench() {
   const state = query.state;
   const batchPreview = state?.batch_selection?.execution_enabled === false;
   const selectedRunSettings = state?.run_controls
-    ? availableCorpusRunSettings(
-        runSettings ?? state.run_controls.defaults,
-        state.run_controls,
-      )
+    ? state.run_controls.can_configure === false
+      ? state.run_controls.defaults
+      : availableCorpusRunSettings(
+          runSettings ?? state.run_controls.defaults,
+          state.run_controls,
+        )
     : undefined;
   const locallyRunningAlertIds = useMemo(
     () =>
@@ -1227,6 +1272,81 @@ export function SocCorpusValidationWorkbench() {
   }, [activityAlertKey, query]);
 
   const refetchWorkbench = query.refetch;
+  const refetchExecution = executionQuery.refetch;
+  const terminalExecution = executionQuery.execution;
+  const terminalRow = state?.alerts.find(
+    (item) => item.alert_id === selectedAlertId,
+  );
+  const externalTerminalRefreshKey =
+    !runFeedback &&
+    !selectedAlertIsActive &&
+    !!activityQuery.activity &&
+    terminalExecution?.alert_id === selectedAlertId &&
+    terminalRow?.workflow_state === "running"
+      ? terminalExecutionRefreshKey(terminalExecution)
+      : null;
+  useEffect(() => {
+    const key = externalTerminalRefreshKey;
+    if (!key) {
+      // In particular, a new active claim must clear the previous failed read's
+      // notice before another failure without a Run can reuse this local key.
+      setTerminalRefreshFailedKey(null);
+      return;
+    }
+    if (terminalRefreshRunIds.current.has(key)) return;
+    let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      let terminalConfirmed = false;
+      try {
+        // The list may still show the precheck's null/previous Run ID. Reread
+        // execution after the claim clears, replacing any pre-clear request;
+        // its old terminal response must not finish the current run.
+        const latest = await refetchExecution({ cancelRefetch: true });
+        if (disposed) return;
+        if (!latest.isError && latest.data?.alert_id === selectedAlertId) {
+          const execution = latest.data;
+          // A changed trace gets its own effect; a running trace resumes polling.
+          if (terminalExecutionRefreshKey(execution) !== key) return;
+          terminalConfirmed = true;
+          const { data, isError } = await refetchWorkbench();
+          if (disposed) return;
+          // A failed refetch retains stale data and cannot satisfy deduplication.
+          if (isError || !data) {
+            setTerminalRefreshFailedKey(key);
+          } else {
+            setTerminalRefreshFailedKey((current) =>
+              current === key ? null : current,
+            );
+            const row = data.alerts.find(
+              (item) => item.alert_id === selectedAlertId,
+            );
+            if (row?.workflow_state !== "running") {
+              // Without a Run ID this key is only valid for the current effect;
+              // a later attempt can also fail before Runtime creates a Run.
+              if (execution.run_id) terminalRefreshRunIds.current.add(key);
+              return;
+            }
+          }
+        }
+      } catch {
+        if (disposed) return;
+        if (terminalConfirmed) setTerminalRefreshFailedKey(key);
+      }
+      retryTimer = setTimeout(() => void refresh(), 2000);
+    };
+    void refresh();
+    return () => {
+      disposed = true;
+      clearTimeout(retryTimer);
+    };
+  }, [
+    externalTerminalRefreshKey,
+    refetchWorkbench,
+    refetchExecution,
+    selectedAlertId,
+  ]);
+
   useEffect(() => {
     const execution = executionQuery.execution;
     if (!execution?.run_id || !selectedAlertId) return;
@@ -1279,6 +1399,7 @@ export function SocCorpusValidationWorkbench() {
     refetchWorkbench,
     runFeedbackByAlert,
     selectedAlertId,
+    state?.alerts,
   ]);
 
   useEffect(() => {
@@ -1353,12 +1474,10 @@ export function SocCorpusValidationWorkbench() {
       if (stored.validationTier) setValidationTier(stored.validationTier);
       if (stored.search !== undefined) setSearch(stored.search);
       if (stored.readiness !== undefined) setReadiness(stored.readiness);
+      if (stored.runStatus !== undefined) setRunStatus(stored.runStatus);
       if (stored.comparison !== undefined) setComparison(stored.comparison);
       if (stored.sourceType !== undefined) setSourceType(stored.sourceType);
       if (stored.groupId !== undefined) setGroupId(stored.groupId);
-      if (stored.unprocessedOnly !== undefined) {
-        setUnprocessedOnly(stored.unprocessedOnly);
-      }
     }
     const returnBatch = new URLSearchParams(window.location.search).get(
       "batch",
@@ -1380,14 +1499,14 @@ export function SocCorpusValidationWorkbench() {
       search,
       readiness,
       comparison,
+      runStatus,
       sourceType,
       groupId,
-      unprocessedOnly,
     };
     try {
       window.sessionStorage.setItem(
         FILTER_STORAGE_KEY,
-        JSON.stringify({ ...snapshot, unprocessedFilterVersion: 2 }),
+        JSON.stringify(snapshot),
       );
     } catch {
       // Navigation continuity is best-effort; the workbench remains usable.
@@ -1396,12 +1515,12 @@ export function SocCorpusValidationWorkbench() {
     batch,
     validationTier,
     comparison,
+    runStatus,
     filtersHydrated,
     groupId,
     readiness,
     search,
     sourceType,
-    unprocessedOnly,
   ]);
 
   const sourceTypes = useMemo(
@@ -1433,12 +1552,6 @@ export function SocCorpusValidationWorkbench() {
         (alert) => sourceType === "all" || alert.source_type === sourceType,
       )
       .filter((alert) => groupId === "all" || alert.group_id === groupId)
-      .filter(
-        (alert) =>
-          !unprocessedOnly ||
-          alert.workflow_state !== "completed" ||
-          alert.alert_id === focusAlertId,
-      )
       .filter((alert) => {
         if (alert.alert_id === focusAlertId) return true;
         if (comparison === "all") return true;
@@ -1467,7 +1580,6 @@ export function SocCorpusValidationWorkbench() {
     search,
     sourceType,
     state?.alerts,
-    unprocessedOnly,
   ]);
 
   useEffect(() => {
@@ -1478,11 +1590,11 @@ export function SocCorpusValidationWorkbench() {
     batch,
     validationTier,
     comparison,
+    runStatus,
     groupId,
     readiness,
     search,
     sourceType,
-    unprocessedOnly,
   ]);
 
   useEffect(() => {
@@ -1618,17 +1730,17 @@ export function SocCorpusValidationWorkbench() {
           search,
           readiness,
           comparison,
+          runStatus,
           sourceType,
           groupId,
-          unprocessedOnly,
           page,
         },
     );
     setSearch("");
     setReadiness("all");
     setComparison("all");
+    setRunStatus("all");
     setSourceType("all");
-    setUnprocessedOnly(false);
     setGroupId(nextGroupId);
     setSelectedAlertId(null);
     setPage(0);
@@ -1640,16 +1752,16 @@ export function SocCorpusValidationWorkbench() {
       search !== groupOrigin.search ||
       readiness !== groupOrigin.readiness ||
       comparison !== groupOrigin.comparison ||
+      runStatus !== groupOrigin.runStatus ||
       sourceType !== groupOrigin.sourceType ||
-      groupId !== groupOrigin.groupId ||
-      unprocessedOnly !== groupOrigin.unprocessedOnly;
+      groupId !== groupOrigin.groupId;
     restoredPage.current = filtersChanged ? groupOrigin.page : null;
     setSearch(groupOrigin.search);
     setReadiness(groupOrigin.readiness);
     setComparison(groupOrigin.comparison);
+    setRunStatus(groupOrigin.runStatus);
     setSourceType(groupOrigin.sourceType);
     setGroupId(groupOrigin.groupId);
-    setUnprocessedOnly(groupOrigin.unprocessedOnly);
     setPage(groupOrigin.page);
     setSelectedAlertId(null);
     setGroupOrigin(null);
@@ -1665,8 +1777,8 @@ export function SocCorpusValidationWorkbench() {
     setSearch("");
     setReadiness("all");
     setComparison("all");
+    setRunStatus("all");
     setSourceType("all");
-    setUnprocessedOnly(false);
     setSelectedAlertId(null);
     setFocusAlertId(null);
     setPage(0);
@@ -1931,6 +2043,31 @@ export function SocCorpusValidationWorkbench() {
                 />
               </div>
             </div>
+            <div className="w-40">
+              <label
+                htmlFor="corpus-run-status-filter"
+                className="mb-1.5 block text-xs font-medium"
+              >
+                运行状态
+              </label>
+              <Select
+                value={runStatus}
+                onValueChange={(value) => {
+                  setRunStatus(value as RunStatusFilter);
+                }}
+              >
+                <SelectTrigger id="corpus-run-status-filter" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(RUN_STATUS_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="w-44">
               <label
                 htmlFor="corpus-readiness-filter"
@@ -2025,14 +2162,6 @@ export function SocCorpusValidationWorkbench() {
                 onValueChange={handleOpenGroup}
               />
             </div>
-            <label className="flex h-9 items-center gap-2 border px-3 text-sm">
-              <Switch
-                checked={unprocessedOnly}
-                onCheckedChange={setUnprocessedOnly}
-                aria-label="仅显示未运行告警"
-              />
-              仅未运行
-            </label>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -2042,10 +2171,10 @@ export function SocCorpusValidationWorkbench() {
                 setSearch("");
                 setReadiness("all");
                 setComparison("all");
+                setRunStatus("all");
                 setSourceType("all");
                 setGroupId("all");
                 setGroupOrigin(null);
-                setUnprocessedOnly(false);
               }}
             >
               <RotateCcwIcon className="size-4" />
@@ -2523,6 +2652,10 @@ export function SocCorpusValidationWorkbench() {
             execution={executionQuery.execution}
             executionLoading={executionQuery.isLoading}
             patternWindowDays={state.safety.pattern_window_days}
+            completionRefreshFailed={
+              !!externalTerminalRefreshKey &&
+              terminalRefreshFailedKey === externalTerminalRefreshKey
+            }
           />
         </div>
 

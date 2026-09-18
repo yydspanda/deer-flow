@@ -81,7 +81,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Fixed recommended demos are no longer shown; group browsing, group search and existing
 > alert links remain available. Normalization inspection is retained at
 > `/workspace/soc/normalization` for on-demand maintenance, outside the operator navigation.
-> The rehearsal defaults to all alerts; enable `仅未运行` to filter out completed runs.
+> The rehearsal defaults to all alerts; use `运行状态` to select successful, running,
+> failed or unrun alerts.
 > `后续运行设置` provides per-run switches for semantic review, enterprise policy,
 > safe-software-path policy and LLM policy advice. They take effect on the next run without
 > restarting services; disabling enterprise policy also disables its two sub-options.
@@ -120,11 +121,37 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > and the shared SOC processing queue. The page offers **开始积累 → 审核经验 → 开始验证**.
 > Batch starts cover the full selected scope; pause/continue skip completed alerts. Single
 > alerts run directly even while the batch is paused, with restart recovery and deduplication.
+> The PingAn SIEM email detector `RPAADM_002192` on `T_GBD_zeus_data` is excluded
+> from both validation batches and manual execution; original corpus data is retained.
+> On Mac Host DEV, edit run settings from `http://localhost:2026` on the deployment
+> machine. LAN colleagues can start, pause and rerun using the batch's last saved
+> settings (deployment defaults before its first round). Local selections are saved
+> on submission; queued tasks keep their original settings. Host startup automatically
+> binds Gateway/Next to loopback while nginx remains the shared LAN entry.
+> Explicit experiment APIs enforce the same current-plan settings; creating another
+> experiment or selecting a historical plan cannot bypass the host-only controls.
+> PingAn Host DEV defaults to eight concurrent alerts, with matching Runtime and model
+> gateway limits. After deploying the updated configuration and restarting Host, batch
+> continue adopts the server's current capacity while preserving queued task settings.
+> Model calls share capacity with chat and drafting, so actual occupancy may be lower.
 > A single request also works after a legacy limit or selected scope completes, keeping
 > other queued alerts paused. Replacing all blocked tasks clears the current stop warning;
 > historical blocked rounds remain available for audit.
+> Opening a running alert shows progress until its result is ready; missing in-flight
+> analysis is not reported as a failed conclusion. Claimed batch tasks count as running
+> during prechecks, including reruns whose previous result is still saved. The header
+> counts active tasks across pages and filters; its denominator is the concurrency limit.
+> If the final result read fails, details show the completed/failed execution status and
+> retry automatically, including validation without Pattern learning and first runs or
+> reruns whose new result has not reached the list. Completion rereads the execution
+> after active work clears so a previous run cannot finish the current one.
+> Batch progress refreshes lightweight lists and traces without reloading open audit bundles.
 > Counts use each alert’s latest task across rounds; reruns retain old results. List filters
-> affect browsing only. The HTTP CLI is
+> affect browsing only. The run-status filter replaces the unprocessed-only switch and
+> shows all, successful, running, failed, or unrun alerts across the selected batch.
+> Failed tasks count as failed even if payload loading or Runtime setup failed before
+> a Run was saved; a newer attempt supersedes that failure, and active work takes priority.
+> The HTTP CLI is
 > `backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py --help`.
 > It supports filters, limits, concurrency, pause/resume, explicit retries and fixed-run
 > exports. Learning uses no existing Memory and accumulates within the experiment;

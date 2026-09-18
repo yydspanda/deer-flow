@@ -29,6 +29,16 @@ prebuilt pages with explicit `--frontend-mode dev` rollback; STG rejects hot rel
 Build and serve receive the same resolved auth/public configuration. The generic launcher
 accepts an operator-owned `--frontend-entry=PATH` and `--skip-env`; ordinary upstream
 startup remains unchanged. Keep all SOC build behavior outside `serve.sh`.
+The generic `--loopback-internal` option binds Gateway and the built-in frontend
+commands to `127.0.0.1`, pins Uvicorn forwarding trust to `127.0.0.1,::1`, and passes
+`DEERFLOW_FRONTEND_HOST=127.0.0.1` to an operator-owned frontend entry, which must honor
+that contract. PingAn Host DEV enables it together with
+`SOC_DEV_CORPUS_LOCAL_CONTROL_ONLY=true`; STG keeps DEV controls disabled. Nginx remains
+the LAN entry and appends the actual connecting address to `X-Forwarded-For`. Keep both
+internal listeners closed to LAN clients: Next's API rewrites cannot independently
+establish client identity. Host-local controls use `localhost:2026`; a hostname or a
+browser-supplied forwarding header is never authority. Generic and Docker launch defaults
+remain unchanged.
 Explicit demo startup also prepares the backend corpus index once via the bounded
 group endpoint and a one-item result page before reporting ready. Normal authentication is never bypassed for
 warmup; its first authorized visit still initializes the index. After a code-triggered
@@ -57,6 +67,10 @@ profiles. DEV must validate the canonical Memory corpus plus the merged
 corpus/index/payload store before starting; STG must not depend on those
 demonstration artifacts. The wrapper must not add Docker as a prerequisite,
 hard-code a developer home path, or create a second Gateway/frontend/nginx implementation.
+The PingAn profile and full-transfer validation keep `SOC_LLM_MAX_CONCURRENCY` and
+`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` aligned at `8`; Host's missing-value fallback
+is also `8` and preserves explicit settings. A capacity update requires the matching
+private profile and a full Host restart. The SQLite legacy Worker remains single-worker.
 Before starting any sidecar, `start` must resolve the absolute local SOC SQLite URL,
 run the SOC migration once, and pass that URL to the API/worker with their own
 auto-migration disabled. `status` reports the persisted `soc_alembic_version` without
@@ -441,3 +455,6 @@ the required handoff source inventory. Generated operator instructions use first
 start/pause/continue/review and second-batch all/reuse/explore; legacy staged CLI commands
 remain optional. Host startup and source-plus-private-overlay delivery are unchanged;
 apply code updates with a frontend rebuild and service restart, preserving data.
+The required handoff inventory also includes PingAn's `corpus_validation.py` scope
+predicate. Both Web and CLI omit its selected detector from two-batch evaluation,
+while the transferred corpus and its hash/count verification remain unchanged.

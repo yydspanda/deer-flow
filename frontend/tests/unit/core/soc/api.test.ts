@@ -22,6 +22,7 @@ import {
   getSocCorpusWorkbenchState,
   getSocCorpusGroups,
   getSocCorpusExperimentCandidates,
+  getSocCorpusExperimentConfiguration,
   getSocMemoryCenterOverview,
   getSocMemoryLineage,
   getSocMemoryWorkingDraft,
@@ -115,6 +116,15 @@ beforeEach(() => {
 });
 
 describe("SOC corpus process API", () => {
+  test("configuration reads include the selected batch and retain the legacy URL", async () => {
+    mockedFetch.mockImplementation(async () => jsonResponse(200, {}));
+    await getSocCorpusExperimentConfiguration("validation");
+    await getSocCorpusExperimentConfiguration();
+    expect(mockedFetch.mock.calls.map(([url]) => url)).toEqual([
+      "/api/soc/dev/corpus-workbench/experiments/configuration?batch=validation",
+      "/api/soc/dev/corpus-workbench/experiments/configuration",
+    ]);
+  });
   test("scopes alert and group reads to the same batch and tier", async () => {
     mockedFetch.mockImplementation(async () => jsonResponse(200, {}));
     const selection = {

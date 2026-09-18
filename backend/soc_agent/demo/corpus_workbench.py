@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
+    EntrySurface,
     LLMAnalysisRequest,
     MemoryPatternDataClass,
     MemoryPatternSourceType,
@@ -48,6 +49,7 @@ from soc_agent.core.handling import project_operational_handling
 from soc_agent.core.operator_language import operator_text
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
+from soc_agent.db.corpus_experiments import CorpusExperimentSchemaNotReady, CorpusFailedJob
 from soc_agent.db.corpus_lists import EMPTY_REVISION, CorpusListSummary
 from soc_agent.demo.corpus_batches import CorpusBatch, CorpusBatchCase, CorpusBatchSelection, CorpusValidationTier, build_corpus_batch_plan
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
@@ -56,6 +58,7 @@ from soc_agent.demo.leadership_guide import (
     build_soc_leadership_demo_guide,
 )
 from soc_agent.demo.normalization_review import NormalizationReviewView, build_normalization_review_view
+from soc_agent.integrations.pingan.corpus_validation import is_corpus_validation_excluded
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm import SocLLMSettings
 from soc_agent.memory.learning import learning_view
@@ -87,6 +90,8 @@ CorpusComparisonStatus = Literal[
     "not_run",
     "unlabeled",
 ]
+CorpusRunStatusFilter = Literal["success", "running", "failed", "not_run"]
+
 CorpusComparisonFilter = Literal[
     "labeled",
     "matched",
@@ -205,6 +210,7 @@ class _CorpusCase:
 @dataclass(frozen=True)
 class _CorpusProjectionContext:
     active_executions: Mapping[str, SocCorpusWorkbenchActiveExecution]
+    failed_jobs: Mapping[str, CorpusFailedJob]
     observations_by_alert: Mapping[str, Any]
     runs_by_alert: Mapping[str, AnalysisRun]
     queues_by_run: Mapping[str, Any]
@@ -277,6 +283,7 @@ class SocCorpusWorkbenchRunControls(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     defaults: SocAnalysisExecutionOptions
+    can_configure: bool = True
     normalization_review_available: bool = True
     tenant_policy_available: bool = False
     tenant_policy_advisor_available: bool = False
@@ -769,11 +776,13 @@ class SocCorpusWorkbenchService:
         self._batch_plan = build_corpus_batch_plan(
             [CorpusBatchCase.model_validate({k: v for k, v in row.items() if k in CorpusBatchCase.model_fields}) for row in batch_rows],
             source_identity=batch_identity,
+            excluded_alert_ids={case.alert_id for case in self._cases.values() if is_corpus_validation_excluded(rule_code=case.rule_code, source_type=case.source_type, topic=case.topic)},
         )
         self._batch_members = {m.alert_id: m for m in self._batch_plan.members}
         self._execution_lock = Lock()
         self._list_lock = Lock()
         self._list_queries = repository.corpus_list_queries()
+        self._experiment_store = repository.corpus_experiments()
         self._list_catalog_id = stable_hash(
             {
                 "projection": "soc.corpus_list.v3",
@@ -812,6 +821,8 @@ class SocCorpusWorkbenchService:
         case = self._cases.get(member.alert_id)
         if case is None or case.payload_hash != member.payload_hash or case.source_index != member.source_index:
             raise SocCorpusWorkbenchError("fixed experiment member identity does not match the configured corpus")
+        if member.alert_id not in self._batch_members:
+            raise SocCorpusWorkbenchError("alert is outside the current validation scope")
         return copy.deepcopy(self._payload_for_case(case))
 
     def experiment_label(self, member, *, decision_available: bool) -> dict[str, Any]:
@@ -837,6 +848,7 @@ class SocCorpusWorkbenchService:
         source_type: str | None = None,
         group_id: str | None = None,
         comparison: CorpusComparisonFilter | None = None,
+        run_status: CorpusRunStatusFilter | None = None,
         unprocessed_only: bool = True,
         focus_alert_id: str | None = None,
         limit: int = 20,
@@ -856,6 +868,7 @@ class SocCorpusWorkbenchService:
             source_type=source_type,
             group_id=group_id,
             comparison=comparison,
+            run_status=run_status,
             unprocessed_only=unprocessed_only,
             focus_alert_id=focus_alert_id,
             limit=limit,
@@ -869,7 +882,9 @@ class SocCorpusWorkbenchService:
     def _selected_cases(self, batch: CorpusBatch | None, validation_tier: CorpusValidationTier | None) -> list[_CorpusCase]:
         if batch not in (None, "learning", "validation") or validation_tier not in (None, "main", "supplementary") or (validation_tier and batch != "validation"):
             raise SocCorpusWorkbenchError("validation_tier requires the validation batch")
-        return [case for case in self._cases.values() if (batch is None or self._batch_members[case.alert_id].batch == batch) and (validation_tier is None or self._batch_members[case.alert_id].validation_tier == validation_tier)]
+        if batch is None:
+            return list(self._cases.values())
+        return [case for case in self._cases.values() if (member := self._batch_members.get(case.alert_id)) is not None and member.batch == batch and (validation_tier is None or member.validation_tier == validation_tier)]
 
     def get_groups(self, *, search: str | None = None, limit: int = 50, offset: int = 0, batch: CorpusBatch | None = None, validation_tier: CorpusValidationTier | None = None) -> SocCorpusGroupPage:
         if not 1 <= limit <= 100 or offset < 0:
@@ -909,6 +924,7 @@ class SocCorpusWorkbenchService:
         source_type: str | None = None,
         group_id: str | None = None,
         comparison: CorpusComparisonFilter | None = None,
+        run_status: CorpusRunStatusFilter | None = None,
         unprocessed_only: bool = True,
         focus_alert_id: str | None = None,
         limit: int = 20,
@@ -922,16 +938,20 @@ class SocCorpusWorkbenchService:
         selected_cases = self._selected_cases(batch, validation_tier)
         selected_ids = {case.alert_id for case in selected_cases}
         group_counts = Counter(case.group_id for case in selected_cases)
-        active_ids = [item.alert_id for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id]
+        active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
+        active_ids = list(active_executions)
+        failed_jobs = self._failed_jobs()
         summaries = self._list_summaries()
-        dynamic_alerts = [replace(item, workflow_state="running") if item.alert_id in active_ids else item for item in summaries.values() if item.alert_id in selected_ids]
+        dynamic_alerts = [
+            replace(item, workflow_state="running") if item.alert_id in active_ids else replace(item, workflow_state="failed") if item.alert_id in failed_jobs else item for item in summaries.values() if item.alert_id in selected_ids
+        ]
         alert_cache: dict[str, SocCorpusWorkbenchAlert] = {}
 
         def alert_view(case: _CorpusCase) -> SocCorpusWorkbenchAlert:
             cached = alert_cache.get(case.alert_id)
             if cached is not None:
                 return cached
-            projected = self._get_alert_view(case.alert_id, exclude_active_alert_id=exclude_active_alert_id)
+            projected = self._get_alert_view(case.alert_id, active_executions=active_executions, failed_jobs=failed_jobs)
             if batch:
                 member = self._batch_members[case.alert_id]
                 projected = projected.model_copy(update={"batch": member.batch, "validation_tier": member.validation_tier, "batch_reason": member.reason, "batch_group_alert_count": group_counts[case.group_id], "can_process": False})
@@ -957,9 +977,11 @@ class SocCorpusWorkbenchService:
             source_type=source_type,
             group_id=group_id,
             comparison=comparison,
+            run_status=run_status,
             unprocessed_only=unprocessed_only,
             focus_alert_id=focus_alert_id,
             active_alert_ids=active_ids,
+            failed_alert_ids=list(failed_jobs),
             limit=limit,
             offset=offset,
             batch=batch,
@@ -1102,7 +1124,7 @@ class SocCorpusWorkbenchService:
         feature_case, readiness = _runtime_feature_case(case, run, support_count=support)
         workflow_state = "ready"
         if run is not None:
-            if run.status is AnalysisRunStatus.RUNNING:
+            if run.status in {AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING}:
                 workflow_state = "running"
             elif run.status is AnalysisRunStatus.FAILED:
                 workflow_state = "failed"
@@ -1110,10 +1132,11 @@ class SocCorpusWorkbenchService:
                 workflow_state = "completed"
             else:
                 workflow_state = "analysis_only"
+        member = self._batch_members.get(case.alert_id)
         return CorpusListSummary(
             alert_id=case.alert_id,
-            batch=self._batch_members[case.alert_id].batch,
-            validation_tier=self._batch_members[case.alert_id].validation_tier,
+            batch=member.batch if member else None,
+            validation_tier=member.validation_tier if member else None,
             group_id=case.group_id,
             behavior_fingerprint=feature_case.behavior_fingerprint,
             decision_eligible=feature_case.decision_eligible,
@@ -1134,9 +1157,15 @@ class SocCorpusWorkbenchService:
         *,
         exclude_active_alert_id: str | None = None,
         alert_id: str,
+        active_executions: Mapping[str, SocCorpusWorkbenchActiveExecution] | None = None,
+        failed_jobs: Mapping[str, CorpusFailedJob] | None = None,
     ) -> _CorpusProjectionContext:
-        active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
-        run = self._run_for_case(self._cases[alert_id])
+        if active_executions is None:
+            active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
+        if failed_jobs is None:
+            failed_jobs = self._failed_jobs(alert_id=alert_id)
+        failure = failed_jobs.get(alert_id) if alert_id not in active_executions else None
+        run = self._run_for_case(self._cases[alert_id]) if failure is None else self._failed_job_run(self._cases[alert_id], failure)
         runs_by_alert = {alert_id: run} if run is not None else {}
         run_query = {"run_id": runs_by_alert[alert_id].run_id} if alert_id in runs_by_alert else {}
         observations_by_alert = self._observations_by_alert(runs_by_alert, alert_id=alert_id) if runs_by_alert else {}
@@ -1186,6 +1215,7 @@ class SocCorpusWorkbenchService:
             memory_uses_by_run[item.run_id].append(item)
         return _CorpusProjectionContext(
             active_executions=active_executions,
+            failed_jobs=failed_jobs,
             observations_by_alert=observations_by_alert,
             runs_by_alert=runs_by_alert,
             queues_by_run=queues_by_run,
@@ -1215,9 +1245,10 @@ class SocCorpusWorkbenchService:
             candidate_by_source=context.candidate_by_source,
             manual_candidate_by_run=context.manual_candidate_by_run,
             record_by_candidate=context.record_by_candidate,
-            can_process=(case.alert_id not in context.active_executions and (run is None or run.status is not AnalysisRunStatus.RUNNING)),
+            can_process=(case.alert_id in self._batch_members and case.alert_id not in context.active_executions and (run is None or run.status is not AnalysisRunStatus.RUNNING)),
             blocked_by_alert_id=None,
             active_execution=context.active_executions.get(case.alert_id),
+            job_failure=context.failed_jobs.get(case.alert_id),
         )
 
     def _get_alert_view(
@@ -1225,6 +1256,8 @@ class SocCorpusWorkbenchService:
         alert_id: str,
         *,
         exclude_active_alert_id: str | None = None,
+        active_executions: Mapping[str, SocCorpusWorkbenchActiveExecution] | None = None,
+        failed_jobs: Mapping[str, CorpusFailedJob] | None = None,
     ) -> SocCorpusWorkbenchAlert:
         case = self._cases.get(alert_id)
         if case is None:
@@ -1234,19 +1267,52 @@ class SocCorpusWorkbenchService:
             context=self._projection_context(
                 exclude_active_alert_id=exclude_active_alert_id,
                 alert_id=alert_id,
+                active_executions=active_executions,
+                failed_jobs=failed_jobs,
             ),
         )
 
+    def _failed_jobs(self, *, alert_id: str | None = None) -> dict[str, CorpusFailedJob]:
+        try:
+            self._experiment_store.require_schema()
+        except CorpusExperimentSchemaNotReady:
+            return {}
+        return {job.alert_id: job for job in self._experiment_store.latest_failed_jobs(plan_id=self._batch_plan.plan_id, tenant_id=CORPUS_WORKBENCH_TENANT, environment=CORPUS_WORKBENCH_ENVIRONMENT, alert_id=alert_id)}
+
+    def _failed_job_run(self, case: _CorpusCase, failure: CorpusFailedJob) -> AnalysisRun | None:
+        # No Run ID means this attempt failed before Runtime persistence. A previous
+        # successful Run remains in history, never the current failed result.
+        run = self._repository.get_run(failure.run_id) if failure.run_id else None
+        return run if run is not None and run.alert_id == case.alert_id and _matches_corpus_run(run, case) else None
+
     def get_activity(self) -> SocCorpusWorkbenchActivity:
-        """Return active alert claims without rebuilding the complete corpus view."""
+        """Merge local and durable claims without rebuilding the complete corpus view."""
 
         now = datetime.now(UTC)
         with self._execution_lock:
-            claims = tuple(self._active_executions.values())
+            claims = dict(self._active_executions)
+        try:
+            self._experiment_store.require_schema()
+        except CorpusExperimentSchemaNotReady:
+            # Legacy browsing stays available; the batch API owns the upgrade error.
+            # Only successful readiness is cached, so an upgrade recovers on refresh.
+            durable_jobs = []
+        else:
+            durable_jobs = self._experiment_store.active_jobs(plan_id=self._batch_plan.plan_id, tenant_id=CORPUS_WORKBENCH_TENANT, environment=CORPUS_WORKBENCH_ENVIRONMENT)
+        for job in durable_jobs:
+            claims[job.alert_id] = _ActiveExecutionClaim(
+                execution_id=job.job_id,
+                alert_id=job.alert_id,
+                actor_id=job.actor_id,
+                actor_surface=EntrySurface.DAEMON.value,
+                # The durable job is the stable request reference before Runtime starts.
+                request_id=job.job_id,
+                started_at=job.started_at,
+            )
         executions = [
             self._active_execution_view(claim, now=now)
             for claim in sorted(
-                claims,
+                claims.values(),
                 key=lambda item: (item.started_at, item.alert_id),
             )
         ]
@@ -1427,6 +1493,8 @@ class SocCorpusWorkbenchService:
             raise SocCorpusWorkbenchError(f"alert {alert_id!r} is not part of the configured DEV corpus")
         if "soc_admin" not in context.actor.roles:
             raise SocCorpusWorkbenchError("the DEV corpus workbench requires the soc_admin role")
+        if alert_id not in self._batch_members:
+            raise SocCorpusWorkbenchError("alert is outside the current validation scope")
 
     def _run_reserved_alert(
         self,
@@ -1544,7 +1612,10 @@ class SocCorpusWorkbenchService:
         case = self._cases.get(alert_id)
         if case is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id!r} is not part of the configured DEV corpus")
-        run = self._run_for_case(case)
+        failure = self._failed_jobs(alert_id=alert_id).get(alert_id)
+        if failure is not None and any(item.alert_id == alert_id for item in self.get_activity().executions):
+            failure = None
+        run = self._run_for_case(case) if failure is None else self._failed_job_run(case, failure)
         observations = self._repository.list_memory_pattern_observations(
             tenant_id=CORPUS_WORKBENCH_TENANT,
             environment=CORPUS_WORKBENCH_ENVIRONMENT,
@@ -1557,13 +1628,14 @@ class SocCorpusWorkbenchService:
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         candidate = self._repository.get_memory_candidate(replay.candidate_id) if replay is not None and replay.candidate_id is not None else None
-        return _execution_view(
+        execution = _execution_view(
             alert_id=alert_id,
             run=run,
             observation=observation,
             replay=replay,
             candidate=candidate,
         )
+        return execution.model_copy(update={"status": "failed"}) if failure is not None else execution
 
     def get_audit_bundle(
         self,
@@ -1749,6 +1821,7 @@ class SocCorpusWorkbenchService:
         can_process: bool,
         blocked_by_alert_id: str | None,
         active_execution: SocCorpusWorkbenchActiveExecution | None,
+        job_failure: CorpusFailedJob | None = None,
     ) -> SocCorpusWorkbenchAlert:
         transition = transition_by_run.get(run.run_id) if run is not None else None
         queue = None
@@ -1807,7 +1880,9 @@ class SocCorpusWorkbenchService:
         ]
         if active_execution is not None:
             workflow_state = "running"
-        elif run is not None and run.status is AnalysisRunStatus.RUNNING:
+        elif job_failure is not None:
+            workflow_state = "failed"
+        elif run is not None and run.status in {AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING}:
             workflow_state = "running"
         elif run is not None and run.status is AnalysisRunStatus.FAILED:
             workflow_state = "failed"
@@ -1821,7 +1896,7 @@ class SocCorpusWorkbenchService:
             (item for item in memory_uses if item.directive_applied),
             None,
         )
-        failure = run.failure if run is not None else None
+        failure = run.failure if run is not None and workflow_state != "running" else None
         label_revealed = decision is not None and case.operational_label_available
         effective_disposition = None
         if transition is not None:
@@ -1845,7 +1920,7 @@ class SocCorpusWorkbenchService:
                 memory_context_count=len(memory_contexts),
                 pattern_support_count=(replay.support_count if replay is not None else None),
             )
-            if run is not None
+            if run is not None and workflow_state != "running" and (job_failure is None or run.status is AnalysisRunStatus.FAILED)
             else None
         )
         if operator_outcome is not None:
@@ -1890,8 +1965,8 @@ class SocCorpusWorkbenchService:
             prompt_version=(run.prompt_version if run is not None else None),
             total_duration_ms=(run.total_duration_ms if run is not None else None),
             output_quality=(run.analysis_output_quality.status.value if run is not None and run.analysis_output_quality is not None else None),
-            failure_kind=(failure.kind.value if failure is not None else None),
-            failure_message=(failure.message if failure is not None else None),
+            failure_kind=(job_failure.error_code if job_failure is not None and workflow_state == "failed" else failure.kind.value if failure is not None else None),
+            failure_message=(job_failure.error_message if job_failure is not None and workflow_state == "failed" else failure.message if failure is not None else None),
             base_verdict=(decision.verdict.value if decision is not None and run.direct_resolution is None else None),
             base_confidence=(decision.confidence if decision is not None else None),
             base_needs_review=(decision.needs_review if decision is not None else None),

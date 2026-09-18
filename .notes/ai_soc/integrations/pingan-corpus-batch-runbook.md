@@ -9,14 +9,23 @@
 ## 1. 前置检查
 
 按交付主 Runbook 完成安装、语料落位、启动和模型 Smoke，不重复安装或启动。
-本版样本应为15,288条，第一批3,002条，用于沉淀待审核经验。第二批分为：
+本版原始语料仍为15,288条；两批验证排除7条 `RPAADM_002192` SIEM 邮件告警，数据保留。
+第一批2,997条，用于沉淀待审核经验。第二批分为：
 
-- **验证经验复用：8,522条**。第一批中有同类样本，用来验证审核后的经验对后续告警是否有用，不保证每条都命中经验。
+- **验证经验复用：8,520条**。第一批中有同类样本，用来验证审核后的经验对后续告警是否有用，不保证每条都命中经验。
 - **其他测试告警：3,764条**。同类只有1～5条，或事件时间无法确认；单独看研判结果，不混入经验复用效果统计。
 
 本次按用户要求暂不重新打包。后续代码、私有配置与数据继续分别交付，已落位且hash相同的数据不重复搬运。
 
 ### 网页运行设置
+
+部署 Mac 本机通过 `http://localhost:2026` 修改运行设置。局域网同事看到只读配置，
+仍可开始、暂停和重跑；使用当前批次最后保存的配置，无运行记录时使用部署默认值。
+本机修改在提交运行时保存；已排队任务不被改写。无需增加启动参数，Host DEV 自动应用限制。
+
+新版 Host DEV 默认并发上限为8，运行配置和模型网关的并发值同步为8；上线需更新配套私有配置并完整重启Host。
+已有批次点击“继续”时采用当前服务端并发上限，保留原任务、运行开关和经验快照。
+同类组仍按顺序执行，聊天和经验起草也共享模型容量，因此实际运行数不保证一直达到8。
 
 告警演练顶部保留 **运行设置** 四个开关：语义核对、企业策略、安全软件路径策略、LLM策略建议。
 开关值随新任务保存，不修改服务器全局配置；已排队任务沿用原设置。配置失效时停止并说明原因，显式重新运行才采用新设置。
@@ -179,13 +188,13 @@ soc learn --experiment "$SOC_EXPERIMENT_ID" --dry-run
 
 ```bash
 soc learn --experiment "$SOC_EXPERIMENT_ID" --purpose memory \
-  --limit 5 --concurrency 3 --request-key "$SOC_EXPERIMENT_ID-learning" \
+  --limit 5 --concurrency 8 --request-key "$SOC_EXPERIMENT_ID-learning" \
   > "$SOC_EXPERIMENT_OUTPUT/learning-receipt.json"
 soc status --round "$(round_id learning)" --watch
 ```
 
 正常完成应显示 `completed_count=5`、`active_count=0`、`state=completed`。
-这里 completed 表示本轮当前额度完成，不是全部3,002条都完成。确认无失败后继续同轮：
+这里 completed 表示本轮当前额度完成，不是全部2,997条都完成。确认无失败后继续同轮：
 
 `status` 的 `timing` 与页面计时同源：运行计时指允许调度期间的墙钟时间，包含等待或服务离线；
 暂停累计单列。至少5条任务结束后才估算当前额度的剩余时间，含失败任务，不保证内网模型吞吐。
@@ -277,7 +286,7 @@ soc draft-export --experiment "$SOC_EXPERIMENT_ID" \
 
 ```bash
 soc validate --experiment "$SOC_EXPERIMENT_ID" --purpose memory --scope reuse \
-  --limit 5 --concurrency 3 --request-key "$SOC_EXPERIMENT_ID-validation" \
+  --limit 5 --concurrency 8 --request-key "$SOC_EXPERIMENT_ID-validation" \
   > "$SOC_EXPERIMENT_OUTPUT/validation-receipt.json"
 soc status --round "$(round_id validation)" --watch
 ```

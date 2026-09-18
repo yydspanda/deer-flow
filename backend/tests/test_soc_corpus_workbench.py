@@ -26,6 +26,7 @@ from soc_agent.contracts import (
     EntrySurface,
     MemoryPatternDataClass,
     MemoryPatternSourceType,
+    RuntimeFailure,
     ServiceRequestContext,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateSource,
@@ -879,8 +880,10 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+@pytest.mark.parametrize("has_partial_result", [False, True])
 def test_corpus_workbench_execution_projects_active_provider_journal(
     tmp_path: Path,
+    has_partial_result: bool,
 ) -> None:
     repository = _repository(tmp_path)
     service = SocCorpusWorkbenchService(
@@ -902,6 +905,10 @@ def test_corpus_workbench_execution_projects_active_provider_journal(
         update={"environment": "dev-corpus-eval"},
     )
     run.llm_analysis_request = request
+    finished_run = run.model_copy(deep=True)
+    if not has_partial_result:
+        run.analysis = None
+        run.decision = None
     run.status = AnalysisRunStatus.RUNNING
     run.ended_at = None
     run.steps = [
@@ -944,6 +951,9 @@ def test_corpus_workbench_execution_projects_active_provider_journal(
 
     execution = service.get_execution(case.alert_id)
 
+    alert = service._get_alert_view(case.alert_id)
+    assert alert.workflow_state == "running"
+    assert alert.operator_outcome is None
     assert execution.status == "running"
     assert execution.current_phase == "reasoning"
     assert execution.provider_purpose == "primary_analysis"
@@ -951,6 +961,13 @@ def test_corpus_workbench_execution_projects_active_provider_journal(
     reasoning = next(item for item in execution.phases if item.phase == "reasoning")
     assert reasoning.status == "running"
     assert [(item.step_name, item.status) for item in reasoning.steps] == [("analyze_llm", "running")]
+
+    repository.save_run(finished_run)
+    assert service._get_alert_view(case.alert_id).operator_outcome is not None
+    finished_run.status = AnalysisRunStatus.FAILED
+    finished_run.failure = RuntimeFailure(step_name="analyze_llm", kind="analyzer_timeout", error_type="TimeoutError", message="fixture timeout")
+    repository.save_run(finished_run)
+    assert service._get_alert_view(case.alert_id).operator_outcome.closure_status.value == "failed"
 
 
 def test_corpus_workbench_process_endpoint_requires_admin() -> None:
@@ -968,12 +985,14 @@ def test_corpus_workbench_state_endpoint_forwards_server_filters() -> None:
     service = _FakeWorkbenchService()
 
     result = soc_corpus_workbench.get_corpus_workbench_state(
+        request=_FakeRequest(),
         service=service,
         search="OpenVPN",
         readiness="recurrent_strong",
         source_type="nids",
         group_id="group-1",
         comparison="mismatched",
+        run_status="success",
         unprocessed_only=False,
         focus_alert_id="2457581",
         limit=20,
@@ -991,6 +1010,7 @@ def test_corpus_workbench_state_endpoint_forwards_server_filters() -> None:
         "source_type": "nids",
         "group_id": "group-1",
         "comparison": "mismatched",
+        "run_status": "success",
         "unprocessed_only": False,
         "focus_alert_id": "2457581",
         "limit": 20,

@@ -114,6 +114,8 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "scripts/soc_pingan_dev_database.py" in required
     assert "scripts/test_soc_pingan_dev_database.py" in required
     assert "backend/soc_agent/demo/corpus_quick_validation.py" in required
+    assert "backend/soc_agent/integrations/pingan/corpus_validation.py" in required
+    assert "backend/app/gateway/soc_corpus_control.py" in required
     assert "scripts/soc_pingan_stage_internal_corpus.py" in required
     assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
 
@@ -173,7 +175,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
     assert "soc_pingan_model_gateway_smoke.py" in runbook
     assert "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY|SOC_LLM_MAX_CONCURRENCY" in runbook
-    assert "两个并发值必须都是 `3`" in runbook
+    assert "两个并发值必须都是 `8`" in runbook
     assert "disable_streaming: true" in runbook
     assert "`thinking_requested=false`" in runbook
     assert "`max_tokens_requested=128`" in runbook
@@ -584,6 +586,26 @@ def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) 
     _assert_private_overlay_config_ready(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"SOC_LLM_MAX_CONCURRENCY": "3"},
+        {"SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "3"},
+        {
+            "SOC_LLM_MAX_CONCURRENCY": "3",
+            "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "3",
+        },
+    ],
+)
+def test_private_overlay_rejects_stale_concurrency_limits(
+    tmp_path: Path, overrides: dict[str, str]
+) -> None:
+    _write_private_profiles(tmp_path, overrides=overrides)
+
+    with pytest.raises(ValueError, match="safe transfer profile: .*MAX_CONCURRENCY"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
 def test_private_overlay_config_rejects_non_dev_prd_active_zeus_target(
     tmp_path: Path,
 ) -> None:
@@ -875,10 +897,10 @@ database:
             "SOC_PINGAN_MODEL_GATEWAY_API_KEYS": "loopback-test-key",
             "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
             "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
-            "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "3",
+            "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "8",
             "SOC_ANALYZER_MODE": "llm",
             "SOC_LLM_MODEL": "deepseek-v4-flash",
-            "SOC_LLM_MAX_CONCURRENCY": "3",
+            "SOC_LLM_MAX_CONCURRENCY": "8",
             "SOC_PINGAN_COMPAT_ENABLED": "true",
             "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
             "SOC_PINGAN_COMPAT_PORT": "8090",

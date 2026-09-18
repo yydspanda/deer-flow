@@ -5,10 +5,11 @@ from copy import copy
 from datetime import UTC, datetime
 
 from soc_agent.contracts import ServiceRequestContext
+from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.contracts.corpus_experiments import Batch, CorpusQuickCommand, CorpusRound, CorpusRoundCreateCommand, CorpusRoundSelection
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict
 from soc_agent.demo.corpus_batches import CorpusBatchPlan
-from soc_agent.demo.corpus_experiments import SocCorpusExperimentService, _eligible, _require_admin
+from soc_agent.demo.corpus_experiments import SocCorpusExperimentService, _eligible, _require_admin, _require_saved_options
 from soc_agent.demo.corpus_round_comparison import job_result_row
 from soc_agent.utils.hashing import stable_hash
 
@@ -80,7 +81,7 @@ class CorpusQuickValidation:
                 return result
             offset += len(page)
 
-    def command(self, command: CorpusQuickCommand, *, context: ServiceRequestContext) -> dict:
+    def command(self, command: CorpusQuickCommand, *, context: ServiceRequestContext, allow_options_override: bool = True, default_options: SocAnalysisExecutionOptions | None = None) -> dict:
         _require_admin(context)
         # Clone only the facade, binding every nested prepare/start/job mutation to
         # one DB transaction. This fences concurrent browser tabs and Gateway workers.
@@ -90,6 +91,8 @@ class CorpusQuickValidation:
                 bound = copy(self.service)
                 bound.repository, bound.store, bound.jobs = tx, tx.corpus_experiments(), tx.processing_jobs()
                 quick = CorpusQuickValidation(bound, self.plan)
+                if command.action != "pause" and not allow_options_override:
+                    _require_saved_options(bound.store, quick.experiment(), command.batch, command.options, default_options)
                 return quick._command(command, context=context)
         except CorpusExperimentConflict:
             # Failed admission rolls back all new work. Record configuration blocks
@@ -147,7 +150,8 @@ class CorpusQuickValidation:
         for round_id in start_rounds:
             selected_ids = [m.alert_id for m, j in rows if j and j.input_payload["round_id"] == round_id]
             svc.store.set_dispatch_scope(round_id, selected_ids)
-            svc.start(round_id, context=context, execution_limit=2_147_483_647)
+            # Capacity follows deployment settings; saved behavioral options stay fixed.
+            svc.start(round_id, context=context, execution_limit=2_147_483_647, concurrency=svc._max_concurrency)
         if new_members:
             usable = any(_eligible(r, datetime.now(UTC)) for r in svc.store.learning_memory_records(experiment_id))
             if command.batch == "validation" and not usable and any(m.validation_tier == "main" for m in new_members):

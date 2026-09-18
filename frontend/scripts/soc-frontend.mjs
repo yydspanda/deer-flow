@@ -175,6 +175,16 @@ export async function build(
   }
 }
 
+export function startArguments(mode, environment = process.env) {
+  if (mode !== "dev" && mode !== "prebuilt")
+    throw new Error("SOC_FRONTEND_MODE must be prebuilt or dev");
+  const args = mode === "dev" ? ["dev", "--webpack"] : ["start"];
+  args.push("--port", "3000");
+  const hostname = environment.DEERFLOW_FRONTEND_HOST?.trim();
+  if (hostname) args.push("--hostname", hostname);
+  return args;
+}
+
 async function main() {
   const action = process.argv[2] ?? "inspect";
   if (action === "build") await build();
@@ -182,24 +192,14 @@ async function main() {
     console.log(JSON.stringify(await inspect(), null, 2));
   else if (action === "start") {
     const mode = process.env.SOC_FRONTEND_MODE ?? "prebuilt";
-    if (mode === "dev")
-      await runNext(
-        ROOT,
-        ROOT,
-        ["dev", "--webpack", "--port", "3000"],
-        process.env,
-      );
+    const args = startArguments(mode);
+    if (mode === "dev") await runNext(ROOT, ROOT, args, process.env);
     else if (mode === "prebuilt") {
       const manifest = await inspect();
       console.log(
         `SOC frontend prebuilt: ${manifest.identity.slice(0, 12)} (no on-demand compilation)`,
       );
-      await runNext(
-        ROOT,
-        manifest.directory,
-        ["start", "--port", "3000"],
-        process.env,
-      );
+      await runNext(ROOT, manifest.directory, args, process.env);
     } else throw new Error("SOC_FRONTEND_MODE must be prebuilt or dev");
   } else
     throw new Error(

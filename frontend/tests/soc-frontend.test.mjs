@@ -4,7 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { build, inspect, sourceIdentity } from "../scripts/soc-frontend.mjs";
+import {
+  build,
+  inspect,
+  sourceIdentity,
+  startArguments,
+} from "../scripts/soc-frontend.mjs";
+
+test("SOC frontend binds both serving modes to the operator-selected host", () => {
+  for (const mode of ["dev", "prebuilt"]) {
+    const defaults = startArguments(mode, {});
+    assert.equal(defaults.includes("--hostname"), false);
+    assert.deepEqual(
+      startArguments(mode, { DEERFLOW_FRONTEND_HOST: "127.0.0.1" }),
+      [...defaults, "--hostname", "127.0.0.1"],
+    );
+    assert.equal(defaults[0], mode === "dev" ? "dev" : "start");
+  }
+});
 
 test("SOC prebuild keeps the current build until a complete replacement exists", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "soc-frontend-"));

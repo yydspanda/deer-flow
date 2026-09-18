@@ -1,9 +1,12 @@
 """Read-only batch browsing; no model or Memory mutations."""
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import inspect, text
 from test_soc_corpus_workbench import _repository
 
 from soc_agent.demo.corpus_workbench import SocCorpusWorkbenchService, _CorpusCase
@@ -146,8 +149,206 @@ def test_batch_api_forwards_selection():
 
     calls = []
     service = SimpleNamespace(get_state=lambda **kw: calls.append(kw), get_groups=lambda **kw: calls.append(kw))
-    get_corpus_workbench_state(service, batch="validation", validation_tier="supplementary")
+    get_corpus_workbench_state(service, request=None, batch="validation", validation_tier="supplementary")
     get_corpus_workbench_groups(service, batch="validation", validation_tier="main")
     assert calls[0]["batch"] == calls[1]["batch"] == "validation"
     assert calls[0]["validation_tier"] == "supplementary"
     assert calls[1]["validation_tier"] == "main"
+
+
+def test_durable_prechecks_filter_first_runs_and_reruns_before_a_new_run_exists(workbench):
+    from test_soc_corpus_experiments import context, service
+
+    from soc_agent.contracts import ProcessingJobStatus
+    from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.core import SocAnalysisService
+
+    # A saved prior result must disappear from success as soon as its rerun is claimed.
+    payload = json.loads((Path(__file__).resolve().parents[1] / "samples/alerts/approved_scanner.json").read_text(encoding="utf-8"))
+    prior = SocAnalysisService().analyze(payload)
+    prior.alert_id = "1"
+    prior.input_hash = workbench._cases["1"].payload_hash
+    prior.llm_analysis_request = prior.llm_analysis_request.model_copy(update={"environment": "dev-corpus-eval"})
+    workbench._repository.save_run(prior)
+    query = dict(batch="learning", unprocessed_only=False, include_rehearsal=False, include_group_catalog=False)
+    before = workbench.get_state(run_status="success", **query)
+    assert [a.alert_id for a in before.alerts] == ["1"]
+    assert before.alerts[0].operator_outcome is not None
+
+    batches = service(workbench._repository, [])
+    batches.prepare(workbench.batch_plan, experiment_id="EXP-current", name="Current corpus", context=context())
+    round_ = batches.create_round(CorpusRoundCreateCommand(experiment_id="EXP-current", selection=CorpusRoundSelection(batch="learning")), context=context())
+    jobs = {item.alert_id: item.job for item in batches.store.list_round_items(round_.round_id).items}
+    assert workbench.get_activity().active_count == 0  # Queued is not executing.
+    for alert_id in ("0", "1"):
+        claimed = batches.jobs.claim_next(queue_name=jobs[alert_id].queue_name, job_ids=[jobs[alert_id].job_id], worker_id="fixture", lease_seconds=120)
+        assert claimed is not None
+        if alert_id == "1":
+            batches.jobs.transition(claimed.job_id, worker_id="fixture", expected_status=ProcessingJobStatus.CLAIMED, target_status=ProcessingJobStatus.PRECHECKING, event_type="fixture_precheck")
+
+    assert workbench._active_executions == {}  # Includes durable/recovered work with no local claim.
+    activity = workbench.get_activity()
+    assert activity.active_count == 2
+    assert {item.alert_id for item in activity.executions} == {"0", "1"}
+    assert {item.execution_id for item in activity.executions} == {jobs["0"].job_id, jobs["1"].job_id}
+    assert all(item.actor_id == "operator" and item.actor_surface == "daemon" and item.elapsed_ms >= 0 for item in activity.executions)
+    running = workbench.get_state(run_status="running", limit=1, offset=1, **query)
+    assert running.alert_page.total == 2
+    assert [a.alert_id for a in running.alerts] == ["1"]
+    assert running.alerts[0].run_id == prior.run_id
+    assert running.alerts[0].workflow_state == "running"
+    assert running.alerts[0].operator_outcome is None
+    assert running.alerts[0].active_execution is not None
+    first_run = workbench._get_alert_view("0")
+    assert first_run.workflow_state == "running" and first_run.run_id is None
+    assert first_run.operator_outcome is None and not first_run.can_process
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 0
+    assert workbench.get_state(run_status="not_run", **query).alert_page.total == workbench.batch_plan.counts["learning"] - 2
+
+
+def test_activity_preserves_legacy_browsing_until_batch_schema_is_upgraded(workbench):
+    from test_soc_corpus_experiments import context, service
+
+    from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.db import create_soc_tables
+    from soc_agent.db.corpus_experiments import CorpusExperimentSchemaNotReady
+
+    repo = workbench._repository
+    with repo._session_factory() as session:
+        engine = session.get_bind()
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE soc_corpus_rounds"))
+    assert workbench.get_activity().active_count == 0
+    assert len(workbench.get_state(unprocessed_only=False, include_rehearsal=False).alerts) == 20
+    assert "soc_corpus_rounds" not in inspect(engine).get_table_names()
+    with pytest.raises(CorpusExperimentSchemaNotReady, match="升级数据库"):
+        repo.corpus_experiments().require_schema()
+
+    # A startup/operator migration is observed on refresh, without caching the failure.
+    create_soc_tables(engine)
+    batches = service(repo, [])
+    batches.prepare(workbench.batch_plan, experiment_id="EXP-upgraded", name="Upgraded corpus", context=context())
+    round_ = batches.create_round(CorpusRoundCreateCommand(experiment_id="EXP-upgraded", selection=CorpusRoundSelection(batch="learning")), context=context())
+    job = batches.store.list_round_items(round_.round_id).items[0].job
+    assert batches.jobs.claim_next(queue_name=job.queue_name, job_ids=[job.job_id], worker_id="fixture", lease_seconds=120) is not None
+    assert [item.execution_id for item in workbench.get_activity().executions] == [job.job_id]
+
+
+def test_failed_jobs_before_runtime_are_filtered_and_cleared_by_a_new_attempt(workbench):
+    from test_soc_corpus_experiments import context
+
+    from soc_agent.contracts import AnalysisRunStatus, RuntimeFailure
+    from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome, CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.core import SocAnalysisService
+    from soc_agent.demo.corpus_experiments import SocCorpusExperimentService
+
+    repo = workbench._repository
+    payload = json.loads((Path(__file__).resolve().parents[1] / "samples/alerts/approved_scanner.json").read_text(encoding="utf-8"))
+    prior = SocAnalysisService().analyze(payload)
+    prior.alert_id = "1"
+    prior.input_hash = workbench._cases["1"].payload_hash
+    prior.llm_analysis_request = prior.llm_analysis_request.model_copy(update={"environment": "dev-corpus-eval"})
+    repo.save_run(prior)
+    query = dict(batch="learning", unprocessed_only=False, include_rehearsal=False, include_group_catalog=False)
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 1
+
+    def fail_before_runtime(*_):
+        raise ValueError("fixture payload cannot be loaded")
+
+    batches = SocCorpusExperimentService(repository=repo, execute=fail_before_runtime, configuration_provider=lambda _: {})
+    batches.prepare(workbench.batch_plan, experiment_id="EXP-current", name="Current corpus", context=context())
+    failed_round = batches.create_round(CorpusRoundCreateCommand(experiment_id="EXP-current", selection=CorpusRoundSelection(batch="learning", alert_ids=["0", "1"])), context=context())
+    batches.start(failed_round.round_id, context=context())
+    assert batches.execute_one(failed_round.round_id)
+    assert batches.execute_one(failed_round.round_id)
+    assert batches.store.round_progress(failed_round.round_id).failed_count == 2
+    assert all(item.job.run_id is None for item in batches.store.list_round_items(failed_round.round_id).items)
+    failed = workbench.get_state(run_status="failed", limit=1, offset=1, **query)
+    assert failed.alert_page.total == 2
+    assert [item.alert_id for item in failed.alerts] == ["1"]
+    assert failed.alerts[0].workflow_state == "failed"
+    assert failed.alerts[0].failure_kind == "ValueError"
+    assert failed.alerts[0].failure_message == "fixture payload cannot be loaded"
+    assert failed.alerts[0].operator_outcome is None
+    assert failed.alerts[0].run_id is None  # The prior successful Run remains history only.
+    assert workbench._get_alert_view("0").workflow_state == "failed"
+    trace = workbench.get_execution("1")
+    assert trace.status == "failed" and trace.run_id is None
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 0
+    assert workbench.get_state(run_status="not_run", **query).alert_page.total == workbench.batch_plan.counts["learning"] - 2
+
+    recovered_run = prior.model_copy(update={"run_id": "RUN-recovered", "started_at": datetime.now(UTC)})
+
+    def succeed(round_, member, request):
+        active = workbench.get_state(run_status="running", **query)
+        assert [item.alert_id for item in active.alerts] == ["1"]
+        assert active.alerts[0].operator_outcome is None
+        assert workbench.get_state(run_status="failed", **query).alert_page.total == 1
+        repo.save_run(recovered_run)
+        return CorpusExecutionOutcome(run_id=recovered_run.run_id)
+
+    recovered = SocCorpusExperimentService(repository=repo, execute=succeed, configuration_provider=lambda _: {})
+    rerun = recovered.create_round(CorpusRoundCreateCommand(experiment_id="EXP-current", selection=CorpusRoundSelection(batch="learning", alert_ids=["1"])), context=context())
+    assert workbench.get_state(run_status="failed", **query).alert_page.total == 1  # Latest queued attempt supersedes the failed job.
+    recovered.start(rerun.round_id, context=context())
+    assert recovered.execute_one(rerun.round_id)
+    assert [item.alert_id for item in workbench.get_state(run_status="failed", **query).alerts] == ["0"]
+    success = workbench.get_state(run_status="success", **query)
+    assert [item.alert_id for item in success.alerts] == ["1"]
+    assert success.alerts[0].run_id == recovered_run.run_id
+    assert success.alerts[0].failure_message is None
+    assert len(recovered.store.alert_history("EXP-current", "1")) == 2
+    assert repo.get_run(prior.run_id) is not None
+
+    old_failed_run = prior.model_copy(
+        update={
+            "run_id": "RUN-old-failed",
+            "alert_id": "0",
+            "input_hash": workbench._cases["0"].payload_hash,
+            "status": AnalysisRunStatus.FAILED,
+            "failure": RuntimeFailure(step_name="analyze_llm", kind="analyzer_timeout", error_type="TimeoutError", message="old timeout"),
+        }
+    )
+    repo.save_run(old_failed_run)
+    retry = recovered.create_round(CorpusRoundCreateCommand(experiment_id="EXP-current", selection=CorpusRoundSelection(batch="learning", alert_ids=["0"])), context=context())
+    retry_job = recovered.store.list_round_items(retry.round_id).items[0].job
+    assert recovered.jobs.claim_next(queue_name=retry_job.queue_name, job_ids=[retry_job.job_id], worker_id="fixture", lease_seconds=120) is not None
+    active = workbench.get_state(run_status="running", **query).alerts[0]
+    assert active.alert_id == "0" and active.run_id == old_failed_run.run_id
+    assert active.operator_outcome is None
+    assert active.failure_kind is None and active.failure_message is None
+
+
+def test_failed_job_after_runtime_does_not_show_a_successful_operator_outcome(workbench):
+    from test_soc_corpus_experiments import context
+
+    from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.core import SocAnalysisService
+    from soc_agent.demo.corpus_experiments import CorpusExecutionError, SocCorpusExperimentService
+
+    repo = workbench._repository
+    payload = json.loads((Path(__file__).resolve().parents[1] / "samples/alerts/approved_scanner.json").read_text(encoding="utf-8"))
+    run = SocAnalysisService().analyze(payload)
+    run.alert_id = "0"
+    run.input_hash = workbench._cases["0"].payload_hash
+    run.llm_analysis_request = run.llm_analysis_request.model_copy(update={"environment": "dev-corpus-eval"})
+
+    def fail_after_runtime(*_):
+        repo.save_run(run)
+        raise CorpusExecutionError("fixture observation failed", run_id=run.run_id)
+
+    batches = SocCorpusExperimentService(repository=repo, execute=fail_after_runtime, configuration_provider=lambda _: {})
+    batches.prepare(workbench.batch_plan, experiment_id="EXP-current", name="Current corpus", context=context())
+    round_ = batches.create_round(CorpusRoundCreateCommand(experiment_id="EXP-current", selection=CorpusRoundSelection(batch="learning", alert_ids=["0"])), context=context())
+    batches.start(round_.round_id, context=context())
+    assert batches.execute_one(round_.round_id)
+    query = dict(batch="learning", unprocessed_only=False, include_rehearsal=False, include_group_catalog=False)
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 0
+    failed = workbench.get_state(run_status="failed", **query)
+    assert failed.alert_page.total == 1
+    assert failed.alerts[0].run_id == run.run_id
+    assert failed.alerts[0].operator_outcome is None
+    assert failed.alerts[0].failure_message == "fixture observation failed"
+    trace = workbench.get_execution("0")
+    assert trace.status == "failed" and trace.run_id == run.run_id
+    assert workbench._audit_run_for_case(workbench._cases["0"], run.run_id).status == run.status

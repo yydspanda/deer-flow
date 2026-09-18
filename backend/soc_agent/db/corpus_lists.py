@@ -112,9 +112,11 @@ class SocCorpusListQueries:
         source_type: str | None,
         group_id: str | None,
         comparison: str | None,
+        run_status: str | None = None,
         unprocessed_only: bool,
         focus_alert_id: str | None,
         active_alert_ids: list[str],
+        failed_alert_ids: list[str] | None = None,
         limit: int,
         offset: int,
         batch: str | None = None,
@@ -135,6 +137,18 @@ class SocCorpusListQueries:
             filters.append(Item.source_type == source_type)
         if group_id:
             filters.append(Item.group_id == group_id)
+        if run_status:
+            active = Item.alert_id.in_(active_alert_ids)
+            failed = Item.alert_id.in_(failed_alert_ids or [])
+            state = payload["workflow_state"].as_string()
+            if run_status == "running":
+                matching = or_(and_(state == "running", ~failed), active)
+            elif run_status == "failed":
+                matching = and_(or_(state == "failed", failed), ~active)
+            else:
+                states = {"success": ["completed", "analysis_only"], "not_run": ["ready"]}[run_status]
+                matching = and_(state.in_(states), ~active, ~failed)
+            filters.append(matching)
         if unprocessed_only:
             filters.append(or_(payload["observed"].as_boolean().is_(False), Item.alert_id.in_(active_alert_ids), focused))
         if comparison == "labeled":

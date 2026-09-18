@@ -3,13 +3,14 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text, update
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import ProcessingJobStatus, SocProcessingJobSubmission
 from soc_agent.contracts.corpus_experiments import CorpusExperiment, CorpusExperimentMember, CorpusRound, CorpusRoundSelection
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict, CorpusExperimentSchemaNotReady
+from soc_agent.db.models import SocProcessingJobRow
 
 
 def test_schema_readiness_is_read_only_and_can_recover_after_upgrade(tmp_path):
@@ -71,6 +72,97 @@ def members(count=12):
         )
         for i in range(count)
     ]
+
+
+def test_active_jobs_include_only_current_plan_scope_and_durable_activity(tmp_path):
+    repo = repository(tmp_path)
+    store = repo.corpus_experiments()
+    current = experiment()
+    expected = set()
+    scopes = [current, *(current.model_copy(update={"experiment_id": f"EXP-{key}", key: value}) for key, value in (("plan_id", "c" * 64), ("tenant_id", "other-tenant"), ("environment", "other-environment")))]
+    for scope in scopes:
+        store.prepare(scope, members())
+        round_ = CorpusRound(
+            round_id=f"ROUND-{scope.experiment_id}",
+            experiment_id=scope.experiment_id,
+            selection=CorpusRoundSelection(batch="learning"),
+            config_hash="d" * 64,
+            config_snapshot={},
+            created_by="operator",
+            created_at=datetime.now(UTC),
+        )
+        store.create_round(round_)
+        learning = [member for member in members() if member.batch == "learning"]
+        for index, status in enumerate(ProcessingJobStatus):
+            alert_id = learning[index].alert_id
+            job, _ = repo.processing_jobs().submit(
+                SocProcessingJobSubmission(
+                    tenant_id=scope.tenant_id,
+                    workload_kind="corpus_experiment",
+                    queue_name="corpus",
+                    idempotency_key=f"{round_.round_id}:{index}",
+                    alert_id=alert_id,
+                    input_payload={"round_id": round_.round_id, "experiment_id": scope.experiment_id},
+                )
+            )
+            store.attach_jobs(round_.round_id, [(alert_id, job.job_id, index)])
+            with repo._session_factory() as session:
+                session.execute(update(SocProcessingJobRow).where(SocProcessingJobRow.job_id == job.job_id).values(status=status.value, started_at=round_.created_at))
+                session.commit()
+            if scope is current and status.value in {"claimed", "prechecking", "analyzing", "projecting"}:
+                expected.add(job.job_id)
+        store.set_round_state(round_.round_id, expected_version=round_.version, state="paused", reason="bulk paused while manual work runs")
+
+    active = store.active_jobs(plan_id=current.plan_id, tenant_id=current.tenant_id, environment=current.environment)
+    assert {row.job_id for row in active} == expected
+    assert len(active) == 4
+    assert all(row.actor_id == "operator" and row.started_at.tzinfo is not None for row in active)
+
+
+def test_latest_failed_jobs_respect_scope_and_superseding_rounds_across_experiments(tmp_path):
+    repo = repository(tmp_path)
+    store = repo.corpus_experiments()
+    current = experiment()
+    scopes = [current, *(current.model_copy(update={"experiment_id": f"EXP-{key}", key: value}) for key, value in (("plan_id", "c" * 64), ("tenant_id", "other-tenant"), ("environment", "other-environment")))]
+    peer = current.model_copy(update={"experiment_id": "EXP-peer"})
+    for scope in [*scopes, peer]:
+        store.prepare(scope, members())
+
+    def add_attempt(scope, status, index):
+        round_ = CorpusRound(
+            round_id=f"ROUND-{scope.experiment_id}-{index}",
+            experiment_id=scope.experiment_id,
+            selection=CorpusRoundSelection(batch="learning", alert_ids=["0"]),
+            config_hash="d" * 64,
+            config_snapshot={},
+            created_by="operator",
+            created_at=current.created_at + timedelta(seconds=index),
+        )
+        store.create_round(round_)
+        job, _ = repo.processing_jobs().submit(
+            SocProcessingJobSubmission(tenant_id=scope.tenant_id, workload_kind="corpus_experiment", queue_name="corpus", idempotency_key=round_.round_id, alert_id="0", input_payload={"round_id": round_.round_id})
+        )
+        store.attach_jobs(round_.round_id, [("0", job.job_id, 0)])
+        with repo._session_factory() as session:
+            session.execute(update(SocProcessingJobRow).where(SocProcessingJobRow.job_id == job.job_id).values(status=status, error_code="fixture-error", error_message="failure before run"))
+            session.commit()
+        return job.job_id
+
+    first = add_attempt(current, "failed", 0)
+    # Newer foreign runs cannot clear or replace the current corpus failure.
+    for index, scope in enumerate(scopes[1:], start=1):
+        add_attempt(scope, "completed", index)
+    args = dict(plan_id=current.plan_id, tenant_id=current.tenant_id, environment=current.environment)
+    failed = store.latest_failed_jobs(**args)
+    assert [(row.job_id, row.alert_id, row.run_id, row.error_code, row.error_message) for row in failed] == [(first, "0", None, "fixture-error", "failure before run")]
+    assert store.latest_failed_jobs(**args, alert_id="1") == []
+    add_attempt(peer, "queued", 4)
+    assert store.latest_failed_jobs(**args) == []
+    latest = add_attempt(peer, "failed", 5)
+    assert [row.job_id for row in store.latest_failed_jobs(**args)] == [latest]
+    add_attempt(peer, "completed", 6)
+    assert store.latest_failed_jobs(**args) == []
+    assert repo.processing_jobs().get(first).status is ProcessingJobStatus.FAILED
 
 
 def test_prepare_idempotency_and_selected_members_are_durable(tmp_path):

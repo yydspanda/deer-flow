@@ -232,9 +232,11 @@ export const getSocCorpusExperiments = (offset = 0) =>
   corpusExperimentRequest<SocCorpusExperiment[]>(
     `experiments?limit=50&offset=${offset}`,
   );
-export const getSocCorpusExperimentConfiguration = () =>
+export const getSocCorpusExperimentConfiguration = (
+  batch?: "learning" | "validation",
+) =>
   corpusExperimentRequest<SocCorpusExperimentConfiguration>(
-    "experiments/configuration",
+    `experiments/configuration${batch ? `?batch=${batch}` : ""}`,
   );
 export const prepareSocCorpusExperiment = (
   experimentId: string,
@@ -374,6 +376,7 @@ export async function getSocCorpusWorkbenchState(
   if (query.sourceType) params.set("source_type", query.sourceType);
   if (query.groupId) params.set("group_id", query.groupId);
   if (query.comparison) params.set("comparison", query.comparison);
+  if (query.runStatus) params.set("run_status", query.runStatus);
   params.set("unprocessed_only", String(query.unprocessedOnly ?? false));
   if (query.focusAlertId) {
     params.set("focus_alert_id", query.focusAlertId);
