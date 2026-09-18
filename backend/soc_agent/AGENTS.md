@@ -29,10 +29,16 @@ file for SOC code. The authoritative product and engineering documents are:
   freezes eligible reviewed learning Memory, checks current governance, and disables
   automatic Pattern learning. Dataset/config/snapshot drift blocks further claims.
   `0029/0030` persist shared alert concurrency and rounds; do not create tables on reads.
+  Batch APIs check required tables/columns before inventory or commands; missing schema
+  returns an actionable 503 without hiding configuration switches or starting dispatch.
+  Cache only successful checks; an operator-applied upgrade can recover on refresh.
+  This is readiness inspection, never implicit migration or reset. Host startup owns migrations.
   DEV owns one Gateway; finish legacy interactive work before preparing experiments.
   Once an experiment exists, manual runs must use durable round controls too.
   Round result/audit reads pin Run ID and source hash, never the latest alert result.
   Reports separate matched-group validation from sparse exploration and unknown usage.
+  Offline comparisons require the same experiment, dataset identity and explicit batch;
+  never grade learning-vs-validation proportions as a paired Memory improvement.
   Prepare jobs/events and round references in bounded chunks within one transaction;
   a failed later chunk must roll back the entire unstarted round. Candidate inventory
   filters by learning-source runs/experiment before pagination; it does not clone review
@@ -447,6 +453,11 @@ file for SOC code. The authoritative product and engineering documents are:
   request and config/model lineage still match; otherwise start a new attempt.
 - Kafka topic `soc.alerts.raw.v1` accepts only
   `SocAlertRawEnvelope(schema_version=soc.alert.raw.v1)`, not bare vendor payloads.
+  The serial consumer retries the same pending record after processing, dead-letter,
+  or commit failure and polls again only after a successful commit. Dead-letter delivery
+  requires a successful broker callback as well as a drained producer queue.
+  Resident daemon counters cover the full lifetime; history retains at most 100 payload-free
+  summaries. Only an explicit `max_loops` run retains complete per-loop results.
 - External state/reason feedback enters through the canonical external-disposition
   command/API. Adapters translate source codes; generic Runtime never recognizes a
   tenant's lifecycle codes.
@@ -454,6 +465,9 @@ file for SOC code. The authoritative product and engineering documents are:
   Problem Details, and use authenticated Gateway identity as authority. Actor headers are
   attribution only. L3 mutations require trusted auth source, role policy, idempotency,
   and append-only audit.
+  Approval execution consumes grants through repository CAS (`approved -> consumed`)
+  in the audit transaction. Concurrent exact retries return the stored execution result;
+  different keys or changed commands conflict without replacing the first result/audit.
 
 ## Agent, Skill, And Action Boundaries
 

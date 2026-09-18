@@ -75,6 +75,7 @@ class SocKafkaConsumerRunner:
         approval_request_topics: frozenset[str] = DEFAULT_APPROVAL_REQUEST_TOPICS,
     ) -> None:
         self._consumer = consumer
+        self._pending_record: KafkaRecord | None = None
         self._worker = SocKafkaWorker(
             daemon_service=daemon_service,
             alert_topics=alert_topics,
@@ -82,10 +83,17 @@ class SocKafkaConsumerRunner:
         )
 
     def process_next(self) -> KafkaRunnerProcessResult:
-        record = self._consumer.poll()
+        # Poll advances the broker client's position before processing succeeds.
+        # Retain failures (including DLQ/commit failures) so a later commit can
+        # never acknowledge a record that this serial runner skipped.
+        if self._pending_record is None:
+            self._pending_record = self._consumer.poll()
+        record = self._pending_record
         if record is None:
             return KafkaRunnerProcessResult(status="idle")
-        return self.process_record(record)
+        result = self.process_record(record)
+        self._pending_record = None
+        return result
 
     def run(self, *, max_records: int, stop_on_idle: bool = True) -> KafkaRunnerLoopResult:
         """Run a bounded consumer loop.

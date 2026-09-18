@@ -46,7 +46,7 @@ from soc_agent.memory import (
 )
 from soc_agent.utils.hashing import stable_hash
 
-DEFAULT_MEMORY_EVAL_FIXTURE = Path(__file__).resolve().parents[2] / "samples/eval/memory/pingan_profile_v6_simulation_v1.json"
+DEFAULT_MEMORY_EVAL_FIXTURE = Path(__file__).resolve().parents[2] / "samples/eval/memory/pingan_profile_v7_simulation_v1.json"
 
 
 class MemoryEvalRelationship(StrEnum):

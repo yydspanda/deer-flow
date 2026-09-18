@@ -6,12 +6,17 @@ from test_soc_memory_governance import candidate
 from test_soc_memory_governance import services as _services
 from test_soc_memory_revision_workflow import _reviewer_context
 
-from soc_agent.contracts import SocMemoryCandidateStatus
+from soc_agent.contracts import SocMemoryApplicabilitySpec, SocMemoryCandidateStatus
 from soc_agent.contracts.memory_governance import MemoryScopeBoundaryReleaseCommand, MemoryScopeRefinementCommand
 from soc_agent.contracts.schemas import SocMemoryReuseCondition
 from soc_agent.core import SocServiceConflictError
 
 services = _services
+
+
+@pytest.fixture(autouse=True, params=["off", "apply"])
+def normalization_mode(monkeypatch, request):
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", request.param)
 
 
 def test_refinement_is_pending_idempotent_and_does_not_replace_parent(services):
@@ -37,7 +42,13 @@ def test_release_requires_explicit_versioned_review_and_is_audited(services):
             "memory_id": "MEM-EXCEPTION",
             "source_candidate_id": "MC-EXCEPTION",
             "retrieval_enabled": False,
-            "applicability": parent.applicability.model_copy(update={"reuse_conditions": [SocMemoryReuseCondition(facet_key="entity", value_prefix="host", values=["host:one"])]}),
+            "applicability": SocMemoryApplicabilitySpec.model_validate(
+                {
+                    **parent.applicability.model_dump(),
+                    "policy_version": "soc.memory_applicability_policy.v4" if parent.applicability.covered_behavior_components is not None else "soc.memory_applicability_policy.v2",
+                    "reuse_conditions": [SocMemoryReuseCondition(facet_key="entity", value_prefix="host", values=["host:one"])],
+                }
+            ),
         }
     )
     repository.save_memory_record(child)

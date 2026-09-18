@@ -189,6 +189,10 @@ def compare_reports(before: dict, after: dict) -> dict:
         raise ValueError("cannot compare different dataset identities")
     if before["round"]["experiment_id"] != after["round"]["experiment_id"]:
         raise ValueError("comparison requires the same experiment")
+    before_batch = (before["round"].get("selection") or {}).get("batch")
+    after_batch = (after["round"].get("selection") or {}).get("batch")
+    if before_batch not in {"learning", "validation"} or after_batch != before_batch:
+        raise ValueError("只能比较同一批次的轮次报告；缺少批次信息时，请重新导出报告。")
     old_items = {row["alert_id"]: row for row in before["rows"]}
     new_items = {row["alert_id"]: row for row in after["rows"]}
     transitions = [
@@ -305,9 +309,18 @@ def render_report(report: dict) -> str:
             "这是批次状态的墙钟计时，包含调度开启时的等待和服务离线时间，不是模型耗时。暂停只停止领取新任务，已领取任务可继续完成。",
             "",
         ]
-    for key, title in (("reuse", "验证同类经验"), ("explore", "探索少样本告警")):
+    batch = (report["round"].get("selection") or {}).get("batch")
+    sections = (
+        (("reuse", "第一批：沉淀经验", "用于积累同类样本并提炼待审核经验，生成候选不代表经验已确认。"),)
+        if batch == "learning"
+        else (
+            ("reuse", "验证经验复用", "第一批中有同类样本，用来验证审核后的经验对后续告警是否有用，不保证每条都命中经验。"),
+            ("explore", "其他告警测试", "同类只有1～5条，或事件时间无法确认；单独查看研判结果，不混入经验复用效果统计。"),
+        )
+    )
+    for key, title, description in sections:
         metrics = report["metrics"][key]
-        lines += [f"## {title}", "", f"选择 {metrics['selected']} 条，完成 {metrics['completed']} 条，受运行中快照变更影响 {metrics['snapshot_affected']} 条。", "", "| 指标 | 分子 / 分母 | 比例 |", "|---|---:|---:|"]
+        lines += [f"## {title}", "", description, "", f"选择 {metrics['selected']} 条，完成 {metrics['completed']} 条，受运行中快照变更影响 {metrics['snapshot_affected']} 条。", "", "| 指标 | 分子 / 分母 | 比例 |", "|---|---:|---:|"]
         for field, label in (
             ("historical_handling_agreement", "历史处置一致率"),
             ("wrong_ignore_against_history", "错误忽略（历史转交作参照）"),
@@ -335,7 +348,7 @@ def render_report(report: dict) -> str:
         "`alerts.csv` 的 initial_queue_wait_ms 只计首次领取前、本任务已纳入额度且允许调度的等待；processing_wall_ms 从首次领取到结束，含重试/恢复；"
         "total_wall_ms 从任务创建到结束，包含未纳入额度及暂停时间。三者不能简单相加，也不能替代逐阶段模型耗时；缺少时间记录保留为空。",
         "`report.json → breakdowns` 按检测规则、实际使用的经验和运行阶段汇总。一条经验可关联多个规则；相似经验参与研判不代表单独决定结果，关联运行的消耗不能相加当作经验额外成本。",
-        "失败、未运行、快照变更、无有效标签的样本不会被计为判断正确；少样本探索单独统计。",
+        "失败、未运行、快照变更、无有效标签的样本不会被计为判断正确；其他告警测试单独统计。",
         "",
     ]
     return "\n".join(lines)

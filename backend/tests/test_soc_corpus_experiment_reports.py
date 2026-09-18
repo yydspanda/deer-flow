@@ -96,8 +96,8 @@ def test_report_separates_small_sample_exploration_and_unknown_usage():
 
 
 def test_comparison_retains_failed_to_successful_run_lineage():
-    before = {"round": {"round_id": "R1", "experiment_id": "EXP-1"}, "source_identity": {"sha256": "fixed"}, "rows": rows()}
-    after = {**before, "round": {"round_id": "R2", "experiment_id": "EXP-1"}, "rows": [{**rows()[3], "status": "completed", "run_id": "RUN-retest", "summary": {"recommended_handling": "transfer"}}]}
+    before = {"round": {"round_id": "R1", "experiment_id": "EXP-1", "selection": {"batch": "validation"}}, "source_identity": {"sha256": "fixed"}, "rows": rows()}
+    after = {**before, "round": {**before["round"], "round_id": "R2"}, "rows": [{**rows()[3], "status": "completed", "run_id": "RUN-retest", "summary": {"recommended_handling": "transfer"}}]}
     result = compare_reports(before, after)
     assert result["paired_alerts"] == 0  # No pair of valid conclusions to grade.
     assert result["recovered_failures"] == 1
@@ -106,6 +106,29 @@ def test_comparison_retains_failed_to_successful_run_lineage():
     assert transition["after_status"] == "completed"
     assert transition["before_run_id"] is None
     assert transition["after_run_id"] == "RUN-retest"
+
+
+@pytest.mark.parametrize("batch", ["learning", None, "unknown"])
+def test_comparison_rejects_other_or_unverifiable_batch(batch):
+    before = {"round": {"round_id": "R1", "experiment_id": "EXP-1", "selection": {"batch": "validation"}}, "source_identity": {"sha256": "fixed"}, "rows": rows()}
+    after = {**before, "round": {**before["round"], "round_id": "R2", "selection": {"batch": batch}}}
+    with pytest.raises(ValueError, match="批次"):
+        compare_reports(before, after)
+
+
+@pytest.mark.parametrize("batch", ["learning", "validation"])
+def test_export_titles_match_operator_batch_names(tmp_path, batch):
+    report = {"round": {"round_id": "R1", "experiment_id": "EXP-1", "selection": {"batch": batch}}, "rows": rows()[:2] if batch == "learning" else rows()}
+    export_report(report, tmp_path / batch)
+    content = (tmp_path / batch / "REPORT.md").read_text(encoding="utf-8")
+    assert "探索少样本" not in content
+    if batch == "learning":
+        assert "## 第一批：沉淀经验" in content
+        assert "## 验证经验复用" not in content
+    else:
+        assert "## 验证经验复用" in content
+        assert "## 其他告警测试" in content
+        assert "第一批中有同类样本" in content
 
 
 def test_invalidated_or_unlabeled_runs_do_not_imply_ground_truth():
@@ -131,7 +154,7 @@ def test_model_cost_includes_persisted_failure_and_success_attempts_without_doub
 
 
 def test_private_export_is_atomic_formula_safe_and_comparison_is_paired(tmp_path):
-    before = {"schema_version": "soc.corpus_round_report.v1", "round": {"round_id": "R1", "experiment_id": "EXP-1"}, "source_identity": {"sha256": "abc"}, "rows": rows()}
+    before = {"schema_version": "soc.corpus_round_report.v1", "round": {"round_id": "R1", "experiment_id": "EXP-1", "selection": {"batch": "validation"}}, "source_identity": {"sha256": "abc"}, "rows": rows()}
     before["rows"][0]["rule_code"] = "=1+1"
     before["rows"][0]["job_timing"] = {"initial_queue_wait_ms": 500, "processing_wall_ms": 1000, "total_wall_ms": 9000, "timing_status": "complete"}
     before["rows"][3].update(error_code="timeout", error_message="@retry", attempt_count=2)
@@ -152,7 +175,7 @@ def test_private_export_is_atomic_formula_safe_and_comparison_is_paired(tmp_path
     assert failures[0]["attempt_count"] == "2"
     with pytest.raises(FileExistsError):
         export_report(before, folder)
-    after = {**before, "round": {"round_id": "R2", "experiment_id": "EXP-1"}, "rows": [*rows()[:1], {**rows()[1], "summary": {"recommended_handling": "transfer"}}]}
+    after = {**before, "round": {**before["round"], "round_id": "R2"}, "rows": [*rows()[:1], {**rows()[1], "summary": {"recommended_handling": "transfer"}}]}
     comparison = compare_reports(before, after)
     assert comparison["paired_alerts"] == 2
     assert comparison["changed_handling"] == 1

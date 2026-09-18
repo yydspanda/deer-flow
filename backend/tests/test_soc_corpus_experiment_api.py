@@ -32,6 +32,30 @@ def client(tmp_path):
     return TestClient(app), application, calls
 
 
+def test_missing_schema_explains_upgrade_without_hiding_configuration(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
+
+    http, application, calls = client(tmp_path)
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.db'}")
+    application.service.store = SqlAlchemyAlertRepository(sessionmaker(bind=engine)).corpus_experiments()
+    root = "/api/soc/dev/corpus-workbench"
+    assert http.get(root + "/experiments/configuration").status_code == 200
+    for path in ("/experiments", "/experiments/EXP-test/rounds"):
+        response = http.get(root + path)
+        assert response.status_code == 503
+        assert response.headers["X-SOC-Error-Code"] == "corpus_schema_upgrade_required"
+        assert "升级数据库" in response.json()["detail"]
+        assert "删除" in response.json()["detail"]
+    assert http.post(root + "/experiments", json={"name": "test"}).status_code == 503
+    assert http.get(root + "/experiments", headers={"test-role": "user"}).status_code == 403
+    assert not calls and not application.dispatcher.is_running
+    create_soc_tables(engine)
+    assert http.get(root + "/experiments").json() == []
+
+
 def test_only_learning_candidates_can_be_drafted_through_background_api(tmp_path):
     import time
 

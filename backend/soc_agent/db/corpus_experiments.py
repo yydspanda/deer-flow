@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, inspect, or_, select, update
 from sqlalchemy.orm import Session, aliased
 
 from soc_agent.contracts import SocMemoryCandidate, SocMemoryCandidateReviewStage, SocMemoryRecord
@@ -23,7 +23,7 @@ from soc_agent.contracts.corpus_experiments import (
 )
 from soc_agent.contracts.processing_jobs import ACTIVE_PROCESSING_JOB_STATUSES, ProcessingJobStatus
 from soc_agent.db.jobs import _job_from_row
-from soc_agent.db.models import SocCorpusExperimentMemberRow, SocCorpusExperimentRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocMemoryCandidateRow, SocMemoryRecordRow, SocProcessingJobRow
+from soc_agent.db.models import SocCorpusExperimentMemberRow, SocCorpusExperimentRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocMemoryCandidateRow, SocMemoryRecordRow, SocMemoryWorkingDraftRow, SocProcessingJobRow
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -31,9 +31,28 @@ class CorpusExperimentConflict(ValueError):
     """Immutable membership or optimistic round state no longer matches."""
 
 
+class CorpusExperimentSchemaNotReady(RuntimeError):
+    """Batch persistence needs deployment migrations, not an empty inventory."""
+
+
 class SqlAlchemyCorpusExperimentRepository:
     def __init__(self, session_factory: Callable[[], AbstractContextManager[Session]]):
         self._session_factory = session_factory
+        self._schema_ready = False
+
+    def require_schema(self) -> None:
+        """Inspect once after success; failed checks can recover after an upgrade."""
+        if self._schema_ready:
+            return
+        rows = (SocCorpusExperimentRow, SocCorpusExperimentMemberRow, SocCorpusRoundRow, SocCorpusRoundItemRow, SocMemoryWorkingDraftRow, SocProcessingJobRow)
+        with self._session_factory() as session:
+            inspector = inspect(session.connection())
+            tables = set(inspector.get_table_names())
+            for row in rows:
+                table = row.__table__
+                if table.name not in tables or not set(table.columns.keys()).issubset({column["name"] for column in inspector.get_columns(table.name)}):
+                    raise CorpusExperimentSchemaNotReady("两批实验暂不可用：需要先升级数据库。请部署维护人员按部署手册完成数据库升级后刷新页面；无需删除现有经验或运行记录。")
+        self._schema_ready = True
 
     def prepare(self, experiment: CorpusExperiment, members: Sequence[CorpusExperimentMember]) -> bool:
         if not members or len({m.alert_id for m in members}) != len(members) or len({m.sequence_number for m in members}) != len(members):

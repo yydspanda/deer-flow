@@ -124,6 +124,12 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > exports. Learning uses no existing Memory and accumulates within the experiment;
 > validation freezes reviewed learning Memory and does not automatically create new
 > observations. Ordinary 30-day aggregation is unchanged.
+> The Web scopes read `验证经验复用` (holdouts with first-batch peers) and
+> `其他告警测试` (sparse/time-unknown samples, reported separately). Four visible
+> `新轮次运行设置` switches are saved with each new round; existing rounds retain
+> their original settings. Enabling enterprise policy marks full-flow evaluation.
+> Missing batch tables/columns return a clear database-upgrade message while settings
+> remain visible. Reads never migrate or reset data; Host startup applies migrations.
 > `retest-plan` selects failed items or actual Memory uses from a saved report;
 > `learn/validate --selection-file` creates a linked new round, preserving dataset,
 > batch and exploration boundaries. Explicit single-alert rounds take the next free
@@ -141,7 +147,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > the Host wrapper's explicit `reset-dev-data` previews and archives only the SOC DEV
 > database. Ordinary deployment never resets it; accounts, corpus and secrets remain intact.
 > Isolated mock full-loop, browser and synthetic capacity checks have passed; the updated internal handoff remains
-> in progress. Real model batches remain internal-only. Copyable Mac commands are in the
+> paused at the user's request. Code, private configuration and corpus data remain separate
+> deliverables. Real model batches remain internal-only. Copyable Mac commands are in the
 > [batch runbook](.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md).
 > See the [two-batch plan](.notes/ai_soc/architecture/corpus-memory-batch-validation-design.md).
 > A browser-driven local lifecycle is available for the reviewed 14-alert
@@ -218,6 +225,13 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > retries or mutable delivery fields do not add support, while a later alert ID remains a new occurrence
 > even when the same IP and rule fire again. Legacy PingAn timestamps without an explicit offset are
 > interpreted as `Asia/Shanghai` by the adapter and retain that assumption in canonical metadata.
+> Kafka retries an uncommitted record before polling again, and commits rejected messages only after
+> confirmed dead-letter delivery. Resident daemon history is capped at 100 payload-free summaries;
+> explicit `--max-loops` runs retain complete results. The default `soc eval memory run` uses a frozen
+> Profile 7 simulation baseline under all normalization modes; it does not measure production quality.
+> Approval retries preserve their operation key, and approved requests remain available for dry-run
+> and execution after the pending list refreshes. Each execution token can be consumed only once.
+> Corpus rounds refresh their final results after progress becomes terminal.
 > Install or refresh the profile with
 > `cd backend && ./.venv/bin/python -m soc_agent.cli agent install-profile --overwrite`. The SOC extension also provides
 > bounded network, endpoint (EDR/HIDS), web, and email specialist profiles through DeerFlow's native

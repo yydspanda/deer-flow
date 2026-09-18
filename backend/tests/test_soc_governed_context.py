@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, time, timedelta
 
 import pytest
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
@@ -35,6 +36,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import SocGovernedContextService, SocServiceError, SocServiceNotFoundError
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables, upgrade_soc_schema
+from soc_agent.db.migration_runner import MIGRATIONS_DIR
 from soc_agent.governed_context import InMemoryGovernedContextFactRepository
 
 NOW = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
@@ -443,7 +445,7 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         }.issubset(analysis_run_columns)
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0026_effectiveness"
+        assert revision == ScriptDirectory(str(MIGRATIONS_DIR)).get_current_head()
     finally:
         engine.dispose()
 

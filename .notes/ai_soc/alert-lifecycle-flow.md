@@ -773,7 +773,7 @@ Approval flow 当前做什么：
 4. 审批人可 approve/reject/expire；approve 在同一事务把 request 变成 `approved` 并创建最多一个 `SocAgentApprovalGrant`，另外两个终态不创建 grant。
 5. 完全相同的终态重试返回原结果；伪造、过时或改变理由/幂等键/有效期的重试会被拒绝。
 6. dry-run 只验证 token、route、payload、上下文和 adapter 支持情况。
-7. execute boundary 当前只消费 token并写执行边界记录。
+7. execute boundary 通过条件更新原子消费 token，并与首次执行审计同事务提交；当前不执行外部副作用。同 key、同命令重试返回原结果，异 key 或变更命令冲突。
 8. 当前不会对生产系统产生外部副作用；每个 request/resolve/dry-run/execute 命令都和追加式
    `SocMutationAuditRecord` 在同一事务提交，审计不保存原始 action payload 或 secret。
 

@@ -1749,19 +1749,23 @@ export function SocCorpusValidationWorkbench() {
           aria-label="实验批次"
         >
           <Tabs
+            className="w-full min-w-0 sm:w-auto"
             value={batch}
             onValueChange={(value) =>
               changeBatchSelection(value as SocCorpusBatch)
             }
           >
-            <TabsList className="h-auto flex-wrap">
-              <TabsTrigger value="learning" className="gap-2 py-2">
+            <TabsList
+              aria-label="实验批次选择"
+              className="grid w-full grid-cols-1 group-data-[orientation=horizontal]/tabs:h-auto sm:w-auto sm:grid-cols-2"
+            >
+              <TabsTrigger value="learning" className="h-9 gap-2 px-3">
                 第一批 · 沉淀经验
                 <span className="tabular-nums">
                   {state.batch_selection?.counts.learning.toLocaleString()}
                 </span>
               </TabsTrigger>
-              <TabsTrigger value="validation" className="gap-2 py-2">
+              <TabsTrigger value="validation" className="h-9 gap-2 px-3">
                 第二批 · 验证效果
                 <span className="tabular-nums">
                   {state.batch_selection
@@ -1784,19 +1788,22 @@ export function SocCorpusValidationWorkbench() {
                 )
               }
             >
-              <SelectTrigger aria-label="验证样本范围" className="w-56">
+              <SelectTrigger
+                aria-label="验证样本范围"
+                className="w-64 max-w-full"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="main">
-                  验证同类经验 ·{" "}
+                  验证经验复用 ·{" "}
                   {state.batch_selection?.counts.validation_main.toLocaleString()}
                 </SelectItem>
                 <SelectItem value="supplementary">
-                  探索少样本告警 ·{" "}
+                  其他告警测试 ·{" "}
                   {state.batch_selection?.counts.validation_supplementary.toLocaleString()}
                 </SelectItem>
-                <SelectItem value="all">全部验证样本</SelectItem>
+                <SelectItem value="all">第二批全部告警</SelectItem>
               </SelectContent>
             </Select>
           )}
@@ -1804,6 +1811,20 @@ export function SocCorpusValidationWorkbench() {
             <Badge variant="outline" className="border-sky-300 text-sky-800">
               样本目录
             </Badge>
+          )}
+          {state.batch_selection && (
+            <p
+              className="text-muted-foreground basis-full text-sm"
+              aria-label="样本用途"
+            >
+              {batch === "learning"
+                ? "每组取 5～10 条同类告警，用于提炼待审核经验。"
+                : validationTier === "main"
+                  ? "第一批有同类样本，用于验证已审核经验在后续告警中的复用效果；是否命中以实际运行结果为准。"
+                  : validationTier === "supplementary"
+                    ? "同类告警仅 1～5 条，或事件时间无法确认；单独测试研判效果，不计入经验复用效果。"
+                    : "包含经验复用验证与其他告警测试，两类结果分别统计。"}
+            </p>
           )}
         </section>
         <section className="flex flex-wrap items-center justify-between gap-3 border-b bg-zinc-50 px-5 py-3 text-xs md:px-7">
@@ -1849,6 +1870,7 @@ export function SocCorpusValidationWorkbench() {
             batch={batch}
             tier={validationTier}
             groupId={groupId}
+            controls={state.run_controls}
             requestedAlert={requestedBatchAlert}
             onRequestHandled={() => setRequestedBatchAlert(null)}
           />
@@ -2121,12 +2143,12 @@ export function SocCorpusValidationWorkbench() {
                         </Button>
                         {alert.validation_tier === "supplementary" && (
                           <p className="mt-2 text-xs text-amber-800">
-                            少样本探索 ·{" "}
+                            其他测试 ·{" "}
                             {alert.batch_reason === "singleton"
-                              ? "单例"
+                              ? "仅一条同类告警"
                               : alert.batch_reason === "small_group"
-                                ? "同类样本较少"
-                                : "时间待核验"}
+                                ? "同类告警 2～5 条"
+                                : "事件时间无法确认"}
                           </p>
                         )}
                       </td>

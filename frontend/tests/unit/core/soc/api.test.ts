@@ -673,7 +673,7 @@ describe("SOC approval API", () => {
     expect(secondHeaders.get("idempotency-key")).toBe("expire-1");
   });
 
-  test("dry-runs approved action without idempotency header", async () => {
+  test("dry-runs approved action with a stable audit idempotency header", async () => {
     mockedFetch.mockResolvedValueOnce(
       jsonResponse(200, {
         route: "response.block_ip",
@@ -695,7 +695,7 @@ describe("SOC approval API", () => {
         actorId: "analyst-1",
         surface: "web",
         traceId: "trace-dry-run-1",
-        idempotencyKey: "idem-ignored",
+        idempotencyKey: "idem-dry-run-1",
       },
     );
 
@@ -714,7 +714,7 @@ describe("SOC approval API", () => {
     const init = firstFetchInit();
     const headers = init.headers as Headers;
     expect(headers.get("x-trace-id")).toBe("trace-dry-run-1");
-    expect(headers.get("idempotency-key")).toBeNull();
+    expect(headers.get("idempotency-key")).toBe("idem-dry-run-1");
   });
 
   test("executes approved action with idempotency header", async () => {

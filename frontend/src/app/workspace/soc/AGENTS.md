@@ -17,6 +17,14 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 
 - Two-batch controls use the server experiment/round API; preparing membership or a
   round does not start inference. CLI-created rounds appear in the same paginated list.
+  Keep all four run switches visible above the round controls as `新轮次运行设置`.
+  New rounds submit those selections, masked by server capabilities; policy enabled
+  means `full_flow`, disabled means `memory`. Do not overwrite selections through a
+  second purpose preset. Use separate batch/session preferences, default to the server's
+  memory-evaluation settings, and display immutable `本轮已保存设置` for existing rounds.
+  Sample scopes are `验证经验复用` (first-batch peers exist, not a guaranteed Memory hit)
+  and `其他告警测试` (1-5 peers or unusable time, separate metrics). Preserve API scope
+  values; these are display terms, not a change to membership or evaluation denominators.
   Keep static sample browsing separate from the selected round's saved results.
   Round/audit queries include the fixed Run ID; do not silently select a later rerun.
   Linked retest rounds expose an on-demand, paginated before/after tab. Render server
@@ -82,6 +90,15 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   are attribution only.
 - State-changing calls send stable idempotency keys and invalidate the owning query
   namespace after success. Do not optimistically mutate governed state.
+  Approval mutations retain their key for the same actor and command after an
+  unacknowledged response; changed inputs use another key, and an acknowledged
+  result releases it. Keep keys and execution grants in component memory only.
+  The approval inbox retains the acknowledged request and grant independently of
+  its pending-list filter until the operator explicitly selects another request.
+  Background refresh must not discard its payload edits or execution result.
+- Corpus round results use the settled progress revision in their query identity.
+  A running-to-settled transition must fetch results after that snapshot, fence
+  older in-flight reads, and keep retrying a failed final fetch before polling stops.
 - All `/workspace/soc/*` pages use `SocWorkspaceHeader` for stable second-level
   navigation. The persistent SOC layout exposes an immediate, non-blocking top progress
   indicator for internal route clicks; target pages then take over with route/local

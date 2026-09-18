@@ -128,6 +128,10 @@ function createRequestId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+export function createSocIdempotencyKey() {
+  return createRequestId("soc-idem");
+}
+
 function buildSocHeaders(
   context: SocRequestContext | undefined,
   {
@@ -156,7 +160,7 @@ function buildSocHeaders(
   if (stateChanging) {
     headers.set(
       "idempotency-key",
-      context.idempotencyKey ?? createRequestId("soc-idem"),
+      context.idempotencyKey ?? createSocIdempotencyKey(),
     );
   }
   return headers;
@@ -802,7 +806,7 @@ export async function dryRunSocApprovedAction(
     `${getBackendBaseURL()}/api/soc/approvals/actions/dry-run`,
     {
       method: "POST",
-      headers: buildSocHeaders(context, { json: true }),
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
       body: JSON.stringify({ ...command, dry_run: true }),
     },
   );

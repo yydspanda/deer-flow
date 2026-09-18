@@ -53,11 +53,22 @@ import {
   corpusRoundSelection,
   corpusRoundStateLabel,
   corpusDuration,
+  type SocCorpusRoundCommand,
   type SocCorpusRoundResult,
 } from "@/core/soc/corpus-experiments";
-import type { SocCorpusBatch } from "@/core/soc/types";
+import type {
+  SocAnalysisExecutionOptions,
+  SocCorpusBatch,
+  SocCorpusWorkbenchRunControls,
+} from "@/core/soc/types";
 
 import { SocCorpusRoundComparison } from "./soc-corpus-round-comparison";
+import {
+  availableCorpusRunSettings,
+  readCorpusRunSettings,
+  SocCorpusRunSettings,
+  SocRunOptionsSummary,
+} from "./soc-corpus-run-settings";
 
 const AuditViewer = dynamic(() =>
   import("./soc-corpus-audit-viewer").then(
@@ -65,6 +76,7 @@ const AuditViewer = dynamic(() =>
   ),
 );
 const QUERY = ["soc-corpus-experiments"] as const;
+const SETTINGS_KEY = "soc.corpus.experiment.run-settings.v1";
 const JOB_LABELS: Record<string, string> = {
   queued: "待运行",
   claimed: "已受理",
@@ -83,12 +95,14 @@ export function SocCorpusExperiments({
   batch,
   tier,
   groupId,
+  controls,
   requestedAlert,
   onRequestHandled,
 }: {
   batch: SocCorpusBatch;
   tier: "main" | "supplementary" | "all";
   groupId: string;
+  controls?: SocCorpusWorkbenchRunControls | null;
   requestedAlert: { alertId: string; key: number } | null;
   onRequestHandled: () => void;
 }) {
@@ -105,7 +119,9 @@ export function SocCorpusExperiments({
   const [alertId, setAlertId] = useState("");
   const [limit, setLimit] = useState("5");
   const [concurrency, setConcurrency] = useState("3");
-  const [purpose, setPurpose] = useState<"memory" | "full_flow">("memory");
+  const [settings, setSettings] = useState<SocAnalysisExecutionOptions | null>(
+    null,
+  );
   const [memoryMode, setMemoryMode] = useState<"snapshot" | "none">("snapshot");
   const [compareToCurrent, setCompareToCurrent] = useState(false);
   const [detail, setDetail] = useState<SocCorpusRoundResult | null>(null);
@@ -143,14 +159,25 @@ export function SocCorpusExperiments({
         : 10_000,
     retry: false,
   });
+  const isRunning =
+    progress.data?.round.state === "running" || !!progress.data?.active_count;
+  // A settled progress snapshot needs a new results read. A separate cache
+  // identity also fences any older in-flight read that still reports analyzing.
+  const settledRevision =
+    progress.data && !isRunning
+      ? [
+          progress.data.round.state,
+          progress.data.round.version,
+          progress.data.completed_count,
+          progress.data.failed_count,
+        ]
+      : null;
   const results = useQuery({
-    queryKey: [...QUERY, "results", roundId, offset],
+    queryKey: [...QUERY, "results", roundId, offset, settledRevision],
     queryFn: () => getSocCorpusRoundResults(roundId, offset),
     enabled: !!roundId,
-    refetchInterval:
-      progress.data?.round.state === "running" || progress.data?.active_count
-        ? 3_000
-        : false,
+    refetchInterval: (query) =>
+      isRunning || query.state.status === "error" ? 3_000 : false,
     retry: false,
   });
   const round = progress.data?.round;
@@ -159,8 +186,29 @@ export function SocCorpusExperiments({
   const current = sameBatch ? progress.data : undefined;
   const canCompareToCurrent =
     !!current && current.round.state !== "running" && !current.active_count;
+  const selectedOptions = configuration.data
+    ? controls
+      ? availableCorpusRunSettings(
+          settings ?? configuration.data.defaults,
+          controls,
+        )
+      : configuration.data.defaults
+    : null;
+  const purpose = selectedOptions?.tenant_policy_enabled
+    ? "full_flow"
+    : "memory";
+
+  function changeSettings(value: SocAnalysisExecutionOptions) {
+    setSettings(value);
+    try {
+      sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(value));
+    } catch {
+      /* Optional browser storage. */
+    }
+  }
 
   useEffect(() => {
+    setSettings(readCorpusRunSettings(SETTINGS_KEY));
     try {
       const saved = JSON.parse(
         sessionStorage.getItem("soc.corpus.experiment") ?? "null",
@@ -247,20 +295,16 @@ export function SocCorpusExperiments({
         return;
       }
       if (command === "create") {
-        if (!configuration.data || !experimentId)
+        if (!configuration.data || !selectedOptions || !experimentId)
           throw new Error("请先准备实验名单");
-        const options =
-          purpose === "memory"
-            ? configuration.data.defaults
-            : configuration.data.full_flow_defaults;
-        const body = {
+        const body: SocCorpusRoundCommand = {
           experiment_id: experimentId,
           selection: corpusRoundSelection(batch, tier, groupId, alertId),
           purpose,
           memory_mode: memoryMode,
           parent_round_id:
             compareToCurrent && canCompareToCurrent ? roundId : null,
-          options,
+          options: selectedOptions,
           execution_limit: limit === "all" ? 2_147_483_647 : Number(limit),
           concurrency: Math.min(
             Number(concurrency),
@@ -315,6 +359,17 @@ export function SocCorpusExperiments({
       className="max-w-full min-w-0 border-b px-5 py-4 md:px-7"
       aria-label="批次执行"
     >
+      {controls && selectedOptions && configuration.data && (
+        <div className="-mx-5 -mt-4 mb-4 md:-mx-7">
+          <SocCorpusRunSettings
+            title="新轮次运行设置"
+            resetTitle="恢复实验默认设置（企业策略关闭）"
+            controls={{ ...controls, defaults: configuration.data.defaults }}
+            value={selectedOptions}
+            onChange={changeSettings}
+          />
+        </div>
+      )}
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-64 max-w-full">
           <label
@@ -479,10 +534,13 @@ export function SocCorpusExperiments({
                   ? "无经验对照"
                   : `已冻结 ${round.memory_snapshot.length} 条第一批经验`}
             </span>
-            <span>
-              企业策略：{round.options.tenant_policy_enabled ? "开启" : "关闭"}
-            </span>
+            <Badge variant="outline">
+              {round.options.tenant_policy_enabled
+                ? "含企业策略"
+                : "经验效果验证"}
+            </Badge>
           </div>
+          <SocRunOptionsSummary value={round.options} title="本轮已保存设置" />
           {current.timing && (
             <div className="text-muted-foreground flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
               <span
@@ -814,23 +872,12 @@ export function SocCorpusExperiments({
             onChange={(event) => setAlertId(event.target.value)}
             placeholder="留空选择当前范围"
           />
-          <label className="text-sm" htmlFor="round-purpose">
-            验证目的
-          </label>
-          <Select
-            value={purpose}
-            onValueChange={(value) => setPurpose(value as typeof purpose)}
-          >
-            <SelectTrigger id="round-purpose" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="memory">经验效果（关闭企业策略）</SelectItem>
-              <SelectItem value="full_flow">
-                完整流程（沿用企业策略配置）
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          {selectedOptions && (
+            <SocRunOptionsSummary
+              value={selectedOptions}
+              title="将保存的运行设置"
+            />
+          )}
           {batch === "validation" && (
             <>
               <label className="text-sm" htmlFor="round-memory">

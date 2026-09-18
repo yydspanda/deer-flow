@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import io
 import json
+import weakref
 
 import pytest
 
+from soc_agent.contracts import SocDaemonProcessResult
 from soc_agent.core import SocDaemonService
 from soc_agent.daemon.kafka_daemon import JsonLineKafkaDaemonMetricSink, KafkaDaemonStopSignal, SocKafkaDaemonRunner
 from soc_agent.daemon.kafka_mapper import KafkaRecord
-from soc_agent.daemon.kafka_runner import SocKafkaConsumerRunner
+from soc_agent.daemon.kafka_runner import KafkaRunnerProcessResult, SocKafkaConsumerRunner
 
 
 class IdleConsumer:
@@ -208,6 +210,62 @@ def test_kafka_daemon_runner_rejects_invalid_settings() -> None:
 
     with pytest.raises(ValueError, match="max_loops"):
         SocKafkaDaemonRunner(runner=__import_runner(IdleConsumer()), idle_sleep_seconds=0).run(max_loops=0)
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_kafka_daemon_history_does_not_determine_lifetime_counters(bounded: bool) -> None:
+    stop_signal = KafkaDaemonStopSignal()
+    records: list[weakref.ReferenceType[KafkaRecord]] = []
+
+    class ResultRunner:
+        count = 0
+        closed = False
+
+        def process_next(self) -> KafkaRunnerProcessResult:
+            self.count += 1
+            if self.count == 305:
+                stop_signal.request_stop("test_complete")
+            status = ("processed", "dead_lettered", "idle")[(self.count - 1) % 3]
+            if status == "idle":
+                return KafkaRunnerProcessResult(status=status)
+            record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=self.count, value=b"large raw payload", headers=(("raw", b"header payload"),))
+            records.append(weakref.ref(record))
+            return KafkaRunnerProcessResult(
+                status=status,
+                record=record,
+                committed=True,
+                dead_lettered=status == "dead_lettered",
+                daemon_result=SocDaemonProcessResult(message_id=str(self.count), kind="alert", status="processed", payload={"raw": "large service payload"}),
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    worker = ResultRunner()
+    sink = ListMetricSink()
+    result = SocKafkaDaemonRunner(runner=worker, stop_signal=stop_signal, idle_sleep_seconds=0, metric_sink=sink).run(max_loops=305 if bounded else None)
+
+    assert result.loop_count == 305
+    assert result.processed_count == 102
+    assert result.dead_lettered_count == 102
+    assert result.idle_count == 101
+    assert result.committed_count == 204
+    assert result.error_count == 0
+    assert sink.events[-1]["loop_count"] == 305
+    assert sink.events[-1]["counters"] == {"processed": 102, "dead_lettered": 102, "idle": 101, "committed": 204}
+    assert worker.closed is True
+    if bounded:
+        assert len(result.results) == 305
+        assert result.results[0].record.value == b"large raw payload"
+        assert result.results[0].daemon_result.payload == {"raw": "large service payload"}
+        assert all(ref() is not None for ref in records)
+    else:
+        assert result.stop_reason == "test_complete"
+        assert len(result.results) == 100
+        assert result.results[-1].record.offset == 305
+        assert all(item.record is None or (not item.record.value and not item.record.headers) for item in result.results)
+        assert all(item.daemon_result is None or not item.daemon_result.payload for item in result.results)
+        assert all(ref() is None for ref in records)
 
 
 def __import_runner(consumer: IdleConsumer):

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol, TextIO
 
-from soc_agent.daemon.kafka_runner import KafkaRunnerLoopResult, KafkaRunnerProcessResult, SocKafkaConsumerRunner
+from soc_agent.daemon.kafka_runner import KafkaRunnerProcessResult, SocKafkaConsumerRunner
+
+DAEMON_RESULT_HISTORY_LIMIT = 100
 
 
 class KafkaDaemonStopSignal:
@@ -66,26 +69,11 @@ class KafkaDaemonRunResult:
     last_error_at: datetime | None = None
     last_error_type: str | None = None
     last_error_message: str | None = None
-
-    @property
-    def loop_count(self) -> int:
-        return len(self.results) + self.error_count
-
-    @property
-    def processed_count(self) -> int:
-        return KafkaRunnerLoopResult(results=self.results).processed_count
-
-    @property
-    def dead_lettered_count(self) -> int:
-        return KafkaRunnerLoopResult(results=self.results).dead_lettered_count
-
-    @property
-    def idle_count(self) -> int:
-        return KafkaRunnerLoopResult(results=self.results).idle_count
-
-    @property
-    def committed_count(self) -> int:
-        return KafkaRunnerLoopResult(results=self.results).committed_count
+    loop_count: int = 0
+    processed_count: int = 0
+    dead_lettered_count: int = 0
+    idle_count: int = 0
+    committed_count: int = 0
 
 
 class SocKafkaDaemonRunner:
@@ -117,12 +105,21 @@ class SocKafkaDaemonRunner:
         self._sleeper = sleeper
 
     def run(self, *, max_loops: int | None = None) -> KafkaDaemonRunResult:
-        """Run until a stop signal is requested or an optional loop cap is reached."""
+        """Run with lifetime counters and a bounded recent history.
+
+        Only an explicit loop cap retains complete per-loop results. Resident
+        runs keep the latest 100 summaries without record or service payloads.
+        """
 
         if max_loops is not None and max_loops < 1:
             raise ValueError("max_loops must be >= 1")
 
-        results: list[KafkaRunnerProcessResult] = []
+        results: deque[KafkaRunnerProcessResult] = deque(maxlen=DAEMON_RESULT_HISTORY_LIMIT if max_loops is None else max_loops)
+        loop_count = 0
+        processed_count = 0
+        dead_lettered_count = 0
+        idle_count = 0
+        committed_count = 0
         started_at = _utc_now()
         stopped_at = started_at
         error_count = 0
@@ -144,6 +141,7 @@ class SocKafkaDaemonRunner:
         )
         try:
             while not self._stop_signal.requested:
+                loop_count += 1
                 try:
                     result = self._runner.process_next()
                 except Exception as exc:  # noqa: BLE001 - daemon boundary backs off and reports adapter/runtime failures
@@ -152,7 +150,6 @@ class SocKafkaDaemonRunner:
                     last_error_at = _utc_now()
                     last_error_type = type(exc).__name__
                     last_error_message = str(exc)
-                    loop_count = len(results) + error_count
                     self._emit_metric(
                         {
                             "event": "error",
@@ -175,9 +172,12 @@ class SocKafkaDaemonRunner:
                         self._sleeper(self._error_backoff_seconds)
                     continue
 
-                results.append(result)
+                results.append(_result_summary(result) if max_loops is None else result)
+                processed_count += int(result.status == "processed")
+                dead_lettered_count += int(result.dead_lettered)
+                idle_count += int(result.status == "idle")
+                committed_count += int(result.committed)
                 consecutive_error_count = 0
-                loop_count = len(results) + error_count
                 emitted_at = _utc_now()
                 if result.status != "idle":
                     last_success_at = emitted_at
@@ -208,7 +208,12 @@ class SocKafkaDaemonRunner:
             self._runner.close()
 
         run_result = KafkaDaemonRunResult(
-            results=results,
+            results=list(results),
+            loop_count=loop_count,
+            processed_count=processed_count,
+            dead_lettered_count=dead_lettered_count,
+            idle_count=idle_count,
+            committed_count=committed_count,
             stop_reason=stop_reason,
             started_at=started_at,
             stopped_at=stopped_at,
@@ -238,6 +243,14 @@ def _max_loops_reached(*, max_loops: int | None, loop_count: int) -> bool:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _result_summary(result: KafkaRunnerProcessResult) -> KafkaRunnerProcessResult:
+    return replace(
+        result,
+        record=replace(result.record, value=b"", headers=()) if result.record is not None else None,
+        daemon_result=result.daemon_result.model_copy(update={"payload": {}}) if result.daemon_result is not None else None,
+    )
 
 
 def _record_metric(result: KafkaRunnerProcessResult) -> dict[str, Any] | None:

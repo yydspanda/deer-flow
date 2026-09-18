@@ -1,5 +1,7 @@
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
 
+from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.db.migration_runner import upgrade_soc_schema
 
 
@@ -12,6 +14,7 @@ def test_experiment_migration_upgrades_existing_database_without_losing_history(
         connection.execute(text("INSERT INTO operator_owned_probe VALUES ('keep')"))
     upgrade_soc_schema(url)
     upgrade_soc_schema(url)
+    SqlAlchemyAlertRepository(sessionmaker(bind=engine)).corpus_experiments().require_schema()
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM soc_alembic_version")) == "0031_memory_working_drafts"
         assert connection.scalar(text("SELECT value FROM operator_owned_probe")) == "keep"

@@ -910,6 +910,13 @@ for (const width of [1920, 390]) {
         );
         json = {
           ...current,
+          run_controls: {
+            defaults: options,
+            normalization_review_available: true,
+            tenant_policy_available: true,
+            tenant_policy_advisor_available: true,
+            tenant_policy_signal_providers_available: true,
+          },
           batch_selection: {
             plan_id: "a".repeat(64),
             batch: url.searchParams.get("batch") ?? "learning",
@@ -930,6 +937,21 @@ for (const width of [1920, 390]) {
       await route.fulfill({ status: post ? 201 : 200, json });
     });
     await page.goto("/workspace/soc/corpus-validation");
+    const settings = page.getByRole("region", { name: "新轮次运行设置" });
+    await expect(settings.getByRole("switch")).toHaveCount(4);
+    await settings
+      .getByRole("switch", { name: "语义核对", exact: true })
+      .click();
+    await settings
+      .getByRole("switch", { name: "企业策略", exact: true })
+      .click();
+    await settings
+      .getByRole("switch", { name: "安全软件路径策略", exact: true })
+      .click();
+    await settings
+      .getByRole("switch", { name: "LLM 策略建议", exact: true })
+      .click();
+    expect(writes).toHaveLength(0);
     await page.getByRole("button", { name: "准备新实验", exact: true }).click();
     await page.getByRole("button", { name: "确认准备", exact: true }).click();
     await expect(
@@ -952,6 +974,25 @@ for (const width of [1920, 390]) {
       batch: "learning",
       alert_ids: ["1984426"],
     });
+    expect(writes[1]!.body.options).toEqual({
+      normalization_review_mode: "off",
+      tenant_policy_enabled: true,
+      tenant_policy_advisor_enabled: true,
+      tenant_policy_signal_providers_enabled: true,
+    });
+    expect(writes[1]!.body.purpose).toBe("full_flow");
+    await settings
+      .getByRole("switch", { name: "企业策略", exact: true })
+      .click();
+    await expect(
+      settings.getByRole("switch", { name: "LLM 策略建议", exact: true }),
+    ).not.toBeChecked();
+    await expect(
+      settings.getByRole("switch", { name: "安全软件路径策略", exact: true }),
+    ).toBeDisabled();
+    await expect(page.getByLabel("本轮已保存设置")).toContainText(
+      "企业策略：开启",
+    );
     await page.getByRole("button", { name: "开始运行", exact: true }).click();
     await expect(page.getByLabel("批次执行")).toContainText("完成 1");
     await expect(page.getByLabel("批次执行")).toContainText(
@@ -965,6 +1006,9 @@ for (const width of [1920, 390]) {
       page.getByRole("button", { name: "本轮已完成", exact: true }),
     ).toBeDisabled();
     await page.reload();
+    await expect(
+      settings.getByRole("switch", { name: "企业策略", exact: true }),
+    ).not.toBeChecked();
     await expect(page.getByLabel("批次执行")).toContainText("完成 1");
     await expect(page.getByLabel("累计运行额度")).toContainText("1 条");
     await expect(
@@ -983,6 +1027,11 @@ for (const width of [1920, 390]) {
       page.getByRole("button", { name: "开始运行", exact: true }),
     ).toBeVisible();
     expect(writes[3]!.body.parent_round_id).toBe("ROUND-fixture");
+    expect(writes[3]!.body.purpose).toBe("memory");
+    expect(writes[3]!.body.options).toEqual({
+      ...options,
+      normalization_review_mode: "off",
+    });
     expect(comparisonReads).toHaveLength(0);
     await page.getByRole("button", { name: "开始运行", exact: true }).click();
     await page.getByRole("tab", { name: "前后对照", exact: true }).click();
@@ -1426,10 +1475,10 @@ for (const width of [1440, 390]) {
             batch,
             validation_tier: tier,
             counts: {
-              learning: 1,
-              validation_main: 1,
-              validation_supplementary: 1,
-              total: 3,
+              learning: 3002,
+              validation_main: 8522,
+              validation_supplementary: 3764,
+              total: 15288,
             },
             selected_count: 1,
             group_count: 1,
@@ -1458,9 +1507,13 @@ for (const width of [1440, 390]) {
     await expect(page.locator('[data-alert-id="1984426"]')).toHaveCount(0);
     await expect(page.getByLabel("当前行为模式组")).toHaveCount(0);
     await page.getByLabel("验证样本范围").click();
-    await page.getByRole("option", { name: /探索少样本告警/ }).click();
+    await expect(page.getByLabel("样本用途")).toContainText("第一批有同类样本");
+    await page.getByRole("option", { name: /其他告警测试/ }).click();
     await expect(page.locator('[data-alert-id="SUP-1"]')).toBeVisible();
-    await expect(page.getByText("少样本探索 · 单例")).toBeVisible();
+    await expect(page.getByText("其他测试 · 仅一条同类告警")).toBeVisible();
+    await expect(page.getByLabel("样本用途")).toContainText(
+      "不计入经验复用效果",
+    );
     await page.locator("#corpus-group-filter").click();
     await expect(
       page.getByRole("dialog").getByRole("heading", { name: "查找行为模式组" }),
@@ -1480,10 +1533,17 @@ for (const width of [1440, 390]) {
       "aria-selected",
       "true",
     );
-    await expect(page.getByLabel("验证样本范围")).toContainText(
-      "探索少样本告警",
-    );
+    await expect(page.getByLabel("验证样本范围")).toContainText("其他告警测试");
     await expect(page.locator('[data-alert-id="SUP-1"]')).toBeVisible();
+    if (width === 390) {
+      const tabs = await page
+        .getByRole("tablist", { name: "实验批次选择" })
+        .boundingBox();
+      const scope = await page.getByLabel("验证样本范围").boundingBox();
+      expect(tabs).not.toBeNull();
+      expect(scope).not.toBeNull();
+      expect(scope!.y).toBeGreaterThanOrEqual(tabs!.y + tabs!.height);
+    }
     await page.screenshot({
       path: testInfo.outputPath(`batch-${width}.png`),
       fullPage: true,

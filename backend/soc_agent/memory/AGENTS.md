@@ -304,6 +304,9 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 - Memory quality uses `soc eval memory prepare|run` with held-out query alerts,
   independent analyst truth, and pairwise record relevance labels. Source alerts used to
   construct a Memory must not overlap held-out queries.
+- The default simulation fixture freezes Profile 7 / feature schema v5 on every request
+  and record. Replay must resolve that saved identity independently of the active
+  normalization mode and still reject version mismatches; historical fixtures stay frozen.
 - Report retrieval, Pattern applicability, directive eligibility, decision change, and
   action authorization separately. Simulation labels cannot establish rollout quality.
 - Browser workbenches are enabled only with `SOC_DEV_MEMORY_WORKBENCH_ENABLED=true`, an

@@ -291,7 +291,9 @@ def _active_memory_fixture(
     return service, candidate.candidate_id, active.memory_id
 
 
-def test_applicability_revision_reprojects_scope_from_exact_source_run() -> None:
+@pytest.mark.parametrize("normalization_mode", ["off", "apply"])
+def test_applicability_revision_reprojects_scope_from_exact_source_run(monkeypatch, normalization_mode) -> None:
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", normalization_mode)
     now = datetime(2026, 8, 21, 8, 30, tzinfo=UTC)
     repository = RevisionRepository()
     service, _, memory_id = _active_memory_fixture(repository, now=now)
@@ -311,13 +313,17 @@ def test_applicability_revision_reprojects_scope_from_exact_source_run() -> None
     candidate = result.candidate
     assert candidate.applicability is not None
     assert candidate.applicability.profile_id == "pingan.soc"
-    assert candidate.applicability.profile_version == "8"
+    # The saved source predates semantic normalization and has no apply report;
+    # replay must use its historical projection, independently of today's mode.
+    assert candidate.applicability.profile_version == "7"
+    assert candidate.applicability.feature_schema_version == "pingan.soc.memory_features.v5"
     assert candidate.applicability.required_facets["environment"] == ["dev"]
     assert candidate.applicability.required_facets["detection_key"] == ["sec_guard_apt:rule_code:rpaadm_000558"]
     assert candidate.applicability.required_facets["behavior_fingerprint"] == candidate.facets["behavior_fingerprint"]
     assert candidate.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
     assert candidate.metadata["revision_scope_source"] == "source_run_profile_projection"
-    assert candidate.metadata["memory_profile_version"] == "8"
+    assert candidate.metadata["memory_profile_version"] == "7"
+    assert candidate.metadata["memory_feature_schema_version"] == "pingan.soc.memory_features.v5"
     assert candidate.facets != predecessor.facets
 
 

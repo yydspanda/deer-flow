@@ -618,6 +618,27 @@ class SqlAlchemyAlertRepository:
                 return None
             return SocAgentApprovalGrant.model_validate(row.grant_payload)
 
+    def consume_approval_grant(self, grant: SocAgentApprovalGrant) -> bool:
+        """Fence the one-time transition in SQL on both SQLite and PostgreSQL."""
+        if grant.status != "consumed":
+            raise ValueError("approval consumption requires a consumed grant")
+        payload = grant.model_dump(mode="json")
+        with self._session_factory() as session:
+            result = session.execute(
+                update(SocApprovalGrantRow)
+                .where(
+                    SocApprovalGrantRow.approval_grant_id == grant.approval_grant_id,
+                    SocApprovalGrantRow.execution_token_id == grant.execution_token_id,
+                    SocApprovalGrantRow.status == "approved",
+                )
+                .values(**_approval_grant_row_values(grant, payload))
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                return False
+            session.commit()
+            return True
+
     def get_approval_grant_by_token(self, execution_token_id: str) -> SocAgentApprovalGrant | None:
         with self._session_factory() as session:
             result = session.execute(select(SocApprovalGrantRow).where(SocApprovalGrantRow.execution_token_id == execution_token_id).limit(1))

@@ -53,14 +53,27 @@
     "/api/soc/memory/candidates/{candidate_id}": [
       "get"
     ],
+    "/api/soc/memory/candidates/{candidate_id}/governance-preview": [
+      "post"
+    ],
     "/api/soc/memory/candidates/{candidate_id}/lesson-draft": [
+      "post"
+    ],
+    "/api/soc/memory/candidates/{candidate_id}/refinements": [
       "post"
     ],
     "/api/soc/memory/candidates/{candidate_id}/review": [
       "post"
     ],
+    "/api/soc/memory/candidates/{candidate_id}/scope-options": [
+      "get"
+    ],
     "/api/soc/memory/candidates/{candidate_id}/supersession": [
       "post"
+    ],
+    "/api/soc/memory/candidates/{candidate_id}/working-draft": [
+      "get",
+      "put"
     ],
     "/api/soc/memory/center": [
       "get"
@@ -84,6 +97,12 @@
       "post"
     ],
     "/api/soc/memory/records/{memory_id}/revision-candidates": [
+      "post"
+    ],
+    "/api/soc/memory/records/{memory_id}/scope-boundaries": [
+      "get"
+    ],
+    "/api/soc/memory/records/{memory_id}/scope-boundaries/release": [
       "post"
     ],
     "/api/soc/memory/revisions": [

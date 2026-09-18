@@ -81,6 +81,8 @@ export function SocApprovalInbox() {
   const [expiresInSeconds, setExpiresInSeconds] = useState("900");
   const [payloadJson, setPayloadJson] = useState("{}");
   const [grant, setGrant] = useState<SocAgentApprovalGrant | null>(null);
+  const [approvedRequest, setApprovedRequest] =
+    useState<SocAgentApprovalRequest | null>(null);
   const [executionResult, setExecutionResult] =
     useState<SocAgentActionResult | null>(null);
 
@@ -91,11 +93,17 @@ export function SocApprovalInbox() {
   const requests = useMemo(() => inbox.requests, [inbox.requests]);
   const fallback =
     requests.find((item) => item.approval_request_id === selectedId) ??
+    (approvedRequest?.approval_request_id === selectedId
+      ? approvedRequest
+      : null) ??
     requests[0] ??
     null;
   const activeId = fallback?.approval_request_id ?? null;
   const detail = useSocApprovalRequest(activeId);
-  const active = detail.request ?? fallback;
+  const active =
+    approvedRequest?.approval_request_id === activeId
+      ? approvedRequest
+      : (detail.request ?? fallback);
   const createGrant = useCreateSocApprovalGrant();
   const rejectRequest = useRejectSocApprovalRequest();
   const expireRequest = useExpireSocApprovalRequest();
@@ -109,17 +117,19 @@ export function SocApprovalInbox() {
     }
     if (
       selectedId &&
+      approvedRequest?.approval_request_id !== selectedId &&
       !requests.some((item) => item.approval_request_id === selectedId)
     ) {
       setSelectedId(requests[0]?.approval_request_id ?? null);
     }
-  }, [requests, selectedId]);
+  }, [approvedRequest, requests, selectedId]);
 
-  useEffect(() => {
+  const selectRequest = (id: string | null) => {
+    setSelectedId(id);
+    setApprovedRequest(null);
     setGrant(null);
     setExecutionResult(null);
-    setPayloadJson(JSON.stringify(active?.action_payload ?? {}, null, 2));
-  }, [active?.action_payload, active?.approval_request_id]);
+  };
 
   const approve = async () => {
     if (!active?.approval_request_id || !reason.trim()) return;
@@ -129,6 +139,16 @@ export function SocApprovalInbox() {
         reason: reason.trim(),
         expires_in_seconds: Math.max(60, Number(expiresInSeconds) || 900),
       });
+      // Pending-list invalidation may remove this row before the next render.
+      // Keep the acknowledged operation available until explicit navigation.
+      setApprovedRequest({
+        ...active,
+        status: "approved",
+        resolution_reason: created.approval_reason,
+      });
+      setSelectedId(active.approval_request_id);
+      setPayloadJson(JSON.stringify(active.action_payload ?? {}, null, 2));
+      setExecutionResult(null);
       setGrant(created);
       toast.success("动作已批准，生成一次性执行凭证");
     } catch (error) {
@@ -243,7 +263,7 @@ export function SocApprovalInbox() {
                   <button
                     key={id ?? request.permission_decision_id}
                     type="button"
-                    onClick={() => setSelectedId(id ?? null)}
+                    onClick={() => selectRequest(id ?? null)}
                     className={cn(
                       "hover:bg-accent w-full border-l-2 border-transparent px-3 py-3 text-left",
                       selected && "bg-accent border-l-foreground",

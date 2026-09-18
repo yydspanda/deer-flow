@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -46,6 +47,16 @@ _LINEAGE_KEY = "b" * 64
 _TERMINAL_AGGREGATION_KEY = "d" * 64
 _TERMINAL_LINEAGE_KEY = "e" * 64
 _PROFILE = GenericSocMemoryProfile().identity
+
+
+@pytest.fixture(autouse=True)
+def fixed_memory_center_clock(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return (_START + timedelta(days=2)).astimezone(tz)
+
+    monkeypatch.setattr("soc_agent.core.memory_center.datetime", FixedDateTime)
 
 
 def _observation(index: int) -> MemoryPatternObservation:

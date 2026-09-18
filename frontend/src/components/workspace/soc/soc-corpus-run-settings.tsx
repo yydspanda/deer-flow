@@ -39,10 +39,12 @@ export function availableCorpusRunSettings(
   };
 }
 
-export function readCorpusRunSettings(): SocAnalysisExecutionOptions | null {
+export function readCorpusRunSettings(
+  storageKey = RUN_SETTINGS_STORAGE_KEY,
+): SocAnalysisExecutionOptions | null {
   try {
     const value: unknown = JSON.parse(
-      window.sessionStorage.getItem(RUN_SETTINGS_STORAGE_KEY) ?? "null",
+      window.sessionStorage.getItem(storageKey) ?? "null",
     );
     if (!value || typeof value !== "object") return null;
     const fields = value as Record<string, unknown>;
@@ -84,10 +86,14 @@ export function SocCorpusRunSettings({
   controls,
   value,
   onChange,
+  title = "后续运行设置",
+  resetTitle = "恢复部署默认设置",
 }: {
   controls: SocCorpusWorkbenchRunControls;
   value: SocAnalysisExecutionOptions;
   onChange: (value: SocAnalysisExecutionOptions) => void;
+  title?: string;
+  resetTitle?: string;
 }) {
   const controlId = useId();
   const items = [
@@ -142,11 +148,11 @@ export function SocCorpusRunSettings({
     },
   ];
   return (
-    <section className="border-b px-5 py-3 md:px-7" aria-label="后续运行设置">
+    <section className="border-b px-5 py-3 md:px-7" aria-label={title}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-2 text-sm font-medium">
           <SlidersHorizontalIcon className="size-4" />
-          后续运行设置
+          {title}
         </h3>
         <Button
           variant="ghost"
@@ -154,7 +160,7 @@ export function SocCorpusRunSettings({
           onClick={() =>
             onChange(availableCorpusRunSettings(controls.defaults, controls))
           }
-          title="恢复部署默认设置"
+          title={resetTitle}
         >
           <RotateCcwIcon className="size-3.5" />
           恢复默认
@@ -223,15 +229,17 @@ export function SocCorpusRunSettings({
 
 export function SocRunOptionsSummary({
   value,
+  title = "本次运行配置",
 }: {
   value: SocAnalysisExecutionOptions;
+  title?: string;
 }) {
   return (
     <div
       className="flex flex-wrap gap-x-4 gap-y-1 border-t px-5 py-2 text-xs md:px-7"
-      aria-label="本次运行配置"
+      aria-label={title}
     >
-      <span className="font-medium">本次运行配置</span>
+      <span className="font-medium">{title}</span>
       <span>
         语义核对：
         {value.normalization_review_mode === "apply"

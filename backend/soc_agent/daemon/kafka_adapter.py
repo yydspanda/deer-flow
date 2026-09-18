@@ -107,10 +107,22 @@ class ConfluentKafkaConsumerPort:
 
     def send_dead_letter(self, record: KafkaRecord, error: Exception) -> None:
         value = json.dumps(_dead_letter_payload(record, error), ensure_ascii=False).encode("utf-8")
-        self._producer.produce(self.settings.dead_letter_topic, key=record.key, value=value)
+        delivered = False
+        delivery_error: Any | None = None
+
+        def on_delivery(error: Any, _message: Any) -> None:
+            nonlocal delivered, delivery_error
+            delivered = True
+            delivery_error = error
+
+        self._producer.produce(self.settings.dead_letter_topic, key=record.key, value=value, on_delivery=on_delivery)
         remaining = self._producer.flush(max(1.0, self.settings.poll_timeout_ms / 1000))
+        if delivery_error is not None:
+            raise KafkaAdapterError(f"dead-letter Kafka delivery failed: {delivery_error}")
         if remaining:
             raise KafkaAdapterError(f"failed to flush {remaining} dead-letter Kafka message(s)")
+        if not delivered:
+            raise KafkaAdapterError("dead-letter Kafka delivery confirmation was not received")
 
     def close(self) -> None:
         self._consumer.close()

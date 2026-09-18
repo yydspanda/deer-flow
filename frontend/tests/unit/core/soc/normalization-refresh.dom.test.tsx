@@ -70,3 +70,19 @@ test("explicit refresh survives local selection but unavailable capability canno
   );
   expect(readCorpusRunSettings()?.refresh_normalization).toBeUndefined();
 });
+
+test("batch settings do not inherit old single-alert policy preferences", () => {
+  const batchKey = "soc.corpus.experiment.run-settings.v1";
+  window.sessionStorage.setItem(
+    RUN_SETTINGS_STORAGE_KEY,
+    JSON.stringify({ ...defaults, tenant_policy_enabled: true }),
+  );
+  expect(readCorpusRunSettings(batchKey)).toBeNull();
+  window.sessionStorage.setItem(batchKey, JSON.stringify(defaults));
+  expect(readCorpusRunSettings(batchKey)).toEqual(defaults);
+  expect(readCorpusRunSettings()?.tenant_policy_enabled).toBe(true);
+  expect(
+    availableCorpusRunSettings(readCorpusRunSettings()!, controls)
+      .tenant_policy_enabled,
+  ).toBe(false);
+});

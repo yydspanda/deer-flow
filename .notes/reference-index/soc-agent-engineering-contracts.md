@@ -1161,6 +1161,8 @@ Kafka daemon / consumer adapter 约束：
   - 成功：`poll -> map -> process_message -> commit`。
   - mapper failure / service failure：先 `send_dead_letter()`，dead-letter 成功后才 `commit` 原 offset。
   - dead-letter 写失败不得 commit 原 offset，必须暴露异常，避免静默丢消息。
+  - 串行 runner 保留未提交的 record；processing、dead-letter 或 commit 失败后重试同一记录，成功提交前不得继续 poll。
+  - Confluent dead-letter 必须同时取得无错误的 delivery callback 和已清空的 flush 队列；队列为空本身不是投递成功证明。
   - bounded loop 必须通过 `SocKafkaConsumerRunner.run()` 聚合结果；CLI/API/daemon wrapper 不应重新实现 poll loop。
   - `KafkaRunnerLoopResult` counters 是后续 metrics/readiness 的最小来源：processed、dead_lettered、idle、committed。
 - `KafkaConsumerPort` 是真实 broker client 的唯一 port；真实 `aiokafka` / `confluent-kafka` adapter 只能实现该协议，不能把具体 SDK 类型扩散到 core、pipeline、repository、API、TUI 或 Web。
@@ -1195,6 +1197,7 @@ Kafka daemon / consumer adapter 约束：
   - `SIGINT` / `SIGTERM` handler 只能设置 stop flag，不得在 signal handler 内做 DB/Kafka/IO 操作。
   - 停止时必须 close consumer port；异常路径也必须释放 consumer。
   - 输出 schema 固定为 `soc.kafka_daemon_run_result.v1`；默认只输出 counters 和 stop reason，只有显式 `--include-results` 才输出每轮结果。
+  - 常驻模式使用独立累计 counters，仅保留最近100条去除 record value/headers 和 service payload 的摘要；仅显式 `--max-loops` 有界运行收集完整结果。
   - 输出必须包含 `metrics`：`started_at`、`stopped_at`、`error_count`、`consecutive_error_count`、`last_success_at`、`last_error_at`、`last_error_type`、`last_error_message`。
   - daemon controller 只能记录 loop-level error metrics；mapper/service failure 的 dead-letter + commit 语义仍归 `SocKafkaConsumerRunner`。
   - `--metric-jsonl stdout|stderr` 是运行中 metric event sink：

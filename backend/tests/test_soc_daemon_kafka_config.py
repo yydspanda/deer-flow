@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -205,6 +206,37 @@ def test_confluent_kafka_consumer_port_raises_when_dead_letter_flush_fails() -> 
         port.send_dead_letter(KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=1, value="{}"), RuntimeError("bad"))
 
 
+@pytest.mark.parametrize("delivery_error", ["topic authorization failed", "message too large"])
+def test_dead_letter_delivery_error_does_not_commit_source_even_when_flush_is_empty(delivery_error: str) -> None:
+    from soc_agent.core import SocDaemonService
+    from soc_agent.daemon.kafka_runner import SocKafkaConsumerRunner
+
+    consumer = FakeConfluentConsumer([FakeConfluentMessage(topic="unknown.topic")])
+    producer = FakeConfluentProducer(delivery_error=delivery_error)
+    port = ConfluentKafkaConsumerPort(KafkaConsumerSettings(enabled=True), consumer=consumer, producer=producer, topic_partition_cls=FakeTopicPartition)
+    runner = SocKafkaConsumerRunner(consumer=port, daemon_service=SocDaemonService())
+
+    with pytest.raises(KafkaAdapterError, match=delivery_error):
+        runner.process_next()
+
+    assert consumer.committed_offsets == []
+    producer.delivery_error = None
+    assert runner.process_next().dead_lettered is True
+    assert consumer.committed_offsets == [FakeTopicPartition("unknown.topic", 0, 1)]
+
+
+def test_dead_letter_requires_delivery_confirmation_even_when_flush_is_empty() -> None:
+    port = ConfluentKafkaConsumerPort(
+        KafkaConsumerSettings(enabled=True),
+        consumer=FakeConfluentConsumer(),
+        producer=FakeConfluentProducer(deliver_callback=False),
+        topic_partition_cls=FakeTopicPartition,
+    )
+
+    with pytest.raises(KafkaAdapterError, match="confirmation"):
+        port.send_dead_letter(KafkaRecord(topic="unknown.topic", partition=0, offset=1, value="{}"), ValueError("bad"))
+
+
 class FakeConfluentMessage:
     def __init__(
         self,
@@ -271,16 +303,25 @@ class FakeConfluentConsumer:
 
 
 class FakeConfluentProducer:
-    def __init__(self, *, flush_remaining: int = 0) -> None:
+    def __init__(self, *, flush_remaining: int = 0, delivery_error: str | None = None, deliver_callback: bool = True) -> None:
         self.flush_remaining = flush_remaining
+        self.delivery_error = delivery_error
+        self.deliver_callback = deliver_callback
+        self.callbacks: list[Callable] = []
         self.produced: list[dict[str, Any]] = []
         self.flush_calls: list[float] = []
 
-    def produce(self, topic: str, *, key: bytes | str | None, value: bytes) -> None:
+    def produce(self, topic: str, *, key: bytes | str | None, value: bytes, on_delivery: Callable | None = None) -> None:
         self.produced.append({"topic": topic, "key": key, "value": value})
+        if on_delivery is not None:
+            self.callbacks.append(on_delivery)
 
     def flush(self, timeout: float) -> int:
         self.flush_calls.append(timeout)
+        if self.deliver_callback and self.flush_remaining == 0:
+            callbacks, self.callbacks = self.callbacks, []
+            for callback in callbacks:
+                callback(self.delivery_error, None)
         return self.flush_remaining
 
 

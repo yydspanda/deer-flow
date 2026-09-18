@@ -67,7 +67,9 @@ def test_old_required_limit_still_blocks_context():
 def test_scope_identity_and_comparison_include_reuse_limits():
     base = scope()
     narrowed = promote_memory_applicability_facets(base, [], {"entity": ["ip:10.0.0.1"]})
-    assert scope_relation(base, narrowed, SocMemoryProfileRegistry()) == "overlap"
+    registry = SocMemoryProfileRegistry()
+    assert scope_relation(base, narrowed, registry) == "strict_superset"
+    assert scope_relation(narrowed, base, registry) == "strict_subset"
 
 
 def test_internal_aliases_are_not_new_business_limits():

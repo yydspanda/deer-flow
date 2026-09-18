@@ -81,7 +81,7 @@ def parser():
         command.add_argument("--group", action="append", default=[])
         command.add_argument("--rule", action="append", default=[])
         command.add_argument("--alert", action="append", default=[])
-        command.add_argument("--scope", choices=("reuse", "explore", "all"), help="默认 reuse；reuse=验证同类经验；explore=探索少样本；all=两类均跑、分开统计")
+        command.add_argument("--scope", choices=("reuse", "explore", "all"), help="默认 reuse；reuse=验证经验复用；explore=其他告警测试；all=两类均跑、分开统计")
         command.add_argument("--selection-file", type=Path, help="使用 retest-plan 固定名单；自动关联旧轮次，不与范围筛选叠加")
         command.add_argument("--limit", type=_limit, default=5, help="本轮累计上限；5 -> 50 -> all，续跑不重跑已完成项")
         command.add_argument("--concurrency", type=int)

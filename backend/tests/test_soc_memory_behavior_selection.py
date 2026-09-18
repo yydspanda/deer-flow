@@ -8,6 +8,7 @@ from test_soc_memory_governance import services as services
 from test_soc_memory_scope_view import sample
 
 from soc_agent.contracts import SocMemoryApplicabilitySpec, SocMemoryQuery
+from soc_agent.contracts.schemas import SocMemoryScopeBinding
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.memory.behavior_scope import select_memory_behavior_components
 from soc_agent.memory.governance import scope_identity, scope_relation
@@ -23,12 +24,13 @@ def fixture():
     return spec, facets, SocMemoryProfileRegistry([PingAnSocMemoryProfile()])
 
 
-def evaluate(spec, facets):
+def evaluate(spec, facets, *, scope_bindings=()):
     return evaluate_memory_scope(
         spec,
         "detection_lesson",
         SocMemoryQuery(
             facets=facets,
+            scope_bindings=list(scope_bindings),
             metadata={
                 "memory_profile_id": spec.profile_id,
                 "memory_profile_version": spec.profile_version,
@@ -46,7 +48,7 @@ def test_selection_order_and_duplicates_do_not_change_scope_or_matching():
     b = select_memory_behavior_components(spec, facets, [*reversed(values), values[0]], registry=registry)
     assert a == b
     assert evaluate(a, facets).status.value == "applicable"
-    identity = dict(tenant_scope="pingan", tenant_id="pingan", metadata={})
+    identity = dict(tenant_scope="pingan", tenant_id="pingan", metadata={}, source=SimpleNamespace(metadata={}), facets=facets)
     assert scope_identity(SimpleNamespace(applicability=a, **identity)) == scope_identity(SimpleNamespace(applicability=b, **identity))
 
 
@@ -55,11 +57,22 @@ def test_unchecked_feature_really_stops_requiring_the_old_hash():
     selected = [v for v in facets["behavior_component_core"] if not v.startswith("network_service:")]
     reviewed = select_memory_behavior_components(spec, facets, selected, registry=registry)
     changed = {**facets, "behavior_fingerprint": ["different"]}
-    changed["behavior_component_core"] = [*selected, "network_service:http/443"]
+    changed["behavior_component_core"] = selected
     changed["behavior_component"] = changed["behavior_component_core"]
     assert evaluate(reviewed, changed).status.value == "applicable"
     assert evaluate(spec, changed).status.value == "partial"
     assert reviewed.required_facets == spec.required_facets  # grouping lineage survives
+
+
+def test_unreviewed_service_remains_context_only_after_unchecking_service():
+    spec, facets, registry = fixture()
+    selected = [v for v in facets["behavior_component_core"] if not v.startswith("network_service:")]
+    reviewed = select_memory_behavior_components(spec, facets, selected, registry=registry)
+    changed = {**facets, "behavior_fingerprint": ["different"], "behavior_component_core": [*selected, "network_service:http/443"], "behavior_component": [*selected, "network_service:http/443"]}
+    report = evaluate(reviewed, changed)
+    assert report.status.value == "partial"
+    assert report.context_only_allowed
+    assert report.uncovered_behavior_components == ["network_service:http/443"]
 
 
 def test_selected_components_are_all_required_not_any_one():
@@ -121,7 +134,7 @@ def test_real_review_retrieval_and_directive_do_not_require_old_fingerprint(serv
     record = confirm(service, item, Verdict.FALSE_POSITIVE, record_applicability=reviewed)
     assert "behavior_fingerprint" not in record.decision_directive.required_facet_keys
     assert "behavior_component" in record.decision_directive.required_facet_keys
-    facets = {**record.facets, "behavior_fingerprint": ["changed"], "behavior_component_core": [*values, "protocol:udp"], "behavior_component": [*values, "protocol:udp"]}
+    facets = {**record.facets, "behavior_fingerprint": ["changed"], "behavior_component_core": values, "behavior_component": values}
     query = SocMemoryQuery(
         tenant_id=record.tenant_id,
         tenant_scope=record.tenant_scope,
@@ -229,4 +242,6 @@ def test_selected_behavior_and_ip_limits_both_apply_without_blocking_reference()
     assert report.context_only_allowed
     assert report.missing_reuse_conditions[0].value_prefix == "destination"
     query["role_entity"].append("destination:192.0.2.2")
-    assert evaluate(reviewed, query).status.value == "applicable"
+    assert evaluate(reviewed, query).status.value == "partial"
+    bindings = [SocMemoryScopeBinding(source_ref="connection:1", facets={"role_entity": query["role_entity"]})]
+    assert evaluate(reviewed, query, scope_bindings=bindings).status.value == "applicable"

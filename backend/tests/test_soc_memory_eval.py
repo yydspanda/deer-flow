@@ -129,6 +129,7 @@ def _request(
         alert_id=alert_id,
         tenant_id="pingan",
         environment="prd",
+        memory_profile={"profile_id": "pingan.soc", "profile_version": "7", "feature_schema_version": "pingan.soc.memory_features.v5"},
         source=AlertSourceRef(
             source_type=AlertSourceType.NIDS,
             source_system="ptp-nids",
@@ -456,7 +457,7 @@ def _fixture() -> MemoryHeldOutEvalFixture:
     profile_identity = shell_record.applicability
     assert profile_identity is not None
     return MemoryHeldOutEvalFixture(
-        fixture_set_id="pingan-memory-profile-v6-simulation",
+        fixture_set_id="pingan-memory-profile-v7-simulation",
         description=("Simulation-only exact, context-only, and different-service rejection Memory evaluation."),
         data_class=SocEvaluationDataClass.SIMULATION,
         mocked=True,
@@ -578,12 +579,16 @@ def test_memory_eval_replays_retrieval_decision_and_burden() -> None:
     assert different_service.effective_verdict is Verdict.SUSPICIOUS
 
 
-def test_default_memory_eval_fixture_is_the_reviewed_simulation_baseline() -> None:
+@pytest.mark.parametrize("mode", ["off", "shadow", "apply"])
+def test_default_memory_eval_fixture_is_the_reviewed_simulation_baseline(monkeypatch, mode) -> None:
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", mode)
     fixture = load_memory_eval_fixture(DEFAULT_MEMORY_EVAL_FIXTURE)
 
     report = run_memory_eval(fixture)
 
-    assert fixture.fixture_set_id == "pingan-memory-profile-v6-simulation"
+    assert fixture.fixture_set_id == "pingan-memory-profile-v7-simulation"
+    assert fixture.memory_profile_version == "7"
+    assert all(case.request.memory_profile["profile_version"] == "7" for case in fixture.cases)
     assert fixture.data_class is SocEvaluationDataClass.SIMULATION
     shell_record = fixture.records[0].record
     assert "平安内部 AskBob LLM 服务调用" in shell_record.content
@@ -593,6 +598,25 @@ def test_default_memory_eval_fixture_is_the_reviewed_simulation_baseline() -> No
     assert report.directive_override_accuracy.accuracy == 1.0
     assert report.real_quality_metrics_available is False
     assert report.rollout_authorized is False
+
+
+@pytest.mark.parametrize("mode", ["off", "apply"])
+def test_cli_default_memory_eval_resolves_frozen_profile(monkeypatch, capsys, mode) -> None:
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", mode)
+    assert main(["eval", "memory", "run"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["memory_profile_version"] == "7"
+    assert report["retrieval_metrics"]["precision"] == 1.0
+    assert report["rollout_authorized"] is False
+
+
+def test_memory_eval_rejects_profile_mismatch() -> None:
+    fixture = _fixture()
+    case = fixture.cases[0]
+    request = case.request.model_copy(update={"memory_profile": {"profile_id": "pingan.soc", "profile_version": "9", "feature_schema_version": "pingan.soc.memory_features.v7"}})
+    mismatched = fixture.model_copy(update={"cases": [case.model_copy(update={"request": request})]})
+    with pytest.raises(ValueError, match="resolves to a different Memory profile"):
+        run_memory_eval(mismatched)
 
 
 def test_memory_eval_rejects_train_and_heldout_overlap() -> None:

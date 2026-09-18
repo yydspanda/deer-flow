@@ -327,6 +327,13 @@ class InMemoryApprovalGrantRepository:
     def save_approval_grant(self, grant: SocAgentApprovalGrant) -> None:
         self.grants[grant.approval_grant_id] = grant
 
+    def consume_approval_grant(self, grant: SocAgentApprovalGrant) -> bool:
+        current = self.grants.get(grant.approval_grant_id)
+        if current is None or current.status != "approved" or current.execution_token_id != grant.execution_token_id:
+            return False
+        self.grants[grant.approval_grant_id] = grant
+        return True
+
     def get_approval_grant(self, approval_grant_id: str) -> SocAgentApprovalGrant | None:
         return self.grants.get(approval_grant_id)
 

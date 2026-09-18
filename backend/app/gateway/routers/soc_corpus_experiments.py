@@ -34,7 +34,7 @@ from soc_agent.contracts.memory_drafts import MemoryDraftGenerateBatch
 from soc_agent.core.errors import SocServiceAuthorizationError, SocServiceConflictError
 from soc_agent.core.memory_draft_jobs import DRAFT_WORKLOAD
 from soc_agent.core.memory_working_drafts import SocMemoryWorkingDraftService
-from soc_agent.db.corpus_experiments import CorpusExperimentConflict
+from soc_agent.db.corpus_experiments import CorpusExperimentConflict, CorpusExperimentSchemaNotReady
 from soc_agent.db.jobs import ProcessingJobConflictError
 from soc_agent.demo.corpus_experiment_timing import item_timing, round_timing
 from soc_agent.demo.corpus_round_comparison import compare_round_item
@@ -74,11 +74,14 @@ async def experiment_lifespan(app):
         request = Request({"type": "http", "app": app, "headers": []})
         repository = get_or_create_soc_repository(request)
         store = repository.corpus_experiments()
+        store.require_schema()
         if store.list_rounds(state="running", limit=1) or repository.processing_jobs().list_workload_jobs(DRAFT_WORKLOAD, statuses=[ProcessingJobStatus.QUEUED, *ACTIVE_PROCESSING_JOB_STATUSES], limit=1):
             get_corpus_experiment_application(request).dispatcher.start()
 
     try:
         await asyncio.to_thread(resume_started_rounds)
+    except CorpusExperimentSchemaNotReady as exc:
+        logger.warning("%s", exc)
     except Exception:
         # Other SOC pages remain available when batch prerequisites need repair.
         logger.exception("Could not resume DEV corpus rounds; check schema and frozen configuration")
@@ -93,7 +96,18 @@ async def experiment_lifespan(app):
 router = create_soc_router(prefix="", tags=["soc-dev-corpus-experiments"])
 router.dependencies.append(Depends(_admin))
 router.lifespan_context = experiment_lifespan
-ApplicationDep = Annotated[CorpusExperimentApplication, Depends(get_corpus_experiment_application)]
+ConfigurationDep = Annotated[CorpusExperimentApplication, Depends(get_corpus_experiment_application)]
+
+
+def _ready_application(application: ConfigurationDep) -> CorpusExperimentApplication:
+    try:
+        application.service.store.require_schema()
+    except CorpusExperimentSchemaNotReady as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"X-SOC-Error-Code": "corpus_schema_upgrade_required"}) from exc
+    return application
+
+
+ApplicationDep = Annotated[CorpusExperimentApplication, Depends(_ready_application)]
 
 
 @contextmanager
@@ -116,7 +130,7 @@ def _round(application, round_id):
 
 
 @router.get("/experiments/configuration")
-def configuration(application: ApplicationDep):
+def configuration(application: ConfigurationDep):
     return {
         "defaults": application.defaults.model_dump(mode="json"),
         "full_flow_defaults": application.full_flow_defaults.model_dump(mode="json"),

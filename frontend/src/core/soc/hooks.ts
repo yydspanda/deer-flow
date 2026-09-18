@@ -1,7 +1,12 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import {
+  hashKey,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useMemo, useRef } from "react";
 
 import { useAuth } from "@/core/auth/AuthProvider";
 
@@ -11,6 +16,7 @@ import {
   closeSocReviewItem,
   correctSocReviewRun,
   createSocApprovalGrant,
+  createSocIdempotencyKey,
   createSocMemoryRevisionCandidate,
   dryRunSocApprovedAction,
   draftSocMemoryBusinessLesson,
@@ -64,9 +70,7 @@ import {
 } from "./api";
 import type { SocVerdict } from "./types";
 import type {
-  SocAgentApprovedActionCommand,
   SocAlertAttentionLevel,
-  SocApprovalGrantRequest,
   SocApprovalResolutionRequest,
   SocAgentApprovalRequestStatus,
   SocDispositionOutcomeRecordRequest,
@@ -1295,70 +1299,70 @@ export function useUpdateSocMemoryRetrievalActivation() {
   });
 }
 
-export function useCreateSocApprovalGrant() {
+function useSocApprovalMutation<TRequest, TResult>(
+  send: (request: TRequest, context: SocRequestContext) => Promise<TResult>,
+) {
   const context = useSocWebRequestContext();
   const queryClient = useQueryClient();
+  const pending = useRef(new Map<string, string>());
   return useMutation({
-    mutationFn: (request: SocApprovalGrantRequest) =>
-      createSocApprovalGrant(request, context),
+    mutationFn: async (request: TRequest) => {
+      // Ambiguous failures retain the operation identity, even if the user
+      // edits another request before retrying this one. Never persist tokens.
+      const identity = hashKey([context.actorId, request]);
+      const key = pending.current.get(identity) ?? createSocIdempotencyKey();
+      pending.current.set(identity, key);
+      const result = await send(request, { ...context, idempotencyKey: key });
+      if (pending.current.get(identity) === key)
+        pending.current.delete(identity);
+      return result;
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: socApprovalQueryKeys.all,
       });
     },
   });
+}
+
+export function useCreateSocApprovalGrant() {
+  return useSocApprovalMutation(createSocApprovalGrant);
 }
 
 export function useRejectSocApprovalRequest() {
-  const context = useSocWebRequestContext();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      approvalRequestId,
-      request,
-    }: {
-      approvalRequestId: string;
-      request: SocApprovalResolutionRequest;
-    }) => rejectSocApprovalRequest(approvalRequestId, request, context),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: socApprovalQueryKeys.all,
-      });
-    },
-  });
+  return useSocApprovalMutation(
+    (
+      {
+        approvalRequestId,
+        request,
+      }: {
+        approvalRequestId: string;
+        request: SocApprovalResolutionRequest;
+      },
+      context,
+    ) => rejectSocApprovalRequest(approvalRequestId, request, context),
+  );
 }
 
 export function useExpireSocApprovalRequest() {
-  const context = useSocWebRequestContext();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      approvalRequestId,
-      request,
-    }: {
-      approvalRequestId: string;
-      request: SocApprovalResolutionRequest;
-    }) => expireSocApprovalRequest(approvalRequestId, request, context),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: socApprovalQueryKeys.all,
-      });
-    },
-  });
+  return useSocApprovalMutation(
+    (
+      {
+        approvalRequestId,
+        request,
+      }: {
+        approvalRequestId: string;
+        request: SocApprovalResolutionRequest;
+      },
+      context,
+    ) => expireSocApprovalRequest(approvalRequestId, request, context),
+  );
 }
 
 export function useDryRunSocApprovedAction() {
-  const context = useSocWebRequestContext();
-  return useMutation({
-    mutationFn: (command: SocAgentApprovedActionCommand) =>
-      dryRunSocApprovedAction(command, context),
-  });
+  return useSocApprovalMutation(dryRunSocApprovedAction);
 }
 
 export function useExecuteSocApprovedAction() {
-  const context = useSocWebRequestContext();
-  return useMutation({
-    mutationFn: (command: SocAgentApprovedActionCommand) =>
-      executeSocApprovedAction(command, context),
-  });
+  return useSocApprovalMutation(executeSocApprovedAction);
 }

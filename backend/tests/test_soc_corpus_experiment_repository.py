@@ -3,13 +3,43 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import ProcessingJobStatus, SocProcessingJobSubmission
 from soc_agent.contracts.corpus_experiments import CorpusExperiment, CorpusExperimentMember, CorpusRound, CorpusRoundSelection
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
-from soc_agent.db.corpus_experiments import CorpusExperimentConflict
+from soc_agent.db.corpus_experiments import CorpusExperimentConflict, CorpusExperimentSchemaNotReady
+
+
+def test_schema_readiness_is_read_only_and_can_recover_after_upgrade(tmp_path):
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.db'}")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE preserved_data (value TEXT)"))
+        connection.execute(text("INSERT INTO preserved_data VALUES ('keep')"))
+    store = SqlAlchemyAlertRepository(sessionmaker(bind=engine)).corpus_experiments()
+    with pytest.raises(CorpusExperimentSchemaNotReady):
+        store.require_schema()
+    assert inspect(engine).get_table_names() == ["preserved_data"]
+    create_soc_tables(engine)
+    store.require_schema()
+    assert store.list_experiments() == []
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT value FROM preserved_data")) == "keep"
+
+
+@pytest.mark.parametrize("defect", ["missing_drafts", "missing_column"])
+def test_readiness_rejects_incomplete_schema(tmp_path, defect):
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'incomplete.db'}")
+    create_soc_tables(engine)
+    with engine.begin() as connection:
+        if defect == "missing_drafts":
+            connection.execute(text("DROP TABLE soc_memory_working_drafts"))
+        else:
+            connection.execute(text("ALTER TABLE soc_corpus_rounds DROP COLUMN record_payload"))
+    store = SqlAlchemyAlertRepository(sessionmaker(bind=engine)).corpus_experiments()
+    with pytest.raises(CorpusExperimentSchemaNotReady):
+        store.require_schema()
 
 
 def repository(tmp_path):

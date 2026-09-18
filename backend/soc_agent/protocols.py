@@ -1064,6 +1064,14 @@ class SocAgentApprovalGrantRepository(Protocol):
 
     def save_approval_grant(self, grant: SocAgentApprovalGrant) -> None: ...
 
+    def consume_approval_grant(self, grant: SocAgentApprovalGrant) -> bool:
+        """Atomically persist consumption only while the stored token is approved.
+
+        A false result leaves the first execution result unchanged. When called
+        inside a mutation UoW, the consumption and its audit commit together.
+        """
+        ...
+
     def get_approval_grant(self, approval_grant_id: str) -> SocAgentApprovalGrant | None: ...
 
     def get_approval_grant_by_token(self, execution_token_id: str) -> SocAgentApprovalGrant | None: ...

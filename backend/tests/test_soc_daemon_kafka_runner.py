@@ -233,3 +233,55 @@ def test_kafka_runner_closes_consumer_port() -> None:
     SocKafkaConsumerRunner(consumer=consumer, daemon_service=FakeDaemonService()).close()
 
     assert consumer.closed is True
+
+
+@pytest.mark.parametrize("failure_stage", ["runtime", "dead_letter", "commit"])
+def test_kafka_runner_retries_failed_record_before_polling_later_offset(failure_stage: str) -> None:
+    topic = "unknown.topic" if failure_stage == "dead_letter" else "soc.alerts.raw.v1"
+    first = KafkaRecord(topic=topic, partition=0, offset=1, value=_alert_value("ALT-1"))
+    second = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=2, value=_alert_value("ALT-2"))
+
+    class TransientConsumer(FakeConsumer):
+        def commit(self, record: KafkaRecord) -> None:
+            if failure_stage == "commit" and not getattr(self, "failed", False):
+                self.failed = True
+                raise RuntimeError("temporary commit failure")
+            super().commit(record)
+
+    class TransientService(FakeDaemonService):
+        def process_message(self, message: SocDaemonMessage | dict[str, Any]) -> SocDaemonProcessResult:
+            if failure_stage == "runtime" and not getattr(self, "failed", False):
+                self.failed = True
+                raise RuntimeError("temporary runtime failure")
+            return super().process_message(message)
+
+    consumer = TransientConsumer([first, second], dead_letter_error=RuntimeError("temporary DLQ failure") if failure_stage == "dead_letter" else None)
+    runner = SocKafkaConsumerRunner(consumer=consumer, daemon_service=TransientService())
+
+    with pytest.raises(RuntimeError, match="temporary"):
+        runner.process_next()
+
+    assert consumer.committed == []
+    consumer.dead_letter_error = None
+    retried = runner.process_next()
+    assert retried.record == first
+    assert list(consumer.records) == [second]
+    assert consumer.committed == [first]
+
+    assert runner.process_next().record == second
+    assert consumer.committed == [first, second]
+
+
+def test_kafka_runner_keeps_retryable_runtime_failure_ahead_of_later_offsets() -> None:
+    first = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=1, value=_alert_value("ALT-1"))
+    second = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=2, value=_alert_value("ALT-2"))
+    consumer = FakeConsumer([first, second])
+    runner = SocKafkaConsumerRunner(consumer=consumer, daemon_service=RetryableRuntimeFailureDaemonService())
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="analyzer_timeout"):
+            runner.process_next()
+
+    assert list(consumer.records) == [second]
+    assert consumer.committed == []
+    assert consumer.dead_letters == []

@@ -5234,7 +5234,7 @@ class SocAgentApprovalService:
         if grant is None:
             raise SocServiceNotFoundError(f"approval execution token {command.execution_token_id} not found")
         if grant.status == "consumed":
-            return self._replay_consumed_grant(grant, context.idempotency_key)
+            return self._replay_consumed_grant(grant, command=command, context=context)
 
         self._validate_grant_for_command(grant, command)
         execution_command = command
@@ -5277,18 +5277,26 @@ class SocAgentApprovalService:
             payload=execution_payload,
         )
 
-        grant.status = "consumed"
-        grant.consumed_at = executed_at
-        grant.consumed_by = context.actor
-        grant.consume_idempotency_key = context.idempotency_key
-        grant.execution_result_id = execution_result_id
-        grant.execution_result_payload = result.model_dump(mode="json")
-        self._grant_repository.save_approval_grant(grant)
+        consumed_grant = grant.model_copy(
+            update={
+                "status": "consumed",
+                "consumed_at": executed_at,
+                "consumed_by": context.actor,
+                "consume_idempotency_key": context.idempotency_key,
+                "execution_result_id": execution_result_id,
+                "execution_result_payload": result.model_dump(mode="json"),
+            }
+        )
+        if not self._grant_repository.consume_approval_grant(consumed_grant):
+            concurrent = self._grant_repository.get_approval_grant_by_token(command.execution_token_id)
+            if concurrent is None or concurrent.status != "consumed":
+                raise SocServiceConflictError(f"approval grant {grant.approval_grant_id} could not be consumed")
+            return self._replay_consumed_grant(concurrent, command=command, context=context)
         self._audit_approved_action(
             operation=SocMutationOperation.APPROVAL_ACTION_EXECUTE,
             command=command_payload,
             context=context,
-            grant=grant,
+            grant=consumed_grant,
             result=result,
             reason="approved action execution boundary",
         )
@@ -5523,9 +5531,24 @@ class SocAgentApprovalService:
             raise SocServiceError("approval resolution requires an idempotency_key")
         return context.idempotency_key.strip()
 
-    def _replay_consumed_grant(self, grant: SocAgentApprovalGrant, idempotency_key: str) -> SocAgentActionResult:
-        if grant.consume_idempotency_key != idempotency_key:
-            raise SocServiceError(f"approval grant {grant.approval_grant_id} has already been consumed")
+    def _replay_consumed_grant(
+        self,
+        grant: SocAgentApprovalGrant,
+        *,
+        command: SocAgentApprovedActionCommand,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if grant.consume_idempotency_key != context.idempotency_key:
+            raise SocServiceConflictError(f"approval grant {grant.approval_grant_id} has already been consumed")
+        # A competing transaction may have committed after our first audit read.
+        audit = self._find_mutation_audit(SocMutationOperation.APPROVAL_ACTION_EXECUTE, context)
+        if audit is not None:
+            validate_mutation_retry(
+                audit,
+                command=command.model_dump(mode="json"),
+                target_type="approval_grant",
+                target_id=grant.approval_grant_id,
+            )
         if grant.execution_result_payload is None:
             raise SocServiceError(f"approval grant {grant.approval_grant_id} was consumed without result payload")
         return SocAgentActionResult.model_validate(grant.execution_result_payload)
