@@ -117,24 +117,30 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > overwritten. It does not change the Web UI, run alerts or create Memory; real learning
 > and validation runs are reserved for internal Mac DEV after operator confirmation.
 > The two-batch execution service now uses durable experiment/round records (`0030`)
-> and the shared SOC processing queue. The page retains group browsing; preparing a
-> round is separate from starting it. The HTTP CLI is
+> and the shared SOC processing queue. The page offers **开始积累 → 审核经验 → 开始验证**.
+> Batch starts cover the full selected scope; pause/continue skip completed alerts. Single
+> alerts run directly even while the batch is paused, with restart recovery and deduplication.
+> A single request also works after a legacy limit or selected scope completes, keeping
+> other queued alerts paused. Replacing all blocked tasks clears the current stop warning;
+> historical blocked rounds remain available for audit.
+> Counts use each alert’s latest task across rounds; reruns retain old results. List filters
+> affect browsing only. The HTTP CLI is
 > `backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py --help`.
 > It supports filters, limits, concurrency, pause/resume, explicit retries and fixed-run
 > exports. Learning uses no existing Memory and accumulates within the experiment;
 > validation freezes reviewed learning Memory and does not automatically create new
 > observations. Ordinary 30-day aggregation is unchanged.
 > The Web scopes read `验证经验复用` (holdouts with first-batch peers) and
-> `其他告警测试` (sparse/time-unknown samples, reported separately). Four visible
-> `新轮次运行设置` switches are saved with each new round; existing rounds retain
+> `其他测试告警` (sparse/time-unknown samples), with **全部** selected by default. Four visible
+> `运行设置` switches are saved with new tasks; existing queued tasks retain
 > their original settings. Enabling enterprise policy marks full-flow evaluation.
 > Missing batch tables/columns return a clear database-upgrade message while settings
 > remain visible. Reads never migrate or reset data; Host startup applies migrations.
 > `retest-plan` selects failed items or actual Memory uses from a saved report;
 > `learn/validate --selection-file` creates a linked new round, preserving dataset,
 > batch and exploration boundaries. Explicit single-alert rounds take the next free
-> dispatcher slot before bulk work. Linked reruns expose a paginated before/after
-> tab with fixed old/new Run records, Memory use, timing and Token measurements.
+> dispatcher slot before bulk work. Fixed historical results and comparison/export APIs
+> remain available to CLI clients; the quick page keeps history in alert details.
 > Unknown measurements and failed results remain distinct from zero or unchanged.
 > Interactive model waiters precede background
 > waiters without preempting active calls or increasing the shared concurrency limit.

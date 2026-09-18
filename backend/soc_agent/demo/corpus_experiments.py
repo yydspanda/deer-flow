@@ -202,7 +202,11 @@ class SocCorpusExperimentService:
             return store.set_round_state(round_id, expected_version=round_.version, state="paused", reason="operator_requested", actor_id=context.actor.actor_id)
 
     def snapshot_problem(self, round_: CorpusRound) -> str | None:
-        if stable_hash(self._configuration_provider(round_.options)) != round_.config_hash:
+        try:
+            config = self._configuration_provider(round_.options)
+        except ValueError as exc:
+            return f"configuration_invalid: {exc}"
+        if stable_hash(config) != round_.config_hash:
             return "configuration_changed"
         experiment = self.store.get_experiment(round_.experiment_id)
         if experiment is None:
@@ -216,9 +220,23 @@ class SocCorpusExperimentService:
                 return "memory_snapshot_changed_or_expired"
         return None
 
+    def request_manual(self, round_id: str, alert_id: str, *, context: ServiceRequestContext) -> None:
+        _require_admin(context)
+        with self.repository.mutation_transaction() as tx:
+            tx.lock_memory_governance()
+            store = tx.corpus_experiments()
+            round_ = store.get_round(round_id)
+            if round_ is None:
+                raise ValueError("round not found")
+            if round_.state == "blocked" or self.snapshot_problem(round_):
+                raise CorpusExperimentConflict("运行设置或已审核经验发生变化，请显式重新运行")
+            queued = store.request_manual(round_id, alert_id, actor_id=context.actor.actor_id)
+            if queued and round_.state == "completed":
+                store.set_round_state(round_id, expected_version=round_.version, state="paused", reason="manual_requested", actor_id=context.actor.actor_id)
+
     def execute_one(self, round_id: str) -> bool:
         round_ = self._round(round_id)
-        if round_.state != "running":
+        if round_.state not in {"prepared", "running", "paused"}:
             return False
         problem = self.snapshot_problem(round_)
         if problem:
@@ -333,7 +351,7 @@ class SocCorpusExperimentService:
             tx.lock_memory_governance()
             store = tx.corpus_experiments()
             progress = store.round_progress(round_id)
-            if progress.round.state == "running" and not progress.active_count and not progress.counts.get("queued", 0):
+            if progress.round.state == "running" and not progress.active_count and not store.dispatch_pending_count(round_id):
                 store.set_round_state(round_id, expected_version=progress.round.version, state="completed", reason="execution_limit_reached" if progress.admitted_count < progress.selected_count else "selected_scope_completed")
 
     @contextmanager

@@ -235,6 +235,102 @@ class SqlAlchemyCorpusExperimentRepository:
         with self._session_factory() as session:
             return [CorpusRoundBrief.model_validate(dict(item)) for item in session.execute(query.order_by(row.created_at.desc(), row.round_id).offset(offset).limit(limit)).mappings()]
 
+    def find_plan_experiment(self, plan_id: str) -> CorpusExperiment | None:
+        with self._session_factory() as session:
+            row = session.scalar(select(SocCorpusExperimentRow).where(SocCorpusExperimentRow.plan_id == plan_id).order_by(SocCorpusExperimentRow.created_at, SocCorpusExperimentRow.experiment_id).limit(1))
+            return CorpusExperiment.model_validate(row.record_payload) if row else None
+
+    def set_dispatch_scope(self, round_id: str, alert_ids: list[str]) -> None:
+        with self._session_factory() as session:
+            row = session.get(SocCorpusRoundRow, round_id)
+            row.record_payload = {**row.record_payload, "dispatch_alert_ids": alert_ids}
+            session.commit()
+
+    def request_manual(self, round_id: str, alert_id: str, *, actor_id: str) -> bool:
+        """Caller holds the shared governance lock; preserve original job/configuration."""
+        with self._session_factory() as session:
+            job = session.scalar(
+                select(SocProcessingJobRow).join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.job_id == SocProcessingJobRow.job_id).where(SocCorpusRoundItemRow.round_id == round_id, SocCorpusRoundItemRow.alert_id == alert_id)
+            )
+            if job is None:
+                raise ValueError("alert is not in this batch task")
+            if job.status == "queued" and not job.metadata_payload.get("manual_dispatch"):
+                job.metadata_payload = {**job.metadata_payload, "manual_dispatch": True, "manual_actor_id": actor_id, "manual_requested_at": datetime.now(UTC).isoformat()}
+                job.version += 1
+            queued = job.status == "queued"
+            session.commit()
+            return queued
+
+    def has_manual_work(self) -> bool:
+        with self._session_factory() as session:
+            return (
+                session.scalar(
+                    select(SocProcessingJobRow.job_id)
+                    .where(
+                        SocProcessingJobRow.workload_kind == "corpus_experiment",
+                        SocProcessingJobRow.metadata_payload["manual_dispatch"].as_boolean().is_(True),
+                        SocProcessingJobRow.status.in_(["queued", *[s.value for s in ACTIVE_PROCESSING_JOB_STATUSES]]),
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
+    def _batch_jobs_query(self, experiment_id: str, selection: CorpusRoundSelection):
+        """Latest attempt per unique member across all internal rounds, including manual work."""
+        item, round_, job = SocCorpusRoundItemRow, SocCorpusRoundRow, SocProcessingJobRow
+        ranked = (
+            select(item.alert_id, item.job_id, func.row_number().over(partition_by=item.alert_id, order_by=(round_.created_at.desc(), round_.round_id.desc())).label("rank"))
+            .join(round_, round_.round_id == item.round_id)
+            .where(round_.experiment_id == experiment_id, round_.batch == selection.batch)
+            .subquery()
+        )
+        member = SocCorpusExperimentMemberRow
+        query = _members_query(experiment_id, selection).outerjoin(ranked, (ranked.c.alert_id == member.alert_id) & (ranked.c.rank == 1)).outerjoin(job, job.job_id == ranked.c.job_id).add_columns(job).order_by(member.sequence_number)
+        return query
+
+    def batch_jobs(self, experiment_id: str, selection: CorpusRoundSelection, *, limit: int | None = None, offset: int = 0):
+        query = self._batch_jobs_query(experiment_id, selection)
+        if limit is not None:
+            _page(limit, offset)
+            query = query.offset(offset).limit(limit)
+        with self._session_factory() as session:
+            return [(CorpusExperimentMember.model_validate(m.record_payload), _job_from_row(j) if j else None) for m, j in session.execute(query)]
+
+    def batch_counts(self, experiment_id: str, selection: CorpusRoundSelection):
+        query = self._batch_jobs_query(experiment_id, selection).with_only_columns(SocProcessingJobRow.status, maintain_column_froms=True).order_by(None).subquery()
+        with self._session_factory() as session:
+            return {status or "remaining": count for status, count in session.execute(select(query.c.status, func.count()).group_by(query.c.status))}
+
+    def alert_history(self, experiment_id: str, alert_id: str, *, limit: int = 20, offset: int = 0):
+        _page(limit, offset)
+        query = (
+            select(SocProcessingJobRow)
+            .join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.job_id == SocProcessingJobRow.job_id)
+            .join(SocCorpusRoundRow, SocCorpusRoundRow.round_id == SocCorpusRoundItemRow.round_id)
+            .where(SocCorpusRoundRow.experiment_id == experiment_id, SocCorpusRoundItemRow.alert_id == alert_id)
+            .order_by(SocCorpusRoundRow.created_at.desc(), SocCorpusRoundRow.round_id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        with self._session_factory() as session:
+            return [_job_from_row(row) for row in session.scalars(query)]
+
+    def batch_control_state(self, experiment_id: str, batch: str):
+        row = SocCorpusRoundRow
+        latest_jobs = self._batch_jobs_query(experiment_id, CorpusRoundSelection(batch=batch, scope="reuse" if batch == "learning" else "all")).with_only_columns(SocProcessingJobRow.job_id, maintain_column_froms=True).order_by(None)
+        blocked_query = (
+            select(row.record_payload)
+            .join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.round_id == row.round_id)
+            .where(row.experiment_id == experiment_id, row.batch == batch, row.state == "blocked", SocCorpusRoundItemRow.job_id.in_(latest_jobs))
+            .order_by(row.created_at.desc(), row.round_id.desc())
+            .limit(1)
+        )
+        with self._session_factory() as session:
+            running = session.scalar(select(row.round_id).where(row.experiment_id == experiment_id, row.batch == batch, row.state == "running").limit(1)) is not None
+            blocked = session.scalar(blocked_query)
+            return running, blocked.get("state_reason") if blocked else None
+
     def list_interactive_round_ids(self, *, limit: int = 100) -> list[str]:
         """Only explicitly selected single-alert work receives interactive priority."""
         _page(limit, 0)
@@ -246,9 +342,10 @@ class SqlAlchemyCorpusExperimentRepository:
             .join(item, item.round_id == row.round_id)
             .join(job, job.job_id == item.job_id)
             .where(
-                row.state == "running",
-                row.record_payload["selection"]["alert_ids"][0].as_string().is_not(None),
-                row.record_payload["selection"]["alert_ids"][1].as_string().is_(None),
+                or_(
+                    (row.state == "running") & row.record_payload["selection"]["alert_ids"][0].as_string().is_not(None) & row.record_payload["selection"]["alert_ids"][1].as_string().is_(None),
+                    row.state.in_(["prepared", "running", "paused"]) & (job.metadata_payload["manual_dispatch"].as_boolean().is_(True)),
+                ),
                 job.status == "queued",
                 job.available_at <= datetime.now(UTC),
                 ~occupied,
@@ -265,7 +362,7 @@ class SqlAlchemyCorpusExperimentRepository:
             if row is None or row.version != expected_version:
                 raise CorpusExperimentConflict("round changed; reload before updating")
             previous = CorpusRound.model_validate(row.record_payload)
-            allowed = {"prepared": {"running", "paused", "blocked"}, "running": {"paused", "blocked", "completed"}, "paused": {"running", "blocked"}, "blocked": set(), "completed": {"running", "blocked"}}
+            allowed = {"prepared": {"running", "paused", "blocked"}, "running": {"paused", "blocked", "completed"}, "paused": {"running", "blocked"}, "blocked": set(), "completed": {"running", "paused", "blocked"}}
             if state != previous.state and state not in allowed[previous.state]:
                 raise CorpusExperimentConflict(f"cannot change round from {previous.state} to {state}; start a new round after snapshot changes")
             new_limit = execution_limit if execution_limit is not None else previous.execution_limit
@@ -314,7 +411,13 @@ class SqlAlchemyCorpusExperimentRepository:
         base = select(SocProcessingJobRow.status).join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.job_id == SocProcessingJobRow.job_id).where(SocCorpusRoundItemRow.round_id == round_id)
         with self._session_factory() as session:
             count = session.scalar(select(func.count()).select_from(base.subquery())) or 0
-            counts = dict(session.execute(base.add_columns(func.count()).where(SocCorpusRoundItemRow.sequence_number < round_.execution_limit).group_by(SocProcessingJobRow.status)).all())
+            counts = dict(
+                session.execute(
+                    base.add_columns(func.count())
+                    .where(or_(SocCorpusRoundItemRow.sequence_number < round_.execution_limit, SocProcessingJobRow.metadata_payload["manual_dispatch"].as_boolean().is_(True)))
+                    .group_by(SocProcessingJobRow.status)
+                ).all()
+            )
             return CorpusRoundProgress(
                 round=round_,
                 selected_count=count,
@@ -328,7 +431,7 @@ class SqlAlchemyCorpusExperimentRepository:
     def eligible_job_ids(self, round_id: str, *, limit: int = 100) -> list[str]:
         _page(limit, 0)
         progress = self.round_progress(round_id)
-        if progress.round.state != "running" or progress.active_count >= progress.round.concurrency:
+        if progress.round.state not in {"prepared", "running", "paused"} or progress.active_count >= progress.round.concurrency:
             return []
         earlier = aliased(SocCorpusRoundItemRow)
         earlier_job = aliased(SocProcessingJobRow)
@@ -339,15 +442,38 @@ class SqlAlchemyCorpusExperimentRepository:
             .where(earlier.round_id == SocCorpusRoundItemRow.round_id, earlier.group_id == SocCorpusRoundItemRow.group_id, earlier.sequence_number < SocCorpusRoundItemRow.sequence_number, earlier_job.status.not_in(terminal))
             .exists()
         )
+        if progress.round.dispatch_alert_ids is not None:
+            older_pending = older_pending.element.where(earlier.alert_id.in_(progress.round.dispatch_alert_ids)).exists()
         query = (
             select(SocCorpusRoundItemRow.job_id)
             .join(SocProcessingJobRow, SocProcessingJobRow.job_id == SocCorpusRoundItemRow.job_id)
-            .where(SocCorpusRoundItemRow.round_id == round_id, SocCorpusRoundItemRow.sequence_number < progress.round.execution_limit, SocProcessingJobRow.status == "queued", ~older_pending)
+            .where(
+                SocCorpusRoundItemRow.round_id == round_id,
+                SocProcessingJobRow.status == "queued",
+                or_(SocProcessingJobRow.metadata_payload["manual_dispatch"].as_boolean().is_(True), (SocCorpusRoundItemRow.sequence_number < progress.round.execution_limit) & ~older_pending & (progress.round.state == "running")),
+            )
             .order_by(SocCorpusRoundItemRow.sequence_number)
             .limit(min(limit, progress.round.concurrency - progress.active_count))
         )
+        if progress.round.dispatch_alert_ids is not None:
+            query = query.where(or_(SocCorpusRoundItemRow.alert_id.in_(progress.round.dispatch_alert_ids), SocProcessingJobRow.metadata_payload["manual_dispatch"].as_boolean().is_(True)))
         with self._session_factory() as session:
-            return list(session.scalars(query))
+            manual = list(session.scalars(query.where(SocProcessingJobRow.metadata_payload["manual_dispatch"].as_boolean().is_(True))))
+            return manual or list(session.scalars(query))
+
+    def dispatch_pending_count(self, round_id: str) -> int:
+        round_ = self.get_round(round_id)
+        item, job = SocCorpusRoundItemRow, SocProcessingJobRow
+        query = (
+            select(func.count())
+            .select_from(item)
+            .join(job, job.job_id == item.job_id)
+            .where(item.round_id == round_id, job.status == "queued", or_(item.sequence_number < round_.execution_limit, job.metadata_payload["manual_dispatch"].as_boolean().is_(True)))
+        )
+        if round_.dispatch_alert_ids is not None:
+            query = query.where(or_(item.alert_id.in_(round_.dispatch_alert_ids), job.metadata_payload["manual_dispatch"].as_boolean().is_(True)))
+        with self._session_factory() as session:
+            return session.scalar(query) or 0
 
     def active_job_count(self) -> int:
         """Call under the shared claim transaction to fence multiple dispatchers."""

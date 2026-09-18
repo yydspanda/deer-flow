@@ -72,8 +72,22 @@ file for SOC code. The authoritative product and engineering documents are:
   not rewrite that baseline. New report plans also hash selected result projections;
   reject drift before committing jobs. `/rounds/{id}/comparison` reads only the current
   page of saved baselines and child outcomes, never latest-alert results or raw logs.
-  Dispatcher priority is server-derived from an explicit one-alert selection; paused
-  or merely prepared rounds never qualify. Query queued, available, unoccupied jobs
+  `demo/corpus_quick_validation.py` owns the thin Web commands and current plan context.
+  Prepare/start/manual admission serialize under the existing governance transaction.
+  Batch statistics use the latest job per unique member across all rounds; paginated
+  history retains immutable Run IDs. Current blocked state uses that same latest-job
+  projection, excluding fully superseded rounds while retaining partial blocks and audit
+  history. Browser filters never enter execution commands.
+  No new table or migration is needed. Queued jobs keep their original configuration;
+  drift blocks dispatch and only an explicit rerun may capture new settings.
+  Dispatcher priority is server-derived from an explicit one-alert selection or a
+  persisted `manual_dispatch` job intent. Paused/prepared rounds may dispatch only
+  explicitly requested manual jobs; Gateway lifespan also detects their queued/active
+  work for lease recovery. Manual admission atomically moves a completed round with a
+  queued requested job to paused, preserving its limit, scope, configuration, and other
+  queued jobs; duplicate requests reuse the same job.
+  `dispatch_alert_ids` limits resumed legacy all-scope rounds
+  to the requested batch scope without changing their fixed membership. Query queued, available, unoccupied jobs
   before the bulk fallback, then use ordinary fenced claims. Model admission uses
   scoped interactive/background FIFO tickets, never caller-chosen numeric priority;
   interactive waiters take free slots first, active calls are not interrupted. Bulk

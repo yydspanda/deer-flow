@@ -435,3 +435,9 @@ bounded, drop-oldest frame queue. WebSocket clients that request
 The legacy no-parameter protocol still base64-encodes frames into JSON at the
 Gateway boundary for backward compatibility. Unknown `frame_format` values
 receive a JSON error and close code 1008.
+
+Quick corpus validation adds `backend/soc_agent/demo/corpus_quick_validation.py` to
+the required handoff source inventory. Generated operator instructions use first-batch
+start/pause/continue/review and second-batch all/reuse/explore; legacy staged CLI commands
+remain optional. Host startup and source-plus-private-overlay delivery are unchanged;
+apply code updates with a frontend rebuild and service restart, preserving data.

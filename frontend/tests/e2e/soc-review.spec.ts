@@ -135,14 +135,20 @@ test("experiment review stays scoped and paginated without loading global candid
     },
   );
   await page.goto(
-    "/workspace/soc/review/memory-candidates?experiment=EXP-only",
+    "/workspace/soc/review/memory-candidates?experiment=EXP-only&return_batch=validation",
   );
   await expect(page.getByText("第一页本实验经验")).toBeVisible();
   await expect(page.getByRole("link", { name: "审核并决定" })).toHaveAttribute(
     "href",
-    "/workspace/soc/review/memory-candidates/MC-PAGE1?experiment=EXP-only",
+    "/workspace/soc/review/memory-candidates/MC-PAGE1?experiment=EXP-only&return_batch=validation",
   );
-  await expect(page.getByText("本实验第一批", { exact: false })).toBeVisible();
+  await expect(page.getByText("当前积累范围", { exact: false })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "返回告警演练" }),
+  ).toHaveAttribute(
+    "href",
+    "/workspace/soc/corpus-validation?batch=validation",
+  );
   await page.getByRole("button", { name: "下一页经验" }).click();
   await expect(page.getByText("第二页本实验经验")).toBeVisible();
   await expect(page.getByText("第一页本实验经验")).toHaveCount(0);

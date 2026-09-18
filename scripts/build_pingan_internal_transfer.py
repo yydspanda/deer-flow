@@ -283,6 +283,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/demo/corpus_experiment_timing.py",
     "backend/soc_agent/demo/corpus_experiment_runtime.py",
     "backend/soc_agent/demo/corpus_experiments.py",
+    "backend/soc_agent/demo/corpus_quick_validation.py",
     "backend/app/gateway/routers/soc_corpus_experiments.py",
     "backend/scripts/soc_corpus_batch_preview.py",
     "backend/scripts/soc_corpus_experiment.py",
@@ -1791,8 +1792,9 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 
 服务启动且模型 Smoke 通过后，按项目内
 `.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md` 操作。
-它提供第一批5条、同轮续跑50条/全部、仅审核本实验候选、冻结已审核经验后第二批验证、
-补充样本单独统计、共享可编辑草稿/后台起草、暂停/恢复、固定轮次导出、定向复测和网页前后对照。
+网页第一批点击“开始积累”覆盖全批，支持暂停、继续和“审核经验”；第二批默认“全部”，
+也可选择“验证经验复用”或“其他测试告警”再开始验证。单条直接运行，批量暂停后仍可单独运行；
+重复提交去重，重跑保留旧结果，批次统计按唯一告警汇总。CLI固定运行记录与导出继续保留。
 仅首次从零实验按其第1.1节使用 `reset-dev-data` 预览，明确确认后才备份并重置SOC DEV库；
 常规部署和续跑不清库。无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。

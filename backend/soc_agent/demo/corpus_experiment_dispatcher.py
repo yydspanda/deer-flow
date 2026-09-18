@@ -74,6 +74,7 @@ class CorpusExperimentDispatcher:
         if slots <= 0 or self._pool is None:
             return
         rounds = self._service.store.list_rounds(state="running", limit=100, offset=self._round_cursor)
+        manual_rounds = self._service.store.list_interactive_round_ids()
         if not rounds:
             self._round_cursor = 0
         has_drafts = self._draft_jobs is not None and bool(self._draft_jobs.jobs.list_workload_jobs(DRAFT_WORKLOAD, statuses=[ProcessingJobStatus.QUEUED], limit=1))
@@ -81,7 +82,9 @@ class CorpusExperimentDispatcher:
         for index in range(slots):
             if self._stop.is_set():
                 break
-            if has_drafts and (self._draft_turn or not rounds):
+            if manual_rounds:
+                self._futures.add(self._pool.submit(self._dispatch_one, None))
+            elif has_drafts and (self._draft_turn or not rounds):
                 self._futures.add(self._pool.submit(self._dispatch_one, None))
                 self._draft_turn = False
             elif rounds:

@@ -21,6 +21,7 @@ from soc_agent.contracts.corpus_experiments import (
     CorpusExperiment,
     CorpusMemberPage,
     CorpusPrepareCommand,
+    CorpusQuickCommand,
     CorpusRound,
     CorpusRoundBrief,
     CorpusRoundCreateCommand,
@@ -75,7 +76,7 @@ async def experiment_lifespan(app):
         repository = get_or_create_soc_repository(request)
         store = repository.corpus_experiments()
         store.require_schema()
-        if store.list_rounds(state="running", limit=1) or repository.processing_jobs().list_workload_jobs(DRAFT_WORKLOAD, statuses=[ProcessingJobStatus.QUEUED, *ACTIVE_PROCESSING_JOB_STATUSES], limit=1):
+        if store.list_rounds(state="running", limit=1) or store.has_manual_work() or repository.processing_jobs().list_workload_jobs(DRAFT_WORKLOAD, statuses=[ProcessingJobStatus.QUEUED, *ACTIVE_PROCESSING_JOB_STATUSES], limit=1):
             get_corpus_experiment_application(request).dispatcher.start()
 
     try:
@@ -391,3 +392,31 @@ def retry_failed(round_id: str, request: Request, application: ApplicationDep):
         if result["retried"]:
             application.dispatcher.start()
         return result
+
+
+@router.get("/quick-validation")
+def quick_validation(application: ApplicationDep, batch: Batch = "learning", scope: str = "all", alert_ids: str = "", offset: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=100)] = 20):
+    from soc_agent.demo.corpus_quick_validation import CorpusQuickValidation
+
+    with _command_errors():
+        return CorpusQuickValidation(application.service, application.workbench.batch_plan).snapshot(batch, scope, offset=offset, limit=limit, alert_ids=alert_ids.split(",") if alert_ids else None)
+
+
+@router.post("/quick-validation", status_code=202)
+def quick_validation_command(body: CorpusQuickCommand, request: Request, application: ApplicationDep):
+    from soc_agent.demo.corpus_quick_validation import CorpusQuickValidation
+
+    with _command_errors():
+        with application.workbench.experiment_preparation_guard():
+            result = CorpusQuickValidation(application.service, application.workbench.batch_plan).command(body, context=_admin(request))
+        application.dispatcher.start()
+        return result
+
+
+@router.get("/quick-validation/history/{alert_id}")
+def quick_validation_history(alert_id: str, application: ApplicationDep, offset: Annotated[int, Query(ge=0)] = 0):
+    from soc_agent.demo.corpus_quick_validation import CorpusQuickValidation
+    from soc_agent.demo.corpus_round_comparison import job_result_row
+
+    quick = CorpusQuickValidation(application.service, application.workbench.batch_plan)
+    return [job_result_row(job) for job in application.service.store.alert_history(quick.experiment(), alert_id, offset=offset)]

@@ -17,6 +17,30 @@ def wait_for(predicate):
         sleep(0.01)
 
 
+def test_manual_queued_member_survives_restart_without_resuming_batch(tmp_path):
+    repo = repository(tmp_path)
+    prepare(repo)
+    calls = []
+    service = SocCorpusExperimentService(repository=repo, execute=lambda r, m, c: calls.append(m.alert_id) or CorpusExecutionOutcome(run_id="RUN-" + m.alert_id), configuration_provider=lambda _: {})
+    batch = service.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning"), execution_limit=100), context=context())
+    service.pause(batch.round_id, context=context())
+    service.request_manual(batch.round_id, "4", context=context())
+    service.request_manual(batch.round_id, "4", context=context())
+    dispatcher = CorpusExperimentDispatcher(service, interval_seconds=0.02)
+    try:
+        dispatcher.start()
+        wait_for(lambda: service.store.round_progress(batch.round_id).completed_count == 1)
+    finally:
+        dispatcher.stop()
+    assert calls == ["4"]
+    assert service.store.get_round(batch.round_id).state == "paused"
+    assert service.store.round_progress(batch.round_id).counts["queued"] == 9
+    service.start(batch.round_id, context=context())
+    while service.execute_one(batch.round_id):
+        pass
+    assert len(calls) == len(set(calls)) == 10
+
+
 def test_single_alert_uses_next_slot_before_batch_and_keeps_shared_capacity(tmp_path):
     repo = repository(tmp_path)
     prepare(repo)

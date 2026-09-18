@@ -113,6 +113,7 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "scripts/soc_pingan_host_sidecars.py" in required
     assert "scripts/soc_pingan_dev_database.py" in required
     assert "scripts/test_soc_pingan_dev_database.py" in required
+    assert "backend/soc_agent/demo/corpus_quick_validation.py" in required
     assert "scripts/soc_pingan_stage_internal_corpus.py" in required
     assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
 
@@ -269,6 +270,8 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "`soc_database.status=ready`" in runbook
     assert "`soc_database.schema_revision=0031_memory_working_drafts`" in runbook
     assert "pingan-corpus-batch-runbook.md" in runbook
+    assert "开始积累" in runbook
+    assert "第一批5条、同轮续跑50条" not in runbook
     assert "历史语料任务不查询/回写 ZEUS" in runbook
     assert "--frontend-mode dev" in runbook
     assert all("unset SOC_DATABASE_URL" not in block for block in local_env_blocks)

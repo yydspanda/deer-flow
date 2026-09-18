@@ -1,6 +1,7 @@
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
+import type { SocCorpusQuickState } from "./corpus-experiments";
 import type {
   SocCorpusExperiment,
   SocCorpusExperimentConfiguration,
@@ -1428,3 +1429,29 @@ export async function updateSocMemoryRetrievalActivation(
     "Failed to update SOC memory retrieval activation",
   );
 }
+
+export const getSocCorpusQuickState = (
+  batch: "learning" | "validation",
+  scope: "all" | "reuse" | "explore",
+  offset = 0,
+  alertIds: string[] = [],
+) =>
+  corpusExperimentRequest<SocCorpusQuickState>(
+    `quick-validation?batch=${batch}&scope=${scope}&offset=${offset}&alert_ids=${encodeURIComponent(alertIds.join(","))}`,
+  );
+export const runSocCorpusQuick = (
+  body: {
+    batch: "learning" | "validation";
+    scope: "all" | "reuse" | "explore";
+    action: "start" | "pause" | "run" | "rerun";
+    alert_id?: string;
+    options: SocAnalysisExecutionOptions;
+  },
+  key?: string,
+) =>
+  corpusExperimentRequest<{ accepted: boolean }>("quick-validation", body, key);
+
+export const getSocCorpusQuickHistory = (alertId: string, offset = 0) =>
+  corpusExperimentRequest<SocCorpusQuickState["items"]>(
+    `quick-validation/history/${encodeURIComponent(alertId)}?offset=${offset}`,
+  );

@@ -5,7 +5,9 @@ No corpus files, existing DEV database, external models or ZEUS endpoints are us
 
 import json
 from datetime import timedelta
+from types import SimpleNamespace
 
+import pytest
 from test_soc_corpus_experiment_repository import experiment, members, repository
 from test_soc_corpus_experiments import context
 from test_soc_memory_governance import confirm
@@ -14,17 +16,19 @@ from test_soc_pingan_memory_profile import _run as sample
 from soc_agent.application import analysis as composition
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import AlertInput, Verdict
-from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+from soc_agent.contracts.corpus_experiments import CorpusQuickCommand, CorpusRoundCreateCommand, CorpusRoundSelection
 from soc_agent.core import SocMemoryService
 from soc_agent.demo.corpus_experiment_reports import compare_reports, export_report
 from soc_agent.demo.corpus_experiment_runtime import CorpusRuntimeExecutor
 from soc_agent.demo.corpus_experiments import SocCorpusExperimentService
+from soc_agent.demo.corpus_quick_validation import CorpusQuickValidation
 from soc_agent.llm import SocLLMSettings
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
 from soc_agent.utils.hashing import stable_hash
 
 
-def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeypatch):
+@pytest.mark.parametrize("quick_entry", [False, True])
+def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeypatch, quick_entry):
     repo = repository(tmp_path)
     registry = build_soc_memory_profile_registry()
     template = sample(1).llm_analysis_request
@@ -72,8 +76,12 @@ def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeyp
     svc = SocCorpusExperimentService(repository=repo, execute=executor, configuration_provider=lambda _: {"mocked": True})
 
     def run_batch(batch, *, memory_mode="snapshot"):
-        round_ = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch=batch), memory_mode=memory_mode), context=context())
-        svc.start(round_.round_id, context=context())
+        if quick_entry:
+            CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id)).command(CorpusQuickCommand(batch=batch), context=context())
+            round_ = svc.store.list_rounds()[-1]
+        else:
+            round_ = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch=batch), memory_mode=memory_mode), context=context())
+            svc.start(round_.round_id, context=context())
         while svc.execute_one(round_.round_id):
             pass
         progress = svc.store.round_progress(round_.round_id)
@@ -99,6 +107,14 @@ def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeyp
     assert svc.store.list_learning_candidates("EXP-test", review_stage="confirmed").items[0].candidate_id == candidate_id
     assert record.source_candidate_id == candidate_id
     before_observations = repo.list_memory_pattern_observations(limit=100)
+    if quick_entry:
+        validation, after = run_batch("validation")
+        quick = CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id))
+        assert quick.snapshot("learning")["completed"] == 5
+        assert quick.snapshot("validation")["completed"] == 1
+        assert after[0].job.result_payload["summary"]["processing_path"] == "memory"
+        assert calls == ["0", "1", "2", "3", "4"]
+        return
     baseline, before = run_batch("validation", memory_mode="none")
     validation, after = run_batch("validation")
     assert [e.memory_id for e in validation.memory_snapshot] == [record.memory_id]

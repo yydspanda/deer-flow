@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ActivityIcon,
   AlertTriangleIcon,
@@ -52,7 +53,10 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { SocCaseOutcomePanel } from "@/components/workspace/soc/soc-case-outcome-panel";
-import { SocCorpusExperiments } from "@/components/workspace/soc/soc-corpus-experiments";
+import {
+  SocCorpusExperiments,
+  SocCorpusQuickHistory,
+} from "@/components/workspace/soc/soc-corpus-experiments";
 import { SocCorpusGroupPicker } from "@/components/workspace/soc/soc-corpus-group-picker";
 import {
   availableCorpusRunSettings,
@@ -88,6 +92,7 @@ import type {
   SocCorpusWorkbenchReadiness,
   SocCorpusWorkbenchState,
 } from "@/core/soc";
+import type { SocCorpusQuickState } from "@/core/soc/corpus-experiments";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
@@ -1084,14 +1089,20 @@ function AlertDetail({
 }
 
 export function SocCorpusValidationWorkbench() {
+  const queryClient = useQueryClient();
   const [requestedBatchAlert, setRequestedBatchAlert] = useState<{
     alertId: string;
     key: number;
+    jobId?: string | null;
+    rerun?: boolean;
   } | null>(null);
+  const [quickState, setQuickState] = useState<SocCorpusQuickState | null>(
+    null,
+  );
   const [batch, setBatch] = useState<SocCorpusBatch>("learning");
   const [validationTier, setValidationTier] = useState<
     SocCorpusValidationTier | "all"
-  >("main");
+  >("all");
   const [runSettings, setRunSettings] =
     useState<SocAnalysisExecutionOptions | null>(null);
   useEffect(() => {
@@ -1349,6 +1360,15 @@ export function SocCorpusValidationWorkbench() {
         setUnprocessedOnly(stored.unprocessedOnly);
       }
     }
+    const returnBatch = new URLSearchParams(window.location.search).get(
+      "batch",
+    );
+    if (returnBatch === "learning" || returnBatch === "validation") {
+      setBatch(returnBatch);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("batch");
+      window.history.replaceState(window.history.state, "", url);
+    }
     setFiltersHydrated(true);
   }, []);
 
@@ -1575,6 +1595,9 @@ export function SocCorpusValidationWorkbench() {
   };
 
   const handleViewResult = (alertId: string) => {
+    void queryClient.invalidateQueries({
+      queryKey: ["soc-corpus-workbench", "execution", alertId],
+    });
     setSelectedAlertId(alertId);
     requestAnimationFrame(() => {
       detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1800,10 +1823,10 @@ export function SocCorpusValidationWorkbench() {
                   {state.batch_selection?.counts.validation_main.toLocaleString()}
                 </SelectItem>
                 <SelectItem value="supplementary">
-                  其他告警测试 ·{" "}
+                  其他测试告警 ·{" "}
                   {state.batch_selection?.counts.validation_supplementary.toLocaleString()}
                 </SelectItem>
-                <SelectItem value="all">第二批全部告警</SelectItem>
+                <SelectItem value="all">全部</SelectItem>
               </SelectContent>
             </Select>
           )}
@@ -1834,7 +1857,7 @@ export function SocCorpusValidationWorkbench() {
             </span>
             <span>
               {batchPreview
-                ? "历史运行记录保留 · 本轮结果独立统计"
+                ? "历史运行记录保留 · 按批次唯一告警统计"
                 : "可任意选择 · 可重新运行"}
             </span>
             <span>企业安全能力接口 · 关闭/模拟</span>
@@ -1871,6 +1894,8 @@ export function SocCorpusValidationWorkbench() {
             tier={validationTier}
             groupId={groupId}
             controls={state.run_controls}
+            alertIds={pageAlerts.map((alert) => alert.alert_id)}
+            onStateUpdated={setQuickState}
             requestedAlert={requestedBatchAlert}
             onRequestHandled={() => setRequestedBatchAlert(null)}
           />
@@ -2077,6 +2102,22 @@ export function SocCorpusValidationWorkbench() {
               </thead>
               <tbody>
                 {pageAlerts.map((alert) => {
+                  const quickJob = quickState?.items.find(
+                    (item) => item.alert_id === alert.alert_id,
+                  );
+                  const quickRunning =
+                    (!!quickJob &&
+                      [
+                        "claimed",
+                        "prechecking",
+                        "analyzing",
+                        "projecting",
+                      ].includes(quickJob.status)) ||
+                    (quickJob?.status === "queued" &&
+                      !!quickJob.manual_dispatch &&
+                      !quickJob.blocked_reason);
+                  const quickPending =
+                    requestedBatchAlert?.alertId === alert.alert_id;
                   const readinessItem = READINESS[alert.readiness];
                   const localProcessing =
                     processingAlertIds.has(alert.alert_id) ||
@@ -2242,6 +2283,7 @@ export function SocCorpusValidationWorkbench() {
                         {batchPreview ? (
                           <div className="flex flex-wrap justify-end gap-1">
                             <Button
+                              disabled={quickRunning || quickPending}
                               size="sm"
                               variant="outline"
                               onClick={(event) => {
@@ -2249,24 +2291,48 @@ export function SocCorpusValidationWorkbench() {
                                 setRequestedBatchAlert({
                                   alertId: alert.alert_id,
                                   key: Date.now(),
+                                  jobId: quickJob?.job_id,
+                                  rerun:
+                                    !!quickJob &&
+                                    (["completed", "failed"].includes(
+                                      quickJob.status,
+                                    ) ||
+                                      !!quickJob.blocked_reason),
                                 });
                               }}
                             >
                               <PlayIcon className="size-4" />
-                              选择本条
+                              {quickRunning || quickPending
+                                ? "运行中"
+                                : quickJob?.status === "completed" ||
+                                    (!!quickState?.blocked_reason &&
+                                      !!quickJob?.job_id)
+                                  ? "重新运行"
+                                  : quickJob?.status === "failed"
+                                    ? "重试"
+                                    : "直接运行"}
                             </Button>
-                            {alert.run_id && (
+                            {quickJob?.error_message && (
+                              <p
+                                role="alert"
+                                className="basis-full text-xs text-red-700"
+                              >
+                                {quickJob.error_message}
+                              </p>
+                            )}
+                            {(alert.run_id ?? quickJob?.run_id) && (
                               <Button
-                                size="icon-sm"
+                                size="sm"
                                 variant="ghost"
-                                title="查看已有历史记录（非本轮结果）"
-                                aria-label={`查看 Alert ${alert.alert_id} 历史记录`}
+                                title="查看结果与历史记录"
+                                aria-label={`查看 Alert ${alert.alert_id} 结果与历史记录`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   handleViewResult(alert.alert_id);
                                 }}
                               >
                                 <EyeIcon className="size-4" />
+                                查看结果
                               </Button>
                             )}
                           </div>
@@ -2446,6 +2512,12 @@ export function SocCorpusValidationWorkbench() {
         ) : null}
 
         <div ref={detailRef}>
+          {batchPreview && selectedAlert && (
+            <SocCorpusQuickHistory
+              key={selectedAlert.alert_id}
+              alertId={selectedAlert.alert_id}
+            />
+          )}
           <AlertDetail
             alert={selectedAlert}
             execution={executionQuery.execution}

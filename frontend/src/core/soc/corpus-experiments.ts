@@ -189,3 +189,21 @@ export function corpusRoundSelection(
     alert_ids: alertId.trim() ? [alertId.trim()] : [],
   };
 }
+
+export interface SocCorpusQuickState {
+  experiment_id: string;
+  total: number;
+  completed: number;
+  active: number;
+  remaining: number;
+  failed: number;
+  pending_candidates: number;
+  manual_pending?: boolean;
+  running: boolean;
+  blocked_reason: string | null;
+  items: (SocCorpusRoundResult & {
+    job_id: string | null;
+    manual_dispatch?: boolean;
+    blocked_reason?: string | null;
+  })[];
+}

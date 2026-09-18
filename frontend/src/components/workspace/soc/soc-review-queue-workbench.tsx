@@ -1705,6 +1705,7 @@ function ExternalDispositionSection({
 function MemoryCandidateInventory({
   candidates,
   experimentId,
+  returnBatch = "learning",
   status,
   isFetching,
   onStatusChange,
@@ -1712,6 +1713,7 @@ function MemoryCandidateInventory({
 }: {
   candidates: SocMemoryCandidate[];
   experimentId?: string;
+  returnBatch?: "learning" | "validation";
   status: SocMemoryCandidateReviewStage;
   isFetching: boolean;
   onStatusChange: (status: SocMemoryCandidateReviewStage) => void;
@@ -1806,7 +1808,7 @@ function MemoryCandidateInventory({
                   asChild
                 >
                   <Link
-                    href={`/workspace/soc/review/memory-candidates/${candidate.candidate_id}${experimentId ? `?experiment=${encodeURIComponent(experimentId)}` : ""}`}
+                    href={`/workspace/soc/review/memory-candidates/${candidate.candidate_id}${experimentId ? `?experiment=${encodeURIComponent(experimentId)}&return_batch=${returnBatch}` : ""}`}
                   >
                     {actionable ? (
                       <ShieldCheckIcon className="size-4" />
@@ -3173,11 +3175,13 @@ export function SocReviewQueueWorkbench({
   initialCandidateId,
   initialView,
   initialExperimentId,
+  initialReturnBatch = "learning",
 }: {
   initialQueueId?: string;
   initialCandidateId?: string;
   initialView?: "queue" | "memory" | "sample";
   initialExperimentId?: string;
+  initialReturnBatch?: "learning" | "validation";
 }) {
   const [workspaceView, setWorkspaceView] = useState<
     "queue" | "memory" | "sample"
@@ -3801,7 +3805,7 @@ export function SocReviewQueueWorkbench({
                   <div className="flex flex-wrap items-center gap-2">
                     <Button variant="ghost" size="sm" asChild>
                       <Link
-                        href={`/workspace/soc/review/memory-candidates${initialExperimentId ? `?experiment=${encodeURIComponent(initialExperimentId)}` : ""}`}
+                        href={`/workspace/soc/review/memory-candidates${initialExperimentId ? `?experiment=${encodeURIComponent(initialExperimentId)}&return_batch=${initialReturnBatch}` : ""}`}
                       >
                         <ChevronLeftIcon className="size-4" />
                         返回审核列表
@@ -3811,7 +3815,7 @@ export function SocReviewQueueWorkbench({
                   </div>
                 ) : (
                   <Badge variant="secondary">
-                    {initialExperimentId ? "本实验第一批 · " : ""}
+                    {initialExperimentId ? "当前积累范围 · " : ""}
                     {standaloneMemoryCandidates.length} 条审核记录
                   </Badge>
                 )}
@@ -3852,7 +3856,9 @@ export function SocReviewQueueWorkbench({
                 {initialExperimentId && (
                   <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
                     <Button variant="outline" asChild>
-                      <Link href="/workspace/soc/corpus-validation">
+                      <Link
+                        href={`/workspace/soc/corpus-validation?batch=${initialReturnBatch}`}
+                      >
                         <ChevronLeftIcon className="size-4" />
                         返回告警演练
                       </Link>
@@ -3887,6 +3893,7 @@ export function SocReviewQueueWorkbench({
                 <MemoryCandidateInventory
                   candidates={standaloneMemoryCandidates}
                   experimentId={initialExperimentId}
+                  returnBatch={initialReturnBatch}
                   status={memoryCandidateStatusFilter}
                   isFetching={listedMemoryCandidatesFetching}
                   onStatusChange={(value) => {

@@ -487,3 +487,14 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   or confirmed Memory record. When Tenant Policy changes the operational action without
   changing the technical verdict, show the model verdict, base action, policy reason, and
   final action as separate steps; do not compress them into an unexplained slash pair.
+
+## Quick batch validation
+
+The corpus page uses `/quick-validation` to start the full learning batch, pause/continue,
+review scoped experience, and validate all/reuse/explore (default all). Keep group/search
+filters out of commands. Single alerts submit directly with per-alert progress; paused
+bulk work stays paused. Rerun idempotency derives from the displayed previous job, and
+old results remain in alert details. Counts come from the server's latest-per-alert
+batch projection, including manual tasks across internal rounds. Preserve `experiment`
+and `return_batch` through candidate list/detail navigation. Running settings apply to
+new jobs; do not expose experiment, round, budget, concurrency or comparison controls.
