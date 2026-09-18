@@ -3,8 +3,8 @@
 ## Current Pointer / 当前指针
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。PingAn DeerFlow chat 固定为 buffered non-streaming；09-18按用户确认将源码中的模型网关与 Runtime 默认并发从 `3` 统一改为 `8`，配套交付与内网容量验收待完成。SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
-- **Next Gate:** 交付新版代码及配套 `8 + 8` 私有并发配置，完整重启Host，验证普通聊天不再发送 `stream=true`、批次在上限8内调度且旧批次继续采用新容量；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
+- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。PingAn DeerFlow chat 固定为 buffered non-streaming；09-18按用户确认将源码中的模型网关与 Runtime 默认并发从 `3` 统一改为 `8`，配套 `8 + 8` 私有配置已重新生成；用户明确要求重建完整包并在内网重置 SOC DEV，从零开展两批验证，实际安装与容量验收待完成。SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
+- **Next Gate:** 交付新版代码及配套 `8 + 8` 私有并发配置；按本次 Runbook 先备份、安装并显式重置 SOC DEV，再启动Host，验证普通聊天不再发送 `stream=true`、从零两批在上限8内调度；随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-18`
 ## Current Constraints / 当前约束
@@ -17,6 +17,7 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+09-18 本轮完整交付准备按用户明确要求改为重新初始化SOC DEV：新增仅控制Runbook的 `--initialize-soc-dev` 标记，普通构建仍保留数据；安装前验证仓库外语料、停服并独立备份，安装/落位/依赖后显式归档重置DEV库，首次start自动建库，回执支持恢复且批次手册不重复重置。同步README/脚本指南/两份手册，两个私有profile已重新生成并核对8+8、权限0600，原语料包四文件流式验证一致可复用。49项交付、77项Host/语料/profile/路径、15项重置共141项回归及格式检查通过；包身份与最终检查以本次transfer-report为准，实际内网安装、重置、模型与容量验收未执行。
 09-18 按用户确认将内网Host默认并发、profile生成与transfer校验统一为8，显式已有配置继续保留。旧批次点击“继续”更新资源容量，不替换任务ID、运行开关或快照；隔离模拟证明8条同时占用、第9条等待，业务配置漂移仍阻断。Host58、profile4、transfer38、快捷/优先级17及配置/权限14项共131项回归通过，Ruff/格式/进度检查通过；同步README、模块指南和两份手册。未修改私有配置、重打包、部署或调用真实模型，内网容量尚待验收。
 09-18 按用户确认限制Mac DEV运行配置：部署本机用localhost修改，局域网同事仍可开始/暂停/重跑，沿用当前批次最近保存配置；浏览器旧选择不再参与远端提交。Host自动把Gateway/Next限制到loopback并固定可信代理，nginx继续提供局域网入口；无新增启动步骤或数据库迁移。配置比较与任务准备共用治理事务，防止远端旧提交覆盖本机新配置，旧单条入口保持批次防绕过。后端25项初验及最终16项专项（有重叠）、86项Host/启动回归、35项交付清单、57项前端单测、2项浏览器及格式/类型检查通过；同步手册与源码清单。未重新打包、部署内网或调用真实模型，PI-01指针不变。
 同轮审查修复：显式轮次在事务内按当前计划的主实验读取已保存配置，拦截同计划空/旧分支以及历史计划的新任务绕过，保留幂等历史回放。失败筛选在SQL计数分页前覆盖最新持久任务，包含尚无Run的失败；明细/轨迹不误用旧成功，重跑时隐藏旧错误，固定历史审计不变。前端无Run失败沿用活动清除后的新轨迹校验并重试最终读取，重复失败不永久去重，新活动清旧提示。74项后端回归、最终增强断言后的2项复跑（含在74项内）、6项浏览器及前端lint/type-check、Ruff/格式检查通过；临时前端已停止。未迁移数据库、修改私有配置、打包、部署或调用真实模型。

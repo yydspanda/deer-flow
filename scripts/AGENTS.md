@@ -103,7 +103,7 @@ DEV may bind authenticated `8090` to the trusted LAN to preserve the old upstrea
 files are marker-checked before signaling, logs remain under the ignored Host DEV state
 directory, and `stop` includes disabled services so stale processes cannot survive a
 configuration change. Keep the model gateway single-process because its admission
-semaphore is process-local. The Host profile aligns the gateway and SOC Runtime at three
+semaphore is process-local. The Host profile aligns the gateway and SOC Runtime at eight
 concurrent model calls; the SQLite compatibility Worker remains single-worker. The PingAn
 model profile must set `disable_streaming: true`: EAGW returns a complete response, while
 LangChain converts that response into one buffered chat chunk without disabling DeerFlow's
@@ -174,6 +174,21 @@ Generated Runbooks must present the normal first-run sequence as the primary
 path. Put status probes that exist only for interrupted-run recovery after that
 sequence, rather than implying a service can already be running before its first
 start step.
+For an explicitly requested fresh SOC DEV validation, the generated Runbook places
+`reset-dev-data` preview and `--confirm RESET-SOC-DEV` after dependency installation
+and preflight, before the first Host start. The builder's `--initialize-soc-dev`
+flag records `reset_soc_dev_requested=true` in the report and selects those manual
+Runbook instructions only; it never runs reset or changes installer behavior.
+Without that flag the primary Runbook path skips reset. Ordinary redeploy still preserves data;
+restarting/resuming a batch must never repeat the reset. Preserve authentication,
+STG, raw corpus, configuration and secrets. Do not use whole-checkout deletion as
+an initialization shortcut. Before replacing an existing checkout, verify its four
+external Downloads corpus copies, stop Host, verify all five ports are free, and
+retain a private independent checkout backup outside the target. The installer's
+temporary rollback is deleted on installation success and does not cover later
+build/start failures. Explain that the new private overlay replaces old private
+configuration and full replacement still requires project dependency installation,
+while existing Mac tools and unchanged corpus transfers can be reused.
 Clean installation must be delegated to the generated standalone
 `INSTALL-PINGAN-MAC.sh` and invoked with `bash`, never sourced. The installer
 resolves the transfer directory from its own `BASH_SOURCE`, verifies the exact

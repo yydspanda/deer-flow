@@ -363,6 +363,7 @@ def build_transfer_archives(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     include_private_overlay: bool = False,
     allow_dirty: bool = False,
+    initialize_soc_dev: bool = False,
 ) -> dict[str, Any]:
     git_info = _git_info(root)
     _assert_source_freeze_allowed(git_info, allow_dirty=allow_dirty)
@@ -444,6 +445,7 @@ def build_transfer_archives(
             archives=archives,
             report_name=report_path.name,
             installer=installer,
+            initialize_soc_dev=initialize_soc_dev,
         ),
     )
     report = {
@@ -458,6 +460,7 @@ def build_transfer_archives(
         "required_source_inventory_complete": True,
         "dirty_override_used": bool(git_info["worktree_dirty"] and allow_dirty),
         "final_handoff_eligible": not git_info["worktree_dirty"],
+        "reset_soc_dev_requested": initialize_soc_dev,
         "secrets_in_console_output": False,
     }
     _write_private_json(report_path, report)
@@ -1255,6 +1258,7 @@ def _transfer_runbook(
     archives: dict[str, Any],
     report_name: str,
     installer: dict[str, Any],
+    initialize_soc_dev: bool = False,
 ) -> str:
     source = archives["source"]
     private = archives.get("private_overlay")
@@ -1278,12 +1282,25 @@ def _transfer_runbook(
             "three PKL files and Workbench payload SQLite are supplied separately and are "
             "verified before use. Keep every artifact inside the approved environment."
         )
+    if initialize_soc_dev:
+        install_sequence = (
+            "本次已选择从零重新验证：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
+            "再执行第 6.1 节显式重置 SOC DEV，最后第 7 节启动。"
+        )
+        reset_instruction = "本次已明确选择重新初始化第一批、审核经验和第二批验证，因此在第一次启动前执行本节。"
+    else:
+        install_sequence = (
+            "本次默认保留运行数据：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
+            "跳过第 6.1 节重置，直接执行第 7 节启动。"
+        )
+        reset_instruction = "本次交付未要求清空 SOC DEV，请跳过本节。仅在用户另外明确要求从零重新验证时执行。"
     return f"""# PingAn Internal Mac DEV/STG Runbook / 平安内网 Mac DEV/STG 操作手册
 
 > Built: `{timestamp}`
 > Source commit: `{git_info["commit"]}` (`{git_info["branch"]}`)
 > Target: Apple Silicon macOS, Python `3.12+`, no Docker
 > Install path: `$HOME/deer-flow`
+> Reset SOC DEV requested: `{str(initialize_soc_dev).lower()}`
 
 本手册由 `scripts/build_pingan_internal_transfer.py` 随包生成。文件名、commit 和
 SHA-256 与本次交付一致，不需要额外 nginx/LAN hotfix。
@@ -1339,6 +1356,62 @@ cat "{report_name}"
 
 ## 3. Install Or Data-Preserving Redeploy / 安装或保留数据升级
 
+{install_sequence}安装器本身始终保留运行数据；
+普通保留数据升级应跳过第 6.1 节。不要把“重新初始化演练”理解为删除整个仓库或账号。
+
+### 3.1 Before Replacement / 替换前备份
+
+已有成功部署的 Mac 先执行下面一块；全新机器没有旧 checkout 时跳过本小节。
+先确认四个原始语料文件在仓库外的 `$HOME/Downloads/source`、`$HOME/Downloads/corpus` 有副本。
+若只有仓库内副本，先复制到第 4 节所列路径并完成校验，再继续；不要先运行安装器。
+数据 hash 未变时不需要重新跨网传输。
+
+此命令先核对语料，再停止旧 Host，确认五个端口释放，最后把完整旧 checkout 独立备份到
+`$HOME/deer-flow-backups/`。预留足够磁盘空间；备份含私有配置、凭证和数据库，只能留在本机受保护目录。
+备份失败时不要继续安装，旧 checkout 仍保留。
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+umask 077
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+test ! -L "$TARGET_REPO"
+test -f scripts/soc_pingan_macos_host_dev.py
+for corpus_file in \\
+  "$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl" \\
+  "$HOME/Downloads/corpus/full_alert_validation_corpus.pkl" \\
+  "$HOME/Downloads/corpus/full_alert_dams_labeled_merged.pkl" \\
+  "$HOME/Downloads/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite"; do
+  test -f "$corpus_file"
+  test -r "$corpus_file"
+done
+python3.12 scripts/soc_pingan_stage_internal_corpus.py
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+for port in 3000 8001 2026 4001 8090; do
+  if lsof -nP -iTCP:"$port" -sTCP:LISTEN; then
+    printf 'Refusing backup while port %s is occupied.\\n' "$port" >&2
+    false
+  else
+    probe_status=$?
+    test "$probe_status" -eq 1
+  fi
+done
+backup_dir="$HOME/deer-flow-backups/before-reset-$(date +%Y%m%dT%H%M%S)-$$"
+mkdir -p "$backup_dir"
+chmod 700 "$backup_dir"
+tar -czf "$backup_dir/deer-flow.tar.gz" -C "$HOME" deer-flow
+shasum -a 256 "$backup_dir/deer-flow.tar.gz" > "$backup_dir/SHA256SUMS"
+printf 'Verified stopped-checkout backup: %s\\n' "$backup_dir"
+BASH
+```
+
+必须看到最后的备份路径，并保留到新版本验收通过。安装器成功后立即删除临时回退目录，
+其事务回退只覆盖安装过程，不覆盖后续依赖安装、前端构建或启动失败；上面的独立备份才供这些情况恢复。
+恢复时也必须先停止新 Host，不得把运行中的 checkout 直接移动或覆盖。
+
+### 3.2 Install / 安装配套源码与私有配置
+
 以下命令会替换当前用户的 `$HOME/deer-flow` 代码；已有部署会自动保留明确列入契约的运行数据：
 
 ```text
@@ -1349,8 +1422,10 @@ backend/.deer-flow/integrations          # 已安装的受管 Integration Skills
 backend/.deer-flow/soc-internal-validation
 ```
 
-新 private overlay 中的配置、凭证与 `pingan-context` 仍以本次交付为准；旧 PID、日志、技能投影、
-临时缓存和旧安装包不会迁入新 checkout。
+新 private overlay 中的配置、凭证与 `pingan-context` 仍以本次交付为准，**会覆盖内网旧配置**。
+如果上次部署后曾在内网调整端点、凭证或 Provider 配置，安装前先与本次私有包核对并保存差异；
+不要把旧 env 整体覆盖回来，以免恢复旧并发或过期配置。本次要求两个并发值都是 `8`。
+旧 PID、日志、技能投影、临时缓存和旧安装包不会迁入新 checkout。
 
 ```bash
 bash "$HOME/READY-TO-TRANSFER/{installer_name}"
@@ -1362,75 +1437,9 @@ shell 状态。它在子 Bash 中依次校验准确 SHA-256、解压并检查新
 都只结束安装器，不会关闭当前终端；Hash/解压/停服/端口失败时不会替换旧 checkout，替换阶段
 或数据恢复失败时会尽力恢复旧目录。不要使用 `source` 或 `.` 加载安装器。
 
-正常重部署不要删除 `deerflow.db`、`soc_agent_dev.db` 或 `soc_agent_stg.db`。只有首次初始化从未成功、且已确认库内没有
-账号、研判、Memory、审核或任务数据时，才可把残库和 `-wal`/`-shm`/`-journal` 一并移动到带时间戳
-的隔离备份目录后重新初始化；仍不要直接 `rm`。
-
-### 3.1 Stateless DEV Reset / 无状态 DEV 清洁重装
-
-如果安装器报告 `existing target is not a recognized Host DEV checkout`，说明
-`$HOME/deer-flow` 存在，但它不是当前安装器能够安全停服和保留状态的完整旧部署。停止端口进程并不会
-消除这个目录检查。仅当已明确确认该目录只是废弃部署包，而且其中的旧 SQLite、Memory、账号和内网验收结果都会永久删除时，
-才执行下面的清洁重装。正常升级禁止使用本节。
-
-下面的命令会先展示 `3000/8001/2026/4001/8090` 的监听者，只有输入完整确认短语
-`DELETE-OLD-DEV` 后，才终止这些 DEV 端口上的残留进程并删除固定目标 `$HOME/deer-flow`：
-
-```bash
-bash <<'BASH'
-TARGET_REPO="$HOME/deer-flow"
-
-printf 'Target to delete: %s\n' "$TARGET_REPO"
-for port in 3000 8001 2026 4001 8090; do
-  printf '\n===== TCP %s =====\n' "$port"
-  lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
-done
-
-read -r -p 'Type DELETE-OLD-DEV to permanently remove this stateless DEV deployment: ' confirmation </dev/tty
-if [[ "$confirmation" != "DELETE-OLD-DEV" ]]; then
-  echo 'Cancelled; no process or file was changed.'
-else
-  pids="$(
-    for port in 3000 8001 2026 4001 8090; do
-      lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null
-    done | sort -u
-  )"
-  if [[ -n "$pids" ]]; then
-    kill -TERM $pids 2>/dev/null || true
-    sleep 3
-  fi
-
-  remaining="$(
-    for port in 3000 8001 2026 4001 8090; do
-      lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null
-    done | sort -u
-  )"
-  if [[ -n "$remaining" ]]; then
-    kill -KILL $remaining 2>/dev/null || true
-    sleep 1
-  fi
-
-  remaining="$(
-    for port in 3000 8001 2026 4001 8090; do
-      lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null
-    done | sort -u
-  )"
-  if [[ -n "$remaining" ]]; then
-    echo "Refusing to delete while DEV ports remain occupied: $remaining"
-  else
-    /bin/rm -rf "$TARGET_REPO"
-    if [[ ! -e "$TARGET_REPO" ]]; then
-      echo "Old stateless DEV deployment removed: $TARGET_REPO"
-    else
-      echo "Removal failed; inspect permissions before retrying."
-    fi
-  fi
-fi
-BASH
-```
-
-看到 `Old stateless DEV deployment removed` 后，重新执行本节上方的
-`bash "$HOME/READY-TO-TRANSFER/{installer_name}"`。新部署会从空库开始，不恢复任何旧运行状态。
+正常重部署不要删除 `deerflow.db`、`soc_agent_dev.db` 或 `soc_agent_stg.db`。
+需要清空 SOC DEV 时，只使用第 6.1 节的受限归档重置命令。如果安装器报告
+`existing target is not a recognized Host DEV checkout`，保留原目录并排查，不执行删除整个仓库的命令。
 
 本次私有包同时包含：
 
@@ -1449,7 +1458,7 @@ validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-ind
 
 ## 4. Stage Existing Corpus / 落位内网已有语料
 
-当前开发者的 `$HOME` 会自然解析为 `/Users/zhangjianming627`；其他同事无需修改脚本。
+`$HOME` 自动使用当前 Mac 登录用户的主目录，不需要修改用户名。
 先确认四个文件位于：
 
 ```text
@@ -1484,13 +1493,17 @@ python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
 ## 5. Host Check And Install / 主机检查与依赖安装
 
 前置要求：Apple Silicon macOS、Python `3.12+`、uv、Node `22+`、项目固定的
-pnpm、nginx `1.23+`，以及已配置的平安 PyPI/pnpm 镜像。
+pnpm、nginx `1.23+`，以及已配置的平安 PyPI/pnpm 镜像。已有 Mac 基础工具无需重装；
+完整包替换不保留旧 `backend/.venv`、`node_modules` 或前端构建，仍须执行本节项目依赖安装。
 
 ```bash
+bash <<'BASH'
+set -euo pipefail
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
+BASH
 ```
 
 安装器使用冻结 lock、内部镜像和独立 `backend/.venv`。不要执行 `uv lock`，
@@ -1505,16 +1518,6 @@ DeerFlow 与 SOC 分别使用 `deerflow.db` 和当前环境独立的 `soc_agent_
 `soc_alembic_version`；`alembic_version` 属于 DeerFlow 主库。迁移失败会发生在 Sidecar 启动之前，
 命令直接返回失败，不会再表现为 `legacy-api exited during startup`。不要额外执行 `source`、
 `unset SOC_DATABASE_URL` 或手工重复 migration。
-
-按下面的状态决定下一步，不要重复执行已经通过的阶段：
-
-| 看到的状态 | 下一步 |
-|---|---|
-| 尚未执行 `start` | 先完成下一节 Fake E2E，再执行第 7 节 `start` |
-| `status` 中 Core/Sidecars 全部运行，且 `soc_database.status=ready` | 不再建库或重启，直接执行模型 Smoke/后续验收 |
-| `SOC database preparation failed before sidecar startup` | 服务尚未启动；保留已有数据库排查。仅确认是无业务数据的新建残库时，才使用第 3.1 节清洁重装 |
-| `legacy-api exited during startup` | 只可能来自旧交付包或非数据库启动错误；先查 Sidecar 日志，不要盲目删库 |
-| `legacy-worker exited during startup` / `did not become ready` | Worker 的数据库、Runtime、Policy、ZEUS 或 Callback 初始化失败；查看 `backend/.deer-flow/internal-host-dev/sidecars/legacy-worker.log`，不得继续提交 30 分钟验收任务 |
 
 ## 6. Execution Plane Preflight / 执行面预检
 
@@ -1555,20 +1558,77 @@ Agent Platform PRD；私有 env 保存 ZEUS PRD/STG 两套受保护 profile，�
 RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
+### 6.1 Restart Validation / 本次从零验证：重置 SOC DEV
+
+{reset_instruction}
+普通保留数据升级跳过本节。重置只归档 `soc_agent_dev.db` 和它的 SQLite sidecars：
+SOC DEV 的研判、批次任务、经验、候选与审核记录从空库重新开始；账号、STG、原始语料、配置和私钥保持不变。
+安装器已保留的旧 SOC DEV 数据会先移入有 Hash 清单的备份目录，不直接删除。
+
+先预览，确认 `database` 是本 checkout 的 `soc_agent_dev.db`、`ready=true`、`blockers=[]`：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data
+BASH
+```
+
+确认范围正确后执行已授权的重置。只在本次从零验证开始前执行一次：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+umask 077
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
+mkdir -p backend/.deer-flow/internal-host-dev
+receipt=backend/.deer-flow/internal-host-dev/dev-reset-receipt.json
+receipt_pending="$(mktemp "$receipt.XXXXXX")"
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data --confirm RESET-SOC-DEV > "$receipt_pending"
+mv "$receipt_pending" "$receipt"
+backend/.venv/bin/python -m json.tool "$receipt"
+BASH
+```
+
+报告必须是 `status=reset`（记录 `backup_directory`）或 `status=already_empty`（原本就是空库）。
+报告保存在 `backend/.deer-flow/internal-host-dev/dev-reset-receipt.json`，与批次手册的恢复入口一致。
+重置归档位于 `backend/.deer-flow/data/soc-dev-reset-backups/`，第 7 节普通 `start` 自动初始化空 SOC Schema。
+这就是本次所需初始化，不需要手工 migration、删库、重新安装 Mac 工具或重新搬运未变化的语料。
+后续重启、继续积累或第二批验证都不要再次执行；进入批次操作手册时也跳过其中已完成的重置步骤。
+
 ## 7. Start Host DEV / 启动服务
 
 首次按本 Runbook 顺序执行到这里时，Host DEV 尚未启动。直接执行一次启动命令，再查看状态：
 
 ```bash
+bash <<'BASH'
+set -euo pipefail
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 python3.12 scripts/soc_pingan_macos_host_dev.py status
+BASH
 ```
 
 只有本节曾经执行过、终端中断后回来继续验收时，才先单独运行 `status`。如果 Core 全部为 `true`、
 三个 Sidecar 都为 `running`，且 `soc_database.status=ready`，不要重复 `start`，直接执行模型 Smoke；
 否则重新执行上面的启动块。
+
+按下面的状态决定下一步，不要重复执行已经通过的阶段：
+
+| 看到的状态 | 下一步 |
+|---|---|
+| 尚未执行 `start` | 完成第 6 节预检（明确从零验证时还需第 6.1 节重置）后，执行本节启动块 |
+| `status` 中 Core/Sidecars 全部运行，且 `soc_database.status=ready` | 不再建库或重启，直接执行模型 Smoke/后续验收 |
+| `SOC database preparation failed before sidecar startup` | 服务尚未启动；保留已有数据库排查。查明原因后重试；需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置 |
+| `legacy-api exited during startup` | 只可能来自旧交付包或非数据库启动错误；先查 Sidecar 日志，不要盲目删库 |
+| `legacy-worker exited during startup` / `did not become ready` | Worker 的数据库、Runtime、Policy、ZEUS 或 Callback 初始化失败；查看 `backend/.deer-flow/internal-host-dev/sidecars/legacy-worker.log`，不得继续提交 30 分钟验收任务 |
+
 
 Host DEV 驱动会先准备可复用的前端构建，再准备 SOC 数据库，启动项目自有 `4001` 模型网关、`8090` 兼容 API 和 Worker，最后启动
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
@@ -1802,8 +1862,9 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 运行配置仅部署 Mac 本机可修改，请在本机通过 `http://localhost:2026` 操作。
 同事通过局域网地址仍可启动、暂停或重跑，沿用该批次最后保存的配置；无运行记录时使用部署默认值。
 本机新选择随提交运行保存，已排队任务保留原配置。Host DEV 自动限制内部服务监听，正常启动命令不变。
-仅首次从零实验按其第1.1节使用 `reset-dev-data` 预览，明确确认后才备份并重置SOC DEV库；
-常规部署和续跑不清库。无需逐条填写 alert ID，也不要重新运行旧 ZEUS
+已完成本手册第 6.1 节重置时，直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节；
+仅尚未重置且另外明确要求从零验证时才执行其第 1.1 节，常规部署和续跑不清库。
+无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。
 第一批2,997条、第二批主要验证8,520条、补充3,764条；原始15,288条语料保留，
 其中7条 `RPAADM_002192` SIEM 邮件告警不参加两批验证。旧4,343条
@@ -2010,6 +2071,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--include-private-overlay", action="store_true")
     parser.add_argument(
+        "--initialize-soc-dev",
+        action="store_true",
+        help="Mark the Runbook for an explicitly requested fresh SOC DEV validation; does not reset a database",
+    )
+    parser.add_argument(
         "--allow-dirty",
         action="store_true",
         help="Build a development-only archive from a dirty worktree; never use for final handoff",
@@ -2030,6 +2096,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 include_private_overlay=args.include_private_overlay,
                 allow_dirty=args.allow_dirty,
+                initialize_soc_dev=args.initialize_soc_dev,
             )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0

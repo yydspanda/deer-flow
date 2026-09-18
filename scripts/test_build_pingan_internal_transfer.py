@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import subprocess
@@ -8,6 +9,7 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from scripts import build_pingan_internal_transfer as transfer_builder
 from scripts.build_pingan_internal_transfer import (
     ARCHIVE_ROOT,
     PRIVATE_ENV_REQUIRED_KEYS,
@@ -120,8 +122,8 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "backend/scripts/soc_pingan_litellm_smoke.py" not in required
 
 
-def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
-    runbook = _transfer_runbook(
+def _render_transfer_runbook(*, initialize_soc_dev: bool = False) -> str:
+    return _transfer_runbook(
         timestamp="20260824T000000Z",
         git_info={"commit": "abc123", "branch": "yyds-dev"},
         archives={
@@ -139,7 +141,12 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
             "path": "/tmp/INSTALL-PINGAN-MAC.sh",
             "sha256": "installer-sha",
         },
+        initialize_soc_dev=initialize_soc_dev,
     )
+
+
+def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
+    runbook = _render_transfer_runbook()
 
     assert "abc123" in runbook
     assert "source-sha" in runbook
@@ -156,20 +163,15 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     clean_install = runbook.split(
         "## 3. Install Or Data-Preserving Redeploy", maxsplit=1
     )[1].split("## 4. Stage Existing Corpus", maxsplit=1)[0]
-    routine_install = clean_install.split("### 3.1 Stateless DEV Reset", maxsplit=1)[0]
-    assert "soc_pingan_macos_host_dev.py stop" not in routine_install
-    assert 'rm -rf "$TARGET_REPO"' not in routine_install
+    assert "soc_pingan_macos_host_dev.py stop" in clean_install
+    assert 'rm -rf "$TARGET_REPO"' not in clean_install
     assert "exit 1" not in clean_install
-    assert "### 3.1 Stateless DEV Reset / 无状态 DEV 清洁重装" in runbook
+    assert "### 3.1 Before Replacement / 替换前备份" in runbook
     assert 'TARGET_REPO="$HOME/deer-flow"' in clean_install
-    assert "DELETE-OLD-DEV" in clean_install
-    assert (
-        "Type DELETE-OLD-DEV to permanently remove this stateless DEV deployment: "
-        "' confirmation </dev/tty" in clean_install
-    )
+    assert "DELETE-OLD-DEV" not in runbook
     assert "for port in 3000 8001 2026 4001 8090" in clean_install
-    assert '/bin/rm -rf "$TARGET_REPO"' in clean_install
-    assert "旧 SQLite、Memory、账号和内网验收结果都会永久删除" in clean_install
+    assert "安装器成功后立即删除临时回退目录" in clean_install
+    assert "已有 Mac 基础工具无需重装" in runbook
     assert "三个 PKL 和 Workbench payload SQLite 不在 private overlay" in runbook
     assert "不需要额外 nginx/LAN hotfix" in runbook
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
@@ -256,9 +258,9 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "soc_agent.cli db upgrade" not in host_install
     assert "Host DEV `start` 统一负责 SOC SQLite migration" in host_install
     assert "新空库发生一次瞬时 `disk I/O error`" in host_install
-    assert "不要重复执行已经通过的阶段" in host_install
-    assert "不再建库或重启，直接执行模型 Smoke/后续验收" in host_install
-    assert "SOC database preparation failed before sidecar startup" in host_install
+    assert "不要重复执行已经通过的阶段" in runbook
+    assert "不再建库或重启，直接执行模型 Smoke/后续验收" in runbook
+    assert "SOC database preparation failed before sidecar startup" in runbook
     assert "## 7. Start Host DEV / 启动服务" in runbook
     assert "首次按本 Runbook 顺序执行到这里时，Host DEV 尚未启动" in runbook
     assert "只有本节曾经执行过、终端中断后回来继续验收时" in runbook
@@ -305,6 +307,190 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     stg_command = re.findall(r"```bash\n(.*?)```", stg_section, flags=re.DOTALL)[0]
     assert "--demo-no-auth" not in stg_command
     assert "--mode fake" in stg_section
+
+
+def test_transfer_runbook_resets_only_dev_after_preflight_before_first_start() -> None:
+    runbook = _render_transfer_runbook(initialize_soc_dev=True)
+    preflight = runbook.index("## 6. Execution Plane Preflight")
+    reset = runbook.index("### 6.1 Restart Validation / 本次从零验证：重置 SOC DEV")
+    start = runbook.index("## 7. Start Host DEV")
+    assert preflight < reset < start
+    section = runbook[reset:start]
+    assert "账号、STG、原始语料、配置和私钥保持不变" in section
+    assert "后续重启、继续积累或第二批验证都不要再次执行" in section
+    assert "status=reset" in section
+    assert "status=already_empty" in section
+    assert "backup_directory" in section
+    assert "dev-reset-receipt.json" in section
+    assert "直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节" in runbook
+    blocks = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)
+    assert len(blocks) == 2
+    assert "reset-dev-data\n" in blocks[0]
+    assert "--confirm" not in blocks[0]
+    assert "reset-dev-data --confirm RESET-SOC-DEV" in blocks[1]
+    for block in blocks:
+        assert "set -euo pipefail" in block
+        assert block.index("soc_pingan_macos_host_dev.py stop") < block.index(
+            "soc_pingan_macos_host_dev.py reset-dev-data"
+        )
+
+
+@pytest.mark.parametrize("initialize_soc_dev", [False, True])
+def test_transfer_runbook_requires_explicit_fresh_validation_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initialize_soc_dev: bool
+) -> None:
+    args = transfer_builder.parse_args(
+        ["--initialize-soc-dev"] if initialize_soc_dev else []
+    )
+    assert args.initialize_soc_dev is initialize_soc_dev
+    (tmp_path / "README.md").write_text("source fixture", encoding="utf-8")
+    monkeypatch.setattr(
+        transfer_builder,
+        "_git_info",
+        lambda root: {"commit": "abc123", "branch": "test", "worktree_dirty": False},
+    )
+    monkeypatch.setattr(
+        transfer_builder, "collect_source_paths", lambda root: [Path("README.md")]
+    )
+    monkeypatch.setattr(
+        transfer_builder, "_assert_required_handoff_sources", lambda _: None
+    )
+    options = {"initialize_soc_dev": True} if initialize_soc_dev else {}
+    report = transfer_builder.build_transfer_archives(
+        root=tmp_path, output_dir=tmp_path / "output", **options
+    )
+    saved_report = json.loads(Path(report["report_path"]).read_text(encoding="utf-8"))
+    assert saved_report["reset_soc_dev_requested"] is initialize_soc_dev
+    runbook = Path(report["runbook"]["path"]).read_text(encoding="utf-8")
+    if initialize_soc_dev:
+        assert "本次已选择从零重新验证" in runbook
+        assert "本次已明确选择重新初始化" in runbook
+    else:
+        assert "本次默认保留运行数据" in runbook
+        assert "本次交付未要求清空 SOC DEV，请跳过本节" in runbook
+        assert "本次已选择从零重新验证" not in runbook
+
+
+def test_transfer_runbook_shell_blocks_parse() -> None:
+    for block in re.findall(
+        r"```bash\n(.*?)```", _render_transfer_runbook(), flags=re.DOTALL
+    ):
+        completed = subprocess.run(
+            ["bash", "-n"], input=block, text=True, capture_output=True, check=False
+        )
+        assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("failure", [None, "stop", "reset-dev-data"])
+def test_runbook_reset_publishes_receipt_only_after_success(
+    tmp_path: Path, failure: str | None
+) -> None:
+    home = tmp_path / "home"
+    repo = home / "deer-flow"
+    python = repo / "backend/.venv/bin/python"
+    python.parent.mkdir(parents=True)
+    _write_executable(
+        python,
+        "#!/bin/bash\nset -e\n"
+        'printf "%s\\n" "$*" >> "$HOME/host-calls"\n'
+        '[[ "${2:-}" != "${RESET_TEST_FAILURE:-}" ]] || exit 2\n'
+        'if [[ "${2:-}" == reset-dev-data ]]; then\n'
+        '  printf \'{"status":"reset","backup_directory":"new-backup"}\\n\'\n'
+        'elif [[ "${1:-}" == -m ]]; then\n  cat "$3"\nfi\n',
+    )
+    receipt = repo / "backend/.deer-flow/internal-host-dev/dev-reset-receipt.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text('{"backup_directory":"previous-backup"}', encoding="utf-8")
+    section = (
+        _render_transfer_runbook(initialize_soc_dev=True)
+        .split("### 6.1 Restart Validation", maxsplit=1)[1]
+        .split("## 7. Start Host DEV", maxsplit=1)[0]
+    )
+    block = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)[1]
+    env = dict(os.environ)
+    env.update(HOME=str(home), RESET_TEST_FAILURE=failure or "")
+    completed = subprocess.run(
+        ["bash"], input=block, env=env, text=True, capture_output=True, check=False
+    )
+    saved = json.loads(receipt.read_text(encoding="utf-8"))
+    if failure:
+        assert completed.returncode != 0
+        assert saved["backup_directory"] == "previous-backup"
+        if failure == "stop":
+            assert "reset-dev-data" not in (home / "host-calls").read_text(
+                encoding="utf-8"
+            )
+    else:
+        assert completed.returncode == 0, completed.stderr
+        assert saved["backup_directory"] == "new-backup"
+        assert receipt.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("failure", [None, "missing_corpus", "stop", "listener"])
+def test_runbook_backup_is_private_and_stops_before_copying(
+    tmp_path: Path, failure: str | None
+) -> None:
+    home = tmp_path / "home"
+    repo = home / "deer-flow"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts/soc_pingan_macos_host_dev.py").write_text("", encoding="utf-8")
+    (repo / "private-marker").write_text("saved-local-config", encoding="utf-8")
+    for relative in (
+        "source/full_alert_2026_month_forth_sample_200.pkl",
+        "corpus/full_alert_validation_corpus.pkl",
+        "corpus/full_alert_dams_labeled_merged.pkl",
+        "corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite",
+    ):
+        path = home / "Downloads" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"corpus")
+        if failure == "missing_corpus":
+            path.unlink()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "python3.12",
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "$HOME/host-calls"\n'
+        'if [[ "${2:-}" == stop ]]; then\n'
+        '  [[ "${BACKUP_TEST_FAILURE:-}" != stop ]] || exit 2\n'
+        '  touch "$HOME/stopped"\nfi\n',
+    )
+    _write_executable(
+        fake_bin / "lsof",
+        '#!/bin/bash\n[[ "${BACKUP_TEST_FAILURE:-}" == listener ]] && exit 0\nexit 1\n',
+    )
+    section = (
+        _render_transfer_runbook()
+        .split("### 3.1 Before Replacement", maxsplit=1)[1]
+        .split("### 3.2 Install", maxsplit=1)[0]
+    )
+    block = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)[0]
+    env = dict(os.environ)
+    env.update(
+        HOME=str(home),
+        PATH=f"{fake_bin}:{env['PATH']}",
+        BACKUP_TEST_FAILURE=failure or "",
+    )
+    completed = subprocess.run(
+        ["bash"], input=block, env=env, text=True, capture_output=True, check=False
+    )
+    backups = list((home / "deer-flow-backups").glob("*/deer-flow.tar.gz"))
+    assert (repo / "private-marker").read_text(encoding="utf-8") == "saved-local-config"
+    if failure:
+        assert completed.returncode != 0
+        assert backups == []
+        if failure == "missing_corpus":
+            assert not (home / "host-calls").exists()
+        return
+    assert completed.returncode == 0, completed.stderr
+    assert (home / "stopped").exists()
+    assert len(backups) == 1
+    assert backups[0].stat().st_mode & 0o777 == 0o600
+    assert backups[0].parent.stat().st_mode & 0o777 == 0o700
+    with tarfile.open(backups[0]) as archive:
+        member = archive.extractfile("deer-flow/private-marker")
+        assert member is not None
+        assert member.read() == b"saved-local-config"
 
 
 def test_transfer_installer_is_self_contained_and_orders_destructive_steps() -> None:

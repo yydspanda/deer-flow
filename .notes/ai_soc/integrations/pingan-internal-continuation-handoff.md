@@ -32,6 +32,14 @@
 
 ### 1.1 Transfer bundle / 内网迁移包
 
+本轮用户明确要求重建完整交付包，并在已成功启动的内网 Mac 上重新初始化 SOC DEV 后开展两批验证。
+随包 Runbook 为本次提供先停服备份、替换安装、语料落位/依赖安装、显式 `reset-dev-data`、首次启动与 Smoke 的顺序。
+只重置 SOC DEV 的告警、任务、经验等记录；保留账号、STG库、源语料和私钥。不要把正常的从零演练当作删除整个部署。
+已装好的 Mac 基础工具可复用；完整安装器不保留 `.venv`、`node_modules` 或四个语料大文件，
+安装前必须确认 Downloads 中的语料副本。安装器的临时回滚目录在替换成功后即删除，因此必须先做仓库外独立备份。
+新 private overlay 覆盖配置，不自动合并内网修改；先核对已调通的内网参数，并确保两处并发值均为8。
+主 Runbook 已完成重置后，不再执行两批手册的第1.1节。真实内网模型/容量验收仍待内网执行。
+
 外网仓库根目录执行：
 
 ```bash
@@ -40,9 +48,11 @@ backend/.venv/bin/python \
 backend/.venv/bin/python \
   backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 git status --short
-python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
+python3 scripts/build_pingan_internal_transfer.py --include-private-overlay --initialize-soc-dev
 ```
 
+`--initialize-soc-dev` 只把本次明确选择的初始化流程写入 Runbook，不在外网或安装器中重置数据库。
+后续普通保留数据升级不要带此参数。
 前两条命令都只静态解析旧源码，不 import/执行旧项目。模型 preparer 选择已审阅 STG
 `DeepSeek_V4_Flash`，迁移本地 loopback key，生成 `0600` 的
 `.secrets/eagw-private-key.der`，并把 lifecycle/callback 初始化为 `fake`；Workflow preparer 导入
@@ -72,7 +82,8 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 - 重部署必须先解压到 staging，再从旧 `$HOME/deer-flow` 执行 Host DEV `stop`；只有
   `3000/8001/2026/4001/8090` 均无监听时才删除旧 checkout。不得先删除或移动运行中的目录，避免旧
   Gateway/Nginx/模型网关/兼容 API 持有 deleted/Trash cwd 并继续占端口。
-- 重部署不得删除或重新创建已有 `deerflow.db` / `soc_agent_dev.db` / `soc_agent_stg.db`。若首次 migration 从未完成且
+- 普通重部署不得删除或重新创建已有 `deerflow.db` / `soc_agent_dev.db` / `soc_agent_stg.db`。
+  本次用户明确选择的 SOC DEV 重置使用独立 `reset-dev-data` 备份并移走DEV库，不清理账号库或STG库。若首次 migration 从未完成且
   确认没有账号、研判、Memory、审核或任务数据，只能把残库和 SQLite sidecar 先移动到带时间戳的
   隔离目录再重试。SOC 库迁移版本固定查询 `soc_alembic_version`，不是 DeerFlow 的
   `alembic_version`。
@@ -118,9 +129,9 @@ python3 scripts/build_pingan_internal_transfer.py --inspect \
   backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/deer-flow-pingan-private-overlay-<timestamp>.tar.gz
 ```
 
-内网 Mac 使用随包安装器叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`；对当前
-开发者它自然解析到 `/Users/zhangjianming627/deer-flow`，对其他同事无需修改脚本或配置。安装命令
-不依赖前一个终端块留下的变量：
+内网 Mac 使用随包安装器叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`，
+无需修改用户名。已有部署先完成随包主 Runbook 第3.1节的语料副本核验、停服和独立备份，
+再执行安装；下面是命令入口摘录，不能替代主 Runbook 的本次初始化顺序：
 
 ```bash
 bash "$HOME/READY-TO-TRANSFER/INSTALL-PINGAN-MAC.sh"
@@ -134,8 +145,8 @@ DeerFlow/SOC 数据库、用户 Memory 与工作区，但不会继承旧 PID、�
 不得把 Runbook 的代码块通过
 `source`/`.` 加载，也不再手工复制长篇解压和 `rm -rf` 命令。
 
-三个 PKL 与 Workbench payload SQLite 已单独保存在内网，不再重复打包。当前开发者的 `$HOME`
-自然解析为 `/Users/zhangjianming627`，其他同事仍使用自己的 home。解压后必须先校验并落位：
+三个 PKL 与 Workbench payload SQLite 已单独保存在内网，不再重复打包。`$HOME`
+使用当前登录用户的主目录。解压后必须先校验并落位：
 
 ```text
 $HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl
@@ -158,11 +169,13 @@ python3.12 scripts/soc_pingan_stage_internal_corpus.py --apply
 Host DEV 路径。它验证内部 registry，执行一次锁定安装，后续固定跳过依赖同步并关闭 Next.js 遥测：
 
 ```bash
-cd "$TARGET_REPO"
+cd "$HOME/deer-flow"
 python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
-python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 ```
+
+接着完成主 Runbook 第6节预检、第6.1节一次性 SOC DEV 重置，最后按第7节
+`start --daemon --demo-no-auth`、`status` 和模型/Web Smoke 启动验收。不要在重置前先开始批量验证。
 
 `--demo-no-auth` 仅用于可信内网演示：页面不再进入注册/登录，所有访问者共享合成管理员身份，
 因此无法按同事区分审计 actor。真实外部动作仍保持关闭。需要验收真实账号和权限时，先停止服务，
