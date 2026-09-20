@@ -2073,6 +2073,19 @@ Observation 写入状态构造只读投影。前端只轮询当前选中且正�
 摘要、模型名、token、Schema/Grounding 计数、Decision 和 Observation/Candidate ID；不得返回原始 payload、
 Evidence/Context 内容、Prompt、模型原文、Provider response 或 secret。
 
+语料 Pattern 进度必须属于所查看的确切 Run，并同时限定 plan、tenant、environment、alert。
+任务尚未保存 `run_id` 时，以冻结 request journal 的幂等键哈希识别其活动 claim；只读取紧凑
+status/batch/reason 列，不加载完整任务 payload。没有 Observation 不代表仍在写入：只对真实活动
+显示 running；正常不适用及第二批验证显示 skipped；写入失败（含旧版误记 completed 的契约错误）
+显示 failed，不能暴露 Pydantic 原始 input。后续重跑不得让历史审计转圈。失败任务汇总保留已存 Run
+的真实分析状态与用量，同任务重试复用已保存的研判，不额外调用模型；读请求不得补写 Observation。
+前端 `analysis_complete` 使用“研判已完成”的中性标签，阶段动画只跟随服务端真实 running 状态。
+
+主研判 Prompt builder 对最终 compact-JSON context 保留 1,500,000 字符（含边界）的资源门禁，
+超限错误同时报告实际字符数。它不代表模型 Token 容量：system、示例、格式和生成输出也占用窗口。
+重构/诊断必须使用同一 builder；不得静默裁剪证据、从模型别名推断容量或在 Runtime 下载 tokenizer。
+仅修改资源门禁不改变模型可见 Prompt 版本。
+
 DEV 告警演练的提交并发采用 `alert_id` 粒度的服务端原子占用：不同告警可并行，同一告警的第二个请求
 必须立即 `409` 且不得再次进入 Runtime/LLM。提交接口完成原子占用后立即返回 `202 Accepted` 和 active
 claim，不得让 HTTP 请求等待模型完成；现有同步分析服务由 Workbench 自有的有界后台 executor 调用。
@@ -2959,6 +2972,11 @@ tool permission denial rate
   均可缺失；generic Memory Kernel 不得规定一个所有厂商必填的多维联合硬键。Tenant Profile 可以基于
   已存在的 canonical facets 定义版本化 compound cohort/applicability，但必须保留 ruleless fallback 和
   context-only/decision-authority 边界。
+- 精确实体 `entity/role_entity` 的原文投影统一使用 `bounded_exact_entity`：保留既有 512 字符
+  门禁，超长完整值以保留类型前缀的 SHA-256 参与匹配，不截断、不扩大审核范围。写入、人工提升、
+  query、来源选项及对象关联比较必须一致；已投影 facet 不二次编码。原始证据和持久化 scope bindings
+  不改写，普通短值及既有 Pattern 空白归一身份保持兼容。摘要格式的原文字面量不能冒充生成摘要。
+  固定格式/行为/控制字段继续原校验；`ValidationError` 不得冒充正常 Pattern 不准入。
 - PingAn Profile v7（feature schema v5）把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
   `detection_key`，但该 key 只表示规则大类，不得单独复制历史 verdict。Profile 必须从 canonical
   rule name 生成版本化 `detection_signature`；不得用 `alert_id/run_id` 合成任一检测身份。

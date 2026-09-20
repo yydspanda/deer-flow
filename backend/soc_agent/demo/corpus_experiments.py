@@ -309,7 +309,9 @@ class SocCorpusExperimentService:
             if current is not None and not current.status.is_terminal:
                 failure_result = {"retryable": controlled.retryable, "stage": current.status.value}
                 if controlled.run_id:
-                    failure_result["summary"] = {"analysis_status": "failed", "measurements": self.repository.get_run_measurements(controlled.run_id)}
+                    # A downstream Pattern failure must not rewrite saved analysis.
+                    saved_run = self.repository.get_run(controlled.run_id)
+                    failure_result["summary"] = {"analysis_status": saved_run.status.value if saved_run is not None else "failed", "measurements": self.repository.get_run_measurements(controlled.run_id)}
                 self.jobs.transition(
                     job.job_id,
                     worker_id=worker_id,

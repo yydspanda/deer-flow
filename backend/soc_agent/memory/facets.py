@@ -56,7 +56,7 @@ def memory_facets_from_analysis_request(
     _add(facets, "environment", request.environment)
 
     for mention in request.extracted_entities.mentions[:80]:
-        _add(facets, "entity", mention.key)
+        _add(facets, "entity", bounded_exact_entity(mention.key))
     for conflict_type in request.conflict_types:
         _add(facets, "conflict_type", conflict_type)
     for skill in request.skill_context.selected_skills:
@@ -173,7 +173,7 @@ def _facets_from_alert_or_report(
 
     if run.entities is not None:
         for mention in run.entities.mentions[:80]:
-            _add(facets, "entity", mention.key)
+            _add(facets, "entity", bounded_exact_entity(mention.key))
         for value in run.entities.rule_codes:
             _add(facets, "rule_code", value)
         for value in run.entities.rule_names:
@@ -295,8 +295,28 @@ def _bounded_evidence_strings(content: str) -> list[str]:
     return strings
 
 
+def bounded_exact_entity(value: str) -> str:
+    """Project a raw typed entity once; never encode already-projected facets.
+
+    Keep the existing Pattern whitespace/length boundary and ordinary short
+    identities. Hash complete comparison-normalized values, never a prefix.
+    Escape raw literals in the digest namespace so they cannot impersonate a
+    generated value. Evidence and persisted object bindings remain untouched.
+    """
+
+    normalized = value.strip()
+    prefix, separator, body = normalized.casefold().partition(":")
+    if not separator or re.fullmatch(r"[a-z_]{1,64}", prefix) is None:
+        return normalized  # Malformed types still face the existing validators.
+    reserved_literal = re.fullmatch(r"sha256:[0-9a-f]{64}", body) is not None
+    pattern_value = " ".join(normalized.split())
+    if len(pattern_value) <= 512 and not reserved_literal:
+        return pattern_value if len(normalized) > 512 else normalized
+    return f"{prefix}:sha256:{stable_hash(normalized.casefold())}"
+
+
 def _role_entity(role: str, value: str) -> str:
-    return f"{str(role).strip().casefold()}:{str(value).strip().casefold()}"
+    return bounded_exact_entity(f"{str(role).strip().casefold()}:{str(value).strip().casefold()}")
 
 
 def _leaf_name(value: str) -> str:
@@ -346,6 +366,7 @@ def reusable_facet_values(
 
 
 __all__ = [
+    "bounded_exact_entity",
     "memory_facets_from_analysis_request",
     "memory_facets_from_analysis_run",
     "merge_memory_facets",

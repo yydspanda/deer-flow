@@ -73,6 +73,10 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 
 ## Retrieval And Decision Use
 
+- `facets.bounded_exact_entity` projects exact entities for learning/reuse; see
+  [contracts](../../../.notes/reference-index/soc-agent-engineering-contracts.md)
+  for full-value hashing, compatibility and errors.
+
 - Applicability policy v4 freezes both selected behaviors (required presence) and the
   complete reviewed behavior coverage. Unchecking a known behavior makes it optional;
   it does not authorize unreviewed new behaviors. Uncovered current behavior stays
@@ -89,19 +93,17 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   The UI does not receive their entire union. Preview, draft and review validate chosen
   values server-side. Refinement preserves its parent, freezes only covered sources and
   creates a pending candidate. Lesson drafting must not borrow excluded source narratives.
-- Direct Memory reuse retains a v4 observation with `lesson=None` and
-  `conclusion_origin=memory_reuse`: useful recurrence evidence, never an independent
-  verdict confirmation. Tenant-policy-only direct results still do not create observations.
-  Both DEV Workbenches must forward direct Memory results to the shared Pattern service
-  and expose the persisted observation in trace/audit. Do not blanket-skip direct results
-  in entrypoint or read-side filtering. Historical missing observations stay missing until
-  an explicit subsequent processing action; a read must not backfill them.
+- Direct Memory reuse persists v4 observations with `lesson=None` and
+  `conclusion_origin=memory_reuse`: recurrence evidence, not independent verdicts.
+  Tenant-policy-only results create none. Both DEV Workbenches forward direct Memory
+  results to the shared Pattern service and expose observations in trace/audit;
+  neither entrypoints nor readers may blanket-skip them. Historical gaps require
+  explicit processing, never read-side backfill.
 
-- Model-visible reviewed prose preserves the complete business lesson, including tail
-  boundaries and invalidation conditions. Compare full facet values before selecting
-  bounded comparison items; never compare truncated prefixes. Whole-record retrieval
-  budgets and final Prompt size checks still apply. Lesson drafting retains complete
-  selected source values and rejects an oversized source catalog rather than slicing it.
+- Model-visible reviewed prose retains the full lesson, including tail boundaries and
+  invalidation conditions. Compare complete facets before bounding comparison items;
+  never compare truncated prefixes. Whole-record retrieval and Prompt budgets still apply.
+  Lesson drafting retains full selected source values and rejects oversized catalogs.
 
 - Exact approved override directives may resolve a run before the primary analyzer, after
   enterprise policy checks. `find_directive_records` evaluates enabled tenant-scoped

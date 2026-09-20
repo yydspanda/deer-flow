@@ -740,10 +740,10 @@ def test_corpus_workbench_execution_projects_runtime_then_pattern_persistence(
 
     assert analysis_complete.status == "analysis_complete"
     assert analysis_complete.run_id == run.run_id
-    assert analysis_complete.current_phase == "memory"
+    assert analysis_complete.current_phase is None
     assert analysis_complete.phases[0].label == "来源适配与标准化 / Adapter & Normalize"
     assert next(item for item in analysis_complete.phases if item.phase == "reasoning").status == "success"
-    assert next(item for item in analysis_complete.phases if item.phase == "memory").status == "running"
+    assert next(item for item in analysis_complete.phases if item.phase == "memory").status == "skipped"
 
     context = ServiceRequestContext(
         actor=ActorContext(

@@ -40,6 +40,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.contracts.memory_learning import SocMemoryLearningView
+from soc_agent.contracts.processing_jobs import ACTIVE_PROCESSING_JOB_STATUSES, ProcessingJobStatus
 from soc_agent.core import (
     SocAnalysisService,
     SocMemoryPatternService,
@@ -49,7 +50,7 @@ from soc_agent.core.handling import project_operational_handling
 from soc_agent.core.operator_language import operator_text
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository
-from soc_agent.db.corpus_experiments import CorpusExperimentSchemaNotReady, CorpusFailedJob
+from soc_agent.db.corpus_experiments import CorpusExperimentSchemaNotReady, CorpusFailedJob, CorpusRunJob
 from soc_agent.db.corpus_lists import EMPTY_REVISION, CorpusListSummary
 from soc_agent.demo.corpus_batches import CorpusBatch, CorpusBatchCase, CorpusBatchSelection, CorpusValidationTier, build_corpus_batch_plan
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
@@ -164,6 +165,7 @@ class _ActiveExecutionClaim:
     actor_surface: str
     request_id: str
     started_at: datetime
+    pattern_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1578,6 +1580,10 @@ class SocCorpusWorkbenchService:
             )
 
         if run.status is not AnalysisRunStatus.FAILED and (run.direct_resolution is None or run.direct_resolution.source_kind == "memory"):
+            with self._execution_lock:
+                claim = self._active_executions.get(alert_id)
+                if claim is not None:
+                    self._active_executions[alert_id] = replace(claim, pattern_run_id=run.run_id)
             # Replays may acquire new semantic features. The Pattern service deduplicates
             # the same alert within the same signature; never pin a new run to old facets.
             aggregation = self._pattern_service.observe_run(
@@ -1606,6 +1612,26 @@ class SocCorpusWorkbenchService:
             ),
         )
 
+    def _pattern_progress(self, run: AnalysisRun | None) -> tuple[CorpusRunJob | None, bool]:
+        if run is None:
+            return None, False
+        with self._execution_lock:
+            claim = self._active_executions.get(run.alert_id)
+            local_active = claim is not None and claim.pattern_run_id == run.run_id
+        try:
+            self._experiment_store.require_schema()
+        except CorpusExperimentSchemaNotReady:
+            return None, local_active
+        job = self._experiment_store.run_job(
+            plan_id=self._batch_plan.plan_id,
+            tenant_id=CORPUS_WORKBENCH_TENANT,
+            environment=CORPUS_WORKBENCH_ENVIRONMENT,
+            alert_id=run.alert_id,
+            run_id=run.run_id,
+            idempotency_key_hash=run.request_journal.idempotency_key_hash if run.request_journal is not None else None,
+        )
+        return job, local_active or (job is not None and job.status in ACTIVE_PROCESSING_JOB_STATUSES)
+
     def get_execution(self, alert_id: str) -> SocCorpusWorkbenchExecution:
         """Return one lightweight persisted timeline without rebuilding corpus state."""
 
@@ -1628,12 +1654,15 @@ class SocCorpusWorkbenchService:
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         candidate = self._repository.get_memory_candidate(replay.candidate_id) if replay is not None and replay.candidate_id is not None else None
+        pattern_job, pattern_active = self._pattern_progress(run)
         execution = _execution_view(
             alert_id=alert_id,
             run=run,
             observation=observation,
             replay=replay,
             candidate=candidate,
+            pattern_job=pattern_job,
+            pattern_active=pattern_active,
         )
         return execution.model_copy(update={"status": "failed"}) if failure is not None else execution
 
@@ -1685,12 +1714,15 @@ class SocCorpusWorkbenchService:
             run_id=run.run_id,
             limit=500,
         )
+        pattern_job, pattern_active = self._pattern_progress(run)
         execution = _execution_view(
             alert_id=alert_id,
             run=run,
             observation=observation,
             replay=replay,
             candidate=resolved_candidate or (candidates[0] if candidates else None),
+            pattern_job=pattern_job,
+            pattern_active=pattern_active,
         )
         return _audit_bundle(
             run=run,
@@ -2579,6 +2611,8 @@ def _execution_view(
     observation: Any | None,
     replay: Any | None,
     candidate: Any | None,
+    pattern_job: CorpusRunJob | None = None,
+    pattern_active: bool = False,
 ) -> SocCorpusWorkbenchExecution:
     now = datetime.now(UTC)
     if run is None:
@@ -2586,6 +2620,8 @@ def _execution_view(
     elif run.status is AnalysisRunStatus.RUNNING:
         status = "running"
     elif run.status is AnalysisRunStatus.FAILED:
+        status = "failed"
+    elif _pattern_job_failed(pattern_job):
         status = "failed"
     elif observation is None and run.direct_resolution is None:
         status = "analysis_complete"
@@ -2622,8 +2658,14 @@ def _execution_view(
         pattern_status = "skipped"
     elif run is not None and run.status is AnalysisRunStatus.FAILED:
         pattern_status = "skipped"
-    elif run is not None and run.status is not AnalysisRunStatus.RUNNING:
+    elif pattern_job is not None and pattern_job.batch == "validation":
+        pattern_status = "skipped"
+    elif run is not None and run.status not in {AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING} and _pattern_job_failed(pattern_job):
+        pattern_status = "failed"
+    elif run is not None and run.status not in {AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING, AnalysisRunStatus.INTERRUPTED} and pattern_active:
         pattern_status = "running"
+    elif run is not None and run.status not in {AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING}:
+        pattern_status = "skipped"
     else:
         pattern_status = "pending"
     projected_steps.append(
@@ -2654,12 +2696,16 @@ def _execution_view(
                 phase=phase_key,
                 label=phase_label,
                 status=phase_status,
-                summary=_phase_summary(
-                    phase_key,
-                    phase_status,
-                    run=run,
-                    observation=observation,
-                    replay=replay,
+                summary=(
+                    _pattern_terminal_summary(pattern_status, pattern_job)
+                    if phase_key == "memory" and run is not None and run.direct_resolution is None and run.status is not AnalysisRunStatus.FAILED and pattern_status in {"skipped", "failed"}
+                    else _phase_summary(
+                        phase_key,
+                        phase_status,
+                        run=run,
+                        observation=observation,
+                        replay=replay,
+                    )
                 ),
                 duration_ms=(sum(duration_values) if duration_values else None),
                 metrics=_phase_metrics(
@@ -2708,6 +2754,29 @@ def _execution_view(
         candidate_id=(candidate.candidate_id if candidate is not None else None),
         phases=phases,
     )
+
+
+def _pattern_job_failed(job: CorpusRunJob | None) -> bool:
+    if job is None:
+        return False
+    # Older executors saved contract validation failures as completed/ineligible.
+    # Preserve those immutable records while projecting their actual outcome.
+    reason = job.pattern_reason or ""
+    return job.status is ProcessingJobStatus.FAILED or (job.status is ProcessingJobStatus.COMPLETED and "validation error" in reason and "MemoryPatternSignature" in reason)
+
+
+def _pattern_terminal_summary(status: CorpusExecutionPhaseStatus, job: CorpusRunJob | None) -> str:
+    """Never expose raw validation errors or embedded evidence in progress reads."""
+    if status == "failed":
+        reason = job.pattern_reason if job is not None and job.pattern_reason else ""
+        if "MemoryPatternSignature" in reason and ("1-512 characters" in reason or "at most 512 characters" in reason):
+            return "模式积累失败：模式特征超过长度限制；研判结果已保存，可重新运行重试。"
+        return "模式积累失败，研判结果已保存；可重新运行重试。"
+    if job is None:
+        return "本次未记录模式观察，研判已结束。"
+    if job.batch == "validation" or job.pattern_reason == "validation_learning_disabled":
+        return "第二批仅验证经验效果，本次不新增模式或经验。"
+    return "本次未积累经验：当前告警不满足模式积累条件；研判结果已保存。"
 
 
 def _execution_step(step: Any) -> SocCorpusWorkbenchExecutionStep:
@@ -2765,6 +2834,8 @@ def _phase_status(
         return "running"
     if "success" in statuses:
         return "success"
+    if statuses == {"skipped"}:
+        return "skipped"
     if execution_status == "failed":
         return "skipped"
     if run is None:

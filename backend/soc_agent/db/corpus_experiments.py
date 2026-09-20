@@ -1,5 +1,7 @@
 """Indexed experiment/round queries over the same SOC job and audit database."""
 
+import hashlib
+import json
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -52,6 +54,13 @@ class CorpusFailedJob:
     run_id: str | None
     error_code: str | None
     error_message: str | None
+
+
+@dataclass(frozen=True)
+class CorpusRunJob:
+    status: ProcessingJobStatus
+    batch: str
+    pattern_reason: str | None
 
 
 class SqlAlchemyCorpusExperimentRepository:
@@ -320,6 +329,41 @@ class SqlAlchemyCorpusExperimentRepository:
         )
         with self._session_factory() as session:
             return [CorpusFailedJob(*row) for row in session.execute(query)]
+
+    def run_job(self, *, plan_id: str, tenant_id: str, environment: str, alert_id: str, run_id: str, idempotency_key_hash: str | None = None) -> CorpusRunJob | None:
+        """Read only one Run's downstream state, including its not-yet-linked claim.
+
+        The dispatcher saves job.run_id after Pattern accumulation returns. Until
+        then, the Runtime request journal identifies the active claim by request
+        hash. Another attempt for the same alert must not rewrite this Run's view.
+        """
+        job, item, round_, experiment = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocCorpusExperimentRow
+        identity = job.run_id == run_id
+        if idempotency_key_hash:
+            identity = or_(identity, job.run_id.is_(None) & job.status.in_([status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]))
+        query = (
+            select(job.run_id, job.idempotency_key, job.status, round_.batch, job.result_payload["pattern_reason"].as_string())
+            .join(item, item.job_id == job.job_id)
+            .join(round_, round_.round_id == item.round_id)
+            .join(experiment, experiment.experiment_id == round_.experiment_id)
+            .where(
+                experiment.plan_id == plan_id,
+                experiment.record_payload["tenant_id"].as_string() == tenant_id,
+                experiment.record_payload["environment"].as_string() == environment,
+                job.tenant_id == tenant_id,
+                item.alert_id == alert_id,
+                job.alert_id == item.alert_id,
+                job.workload_kind == "corpus_experiment",
+                identity,
+            )
+            .order_by((job.run_id == run_id).desc(), round_.created_at.desc(), round_.round_id.desc())
+        )
+        with self._session_factory() as session:
+            for saved_run_id, key, status, batch, reason in session.execute(query):
+                # Use the journal's compact UTF-8 hash encoding, not stable_hash.
+                if saved_run_id == run_id or hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest() == idempotency_key_hash:
+                    return CorpusRunJob(ProcessingJobStatus(status), batch, reason)
+        return None
 
     def set_dispatch_scope(self, round_id: str, alert_ids: list[str]) -> None:
         with self._session_factory() as session:

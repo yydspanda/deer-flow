@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 
 from soc_agent.contracts import SocMemoryCandidateType, SocMemoryQuery
+from soc_agent.memory.facets import bounded_exact_entity
 from soc_agent.memory.scoring import evaluate_memory_scope
 from soc_agent.utils.model_json import model_json
 
@@ -46,7 +47,8 @@ def scope_samples(candidate, repository):
         sample["facets"] = {key: list(values) for key, values in sample["facets"].items()}
         for binding in sample.get("scope_bindings", []):
             for key, values in binding.facets.items():
-                sample["facets"][key] = sorted(set(sample["facets"].get(key, [])) | set(values))
+                projected = {bounded_exact_entity(value) for value in values} if key in {"entity", "role_entity"} else set(values)
+                sample["facets"][key] = sorted(set(sample["facets"].get(key, [])) | projected)
     return samples
 
 

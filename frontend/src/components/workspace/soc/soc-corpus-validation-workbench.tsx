@@ -405,7 +405,7 @@ const EXECUTION_STATUS_LABELS: Record<
 > = {
   not_started: "尚未运行",
   running: "运行中",
-  analysis_complete: "Runtime 完成，等待 Pattern 写入",
+  analysis_complete: "研判已完成",
   completed: "完整链路完成",
   failed: "运行失败",
 };
@@ -489,7 +489,7 @@ function executionStatusIcon(
   return <Clock3Icon className="text-muted-foreground size-4" />;
 }
 
-function ExecutionMonitor({
+export function ExecutionMonitor({
   execution,
   isLoading,
 }: {

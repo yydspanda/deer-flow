@@ -43,23 +43,21 @@ file for SOC code. The authoritative product and engineering documents are:
   This is readiness inspection, never implicit migration or reset. Host startup owns migrations.
   DEV owns one Gateway; finish legacy interactive work before preparing experiments.
   Once an experiment exists, manual runs must use durable round controls too.
-  Corpus list `run_status` filtering applies before SQL counts/pagination. Successful
-  execution includes completed and analysis-only runs; active reruns override earlier
-  terminal rows. Activity merges local claims with durable claimed/prechecking/analyzing/
-  projecting jobs scoped to the immutable corpus plan, tenant and environment, including
-  manual work in paused rounds. Queued/terminal jobs are excluded; read only compact
-  job columns, and reuse one activity snapshot for list counts and visible row projections.
-  If batch schema is unavailable, retain legacy activity/browsing while batch APIs return
-  the existing actionable upgrade error. Cache only successful schema readiness checks.
-  Also overlay the latest scoped durable job failure before list counts/pagination,
-  including failures before Runtime saves an AnalysisRun. Rank attempts before filtering
-  failures so superseded errors cannot hide a newer success; active claims take priority.
-  Use compact job fields and one failure snapshot for summaries and visible rows, without
-  rewriting cached Run projections or loading audit bundles. A failed attempt with no Run
-  must not present an earlier successful Run's conclusion as its result.
-  Detail/execution reads filter the failure query to the selected alert before ranking.
-  Execution reports a durable failure even without a Run; fixed historical audit reads
-  continue to use their explicit Run ID and are never rewritten by the live overlay.
+  Filter corpus `run_status` before SQL counts/pagination: success includes completed
+  and analysis-only runs; active reruns override terminal results. Merge local claims
+  with durable claimed/prechecking/analyzing/projecting jobs scoped by immutable plan,
+  tenant and environment, including manual work in paused rounds. Exclude queued/terminal
+  jobs; read compact columns and reuse one activity snapshot for counts and visible rows.
+  Missing batch schema preserves legacy browsing/activity; batch APIs return the
+  actionable upgrade error. Cache only successful readiness checks.
+  Before counts/pagination, overlay the latest scoped durable failure, even without an
+  AnalysisRun. Rank all attempts before selecting failures; active claims win. Reuse one
+  compact failure snapshot for summaries/rows without changing cached Runs or loading
+  audit bundles. Never show a prior success for a failed attempt without a Run.
+  Detail/execution filters by alert before ranking; durable no-Run failures remain visible.
+  Fixed audits use their explicit Run ID, never the live overlay.
+  Pattern activity, terminal outcomes and retry semantics follow the engineering contracts;
+  a missing observation alone never proves ongoing work or invalidates saved analysis.
   This browse filter never enters quick-validation dispatch commands.
   Corpus alert projections omit operator outcomes while a run is pending/running or an
   active execution owns the alert; absent intermediate analysis is not a terminal failure.
@@ -548,6 +546,8 @@ file for SOC code. The authoritative product and engineering documents are:
   Model projection sends the complete method once in S-*; Skill metadata points there.
   S/A/M/C/T context prose and condition comparisons bypass raw-evidence string clipping.
   Overall Prompt size guards still fail explicitly; never silently remove an exception.
+  Primary analysis's inclusive 1,500,000-character guard is not a Token budget;
+  input accounting and overflow rules follow the engineering contracts.
 - Read-only provider results persist as `InvestigationEvidence` with provider/mode/mock
   provenance and `decision_impact=none`. Providers never directly change verdict, close
   ReviewQueue, confirm Memory, or authorize action.

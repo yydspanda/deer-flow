@@ -6,6 +6,8 @@ from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
+from pydantic import ValidationError
+
 from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
@@ -274,6 +276,10 @@ def memory_pattern_command_from_run(
             run,
             facets=common_facets,
         )
+    except ValidationError:
+        # A broken projection is a retryable processing failure, not a normal
+        # decision that this completed analysis is ineligible for learning.
+        raise
     except ValueError as exc:
         raise MemoryPatternIneligibleError(str(exc)) from exc
     from soc_agent.memory.scope_bindings import scope_bindings

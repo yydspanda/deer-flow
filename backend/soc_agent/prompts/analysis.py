@@ -26,7 +26,9 @@ from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 from soc_agent.utils.model_json import model_json
 
 ANALYSIS_PROMPT_VERSION = "soc-analysis-v47"
-MAX_ANALYSIS_CONTEXT_CHARS = 180_000
+# Resource guard for projected context, not a model-specific Token window.
+# The provider also accounts for prompt instructions and generated output.
+MAX_ANALYSIS_CONTEXT_CHARS = 1_500_000
 
 _NETWORK_SOURCE_TYPES = frozenset(
     {
@@ -483,7 +485,7 @@ def build_analysis_prompt(request: LLMAnalysisRequest) -> AnalysisPrompt:
     context["prompt_example_id"] = example_id
     context_chars = len(json.dumps(context, ensure_ascii=False, separators=(",", ":"), default=str))
     if context_chars > MAX_ANALYSIS_CONTEXT_CHARS:
-        raise AnalysisPromptSizeError(f"bounded analysis context exceeds {MAX_ANALYSIS_CONTEXT_CHARS} characters")
+        raise AnalysisPromptSizeError(f"bounded analysis context exceeds {MAX_ANALYSIS_CONTEXT_CHARS} characters (actual: {context_chars})")
     return AnalysisPrompt(
         prompt_version=ANALYSIS_PROMPT_VERSION,
         system=_system_prompt(),

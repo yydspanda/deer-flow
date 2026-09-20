@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ from soc_agent.prompts import (
     analysis_output_examples,
     build_analysis_prompt,
 )
+from soc_agent.prompts import analysis as analysis_prompt_module
+from soc_agent.prompts.analysis import AnalysisPromptSizeError
 from soc_agent.prompts.operator_language import OPERATOR_OUTPUT_LANGUAGE
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
@@ -127,6 +130,40 @@ def test_analysis_prompt_keeps_long_context_before_tail_output_contract() -> Non
     assert "<business_context>" in prompt.system
     assert len(prompt.system) < 9_000
     assert "format_fragments" not in prompt.user
+
+
+def _request_with_projected_context_size(monkeypatch: pytest.MonkeyPatch, context_chars: int):
+    request = _analysis_request("missing_fields.json")
+    context = analysis_prompt_module.project_analysis_context(request)
+    context["synthetic_size_guard_fixture"] = "SYNTHETIC_START:SYNTHETIC_END"
+    monkeypatch.setattr(analysis_prompt_module, "project_analysis_context", lambda _: deepcopy(context))
+    initial_prompt = build_analysis_prompt(request)
+    initial_chars = len(json.dumps(initial_prompt.context, ensure_ascii=False, separators=(",", ":"), default=str))
+    assert initial_chars < context_chars
+    context["synthetic_size_guard_fixture"] = "SYNTHETIC_START:" + "测" * (context_chars - initial_chars) + "SYNTHETIC_END"
+    return request, context["synthetic_size_guard_fixture"]
+
+
+@pytest.mark.parametrize("context_chars", [214_676, 1_500_000])
+def test_analysis_prompt_accepts_large_context_without_truncation(monkeypatch: pytest.MonkeyPatch, context_chars: int) -> None:
+    request, complete_fixture = _request_with_projected_context_size(monkeypatch, context_chars)
+
+    prompt = build_analysis_prompt(request)
+
+    assert len(json.dumps(prompt.context, ensure_ascii=False, separators=(",", ":"), default=str)) == context_chars
+    assert prompt.context["synthetic_size_guard_fixture"] == complete_fixture
+    assert complete_fixture in prompt.user
+    assert prompt.user.rstrip().endswith("</final_checklist>")
+
+
+def test_analysis_prompt_rejects_context_above_limit_with_actual_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    request, _ = _request_with_projected_context_size(monkeypatch, 1_500_001)
+
+    with pytest.raises(AnalysisPromptSizeError) as error:
+        build_analysis_prompt(request)
+
+    assert "1500001" in str(error.value)
+    assert "1500000" in str(error.value)
 
 
 def test_analysis_prompt_selects_one_relevant_complete_example() -> None:

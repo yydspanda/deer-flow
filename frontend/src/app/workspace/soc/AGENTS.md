@@ -356,34 +356,30 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   execution endpoint. Render the server projection of persisted Runtime steps, provider
   journal, durations, bounded counts, decision, and Pattern write; do not estimate phase
   progress in React or expose raw evidence, prompts, model responses, or secrets.
-- Do not use one mutation's global pending state to lock the corpus table. Keep local
-  pending state by alert ID and poll the server's lightweight `/activity` projection so
-  different alerts can run concurrently while duplicate clicks across browser sessions
-  remain disabled. The header counts active claims across the current corpus, including
-  durable batch jobs outside the visible page/status filter. Its denominator is the
-  concurrency limit, not an expected constant number of running jobs.
-  Poll quickly only while executions are active and back off while the
-  workbench is idle. A process response is only a `202 Accepted` claim acknowledgement;
-  it does not contain the final analysis. Keep the alert visibly running, use
-  `/activity` and `/execution` for progress, and refetch the authoritative page after the
-  claim disappears rather than treating the mutation response as completion.
-  A fresh terminal execution also triggers one final page refresh if activity polling missed
-  the claim. Compare with the pre-submit Run ID so an old completed Run cannot finish a rerun.
-  Terminal status must not remain a local spinner merely because the row is absent or the
-  final list read fails. For externally started runs, retry unsuccessful final reads while
-  that alert/run remains selected and show the terminal execution status with a loading-error
-  notice. A failed refetch can retain stale query data; it never satisfies refresh deduplication.
-  Treat `analysis_complete` as terminal once durable activity clears: validation does not
-  require a Pattern observation. The cached running row may have no Run ID yet or retain
-  the prior Run ID. After activity clears, explicitly reread execution before using a
-  terminal trace for completion handling, cancelling older in-flight execution reads.
-  A different cached row Run ID alone never completes a final refresh that still reads running.
-  A durable task can fail before any Run is saved. Accept an explicit `failed` trace
-  with a null Run ID under the same post-activity fresh-read fence; do not persist a
-  Run-based deduplication key for it, since another attempt can fail before saving a Run too.
-  Cancel retries on selection/run changes or unmount. Keep the explicitly focused result
-  through readiness/comparison changes caused by processing; changing the user's filters
-  clears that temporary focus.
+- Keep pending state per alert, never lock the corpus table for one mutation. Poll the
+  server's lightweight `/activity` so different alerts can run concurrently while duplicate
+  clicks across sessions stay disabled. Header counts include all active corpus claims,
+  including durable jobs outside the visible page/status filter; the denominator is the
+  concurrency limit, not an expected active count. Poll quickly while active, back off at idle.
+  `202 Accepted` acknowledges a claim, not a final analysis. Keep the alert visibly running,
+  use `/activity` and `/execution` for progress, and refetch the authoritative page when
+  the claim disappears. A fresh terminal trace also triggers one final page refresh if
+  activity polling missed the claim. Compare the pre-submit Run ID so an old completed Run
+  cannot finish a rerun. A missing row or failed final read must not retain a local spinner.
+  For externally started runs, retry failed final reads while that alert/run stays selected;
+  show its terminal status with a loading-error notice. Failed refetches may retain stale
+  data and never satisfy refresh deduplication. Cancel retries on selection/run changes or unmount.
+  Treat `analysis_complete` as terminal after durable activity clears; label it `研判已完成`.
+  Validation requires no Pattern observation; its absence never implies a running write.
+  Only server phase status `running` animates; show skipped/failed explanations alongside
+  the saved analysis without a spinner. A cached running row may have a null or prior Run ID.
+  After activity clears, cancel older in-flight execution reads and explicitly reread execution
+  before using a terminal trace. A different cached Run ID never completes a final refresh
+  that still reads running. Durable failure before a Run exists may return `failed` with a
+  null Run ID; accept it under the same post-activity fresh-read fence without persisting a
+  Run-based deduplication key, since later attempts may also fail before saving a Run.
+  Keep explicitly focused results through processing-driven readiness/comparison changes;
+  user filter changes clear that temporary focus.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
   Batch progress and quick-command invalidation target only lightweight workbench
   state/activity/execution keys; pinned audit bundles remain cached even as unrelated jobs finish.
