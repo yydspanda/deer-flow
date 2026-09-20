@@ -9,14 +9,21 @@ import io
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+if __package__:
+    from .soc_pingan_compatibility_gate import run_compatibility_gate
+else:
+    from soc_pingan_compatibility_gate import run_compatibility_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 TRANSFER_ROOT = ROOT / "backend/.deer-flow/internal-transfer"
@@ -302,6 +309,14 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/db/migrations/versions/0022_tenant_policy_decisions.py",
     "scripts/build_pingan_macos_offline_bundle.py",
     "scripts/build_pingan_internal_transfer.py",
+    "scripts/soc_pingan_compatibility_gate.py",
+    "scripts/test_soc_pingan_compatibility_gate.py",
+    "scripts/test_pingan_transfer_compatibility_gate.py",
+    "backend/tests/test_soc_release_memory_compatibility.py",
+    "backend/tests/test_soc_pingan_memory_profile_restore.py",
+    "backend/tests/test_soc_corpus_pattern_execution.py",
+    "backend/tests/test_soc_memory_experiment_retrieval.py",
+    "backend/tests/fixtures/soc_memory/profile7_v5_release_20260918.json",
     "scripts/build_pingan_corpus_transfer.py",
     "scripts/soc_pingan_macos_host_dev.py",
     "scripts/soc_pingan_host_sidecars.py",
@@ -369,8 +384,6 @@ def build_transfer_archives(
     git_info = _git_info(root)
     _assert_source_freeze_allowed(git_info, allow_dirty=allow_dirty)
     output_dir = output_dir.expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    output_dir.chmod(0o700)
     private_paths: list[Path] | None = None
     if include_private_overlay:
         private_paths = [Path(item) for item in PRIVATE_OVERLAY_PATHS]
@@ -391,6 +404,76 @@ def build_transfer_archives(
         git_info=git_info,
         private=False,
     )
+    fingerprint = _source_fingerprint(source_manifest)
+    compatibility = run_compatibility_gate(
+        root, source_commit=git_info["commit"], source_fingerprint=fingerprint
+    )
+    if (
+        compatibility.get("status") != "passed"
+        or compatibility.get("source_commit") != git_info["commit"]
+        or compatibility.get("source_fingerprint") != fingerprint
+    ):
+        raise ValueError("compatibility evidence does not match the frozen source")
+    _assert_source_unchanged(root, source_manifest)
+    # Keep prior verified archives and their installer/runbooks intact until
+    # tests, archive inspection and the final source identity check all pass.
+    with tempfile.TemporaryDirectory(prefix="pingan-verified-transfer-") as directory:
+        staging = Path(directory)
+        report = _write_transfer_artifacts(
+            root=root,
+            output_dir=staging,
+            source_paths=source_paths,
+            source_manifest=source_manifest,
+            private_paths=private_paths,
+            git_info=git_info,
+            timestamp=timestamp,
+            allow_dirty=allow_dirty,
+            initialize_soc_dev=initialize_soc_dev,
+            compatibility=compatibility,
+        )
+        for archive in report["archives"].values():
+            inspect_archive(Path(archive["path"]))
+        _assert_source_unchanged(root, source_manifest)
+        _publish_transfer_artifacts(staging, output_dir, report)
+    return report
+
+
+def _source_fingerprint(manifest: MappingLike) -> str:
+    frozen = {"commit": manifest["git"]["commit"], "files": manifest["files"]}
+    return hashlib.sha256(
+        json.dumps(frozen, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _assert_source_unchanged(root: Path, original: MappingLike) -> None:
+    current_git = _git_info(root)
+    if current_git != original["git"]:
+        raise ValueError("source identity changed after compatibility checks started")
+    current = _archive_manifest(
+        archive_kind="source",
+        root=root,
+        paths=collect_source_paths(root),
+        created_at=original["created_at"],
+        git_info=current_git,
+        private=False,
+    )
+    if _source_fingerprint(current) != _source_fingerprint(original):
+        raise ValueError("source files changed after compatibility checks started")
+
+
+def _write_transfer_artifacts(
+    *,
+    root: Path,
+    output_dir: Path,
+    source_paths: list[Path],
+    source_manifest: MappingLike,
+    private_paths: list[Path] | None,
+    git_info: dict[str, Any],
+    timestamp: str,
+    allow_dirty: bool,
+    initialize_soc_dev: bool,
+    compatibility: dict[str, Any],
+) -> dict[str, Any]:
     source_path = output_dir / f"deer-flow-pingan-source-{timestamp}.tar.gz"
     _write_archive(
         source_path,
@@ -403,8 +486,7 @@ def build_transfer_archives(
         "source": _archive_result(source_path, source_manifest),
     }
 
-    if include_private_overlay:
-        assert private_paths is not None
+    if private_paths is not None:
         private_manifest = _archive_manifest(
             archive_kind="private_overlay",
             root=root,
@@ -459,13 +541,86 @@ def build_transfer_archives(
         "required_source_file_count": len(REQUIRED_HANDOFF_SOURCE_PATHS),
         "required_source_inventory_complete": True,
         "dirty_override_used": bool(git_info["worktree_dirty"] and allow_dirty),
-        "final_handoff_eligible": not git_info["worktree_dirty"],
+        "final_handoff_eligible": not git_info["worktree_dirty"]
+        and compatibility["status"] == "passed",
+        "compatibility_check": {
+            **compatibility,
+            "source_archive_sha256": archives["source"]["sha256"],
+        },
         "reset_soc_dev_requested": initialize_soc_dev,
         "secrets_in_console_output": False,
     }
     _write_private_json(report_path, report)
     report["report_path"] = str(report_path)
     return report
+
+
+def _publish_transfer_artifacts(
+    staging: Path, output_dir: Path, report: dict[str, Any]
+) -> None:
+    report_name = Path(report["report_path"]).name
+    unique_names = [Path(item["path"]).name for item in report["archives"].values()]
+    unique_names.append(report_name)
+    for name in unique_names:
+        if (output_dir / name).exists():
+            raise FileExistsError(f"transfer artifact already exists: {name}")
+    report["output_directory"] = str(output_dir)
+    for item in [
+        *report["archives"].values(),
+        report["installer"],
+        *report["runbooks"].values(),
+    ]:
+        item["path"] = str(output_dir / Path(item["path"]).name)
+    report["report_path"] = str(output_dir / report_name)
+    _write_private_json(
+        staging / report_name,
+        {key: value for key, value in report.items() if key != "report_path"},
+    )
+    output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    output_dir.chmod(0o700)
+    # Copy before touching the previous release. Incoming files and backups
+    # must share the destination filesystem so replacement also works when
+    # system temporary storage is on a different device.
+    publication = Path(tempfile.mkdtemp(prefix=".publishing-", dir=output_dir))
+    incoming = publication / "incoming"
+    backups = publication / "backups"
+    incoming.mkdir()
+    backups.mkdir()
+    touched: list[str] = []
+    cleanup = True
+    try:
+        for path in staging.iterdir():
+            shutil.copy2(path, incoming / path.name)
+        archive_names = unique_names[:-1]
+        sidecar_names = sorted(
+            path.name for path in staging.iterdir() if path.name not in unique_names
+        )
+        # Archives precede the installer; the report is the completion marker.
+        for name in [*archive_names, *sidecar_names, report_name]:
+            target = output_dir / name
+            if target.exists() or target.is_symlink():
+                shutil.copy2(target, backups / name, follow_symlinks=False)
+            touched.append(name)
+            os.replace(incoming / name, target)
+    except BaseException:
+        # Keep backups even if recovery itself is interrupted.
+        cleanup = False
+        try:
+            for name in reversed(touched):
+                target = output_dir / name
+                target.unlink(missing_ok=True)
+                backup = backups / name
+                if backup.exists() or backup.is_symlink():
+                    os.replace(backup, target)
+        except OSError as exc:
+            raise OSError(
+                f"publication rollback failed; previous files retained at {backups}"
+            ) from exc
+        cleanup = True
+        raise
+    finally:
+        if cleanup:
+            shutil.rmtree(publication)
 
 
 def _write_transfer_runbooks(
@@ -1462,8 +1617,11 @@ cd "$HOME/READY-TO-TRANSFER"
 cat "{report_name}"
 ```
 
-必须看到 `source_worktree_dirty=false`、`final_handoff_eligible=true` 和
-`required_source_inventory_complete=true`。
+必须看到 `source_worktree_dirty=false`、`final_handoff_eligible=true`、
+`required_source_inventory_complete=true` 和 `compatibility_check.status=passed`。
+`compatibility_check` 记录旧记录展示、已审核经验复用与越界拒绝的离线检查结果，
+同时绑定本包源码 commit、文件指纹和源码归档 SHA-256。打包程序已自动完成这些检查，
+内网无需重复运行测试，也不需要重跑第一批或重新审核已有经验。
 `default_runbook` 标明本次推荐入口；`reset_soc_dev_requested` 是交付选择，
 两份说明文件同时存在不代表应当重置。`runbooks` 分别记录两份文档的 SHA-256。
 

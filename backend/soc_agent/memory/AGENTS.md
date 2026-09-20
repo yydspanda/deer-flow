@@ -160,12 +160,19 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   features; `off/shadow` use Profile 7 / v5. The shared Memory kernel does not parse
   detector vendor labels or create semantic facts. Keep old records/indexes untouched;
   the offline corpus index remains an Adapter-only navigation index, not an authority for
-  a completed run's Memory scope. Workbench readers use the run's saved review mode and
-  actual signature to select observations; new apply candidates use the actual v7 facets.
-  New requests freeze `memory_profile`; historical unmarked apply runs use Profile 8 / v6.
+  a completed run's Memory scope. Workbench readers restore the frozen `memory_profile`
+  identity and actual signature to select observations, even when the run's semantic-review
+  mode differs. Only historical runs without a saved identity use legacy review-mode
+  inference (`apply` -> Profile 8 / v6, otherwise Profile 7 / v5). Invalid saved identities
+  fail closed rather than selecting another profile; new apply candidates use actual v7 facets.
   Restore known historical projectors for read/replay without rewriting or reactivating old Memory.
   Replaying the same alert/signature does not increase support. New semantic signatures
   must not be attached to old observations or silently widen reviewed Memory scopes.
+  The mandatory PingAn pre-delivery gate loads the fixed Profile 7 / v5 release baseline
+  to verify historical list/detail/audit reads, approved reuse and out-of-scope rejection.
+  Keep its original serialized records and matching expectations fixed; normal tests must
+  not regenerate old samples through current code. The gate uses temporary state and must
+  not rewrite business records, change reviewed conditions or require internal reruns.
 - Retrieval policy v2 runs exact-facet and text lanes over the complete eligible corpus,
   merges bounded candidates, and requires a Memory-type-specific strong anchor.
   Source/environment/category alone cannot admit a detection lesson or benign Pattern;

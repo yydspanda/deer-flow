@@ -335,7 +335,10 @@ file for SOC code. The authoritative product and engineering documents are:
   recovering an older parent must not hide a newer child. Single-alert reads page by
   alert/input hash, retaining scope and legacy policy-snapshot checks. Candidates,
   reviews, transitions and Memory uses are Run-scoped. Observations stay alert-scoped
-  for reruns; signature reconstruction must reuse the learning entity filter.
+  for reruns; signature reconstruction must restore the frozen request Profile identity
+  and reuse the learning entity filter. Read-time feature projections and list caches
+  must honor the same identity even when per-run review mode differs. Invalid identities
+  cannot bind an observation; retain static navigation without inventing accumulation.
   A saved sample shows successful accumulation even below candidate thresholds.
 - The explicitly gated corpus DEV workbench may expose a separate, on-demand,
   `soc_admin`-only audit bundle containing the persisted raw input, canonical alert,

@@ -391,6 +391,11 @@ def test_transfer_runbook_requires_explicit_fresh_validation_request(
     monkeypatch.setattr(
         transfer_builder, "_assert_required_handoff_sources", lambda _: None
     )
+    monkeypatch.setattr(
+        transfer_builder,
+        "run_compatibility_gate",
+        lambda root, **identity: {"status": "passed", **identity, "passed": 3},
+    )
     options = {"initialize_soc_dev": True} if initialize_soc_dev else {}
     report = transfer_builder.build_transfer_archives(
         root=tmp_path, output_dir=tmp_path / "output", **options
@@ -406,6 +411,8 @@ def test_transfer_runbook_requires_explicit_fresh_validation_request(
         assert _sha256_file(path) == item["sha256"]
         assert path.stat().st_mode & 0o777 == 0o600
         content = path.read_text(encoding="utf-8")
+        assert "compatibility_check.status=passed" in content
+        assert "内网无需重复运行测试" in content
         assert ("reset-dev-data --confirm RESET-SOC-DEV" in content) is (
             mode == "reinitialize"
         )

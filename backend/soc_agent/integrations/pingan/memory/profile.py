@@ -80,10 +80,12 @@ class PingAnSocMemoryProfile:
 
     @classmethod
     def for_run(cls, run: AnalysisRun) -> PingAnSocMemoryProfile:
-        """Read historical features using the run's saved mode, not today's rollout."""
-        report = run.normalization_assistance
+        """Restore the writer's frozen identity; infer only unmarked legacy runs."""
         saved = run.llm_analysis_request.memory_profile if run.llm_analysis_request else {}
-        return cls(semantic_features=report is not None and report.mode == "apply", stable_semantics=saved.get("profile_version") == "9")
+        if saved:
+            return cls().for_identity(saved)
+        report = run.normalization_assistance
+        return cls(semantic_features=report is not None and report.mode == "apply", stable_semantics=False)
 
     def for_identity(self, identity: dict[str, str]):
         version = identity.get("profile_version")

@@ -13,11 +13,11 @@ from test_soc_corpus_experiments import context, service
 from test_soc_pingan_memory_profile import _run as _pingan_run
 
 from soc_agent.application.memory import build_soc_memory_profile_registry
-from soc_agent.contracts import AnalysisRequestJournal, AuditAction, MemoryPatternDataClass, MemoryPatternSourceType
+from soc_agent.contracts import AnalysisRequestJournal, AuditAction, MemoryPatternDataClass, MemoryPatternSourceType, NormalizationAssistResult
 from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
 from soc_agent.core import SocAnalysisService, SocMemoryPatternService
 from soc_agent.db.models import SocProcessingJobRow
-from soc_agent.demo.corpus_workbench import _observation_matches_run
+from soc_agent.demo.corpus_workbench import _observation_matches_run, _runtime_feature_case
 
 workbench = batch_fixtures.workbench
 
@@ -200,7 +200,11 @@ def test_active_local_claim_only_marks_its_new_run_as_writing_pattern(workbench)
     assert _memory(workbench.get_execution(current.alert_id)).status == "skipped"
 
 
-def test_filtered_long_entity_observation_remains_visible_in_execution_audit_and_list(workbench):
+@pytest.mark.parametrize(
+    ("saved_version", "review_mode"),
+    [(None, None), ("7", "apply"), ("8", "shadow"), ("9", None), ("9", "shadow")],
+)
+def test_saved_observation_remains_visible_in_execution_audit_and_list(workbench, saved_version, review_mode):
     job = _job(workbench)
     long_url = "https://example.test/query?sql=" + "x" * 700
     run = _pingan_run(1, service_url=long_url)
@@ -208,6 +212,14 @@ def test_filtered_long_entity_observation_remains_visible_in_execution_audit_and
     run.input_hash = workbench._cases[job.alert_id].payload_hash
     run.llm_analysis_request.alert_id = job.alert_id
     run.llm_analysis_request.environment = "dev-corpus-eval"
+    if saved_version is not None:
+        run.llm_analysis_request.memory_profile = {
+            "profile_id": "pingan.soc",
+            "profile_version": saved_version,
+            "feature_schema_version": {"7": "pingan.soc.memory_features.v5", "8": "pingan.soc.memory_features.v6", "9": "pingan.soc.memory_features.v7"}[saved_version],
+        }
+    if review_mode is not None:
+        run.normalization_assistance = NormalizationAssistResult(mode=review_mode, status="applied" if review_mode == "apply" else "shadow", request_hash="fixture", model_name="fixture", prompt_version="fixture")
     workbench._repository.save_run(run)
     frozen_run = run.model_dump(mode="json")
     patterns = SocMemoryPatternService(repository=workbench._repository, candidate_repository=workbench._repository, profile_registry=build_soc_memory_profile_registry())
@@ -223,6 +235,9 @@ def test_filtered_long_entity_observation_remains_visible_in_execution_audit_and
     wrong_behavior = observation.model_copy(update={"signature": observation.signature.model_copy(update={"value": "unrelated-behavior"})})
     assert not _observation_matches_run(wrong_profile, run)
     assert not _observation_matches_run(wrong_behavior, run)
+    wrong_run = run.model_copy(deep=True)
+    wrong_run.llm_analysis_request.memory_profile = {"profile_id": "foreign.soc", "profile_version": "9", "feature_schema_version": "pingan.soc.memory_features.v7"}
+    assert not _observation_matches_run(observation, wrong_run)
 
     execution = workbench.get_execution(job.alert_id)
     assert execution.status == "completed"
@@ -240,4 +255,12 @@ def test_filtered_long_entity_observation_remains_visible_in_execution_audit_and
     row = next(item for item in state.alerts if item.alert_id == job.alert_id)
     assert row.workflow_state == "completed"
     assert row.observation_id == observation.observation_id
+    if saved_version is not None:
+        assert row.behavior_fingerprint == observation.signature.facets["behavior_fingerprint"][0]
+        summary = workbench._list_queries.rows(workbench._list_catalog_id)[job.alert_id][1]
+        assert summary.semantic_features_applied
+        assert summary.behavior_fingerprint == row.behavior_fingerprint
+    case = workbench._cases[job.alert_id]
+    # A damaged frozen identity cannot relabel the run or break the whole list.
+    assert _runtime_feature_case(case, wrong_run, support_count=1) == (case, case.readiness)
     assert workbench._repository.get_run(run.run_id).model_dump(mode="json") == frozen_run

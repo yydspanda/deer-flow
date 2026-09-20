@@ -4,7 +4,7 @@
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
 - **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。PingAn DeerFlow chat 固定为 buffered non-streaming；09-18按用户确认将源码中的模型网关与 Runtime 默认并发从 `3` 统一改为 `8`，配套 `8 + 8` 私有配置已重新生成；09-20 用户反馈内网 Mac DEV 已部署并完成第一批积累，运营正在审核经验；外网按用户确认撤回长实体摘要转换，保留旧经验匹配语义与 512 门禁，新学习超长特征过滤及兼容回归已完成，待交付第二批验证所需更新。SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
-- **Next Gate:** 保留内网现有数据库并继续第一批经验审核；完成旧经验与新版查询的兼容回归后，按用户授权更新代码包，使用已审核并开放的经验验证第二批；本轮不重复初始化或重跑成功第一批。随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
+- **Next Gate:** 保留内网现有数据库并继续第一批经验审核；旧记录与经验复用的强制交付检查已通过，用户要求本轮先不打包。后续经授权更新代码包，使用已审核并开放的经验验证第二批，不重复初始化或重跑成功第一批。随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-20`
 ## Current Constraints / 当前约束
@@ -25,7 +25,10 @@
 - **Follow-up:** 用户重跑 `2506195 / RUN-BCBD205C5349` 已保存样本，但工作台重建签名未复用过滤，误显示跳过；列表、执行与审计识别现统一使用学习过滤，补齐适用范围修订候选的同类入口。先复现后修复，39 项进度与修订回归通过；只读访问运行中的接口确认 `completed`、Memory `success`、累计 1 条样本，未重跑模型或改写历史数据。
 - **Release preparation:** 09-20 用户授权重建保留数据的完整内网交付。默认 Runbook 不再渲染重置命令，交接单和批次手册改为保留已完成第一批、继续审核及第二批验证；仅显式从零构建保留初始化指引。交付脚本51项、Host/语料/sidecar/临时数据库81项及私有profile10项共142项回归通过，覆盖数据库及WAL/SHM/journal保留。两个私有profile已静态重新生成，配置值与上次包一致、并发保持8+8。最终包身份与验包结果以生成的transfer-report和检查报告为准；未操作内网服务或数据库。
 - **Runbook follow-up:** 用户确认内网停服备份成功后，按要求拆成两份完整手册：保留数据升级与完全初始化重新部署；后者先停旧服务并备份，由原安装器替换，依赖/预检后显式归档重置SOC DEV，不删除账号/STG或卸系统工具。两篇补备份阶段提示及压缩/校验静默耗时说明，默认仍为升级；交付脚本53项回归通过。仅刷新当前交付的文档与报告哈希，保留 `3d4d6c1f` 源码归档、私有归档及安装器原字节，已完成的内网步骤不重复。
-- **Next:** 运营继续审核现有第一批；按用户授权交付代码更新后，再用已审核且开放的旧经验验证第二批，不重复初始化或全批重跑。
+- **Saved-profile readback:** 用户提供内网 `2454675` 两次 completed 记录，均已保存 Observation、尚未达到重复模式门槛，与页面“不满足模式积累条件”不符。隔离复现读取按 review mode 推断版本、写入按冻结 Profile identity 恢复的分歧；现读取优先校验保存 identity，仅未标记历史保留原推断。列表、轨迹、审计及运行特征投影统一恢复，升级可重建列表缓存到 v4；无效 identity 不绑定样本且不阻断静态导航。100项后端回归、Ruff格式与静态检查、进度治理检查通过，覆盖保存版本/审核模式组合、旧经验精确复用、去重及列表/轨迹/审计。经验写入、第二批查询匹配及已审核条件不变；未重跑模型、改写业务数据或重建内网包。
+- **Readback diagnosis evidence:** 外网 `RUN-54E79A256E2B` 只读确认保存/观察/旧页面均为 Profile 9，实际支持 1、门槛 5，pattern_reason 与内网两条一致。直接从已交付 `3d4d6c1f` 源码归档提取旧读取函数，外网原记录匹配成功；仅内存模拟 saved7 + apply 时 writer7/reader8 错位，旧读取失败、新读取成功。相关四源码文件与 09-18 `2b4d3e43` 固定基线逐字节一致；09-20 私有归档未设置 `SOC_NORMALIZATION_ASSIST_MODE`，程序默认 off，外网 .env 为 apply。随后用户回传内网只读联查，确认 `RUN-8AC0FA0F532B` 和 `RUN-E78082C7B40D` 的保存 identity 均为 pingan.soc7/v5、review_mode=apply，对应两个 Observation 实际存在且同为7/v5；7写入/8读取错位获得目标机记录证据。两次任务保存的支持数分别1/5与4/5，属于当次聚合结果，不能据此推断旧样本丢失或当前全批数量；本次未改内网配置、业务数据或部署包。
+- **Mandatory compatibility gate:** 按用户授权将旧记录展示与旧经验复用设为完整交付前强制检查。固定 `2b4d3e43` 旧代码生成的合成 Profile7/v5 原始记录；临时 SQLite 验证列表、执行、固定审计、旧经验正向复用及9类反例，读取不改写原文；普通测试不重生成旧基线。打包器自动运行指定检查，失败、跳过、缺失、超时及源码漂移均停止出包，无跳过开关；回执绑定源码身份、基线和归档哈希。检查及验包后才发布，普通异常或备份中断保留旧包。实际离线门禁62项、交付和门禁脚本104项共166项通过，旧读取逻辑在同一冻结样本上可复现失败；Ruff和进度检查通过。同步README、模块指南、工程契约和两份Runbook模板。门禁实施与验证未访问业务库、调用模型或更改内网数据；随后用户授权提交推送，本轮仍不构建部署包或部署。
+- **Next:** 运营继续审核现有第一批；当前不打包，后续按用户授权交付代码更新，再用已审核且开放的旧经验验证第二批，不重复初始化或全批重跑。
 
 09-18 本轮完整交付准备按用户明确要求改为重新初始化SOC DEV：新增仅控制Runbook的 `--initialize-soc-dev` 标记，普通构建仍保留数据；安装前验证仓库外语料、停服并独立备份，安装/落位/依赖后显式归档重置DEV库，首次start自动建库，回执支持恢复且批次手册不重复重置。同步README/脚本指南/两份手册，两个私有profile已重新生成并核对8+8、权限0600，原语料包四文件流式验证一致可复用。49项交付、77项Host/语料/profile/路径、15项重置共141项回归及格式检查通过；包身份与最终检查以本次transfer-report为准，实际内网安装、重置、模型与容量验收未执行。
 09-18 按用户确认将内网Host默认并发、profile生成与transfer校验统一为8，显式已有配置继续保留。旧批次点击“继续”更新资源容量，不替换任务ID、运行开关或快照；隔离模拟证明8条同时占用、第9条等待，业务配置漂移仍阻断。Host58、profile4、transfer38、快捷/优先级17及配置/权限14项共131项回归通过，Ruff/格式/进度检查通过；同步README、模块指南和两份手册。未修改私有配置、重打包、部署或调用真实模型，内网容量尚待验收。

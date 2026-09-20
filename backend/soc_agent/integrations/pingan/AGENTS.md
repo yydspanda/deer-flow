@@ -51,7 +51,11 @@ generic `soc_agent` code.
   events sharing a parent process; hashes, IPs and user-specific directories are not these
   new feature anchors. Do not claim full coverage or migrate old Memory automatically.
   The deployment default remains off; external DEV explicitly opts into apply. Historical
-  readers use `PingAnSocMemoryProfile.for_run`, preserving each saved run's review mode.
+  readers use `PingAnSocMemoryProfile.for_run`, restoring the complete frozen request
+  Profile identity, exactly as the learning writer does. A per-run review setting may
+  differ from that identity; it must not cause a reader to infer another version.
+  Only unmarked historical runs retain review-mode inference (apply -> 8, otherwise 7).
+  Reject invalid saved identities rather than silently falling back to another Profile.
   Inspection is an
   on-demand read of per-run facts, not an analyst maintenance prerequisite. Phishing-email
   specialization remains deferred by user decision; trust the upstream ML/LLM detection.

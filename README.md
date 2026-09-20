@@ -192,7 +192,12 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Backup steps show their current stage; compression and hashing may take time without
 > further output. Wait for `Verified stopped-checkout backup` before installing.
 > Code, private configuration and corpus data remain separate
-> deliverables. Real model batches remain internal-only. Copyable Mac commands are in the
+> deliverables. Before creating a transfer, the builder automatically checks fixed synthetic
+> records from a previously delivered version: historical sample display, approved experience
+> reuse, and rejection outside reviewed conditions. Failed, skipped, missing or timed-out checks
+> block delivery; there is no skip option. Results are bound to the source commit and fingerprint.
+> Checks use temporary databases without model calls or business data, and add no Mac deployment
+> steps. Real model batches remain internal-only. Copyable Mac commands are in the
 > [batch runbook](.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md).
 > See the [two-batch plan](.notes/ai_soc/architecture/corpus-memory-batch-validation-design.md).
 > A browser-driven local lifecycle is available for the reviewed 14-alert
@@ -268,7 +273,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Existing reviewed conditions, incoming-alert matching features and retrieval comparisons stay
 > unchanged; validation-only runs do not wait for a new experience observation.
 > A saved alert sample shows successful accumulation even before enough samples exist to propose
-> an experience candidate; progress and audit reads apply the same learning-feature filter.
+> an experience candidate; list, progress and audit reads restore its saved feature version and
+> apply the same learning-feature filter. A different semantic-review setting must not hide a
+> stored sample or report it as ineligible; correcting the display requires no rerun or data reset.
 > The offline group index is a navigation aid, while completed runs use their actual behavior facets.
 > Profile upgrades do not migrate reviewed Memory or delete history. Pattern idempotency remains
 > stable within each profile/signature contract. This

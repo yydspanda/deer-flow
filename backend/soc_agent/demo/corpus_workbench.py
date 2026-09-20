@@ -709,11 +709,11 @@ def _matches_corpus_run(run: AnalysisRun, case: _CorpusCase) -> bool:
 def _observation_matches_run(observation: Any, run: AnalysisRun | None) -> bool:
     if run is None or run.llm_analysis_request is None or (run.direct_resolution is not None and run.direct_resolution.source_kind != "memory"):
         return False
-    profile = PingAnSocMemoryProfile.for_run(run)
-    identity = profile.identity
-    if observation.profile_id != identity.profile_id or observation.profile_version != identity.profile_version or observation.feature_schema_version != identity.feature_schema_version:
-        return False
     try:
+        profile = PingAnSocMemoryProfile.for_run(run)
+        identity = profile.identity
+        if observation.profile_id != identity.profile_id or observation.profile_version != identity.profile_version or observation.feature_schema_version != identity.feature_schema_version:
+            return False
         facets = filter_learning_entity_facets(profile.project_run_facets(run), pattern_whitespace=True)
         signature = profile.build_pattern_signature(run, facets=facets)
     except ValueError:
@@ -790,7 +790,7 @@ class SocCorpusWorkbenchService:
         self._experiment_store = repository.corpus_experiments()
         self._list_catalog_id = stable_hash(
             {
-                "projection": "soc.corpus_list.v3",
+                "projection": "soc.corpus_list.v4",
                 "batch_plan": self._batch_plan.plan_id,
                 "source": self._source_sha256,
                 "index": self._index_sha256,
@@ -1154,7 +1154,7 @@ class SocCorpusWorkbenchService:
             decision_available=decision is not None,
             run_id=run.run_id if run else None,
             aggregation_key=observation.aggregation_key if observation is not None else None,
-            semantic_features_applied=bool(run is not None and run.llm_analysis_request is not None and run.normalization_assistance is not None and run.normalization_assistance.mode == "apply"),
+            semantic_features_applied=_runtime_feature_profile(run) is not None,
         )
 
     def _projection_context(
@@ -3616,10 +3616,25 @@ def _case_readiness(
     return "context_only_singleton"
 
 
+def _runtime_feature_profile(run: AnalysisRun | None) -> PingAnSocMemoryProfile | None:
+    if run is None or run.llm_analysis_request is None:
+        return None
+    try:
+        profile = PingAnSocMemoryProfile.for_run(run)
+    except ValueError:
+        return None
+    # Frozen semantic features remain authoritative even if this run's review
+    # switch was off. Preserve legacy applied-review projections on Profile 7.
+    if profile.semantic_features or (run.normalization_assistance is not None and run.normalization_assistance.mode == "apply"):
+        return profile
+    return None
+
+
 def _runtime_feature_case(case: _CorpusCase, run: AnalysisRun | None, *, support_count: int) -> tuple[_CorpusCase, CorpusReadiness]:
-    if run is None or run.llm_analysis_request is None or run.normalization_assistance is None or run.normalization_assistance.mode != "apply":
+    profile = _runtime_feature_profile(run)
+    if profile is None:
         return case, case.readiness
-    facets = PingAnSocMemoryProfile.for_run(run).project_run_facets(run)
+    facets = profile.project_run_facets(run)
     fingerprint = next(iter(facets.get("behavior_fingerprint", [])), None)
     strength = next(iter(facets.get("behavior_strength", [])), None)
     projected = replace(
