@@ -335,6 +335,22 @@ def test_transfer_runbook_resets_only_dev_after_preflight_before_first_start() -
         )
 
 
+def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
+    runbook = _render_transfer_runbook()
+    section = runbook.split("### 6.1 ", maxsplit=1)[1].split(
+        "## 7. Start Host DEV", maxsplit=1
+    )[0]
+
+    assert "保留已有 SOC DEV 数据" in section
+    assert "第一批研判结果、批次进度、经验样本、待审核经验及已完成的审核记录" in section
+    assert "直接继续第 7 节启动" in section
+    assert "```bash" not in section
+    assert "soc_pingan_macos_host_dev.py reset-dev-data" not in runbook
+    assert "本次从零验证" not in runbook
+    assert "需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置" not in runbook
+    assert "继续审核经验或第二批验证，跳过批次手册第 1.1 节重置" in runbook
+
+
 @pytest.mark.parametrize("initialize_soc_dev", [False, True])
 def test_transfer_runbook_requires_explicit_fresh_validation_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initialize_soc_dev: bool
@@ -371,9 +387,12 @@ def test_transfer_runbook_requires_explicit_fresh_validation_request(
         assert "本次已选择从零重新验证" not in runbook
 
 
-def test_transfer_runbook_shell_blocks_parse() -> None:
+@pytest.mark.parametrize("initialize_soc_dev", [False, True])
+def test_transfer_runbook_shell_blocks_parse(initialize_soc_dev: bool) -> None:
     for block in re.findall(
-        r"```bash\n(.*?)```", _render_transfer_runbook(), flags=re.DOTALL
+        r"```bash\n(.*?)```",
+        _render_transfer_runbook(initialize_soc_dev=initialize_soc_dev),
+        flags=re.DOTALL,
     ):
         completed = subprocess.run(
             ["bash", "-n"], input=block, text=True, capture_output=True, check=False
@@ -633,6 +652,14 @@ def test_transfer_installer_replaces_checkout_without_parent_shell_state(
         "soc-state\n",
         encoding="utf-8",
     )
+    database_companions = {
+        "soc_agent_dev.db-wal": b"pending-learning-and-review-records",
+        "soc_agent_dev.db-shm": b"shared-memory-state",
+        "soc_agent_dev.db-journal": b"rollback-journal-state",
+        "soc_agent_stg.db": b"stg-state",
+    }
+    for name, content in database_companions.items():
+        (old_repo / "backend/.deer-flow/data" / name).write_bytes(content)
     (old_repo / "backend/.deer-flow/.jwt_secret").write_text(
         "stable-secret\n",
         encoding="utf-8",
@@ -686,6 +713,10 @@ def test_transfer_installer_replaces_checkout_without_parent_shell_state(
     assert (
         home / "deer-flow/backend/.deer-flow/data/soc_agent_dev.db"
     ).read_text() == "soc-state\n"
+    for name, content in database_companions.items():
+        assert (
+            home / "deer-flow/backend/.deer-flow/data" / name
+        ).read_bytes() == content
     assert (
         home / "deer-flow/backend/.deer-flow/.jwt_secret"
     ).read_text() == "stable-secret\n"

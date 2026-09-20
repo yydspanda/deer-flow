@@ -1,9 +1,9 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-09-18
+> Reconciled: 2026-09-20
 > Status: `Active internal acceptance / model, lifecycle and Worker proven; ZEUS-originated callback pending`
-> Resume action: deploy the buffered chat and eight-slot concurrency profile, verify chat and bounded batch dispatch, then have ZEUS originate a fresh compatibility Job so callback and old-page readback can be accepted
+> Resume action: preserve the completed first-batch database while upgrading, continue experience review and second-batch validation, then have ZEUS originate a fresh compatibility Job so callback and old-page readback can be accepted
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -32,13 +32,15 @@
 
 ### 1.1 Transfer bundle / 内网迁移包
 
-本轮用户明确要求重建完整交付包，并在已成功启动的内网 Mac 上重新初始化 SOC DEV 后开展两批验证。
-随包 Runbook 为本次提供先停服备份、替换安装、语料落位/依赖安装、显式 `reset-dev-data`、首次启动与 Smoke 的顺序。
-只重置 SOC DEV 的告警、任务、经验等记录；保留账号、STG库、源语料和私钥。不要把正常的从零演练当作删除整个部署。
+内网 Mac DEV 已完成第一批积累，运营正在审核经验。本轮用户要求重建完整交付包并保留这些成果。
+随包 Runbook 按停服备份、保留数据安装、语料落位/依赖安装、预检、启动与 Smoke 的顺序执行。
+本次跳过主 Runbook 第 6.1 节和两批手册第 1.1 节，不执行 `reset-dev-data`，不重新初始化或重跑成功第一批。
+保留整个 `backend/.deer-flow/data/`，包括 SOC DEV 的结果、任务、经验、草稿和审核记录，以及账号库、STG库和 SQLite sidecars。
 已装好的 Mac 基础工具可复用；完整安装器不保留 `.venv`、`node_modules` 或四个语料大文件，
 安装前必须确认 Downloads 中的语料副本。安装器的临时回滚目录在替换成功后即删除，因此必须先做仓库外独立备份。
 新 private overlay 覆盖配置，不自动合并内网修改；先核对已调通的内网参数，并确保两处并发值均为8。
-主 Runbook 已完成重置后，不再执行两批手册的第1.1节。真实内网模型/容量验收仍待内网执行。
+启动后先核对第一批完成数量、待审核经验及已审核记录，再继续审核和第二批验证。
+本机回归不替代真实内网升级、模型质量或容量验收。
 
 外网仓库根目录执行：
 
@@ -48,11 +50,11 @@ backend/.venv/bin/python \
 backend/.venv/bin/python \
   backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 git status --short
-python3 scripts/build_pingan_internal_transfer.py --include-private-overlay --initialize-soc-dev
+backend/.venv/bin/python scripts/build_pingan_internal_transfer.py --include-private-overlay
 ```
 
-`--initialize-soc-dev` 只把本次明确选择的初始化流程写入 Runbook，不在外网或安装器中重置数据库。
-后续普通保留数据升级不要带此参数。
+本次不带 `--initialize-soc-dev`，报告必须为 `reset_soc_dev_requested=false`。
+只有用户另外明确要求从零验证时，才可用该参数生成独立的重置指引；它不在外网或安装器中重置数据库。
 前两条命令都只静态解析旧源码，不 import/执行旧项目。模型 preparer 选择已审阅 STG
 `DeepSeek_V4_Flash`，迁移本地 loopback key，生成 `0600` 的
 `.secrets/eagw-private-key.der`，并把 lifecycle/callback 初始化为 `fake`；Workflow preparer 导入
@@ -83,9 +85,8 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
   `3000/8001/2026/4001/8090` 均无监听时才删除旧 checkout。不得先删除或移动运行中的目录，避免旧
   Gateway/Nginx/模型网关/兼容 API 持有 deleted/Trash cwd 并继续占端口。
 - 普通重部署不得删除或重新创建已有 `deerflow.db` / `soc_agent_dev.db` / `soc_agent_stg.db`。
-  本次用户明确选择的 SOC DEV 重置使用独立 `reset-dev-data` 备份并移走DEV库，不清理账号库或STG库。若首次 migration 从未完成且
-  确认没有账号、研判、Memory、审核或任务数据，只能把残库和 SQLite sidecar 先移动到带时间戳的
-  隔离目录再重试。SOC 库迁移版本固定查询 `soc_alembic_version`，不是 DeerFlow 的
+  已有数据库由 Host `start` 就地升级结构；失败时保留原库排查，不以重置重试。
+  SOC 库迁移版本固定查询 `soc_alembic_version`，不是 DeerFlow 的
   `alembic_version`。
 
 当前目标 Mac 已具备 Python `3.12.7`、uv 和批准的内部包镜像，因此本次交付不再生成
@@ -174,8 +175,9 @@ python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
 ```
 
-接着完成主 Runbook 第6节预检、第6.1节一次性 SOC DEV 重置，最后按第7节
-`start --daemon --demo-no-auth`、`status` 和模型/Web Smoke 启动验收。不要在重置前先开始批量验证。
+接着完成主 Runbook 第6节预检，跳过第6.1节重置，最后按第7节
+`start --daemon --demo-no-auth`、`status` 和模型/Web Smoke 启动验收。
+核对原第一批结果和审核进度保留后，继续审核经验和第二批验证。
 
 `--demo-no-auth` 仅用于可信内网演示：页面不再进入注册/登录，所有访问者共享合成管理员身份，
 因此无法按同事区分审计 actor。真实外部动作仍保持关闭。需要验收真实账号和权限时，先停止服务，

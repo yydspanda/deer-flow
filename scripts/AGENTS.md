@@ -179,7 +179,10 @@ For an explicitly requested fresh SOC DEV validation, the generated Runbook plac
 and preflight, before the first Host start. The builder's `--initialize-soc-dev`
 flag records `reset_soc_dev_requested=true` in the report and selects those manual
 Runbook instructions only; it never runs reset or changes installer behavior.
-Without that flag the primary Runbook path skips reset. Ordinary redeploy still preserves data;
+Without that flag the primary Runbook path preserves existing learning/review data;
+Section 6.1 contains only preservation and continuation instructions, with no executable
+reset commands. Startup-failure recovery and the batch-runbook handoff must also retain
+that choice rather than suggesting a reset. Ordinary redeploy still preserves data;
 restarting/resuming a batch must never repeat the reset. Preserve authentication,
 STG, raw corpus, configuration and secrets. Do not use whole-checkout deletion as
 an initialization shortcut. Before replacing an existing checkout, verify its four

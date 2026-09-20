@@ -1287,13 +1287,69 @@ def _transfer_runbook(
             "本次已选择从零重新验证：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
             "再执行第 6.1 节显式重置 SOC DEV，最后第 7 节启动。"
         )
-        reset_instruction = "本次已明确选择重新初始化第一批、审核经验和第二批验证，因此在第一次启动前执行本节。"
+        reset_section = """### 6.1 Restart Validation / 本次从零验证：重置 SOC DEV
+
+本次已明确选择重新初始化第一批、审核经验和第二批验证，因此在第一次启动前执行本节。
+普通保留数据升级跳过本节。重置只归档 `soc_agent_dev.db` 和它的 SQLite sidecars：
+SOC DEV 的研判、批次任务、经验、候选与审核记录从空库重新开始；账号、STG、原始语料、配置和私钥保持不变。
+安装器已保留的旧 SOC DEV 数据会先移入有 Hash 清单的备份目录，不直接删除。
+
+先预览，确认 `database` 是本 checkout 的 `soc_agent_dev.db`、`ready=true`、`blockers=[]`：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data
+BASH
+```
+
+确认范围正确后执行已授权的重置。只在本次从零验证开始前执行一次：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+umask 077
+export TARGET_REPO="$HOME/deer-flow"
+cd "$TARGET_REPO"
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
+mkdir -p backend/.deer-flow/internal-host-dev
+receipt=backend/.deer-flow/internal-host-dev/dev-reset-receipt.json
+receipt_pending="$(mktemp "$receipt.XXXXXX")"
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data --confirm RESET-SOC-DEV > "$receipt_pending"
+mv "$receipt_pending" "$receipt"
+backend/.venv/bin/python -m json.tool "$receipt"
+BASH
+```
+
+报告必须是 `status=reset`（记录 `backup_directory`）或 `status=already_empty`（原本就是空库）。
+报告保存在 `backend/.deer-flow/internal-host-dev/dev-reset-receipt.json`，与批次手册的恢复入口一致。
+重置归档位于 `backend/.deer-flow/data/soc-dev-reset-backups/`，第 7 节普通 `start` 自动初始化空 SOC Schema。
+这就是本次所需初始化，不需要手工 migration、删库、重新安装 Mac 工具或重新搬运未变化的语料。
+后续重启、继续积累或第二批验证都不要再次执行；进入批次操作手册时也跳过其中已完成的重置步骤。"""
+        database_recovery = "服务尚未启动；保留已有数据库排查。查明原因后重试；需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置"
+        batch_start_instruction = (
+            "已完成本手册第 6.1 节重置时，直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节；\n"
+            "仅尚未重置且另外明确要求从零验证时才执行其第 1.1 节，常规部署和续跑不清库。"
+        )
     else:
         install_sequence = (
             "本次默认保留运行数据：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
             "跳过第 6.1 节重置，直接执行第 7 节启动。"
         )
-        reset_instruction = "本次交付未要求清空 SOC DEV，请跳过本节。仅在用户另外明确要求从零重新验证时执行。"
+        reset_section = """### 6.1 Preserve Existing Validation / 保留已有 SOC DEV 数据
+
+本次交付未要求清空 SOC DEV，请跳过本节。第一批研判结果、批次进度、经验样本、待审核经验及已完成的审核记录均保留。
+第 3 节安装器已迁入完整数据库目录及 SQLite sidecars；不要清库，也不需要重新积累第一批。
+完成第 6 节预检后，直接继续第 7 节启动。启动会升级现有数据库结构，不会重新初始化已有数据。
+启动后先核对第一批完成数量、待审核经验和已审核记录，再继续审核经验或第二批验证。"""
+        database_recovery = "服务尚未启动；保留已有数据库和备份排查，查明原因后重试，不要通过清库解决启动失败"
+        batch_start_instruction = (
+            "已有第一批积累成果时，继续审核经验或第二批验证，跳过批次手册第 1.1 节重置。\n"
+            "若第一批尚未完成，按原批次继续积累；本次升级不重新初始化已有数据。"
+        )
     return f"""# PingAn Internal Mac DEV/STG Runbook / 平安内网 Mac DEV/STG 操作手册
 
 > Built: `{timestamp}`
@@ -1438,7 +1494,7 @@ shell 状态。它在子 Bash 中依次校验准确 SHA-256、解压并检查新
 或数据恢复失败时会尽力恢复旧目录。不要使用 `source` 或 `.` 加载安装器。
 
 正常重部署不要删除 `deerflow.db`、`soc_agent_dev.db` 或 `soc_agent_stg.db`。
-需要清空 SOC DEV 时，只使用第 6.1 节的受限归档重置命令。如果安装器报告
+如果安装器报告
 `existing target is not a recognized Host DEV checkout`，保留原目录并排查，不执行删除整个仓库的命令。
 
 本次私有包同时包含：
@@ -1558,48 +1614,7 @@ Agent Platform PRD；私有 env 保存 ZEUS PRD/STG 两套受保护 profile，�
 RSA key 只存在于 private overlay，
 不得复制到 source archive、Git 或验收报告。
 
-### 6.1 Restart Validation / 本次从零验证：重置 SOC DEV
-
-{reset_instruction}
-普通保留数据升级跳过本节。重置只归档 `soc_agent_dev.db` 和它的 SQLite sidecars：
-SOC DEV 的研判、批次任务、经验、候选与审核记录从空库重新开始；账号、STG、原始语料、配置和私钥保持不变。
-安装器已保留的旧 SOC DEV 数据会先移入有 Hash 清单的备份目录，不直接删除。
-
-先预览，确认 `database` 是本 checkout 的 `soc_agent_dev.db`、`ready=true`、`blockers=[]`：
-
-```bash
-bash <<'BASH'
-set -euo pipefail
-export TARGET_REPO="$HOME/deer-flow"
-cd "$TARGET_REPO"
-backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
-backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data
-BASH
-```
-
-确认范围正确后执行已授权的重置。只在本次从零验证开始前执行一次：
-
-```bash
-bash <<'BASH'
-set -euo pipefail
-umask 077
-export TARGET_REPO="$HOME/deer-flow"
-cd "$TARGET_REPO"
-backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
-mkdir -p backend/.deer-flow/internal-host-dev
-receipt=backend/.deer-flow/internal-host-dev/dev-reset-receipt.json
-receipt_pending="$(mktemp "$receipt.XXXXXX")"
-backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data --confirm RESET-SOC-DEV > "$receipt_pending"
-mv "$receipt_pending" "$receipt"
-backend/.venv/bin/python -m json.tool "$receipt"
-BASH
-```
-
-报告必须是 `status=reset`（记录 `backup_directory`）或 `status=already_empty`（原本就是空库）。
-报告保存在 `backend/.deer-flow/internal-host-dev/dev-reset-receipt.json`，与批次手册的恢复入口一致。
-重置归档位于 `backend/.deer-flow/data/soc-dev-reset-backups/`，第 7 节普通 `start` 自动初始化空 SOC Schema。
-这就是本次所需初始化，不需要手工 migration、删库、重新安装 Mac 工具或重新搬运未变化的语料。
-后续重启、继续积累或第二批验证都不要再次执行；进入批次操作手册时也跳过其中已完成的重置步骤。
+{reset_section}
 
 ## 7. Start Host DEV / 启动服务
 
@@ -1623,9 +1638,9 @@ BASH
 
 | 看到的状态 | 下一步 |
 |---|---|
-| 尚未执行 `start` | 完成第 6 节预检（明确从零验证时还需第 6.1 节重置）后，执行本节启动块 |
+| 尚未执行 `start` | 完成第 6 节预检，并按第 6.1 节确认本次数据处理方式后，执行本节启动块 |
 | `status` 中 Core/Sidecars 全部运行，且 `soc_database.status=ready` | 不再建库或重启，直接执行模型 Smoke/后续验收 |
-| `SOC database preparation failed before sidecar startup` | 服务尚未启动；保留已有数据库排查。查明原因后重试；需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置 |
+| `SOC database preparation failed before sidecar startup` | {database_recovery} |
 | `legacy-api exited during startup` | 只可能来自旧交付包或非数据库启动错误；先查 Sidecar 日志，不要盲目删库 |
 | `legacy-worker exited during startup` / `did not become ready` | Worker 的数据库、Runtime、Policy、ZEUS 或 Callback 初始化失败；查看 `backend/.deer-flow/internal-host-dev/sidecars/legacy-worker.log`，不得继续提交 30 分钟验收任务 |
 
@@ -1862,8 +1877,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 运行配置仅部署 Mac 本机可修改，请在本机通过 `http://localhost:2026` 操作。
 同事通过局域网地址仍可启动、暂停或重跑，沿用该批次最后保存的配置；无运行记录时使用部署默认值。
 本机新选择随提交运行保存，已排队任务保留原配置。Host DEV 自动限制内部服务监听，正常启动命令不变。
-已完成本手册第 6.1 节重置时，直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节；
-仅尚未重置且另外明确要求从零验证时才执行其第 1.1 节，常规部署和续跑不清库。
+{batch_start_instruction}
 无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。
 第一批2,997条、第二批主要验证8,520条、补充3,764条；原始15,288条语料保留，

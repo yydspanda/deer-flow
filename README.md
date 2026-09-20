@@ -180,11 +180,13 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > the Host wrapper's explicit `reset-dev-data` previews and archives only the SOC DEV
 > database. Ordinary deployment never resets it; accounts, corpus and secrets remain intact.
 > Isolated mock full-loop, browser and synthetic capacity checks have passed. The current
-> internal handoff includes a requested fresh SOC DEV initialization before the first
-> start: back up the stopped checkout, install the matching source/private packages,
-> stage the existing corpus, install dependencies, then explicitly reset SOC DEV once.
-> The generated Runbook owns that sequence; do not repeat the reset when opening the
-> batch runbook. Code, private configuration and corpus data remain separate
+> internal handoff preserves completed learning and experience reviews: back up the
+> stopped checkout, install the matching source/private packages, stage the existing
+> corpus, install dependencies, then start with the preserved database. Startup upgrades
+> its schema in place. The generated Runbook omits reset commands by default and continues
+> with experience review or second-batch validation. Only an explicitly requested fresh
+> validation package (`--initialize-soc-dev`) includes the one-time reset instructions.
+> Code, private configuration and corpus data remain separate
 > deliverables. Real model batches remain internal-only. Copyable Mac commands are in the
 > [batch runbook](.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md).
 > See the [two-batch plan](.notes/ai_soc/architecture/corpus-memory-batch-validation-design.md).
