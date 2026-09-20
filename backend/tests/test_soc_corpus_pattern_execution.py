@@ -10,11 +10,14 @@ import pytest
 import test_soc_corpus_batch_workbench as batch_fixtures
 from sqlalchemy import update
 from test_soc_corpus_experiments import context, service
+from test_soc_pingan_memory_profile import _run as _pingan_run
 
-from soc_agent.contracts import AnalysisRequestJournal, AuditAction
+from soc_agent.application.memory import build_soc_memory_profile_registry
+from soc_agent.contracts import AnalysisRequestJournal, AuditAction, MemoryPatternDataClass, MemoryPatternSourceType
 from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
-from soc_agent.core import SocAnalysisService
+from soc_agent.core import SocAnalysisService, SocMemoryPatternService
 from soc_agent.db.models import SocProcessingJobRow
+from soc_agent.demo.corpus_workbench import _observation_matches_run
 
 workbench = batch_fixtures.workbench
 
@@ -195,3 +198,46 @@ def test_active_local_claim_only_marks_its_new_run_as_writing_pattern(workbench)
     finally:
         workbench._release_execution(claim)
     assert _memory(workbench.get_execution(current.alert_id)).status == "skipped"
+
+
+def test_filtered_long_entity_observation_remains_visible_in_execution_audit_and_list(workbench):
+    job = _job(workbench)
+    long_url = "https://example.test/query?sql=" + "x" * 700
+    run = _pingan_run(1, service_url=long_url)
+    run.alert_id = job.alert_id
+    run.input_hash = workbench._cases[job.alert_id].payload_hash
+    run.llm_analysis_request.alert_id = job.alert_id
+    run.llm_analysis_request.environment = "dev-corpus-eval"
+    workbench._repository.save_run(run)
+    frozen_run = run.model_dump(mode="json")
+    patterns = SocMemoryPatternService(repository=workbench._repository, candidate_repository=workbench._repository, profile_registry=build_soc_memory_profile_registry())
+    workbench._pattern_service = patterns
+    result = patterns.observe_run(run, source_type=MemoryPatternSourceType.BATCH_ALERT, transport_ref="filtered-display", environment="dev-corpus-eval", data_class=MemoryPatternDataClass.OPERATIONAL, context=context())
+    observation = result.observation
+    assert "url:" + long_url not in observation.signature.facets.get("entity", [])
+    assert workbench._repository.list_memory_pattern_observations(alert_id=run.alert_id)[0].observation_id == observation.observation_id
+    _update_job(workbench, job, status="completed", run_id=run.run_id, result_payload={"observation_id": observation.observation_id})
+
+    # The capacity filter must not relax profile or behavior identity guards.
+    wrong_profile = observation.model_copy(update={"profile_version": "unknown-profile-version"})
+    wrong_behavior = observation.model_copy(update={"signature": observation.signature.model_copy(update={"value": "unrelated-behavior"})})
+    assert not _observation_matches_run(wrong_profile, run)
+    assert not _observation_matches_run(wrong_behavior, run)
+
+    execution = workbench.get_execution(job.alert_id)
+    assert execution.status == "completed"
+    assert execution.observation_id == observation.observation_id
+    assert _memory(execution).status == "success"
+    assert execution.current_phase is None
+
+    audit = workbench.get_audit_bundle(job.alert_id, context=context(), run_id=run.run_id)
+    assert audit.execution.status == "completed"
+    assert _memory(audit.execution).status == "success"
+    memory_artifact = next(item for item in audit.artifacts if item.artifact_id == "memory-pattern-write")
+    assert memory_artifact.payload["pattern_observation"]["observation_id"] == observation.observation_id
+
+    state = workbench.get_state(batch="learning", search=job.alert_id, unprocessed_only=False, include_group_catalog=False, include_rehearsal=False)
+    row = next(item for item in state.alerts if item.alert_id == job.alert_id)
+    assert row.workflow_state == "completed"
+    assert row.observation_id == observation.observation_id
+    assert workbench._repository.get_run(run.run_id).model_dump(mode="json") == frozen_run

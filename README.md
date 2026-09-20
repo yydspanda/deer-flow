@@ -260,6 +260,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > existing stable-anchor, quality and human-review gates; no hashes or truncated substitutes are added.
 > Existing reviewed conditions, incoming-alert matching features and retrieval comparisons stay
 > unchanged; validation-only runs do not wait for a new experience observation.
+> A saved alert sample shows successful accumulation even before enough samples exist to propose
+> an experience candidate; progress and audit reads apply the same learning-feature filter.
 > The offline group index is a navigation aid, while completed runs use their actual behavior facets.
 > Profile upgrades do not migrate reviewed Memory or delete history. Pattern idempotency remains
 > stable within each profile/signature contract. This

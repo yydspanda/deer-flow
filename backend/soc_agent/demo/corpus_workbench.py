@@ -62,6 +62,7 @@ from soc_agent.demo.normalization_review import NormalizationReviewView, build_n
 from soc_agent.integrations.pingan.corpus_validation import is_corpus_validation_excluded
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm import SocLLMSettings
+from soc_agent.memory.facets import filter_learning_entity_facets
 from soc_agent.memory.learning import learning_view
 from soc_agent.memory.patterns import EXACT_MEMORY_FACET_TOO_LONG, MemoryPatternIneligibleError
 from soc_agent.normalizers import normalize_alert_payload
@@ -713,7 +714,8 @@ def _observation_matches_run(observation: Any, run: AnalysisRun | None) -> bool:
     if observation.profile_id != identity.profile_id or observation.profile_version != identity.profile_version or observation.feature_schema_version != identity.feature_schema_version:
         return False
     try:
-        signature = profile.build_pattern_signature(run, facets=profile.project_run_facets(run))
+        facets = filter_learning_entity_facets(profile.project_run_facets(run), pattern_whitespace=True)
+        signature = profile.build_pattern_signature(run, facets=facets)
     except ValueError:
         return False
     return observation.signature.dimension == signature.dimension and observation.signature.value == signature.value

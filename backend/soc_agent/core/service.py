@@ -158,6 +158,7 @@ from soc_agent.memory import (
     resolve_memory_business_lesson,
 )
 from soc_agent.memory.behavior_scope import required_directive_keys, select_memory_behavior_components
+from soc_agent.memory.facets import filter_learning_entity_facets
 from soc_agent.memory.governance import assessed_verdict, governed_records, preview_governance, scope_identity, scope_relation, validity_overlaps
 from soc_agent.memory.learning import aggregation_key, learning_view, resolve_learning_candidate
 from soc_agent.memory.lessons import promote_memory_applicability_facets
@@ -2559,7 +2560,7 @@ class SocMemoryService:
                 raise SocServiceConflictError("the source run alert does not match the persisted Memory lineage")
             source_alert_id = source_run.alert_id
             profile = self._profile_registry.resolve_run(source_run)
-            revision_facets = profile.project_run_facets(source_run)
+            revision_facets = filter_learning_entity_facets(profile.project_run_facets(source_run))
             revision_applicability = profile.build_applicability(
                 consensus_facets=revision_facets,
                 strong_anchor_facets=revision_facets,

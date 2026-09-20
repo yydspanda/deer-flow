@@ -332,11 +332,11 @@ file for SOC code. The authoritative product and engineering documents are:
   endpoint alert-scoped and lightweight; expose bounded metrics and sanitized errors,
   never raw prompts, evidence bodies, provider responses, or credentials.
   Corpus list, execution and audit select the latest eligible run by `started_at`;
-  recovery updates to an older parent must not replace its newer completed child.
-  Single-alert projections load runs by alert and input hash in started-time pages,
-  retaining scope validation and the legacy policy-snapshot fallback. Related candidates,
-  reviews, transitions and Memory uses are Run-scoped; Pattern observations remain
-  alert-scoped so an explicit rerun can reuse its original matching observation.
+  recovering an older parent must not hide a newer child. Single-alert reads page by
+  alert/input hash, retaining scope and legacy policy-snapshot checks. Candidates,
+  reviews, transitions and Memory uses are Run-scoped. Observations stay alert-scoped
+  for reruns; signature reconstruction must reuse the learning entity filter.
+  A saved sample shows successful accumulation even below candidate thresholds.
 - The explicitly gated corpus DEV workbench may expose a separate, on-demand,
   `soc_admin`-only audit bundle containing the persisted raw input, canonical alert,
   bounded model context, parsed model result, validation reports, Decision lineage, and
