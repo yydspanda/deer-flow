@@ -174,21 +174,34 @@ Generated Runbooks must present the normal first-run sequence as the primary
 path. Put status probes that exist only for interrupted-run recovery after that
 sequence, rather than implying a service can already be running before its first
 start step.
-For an explicitly requested fresh SOC DEV validation, the generated Runbook places
-`reset-dev-data` preview and `--confirm RESET-SOC-DEV` after dependency installation
-and preflight, before the first Host start. The builder's `--initialize-soc-dev`
-flag records `reset_soc_dev_requested=true` in the report and selects those manual
-Runbook instructions only; it never runs reset or changes installer behavior.
-Without that flag the primary Runbook path preserves existing learning/review data;
-Section 6.1 contains only preservation and continuation instructions, with no executable
-reset commands. Startup-failure recovery and the batch-runbook handoff must also retain
-that choice rather than suggesting a reset. Ordinary redeploy still preserves data;
+Every full transfer generates two independently complete manuals:
+`PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md` preserves existing learning/review data and
+contains no executable reset commands; `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`
+stops the old Host, checks ports, backs up the whole stopped checkout, delegates
+replacement to the installer, and places `reset-dev-data` preview and
+`--confirm RESET-SOC-DEV` after dependency installation/preflight, before the first
+Host start. Reinitialization archives SOC DEV only; it does not uninstall Mac tools
+or erase accounts, STG or original corpus. The two manuals replace the old single
+`PINGAN-INTERNAL-MAC-RUNBOOK.md`; the full source/private handoff therefore contains
+six files. The report's `runbooks` mapping records both manuals and their SHA-256;
+keep `runbook` as the selected-default compatibility field. Upgrade is the default.
+The builder's `--initialize-soc-dev` flag selects the reinitialization manual and
+records `reset_soc_dev_requested=true`; it never runs reset or changes installer
+behavior, and both manuals are generated regardless of this flag.
+Startup-failure recovery and the batch-runbook handoff must retain the selected
+manual's choice rather than suggesting a reset. Ordinary redeploy still preserves data;
 restarting/resuming a batch must never repeat the reset. Preserve authentication,
 STG, raw corpus, configuration and secrets. Do not use whole-checkout deletion as
 an initialization shortcut. Before replacing an existing checkout, verify its four
 external Downloads corpus copies, stop Host, verify all five ports are free, and
-retain a private independent checkout backup outside the target. The installer's
-temporary rollback is deleted on installation success and does not cover later
+retain a private independent checkout backup outside the target. Show explicit
+backup stage messages and explain that tar compression and shasum hashing can take
+a long time without further output. Installation follows only after the success
+marker `Verified stopped-checkout backup`. A documentation-only split may update
+the manuals and their report hashes for an existing release without rebuilding or
+modifying its verified source/private archives or installer. Operators already
+upgrading continue at their unfinished step instead of restarting the procedure.
+The installer's temporary rollback is deleted on installation success and does not cover later
 build/start failures. Explain that the new private overlay replaces old private
 configuration and full replacement still requires project dependency installation,
 while existing Mac tools and unchanged corpus transfers can be reused.

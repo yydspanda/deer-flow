@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TRANSFER_ROOT = ROOT / "backend/.deer-flow/internal-transfer"
 DEFAULT_OUTPUT_DIR = TRANSFER_ROOT / "READY-TO-TRANSFER"
 TRANSFER_INSTALLER_NAME = "INSTALL-PINGAN-MAC.sh"
-TRANSFER_RUNBOOK_NAME = "PINGAN-INTERNAL-MAC-RUNBOOK.md"
+TRANSFER_RUNBOOK_NAME = "PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md"
+TRANSFER_REINITIALIZE_RUNBOOK_NAME = "PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md"
 ARCHIVE_ROOT = "deer-flow-pingan-internal"
 MANIFEST_SCHEMA_VERSION = "soc.pingan_internal_transfer_manifest.v1"
 
@@ -436,25 +437,24 @@ def build_transfer_archives(
     installer = _sidecar_result(installer_path)
 
     report_path = output_dir / f"transfer-report-{timestamp}.json"
-    runbook_path = output_dir / TRANSFER_RUNBOOK_NAME
-    _write_private_text(
-        runbook_path,
-        _transfer_runbook(
-            timestamp=timestamp,
-            git_info=git_info,
-            archives=archives,
-            report_name=report_path.name,
-            installer=installer,
-            initialize_soc_dev=initialize_soc_dev,
-        ),
+    runbooks = _write_transfer_runbooks(
+        output_dir=output_dir,
+        timestamp=timestamp,
+        git_info=git_info,
+        archives=archives,
+        report_name=report_path.name,
+        installer=installer,
     )
+    default_runbook = "reinitialize" if initialize_soc_dev else "upgrade"
     report = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
         "output_directory": str(output_dir),
         "archives": archives,
         "installer": installer,
-        "runbook": _sidecar_result(runbook_path),
+        "runbook": runbooks[default_runbook],
+        "runbooks": runbooks,
+        "default_runbook": default_runbook,
         "source_worktree_dirty": git_info["worktree_dirty"],
         "required_source_file_count": len(REQUIRED_HANDOFF_SOURCE_PATHS),
         "required_source_inventory_complete": True,
@@ -466,6 +466,36 @@ def build_transfer_archives(
     _write_private_json(report_path, report)
     report["report_path"] = str(report_path)
     return report
+
+
+def _write_transfer_runbooks(
+    *,
+    output_dir: Path,
+    timestamp: str,
+    git_info: dict[str, Any],
+    archives: dict[str, Any],
+    report_name: str,
+    installer: dict[str, Any],
+) -> dict[str, Any]:
+    runbooks = {}
+    for mode, name in (
+        ("upgrade", TRANSFER_RUNBOOK_NAME),
+        ("reinitialize", TRANSFER_REINITIALIZE_RUNBOOK_NAME),
+    ):
+        path = output_dir / name
+        _write_private_text(
+            path,
+            _transfer_runbook(
+                timestamp=timestamp,
+                git_info=git_info,
+                archives=archives,
+                report_name=report_name,
+                installer=installer,
+                initialize_soc_dev=mode == "reinitialize",
+            ),
+        )
+        runbooks[mode] = _sidecar_result(path)
+    return runbooks
 
 
 def inspect_archive(path: Path) -> dict[str, Any]:
@@ -1283,13 +1313,22 @@ def _transfer_runbook(
             "verified before use. Keep every artifact inside the approved environment."
         )
     if initialize_soc_dev:
+        title = "内网 Mac DEV：完全初始化重新部署"
+        mode = "reinitialize"
+        introduction = (
+            "仅在明确决定从零重新验证时使用本手册。先停止并卸下旧项目服务，备份后由安装器替换旧项目代码，\n"
+            "再显式归档重置 SOC DEV：告警结果、第一批/第二批任务、经验、草稿和审核记录从空库开始。\n"
+            "账号库、STG 数据库和仓库外原始语料保留；Mac 的 Python、Node、nginx 等基础工具无需卸载。\n"
+            f"**已经完成第一批、正在审核经验的部署请使用[保留数据升级手册]({TRANSFER_RUNBOOK_NAME})。**\n"
+            "提供这份说明不代表当前部署已获准清空数据。"
+        )
         install_sequence = (
-            "本次已选择从零重新验证：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
+            "仅在明确决定从零重新验证时：先按本节停服、备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
             "再执行第 6.1 节显式重置 SOC DEV，最后第 7 节启动。"
         )
         reset_section = """### 6.1 Restart Validation / 本次从零验证：重置 SOC DEV
 
-本次已明确选择重新初始化第一批、审核经验和第二批验证，因此在第一次启动前执行本节。
+仅在明确决定从零重新验证时，在第一次启动前执行本节。
 普通保留数据升级跳过本节。重置只归档 `soc_agent_dev.db` 和它的 SQLite sidecars：
 SOC DEV 的研判、批次任务、经验、候选与审核记录从空库重新开始；账号、STG、原始语料、配置和私钥保持不变。
 安装器已保留的旧 SOC DEV 数据会先移入有 Hash 清单的备份目录，不直接删除。
@@ -1335,13 +1374,21 @@ BASH
             "仅尚未重置且另外明确要求从零验证时才执行其第 1.1 节，常规部署和续跑不清库。"
         )
     else:
+        title = "内网 Mac DEV：保留数据升级"
+        mode = "upgrade"
+        introduction = (
+            "适用于已有部署，尤其是第一批已完成、正在审核经验或验证第二批的 Mac。\n"
+            "请先保存正在编辑的审核草稿，暂停同事操作，记下第一批完成数量、待审核及已审核经验，\n"
+            "再按本篇停服备份、替换代码、恢复语料、安装依赖和启动。整个流程保留数据库，不重新积累第一批。\n"
+            f"仅另外决定从零验证时才使用[完全初始化重新部署手册]({TRANSFER_REINITIALIZE_RUNBOOK_NAME})。"
+        )
         install_sequence = (
-            "本次默认保留运行数据：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
-            "跳过第 6.1 节重置，直接执行第 7 节启动。"
+            "本手册保留运行数据：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
+            "核对第 6.1 节保留范围后，直接执行第 7 节启动。"
         )
         reset_section = """### 6.1 Preserve Existing Validation / 保留已有 SOC DEV 数据
 
-本次交付未要求清空 SOC DEV，请跳过本节。第一批研判结果、批次进度、经验样本、待审核经验及已完成的审核记录均保留。
+本手册保留 SOC DEV，本节没有需要执行的命令。第一批研判结果、批次进度、经验样本、待审核经验及已完成的审核记录均保留。
 第 3 节安装器已迁入完整数据库目录及 SQLite sidecars；不要清库，也不需要重新积累第一批。
 完成第 6 节预检后，直接继续第 7 节启动。启动会升级现有数据库结构，不会重新初始化已有数据。
 启动后先核对第一批完成数量、待审核经验和已审核记录，再继续审核经验或第二批验证。"""
@@ -1350,13 +1397,20 @@ BASH
             "已有第一批积累成果时，继续审核经验或第二批验证，跳过批次手册第 1.1 节重置。\n"
             "若第一批尚未完成，按原批次继续积累；本次升级不重新初始化已有数据。"
         )
-    return f"""# PingAn Internal Mac DEV/STG Runbook / 平安内网 Mac DEV/STG 操作手册
+    return f"""# {title}
 
 > Built: `{timestamp}`
 > Source commit: `{git_info["commit"]}` (`{git_info["branch"]}`)
 > Target: Apple Silicon macOS, Python `3.12+`, no Docker
 > Install path: `$HOME/deer-flow`
-> Reset SOC DEV requested: `{str(initialize_soc_dev).lower()}`
+> Procedure: `{mode}`
+> Following this procedure resets SOC DEV: `{str(initialize_soc_dev).lower()}`
+
+{introduction}
+
+**只选择一份手册，不要两份依次执行。** 两份手册共用相同源码包、私有配置包和安装器。
+若正在按照此前单份 Runbook 操作，请从已完成的步骤后继续；无需因文档更新重复已经完成的备份或安装。
+每一步确认成功再继续；具体包身份与校验值见第 1 节。
 
 本手册由 `scripts/build_pingan_internal_transfer.py` 随包生成。文件名、commit 和
 SHA-256 与本次交付一致，不需要额外 nginx/LAN hotfix。
@@ -1375,6 +1429,7 @@ PRD `isec-gw.paic.com.cn`，并受独立 target、host allowlist 和 production 
 {private_name}
 {report_name}
 {TRANSFER_RUNBOOK_NAME}
+{TRANSFER_REINITIALIZE_RUNBOOK_NAME}
 {installer_name}
 ```
 
@@ -1409,15 +1464,19 @@ cat "{report_name}"
 
 必须看到 `source_worktree_dirty=false`、`final_handoff_eligible=true` 和
 `required_source_inventory_complete=true`。
+`default_runbook` 标明本次推荐入口；`reset_soc_dev_requested` 是交付选择，
+两份说明文件同时存在不代表应当重置。`runbooks` 分别记录两份文档的 SHA-256。
 
 ## 3. Install Or Data-Preserving Redeploy / 安装或保留数据升级
 
-{install_sequence}安装器本身始终保留运行数据；
-普通保留数据升级应跳过第 6.1 节。不要把“重新初始化演练”理解为删除整个仓库或账号。
+{install_sequence}安装器本身始终保留运行数据；后续数据处理以本手册第 6.1 节为准。
+不要把“重新初始化演练”理解为删除整个仓库或账号。
 
 ### 3.1 Before Replacement / 替换前备份
 
 已有成功部署的 Mac 先执行下面一块；全新机器没有旧 checkout 时跳过本小节。
+停掉旧 Host、确认端口释放，再交给第 3.2 节安装器替换，就是卸下旧项目服务的过程；
+不要先手动删除 `$HOME/deer-flow`，也不要卸载系统级 Python、Node 或 nginx。
 先确认四个原始语料文件在仓库外的 `$HOME/Downloads/source`、`$HOME/Downloads/corpus` 有副本。
 若只有仓库内副本，先复制到第 4 节所列路径并完成校验，再继续；不要先运行安装器。
 数据 hash 未变时不需要重新跨网传输。
@@ -1425,6 +1484,9 @@ cat "{report_name}"
 此命令先核对语料，再停止旧 Host，确认五个端口释放，最后把完整旧 checkout 独立备份到
 `$HOME/deer-flow-backups/`。预留足够磁盘空间；备份含私有配置、凭证和数据库，只能留在本机受保护目录。
 备份失败时不要继续安装，旧 checkout 仍保留。
+看到 `{{"status":"stopped"}}` 只表示停服完成；后面的整项目压缩和 SHA-256 计算可能较久没有新增输出。
+下方会显示四个阶段提示。看到第 3/4 阶段时请等待，不要关闭终端或按 Ctrl+C；
+只有最后出现 `Verified stopped-checkout backup:` 才表示备份完成。
 
 ```bash
 bash <<'BASH'
@@ -1434,6 +1496,7 @@ export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 test ! -L "$TARGET_REPO"
 test -f scripts/soc_pingan_macos_host_dev.py
+printf '[backup 1/4] Checking corpus / 检查仓库外语料\\n'
 for corpus_file in \\
   "$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl" \\
   "$HOME/Downloads/corpus/full_alert_validation_corpus.pkl" \\
@@ -1443,6 +1506,7 @@ for corpus_file in \\
   test -r "$corpus_file"
 done
 python3.12 scripts/soc_pingan_stage_internal_corpus.py
+printf '[backup 2/4] Stopping services / 停止旧服务并检查端口\\n'
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 for port in 3000 8001 2026 4001 8090; do
   if lsof -nP -iTCP:"$port" -sTCP:LISTEN; then
@@ -1453,10 +1517,12 @@ for port in 3000 8001 2026 4001 8090; do
     test "$probe_status" -eq 1
   fi
 done
-backup_dir="$HOME/deer-flow-backups/before-reset-$(date +%Y%m%dT%H%M%S)-$$"
+backup_dir="$HOME/deer-flow-backups/before-redeploy-$(date +%Y%m%dT%H%M%S)-$$"
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
+printf '[backup 3/4] Compressing old checkout / 正在压缩备份，请等待: %s\\n' "$backup_dir"
 tar -czf "$backup_dir/deer-flow.tar.gz" -C "$HOME" deer-flow
+printf '[backup 4/4] Computing SHA-256 / 正在计算校验值，请等待\\n'
 shasum -a 256 "$backup_dir/deer-flow.tar.gz" > "$backup_dir/SHA256SUMS"
 printf 'Verified stopped-checkout backup: %s\\n' "$backup_dir"
 BASH
@@ -2087,7 +2153,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--initialize-soc-dev",
         action="store_true",
-        help="Mark the Runbook for an explicitly requested fresh SOC DEV validation; does not reset a database",
+        help="Select the reinitialization guide as default; always writes both guides and never resets a database",
     )
     parser.add_argument(
         "--allow-dirty",

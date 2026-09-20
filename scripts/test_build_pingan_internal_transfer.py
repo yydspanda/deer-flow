@@ -352,6 +352,26 @@ def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
 
 
 @pytest.mark.parametrize("initialize_soc_dev", [False, True])
+def test_transfer_runbooks_separate_reinstall_from_preserved_upgrade(
+    initialize_soc_dev: bool,
+) -> None:
+    runbook = _render_transfer_runbook(initialize_soc_dev=initialize_soc_dev)
+    assert "PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md" in runbook
+    assert "PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md" in runbook
+    assert "只选择一份手册" in runbook
+    assert "无需因文档更新重复已经完成的备份或安装" in runbook
+    if initialize_soc_dev:
+        assert "# 内网 Mac DEV：完全初始化重新部署" in runbook
+        assert "本次已明确选择重新初始化" not in runbook
+        assert "先停止并卸下旧项目服务" in runbook
+        assert "reset-dev-data --confirm RESET-SOC-DEV" in runbook
+    else:
+        assert "# 内网 Mac DEV：保留数据升级" in runbook
+        assert "soc_pingan_macos_host_dev.py reset-dev-data" not in runbook
+        assert "请先保存正在编辑的审核草稿" in runbook
+
+
+@pytest.mark.parametrize("initialize_soc_dev", [False, True])
 def test_transfer_runbook_requires_explicit_fresh_validation_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initialize_soc_dev: bool
 ) -> None:
@@ -377,13 +397,25 @@ def test_transfer_runbook_requires_explicit_fresh_validation_request(
     )
     saved_report = json.loads(Path(report["report_path"]).read_text(encoding="utf-8"))
     assert saved_report["reset_soc_dev_requested"] is initialize_soc_dev
+    expected_default = "reinitialize" if initialize_soc_dev else "upgrade"
+    assert saved_report["default_runbook"] == expected_default
+    assert set(saved_report["runbooks"]) == {"upgrade", "reinitialize"}
+    assert saved_report["runbook"] == saved_report["runbooks"][expected_default]
+    for mode, item in saved_report["runbooks"].items():
+        path = Path(item["path"])
+        assert _sha256_file(path) == item["sha256"]
+        assert path.stat().st_mode & 0o777 == 0o600
+        content = path.read_text(encoding="utf-8")
+        assert ("reset-dev-data --confirm RESET-SOC-DEV" in content) is (
+            mode == "reinitialize"
+        )
     runbook = Path(report["runbook"]["path"]).read_text(encoding="utf-8")
     if initialize_soc_dev:
-        assert "本次已选择从零重新验证" in runbook
-        assert "本次已明确选择重新初始化" in runbook
+        assert "仅在明确决定从零重新验证时" in runbook
+        assert "本次已明确选择重新初始化" not in runbook
     else:
-        assert "本次默认保留运行数据" in runbook
-        assert "本次交付未要求清空 SOC DEV，请跳过本节" in runbook
+        assert "本手册保留运行数据" in runbook
+        assert "本手册保留 SOC DEV，本节没有需要执行的命令" in runbook
         assert "本次已选择从零重新验证" not in runbook
 
 
@@ -503,6 +535,13 @@ def test_runbook_backup_is_private_and_stops_before_copying(
         return
     assert completed.returncode == 0, completed.stderr
     assert (home / "stopped").exists()
+    assert "[backup 1/4] Checking corpus" in completed.stdout
+    assert "[backup 2/4] Stopping services" in completed.stdout
+    assert "[backup 3/4] Compressing old checkout" in completed.stdout
+    assert "[backup 4/4] Computing SHA-256" in completed.stdout
+    assert completed.stdout.index("[backup 3/4]") < completed.stdout.index(
+        "Verified stopped-checkout backup:"
+    )
     assert len(backups) == 1
     assert backups[0].stat().st_mode & 0o777 == 0o600
     assert backups[0].parent.stat().st_mode & 0o777 == 0o700

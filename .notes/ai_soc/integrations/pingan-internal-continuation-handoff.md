@@ -32,12 +32,17 @@
 
 ### 1.1 Transfer bundle / 内网迁移包
 
-内网 Mac DEV 已完成第一批积累，运营正在审核经验。本轮用户要求重建完整交付包并保留这些成果。
-随包 Runbook 按停服备份、保留数据安装、语料落位/依赖安装、预检、启动与 Smoke 的顺序执行。
-本次跳过主 Runbook 第 6.1 节和两批手册第 1.1 节，不执行 `reset-dev-data`，不重新初始化或重跑成功第一批。
-保留整个 `backend/.deer-flow/data/`，包括 SOC DEV 的结果、任务、经验、草稿和审核记录，以及账号库、STG库和 SQLite sidecars。
+内网 Mac DEV 已完成第一批积累，运营正在审核经验。完整交付包已按保留这些成果的要求重建，本次将操作手册拆为升级和重新初始化两份。
+本次使用 `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md`，按停服备份、保留数据安装、语料落位/依赖安装、预检、启动与 Smoke 的顺序执行。
+该手册不包含可执行的重置命令；两批手册第 1.1 节也不执行，不重新初始化或重跑成功第一批。
+另一份 `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md` 是独立完整的从零部署流程：先停旧 Host、检查端口并备份整个项目，
+再由安装器替换项目，完成依赖和预检后显式归档重置 SOC DEV，最后启动新一轮验证。它保留账号、STG 和原始语料，不卸载 Mac 系统工具。
+升级路径保留整个 `backend/.deer-flow/data/`，包括 SOC DEV 的结果、任务、经验、草稿和审核记录，以及账号库、STG库和 SQLite sidecars。
 已装好的 Mac 基础工具可复用；完整安装器不保留 `.venv`、`node_modules` 或四个语料大文件，
 安装前必须确认 Downloads 中的语料副本。安装器的临时回滚目录在替换成功后即删除，因此必须先做仓库外独立备份。
+备份代码块显示停服、端口检查、压缩和校验阶段；`tar` 压缩和 `shasum` 校验可能较长时间没有更多输出，
+应等待 `Verified stopped-checkout backup` 成功标志后再安装。本次手册拆分只更新文档生成器与现有包的两份文档/报告，
+不改变已发布的两个 archive 或安装器；正在内网升级的操作员从尚未完成的步骤继续，无需从头重来。
 新 private overlay 覆盖配置，不自动合并内网修改；先核对已调通的内网参数，并确保两处并发值均为8。
 启动后先核对第一批完成数量、待审核经验及已审核记录，再继续审核和第二批验证。
 本机回归不替代真实内网升级、模型质量或容量验收。
@@ -54,7 +59,8 @@ backend/.venv/bin/python scripts/build_pingan_internal_transfer.py --include-pri
 ```
 
 本次不带 `--initialize-soc-dev`，报告必须为 `reset_soc_dev_requested=false`。
-只有用户另外明确要求从零验证时，才可用该参数生成独立的重置指引；它不在外网或安装器中重置数据库。
+构建器每次都生成两份完整手册。只有用户另外明确要求从零验证时，才用该参数将默认手册选为重新初始化，
+并标记 `reset_soc_dev_requested=true`；它不在外网或安装器中重置数据库。
 前两条命令都只静态解析旧源码，不 import/执行旧项目。模型 preparer 选择已审阅 STG
 `DeepSeek_V4_Flash`，迁移本地 loopback key，生成 `0600` 的
 `.secrets/eagw-private-key.der`，并把 lifecycle/callback 初始化为 `fake`；Workflow preparer 导入
@@ -74,13 +80,18 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 这是预期保护，不是打包器故障。
 
 构建器会在 Git-ignored 的
-`backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/` 中生成本次交付的五个文件：
+`backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/` 中生成本次交付的六个文件：
 
 - `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
 - `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、corpus manifest/index、历史 EDR XLSX 及其已编译路径目录；不再携带三个大 PKL 或 Workbench payload SQLite，只能走获批的内部传输通道。
-- `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
-- `PINGAN-INTERNAL-MAC-RUNBOOK.md`：由构建器自动生成，固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令；不再手工维护时间戳，也不再携带独立 nginx/LAN hotfix。
+- `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；`runbooks` 映射记录两份手册及各自 SHA-256，`runbook` 保留选中默认手册的兼容字段；不含 secret 内容。
+- `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md`：默认推荐，完整的保留数据升级流程，保留第一批结果、经验和审核进度。
+- `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`：完整的停旧服务、备份、安装、显式归档重置 SOC DEV 与重新启动流程，只在明确从零验证时使用。
 - `INSTALL-PINGAN-MAC.sh`：自包含安装器；从脚本自身位置解析两个 archive，先验 Hash/解压结果，再停止旧 Host DEV、检查五个端口并事务式替换 checkout。已有部署会把 `backend/.deer-flow/data`、JWT、用户/Agent/线程状态、受管集成及内网验收证据复制到新 checkout，保留两个 SQLite 及其 sidecar；新 private overlay 的配置与 `pingan-context` 不被旧目录覆盖。必须用 `bash` 执行，禁止 `source`；失败只退出子脚本，不关闭操作员终端。
+
+两份手册均由构建器固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令，替代原来的
+`PINGAN-INTERNAL-MAC-RUNBOOK.md`；不再手工维护时间戳，也不携带独立 nginx/LAN hotfix。
+
 - 重部署必须先解压到 staging，再从旧 `$HOME/deer-flow` 执行 Host DEV `stop`；只有
   `3000/8001/2026/4001/8090` 均无监听时才删除旧 checkout。不得先删除或移动运行中的目录，避免旧
   Gateway/Nginx/模型网关/兼容 API 持有 deleted/Trash cwd 并继续占端口。
@@ -131,8 +142,8 @@ python3 scripts/build_pingan_internal_transfer.py --inspect \
 ```
 
 内网 Mac 使用随包安装器叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`，
-无需修改用户名。已有部署先完成随包主 Runbook 第3.1节的语料副本核验、停服和独立备份，
-再执行安装；下面是命令入口摘录，不能替代主 Runbook 的本次初始化顺序：
+无需修改用户名。已有部署先完成随包升级手册的语料副本核验、停服和独立备份，
+再执行安装；下面是命令入口摘录，不能替代升级手册的完整操作顺序：
 
 ```bash
 bash "$HOME/READY-TO-TRANSFER/INSTALL-PINGAN-MAC.sh"
@@ -175,7 +186,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
 ```
 
-接着完成主 Runbook 第6节预检，跳过第6.1节重置，最后按第7节
+接着完成升级手册的预检，最后按启动一节的
 `start --daemon --demo-no-auth`、`status` 和模型/Web Smoke 启动验收。
 核对原第一批结果和审核进度保留后，继续审核经验和第二批验证。
 

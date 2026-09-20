@@ -183,9 +183,14 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > internal handoff preserves completed learning and experience reviews: back up the
 > stopped checkout, install the matching source/private packages, stage the existing
 > corpus, install dependencies, then start with the preserved database. Startup upgrades
-> its schema in place. The generated Runbook omits reset commands by default and continues
-> with experience review or second-batch validation. Only an explicitly requested fresh
-> validation package (`--initialize-soc-dev`) includes the one-time reset instructions.
+> its schema in place. Every transfer includes two complete guides:
+> `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md` preserves learning and reviews and is the default;
+> `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md` stops the old services, backs up the checkout,
+> reinstalls the project, then explicitly archives and resets SOC DEV before starting fresh.
+> Reinitialization preserves accounts, STG and source corpus, and does not uninstall Mac tools.
+> `--initialize-soc-dev` only selects the default guide and report flag; it never resets data.
+> Backup steps show their current stage; compression and hashing may take time without
+> further output. Wait for `Verified stopped-checkout backup` before installing.
 > Code, private configuration and corpus data remain separate
 > deliverables. Real model batches remain internal-only. Copyable Mac commands are in the
 > [batch runbook](.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md).
