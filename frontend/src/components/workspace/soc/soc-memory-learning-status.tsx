@@ -11,7 +11,7 @@ export function SocMemoryLearningStatus({
   view: SocMemoryLearningView;
 }) {
   const href = memoryLearningHref(view);
-  if (!href) return null;
+  if (!href && view.state !== "closed") return null;
   return (
     <section
       className="flex flex-wrap items-center justify-between gap-4 border-y border-sky-200 bg-sky-50 px-5 py-4 text-sky-950"
@@ -24,12 +24,14 @@ export function SocMemoryLearningStatus({
           <p className="mt-1 text-sm">{view.detail}</p>
         </div>
       </div>
-      <Button size="sm" asChild>
-        <Link href={href}>
-          {view.action_label}
-          <ExternalLinkIcon className="size-3.5" />
-        </Link>
-      </Button>
+      {href && (
+        <Button size="sm" asChild>
+          <Link href={href}>
+            {view.action_label}
+            <ExternalLinkIcon className="size-3.5" />
+          </Link>
+        </Button>
+      )}
     </section>
   );
 }

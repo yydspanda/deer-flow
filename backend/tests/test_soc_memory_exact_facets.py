@@ -1,18 +1,25 @@
-"""Long exact entities stay bounded without losing evidence or reuse scope."""
+"""Preserve historical exact matching without changing the 512-character contract."""
 
 from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 from test_soc_memory_coverage import evaluate, query, scope
-from test_soc_pingan_memory_profile import _observe, _run, _service
+from test_soc_memory_retrieval_v2 import _record
+from test_soc_pingan_memory_profile import _context, _observe, _run, _service
 
-from soc_agent.application.memory import build_soc_memory_profile_registry
-from soc_agent.contracts import EntityKind, EntityMention, MemoryPatternDataClass, MemoryPatternSourceType
-from soc_agent.contracts.schemas import RoleResolution, RoleResolutionStatus, SocMemoryReuseCondition, SocMemoryScopeBinding
-from soc_agent.memory import InMemoryMemoryPatternRepository, memory_pattern_command_from_run, memory_query_from_analysis_request
+from soc_agent.contracts import AlertInput, EntityKind, EntityMention, MemoryPatternDataClass, MemoryPatternSourceType, SocMemoryCandidateType
+from soc_agent.contracts.schemas import RoleResolution, RoleResolutionStatus, SocMemoryReuseCondition
+from soc_agent.core import SocMemoryService
+from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
+from soc_agent.memory import InMemoryMemoryCandidateRepository, InMemoryMemoryPatternRepository, memory_pattern_command_from_run, memory_query_from_analysis_request
 from soc_agent.memory.facets import memory_facets_from_analysis_request, memory_facets_from_analysis_run, merge_memory_facets
+from soc_agent.memory.lessons import promote_memory_applicability_facets
+from soc_agent.memory.scope_bindings import scope_bindings
 from soc_agent.memory.scope_options import option_page, scope_samples
+from soc_agent.memory.scoring import evaluate_memory_scope
+from soc_agent.pipeline.extractor import extract_entities
+from soc_agent.utils.hashing import stable_hash
 
 
 @pytest.fixture(autouse=True)
@@ -26,93 +33,131 @@ def with_entity(value, *, kind=EntityKind.URL):
     return run
 
 
+class HistoricalRawEntityProfile(PingAnSocMemoryProfile):
+    """Fixture for the raw entity facets persisted before large-input handling."""
+
+    def project_run_facets(self, run):
+        facets = super().project_run_facets(run)
+        facets["entity"] = sorted({mention.key.strip() for mention in run.llm_analysis_request.extracted_entities.mentions})
+        return facets
+
+
+def extracted_url_run(index, entity_key):
+    run = _run(index, service_url=entity_key.removeprefix("url:"))
+    request = run.llm_analysis_request
+    request.extracted_entities = extract_entities(AlertInput(alert_id=request.alert_id, source=request.source, detection=request.detection, classification=request.classification, entities=request.canonical_entities))
+    return run
+
+
+_URL_PREFIX = "url:https://example.test/"
+_UNICODE_BOUNDARY = _URL_PREFIX + "a" * (512 - len(_URL_PREFIX) - 1) + "ß"
+
+
+@pytest.mark.parametrize("semantic", [False, True], ids=["profile-7", "profile-9"])
+@pytest.mark.parametrize(
+    ("stored_key", "incoming_key"),
+    [
+        (_URL_PREFIX + "path", _URL_PREFIX + "path"),
+        ("url:" + "a" * 508, "url:" + "a" * 508),
+        (_UNICODE_BOUNDARY, _UNICODE_BOUNDARY.casefold()),
+        ("url:sha256:" + "a" * 64, "url:sha256:" + "a" * 64),
+    ],
+    ids=["ordinary", "512-ascii", "casefold-crosses-512", "native-sha256-literal"],
+)
+def test_old_reviewed_exact_conditions_still_match(stored_key, incoming_key, semantic):
+    stored = extracted_url_run(1, stored_key)
+    current = extracted_url_run(2, incoming_key)
+    original = stored.model_dump(mode="json")
+    profile = HistoricalRawEntityProfile(semantic_features=semantic)
+    facets = profile.project_run_facets(stored)
+    signature = profile.build_pattern_signature(stored, facets=facets)
+    applicability = profile.build_applicability(consensus_facets=signature.facets, strong_anchor_facets=signature.facets)
+    reviewed = promote_memory_applicability_facets(applicability, [], {"entity": [stored_key]})
+    frozen_scope = reviewed.model_dump(mode="json")
+    assert stored_key in [mention.key for mention in stored.llm_analysis_request.extracted_entities.mentions]
+    assert len(stored_key) <= 512
+
+    current_profile = PingAnSocMemoryProfile(semantic_features=semantic)
+    current_query = memory_query_from_analysis_request(current.llm_analysis_request, profile=current_profile)
+    result = evaluate_memory_scope(reviewed, SocMemoryCandidateType.BENIGN_PATTERN, current_query, {})
+    assert result.status.value == "applicable"
+    assert not result.missing_reuse_conditions
+
+    different = extracted_url_run(3, incoming_key + "different")
+    different_query = memory_query_from_analysis_request(different.llm_analysis_request, profile=current_profile)
+    different_result = evaluate_memory_scope(reviewed, SocMemoryCandidateType.BENIGN_PATTERN, different_query, {})
+    assert different_result.status.value == "partial"
+    assert different_result.missing_reuse_conditions
+    assert reviewed.model_dump(mode="json") == frozen_scope
+    assert stored.model_dump(mode="json") == original
+
+
 @pytest.mark.parametrize("kind", [EntityKind.URL, EntityKind.PROCESS, EntityKind.HOST, EntityKind.USER, EntityKind.EMAIL])
-def test_long_exact_entities_share_write_and_query_projection_without_changing_evidence(kind):
+def test_long_query_entities_keep_complete_raw_values_and_evidence(kind):
     value = "Example/" + "路径" * 400 + "?tail=one"
     run = with_entity(value, kind=kind)
     original = run.model_dump(mode="json")
+    expected = [f"{kind.value}:{value}"]
     stored = memory_facets_from_analysis_run(run)["entity"]
     queried = memory_query_from_analysis_request(run.llm_analysis_request).facets["entity"]
-    changed = memory_facets_from_analysis_run(with_entity(value + "two", kind=kind))["entity"]
-    case_equivalent = memory_facets_from_analysis_run(with_entity(value.swapcase(), kind=kind))["entity"]
-
-    assert len(stored[0]) <= 512
-    assert stored[0].startswith(f"{kind.value}:sha256:")
-    assert stored == queried == case_equivalent
-    assert stored != changed
-    assert merge_memory_facets({"entity": stored}, {"entity": queried}) == {"entity": stored}
+    assert stored == queried == expected
+    assert merge_memory_facets({"entity": stored}, {"entity": queried}) == {"entity": expected}
     assert run.model_dump(mode="json") == original
 
 
-@pytest.mark.parametrize("value", ["a" * 507, "a" * 508, "a" * 509, "a " * 250 + " " * 50])
-def test_short_and_legacy_whitespace_values_keep_their_original_identity(value):
-    run = with_entity(value)
-    raw_key = run.llm_analysis_request.extracted_entities.mentions[0].key
-    facet = memory_facets_from_analysis_run(run)["entity"][0]
-    if len(" ".join(raw_key.split())) <= 512:
-        assert facet == raw_key.strip()
-    else:
-        assert len(facet) <= 512
-        assert facet != raw_key
+def test_legacy_reference_record_with_long_raw_entity_remains_retrievable():
+    value = "https://example.test/query?sql=" + "a" * 700
+    record = _record("MEM-LEGACY-LONG-ENTITY", facets={"entity": ["url:" + value]})
+    assert record.applicability is None
+    frozen = record.model_dump(mode="json")
+    repository = InMemoryMemoryCandidateRepository()
+    repository.save_memory_record(record)
+    service = SocMemoryService(record_repository=repository)
+    matched = service.find_relevant_records(memory_query_from_analysis_request(with_entity(value).llm_analysis_request))
+    changed = service.find_relevant_records(memory_query_from_analysis_request(with_entity(value + "different").llm_analysis_request))
+    assert [match.memory_id for match in matched.matches] == [record.memory_id]
+    assert matched.matches[0].applicability_report.status.value == "legacy_anchor_only"
+    assert not changed.matches
+    assert repository.get_memory_record(record.memory_id).model_dump(mode="json") == frozen
 
 
-def test_a_short_literal_cannot_impersonate_a_generated_fingerprint():
-    fingerprint = memory_facets_from_analysis_run(with_entity("x" * 900))["entity"][0]
-    literal = with_entity(fingerprint.removeprefix("url:"))
-    assert memory_facets_from_analysis_run(literal)["entity"] != [fingerprint]
-
-
-def test_legacy_long_whitespace_uses_the_existing_pattern_identity_everywhere():
-    run = with_entity("a" + " " * 700 + "z")
-    repository = InMemoryMemoryPatternRepository()
-    service = _service(repository)
-    observation = _observe(service, run, "legacy-whitespace:1").observation
-    assert observation.signature.facets["entity"] == ["url:a z"]
-    assert memory_facets_from_analysis_run(run)["entity"] == ["url:a z"]
-    assert memory_query_from_analysis_request(run.llm_analysis_request).facets["entity"] == ["url:a z"]
-    assert run.llm_analysis_request.extracted_entities.mentions[0].value == "a" + " " * 700 + "z"
-
-
-def test_long_role_values_preserve_roles_and_use_complete_values():
+def test_long_role_values_keep_the_existing_casefolded_identity():
     run = _run(1)
-    request = run.llm_analysis_request
-    value = "endpoint/" + "a" * 700
-    request.fact_reconstruction.role_resolutions = [RoleResolution(role=role, status=RoleResolutionStatus.CONFIRMED, selected_value=value, rationale="Synthetic confirmed role.", confidence=0.9) for role in ("attacker", "victim")]
-    values = memory_facets_from_analysis_request(request)["role_entity"]
-    assert all(len(item) <= 512 for item in values)
-    assert values[0].startswith("attacker:sha256:")
-    assert values[1].startswith("victim:sha256:")
-    assert values[0] != values[1]
+    value = "Endpoint/" + "a" * 700
+    run.llm_analysis_request.fact_reconstruction.role_resolutions = [
+        RoleResolution(role=role, status=RoleResolutionStatus.CONFIRMED, selected_value=value, rationale="Synthetic confirmed role.", confidence=0.9) for role in ("attacker", "victim")
+    ]
+    original = run.model_dump(mode="json")
+    assert memory_facets_from_analysis_request(run.llm_analysis_request)["role_entity"] == [f"{role}:{value}".casefold() for role in ("attacker", "victim")]
+    assert run.model_dump(mode="json") == original
 
 
-def test_long_url_can_accumulate_and_match_without_changing_behavior_identity():
-    repository = InMemoryMemoryPatternRepository()
-    service = _service(repository)
-    value = "https://example.test/query?sql=" + "a" * 1500
-    first = _run(1, service_url=value)
-    second = _run(2, service_url=value)
-    first_result = _observe(service, first, "long-url:1")
-    result = _observe(service, second, "long-url:2")
-    assert result.candidate is not None
-    assert _observe(service, first, "long-url:1").observation == first_result.observation
-    profile = build_soc_memory_profile_registry().resolve_run(second)
-    request = second.llm_analysis_request
-    facets = profile.project_query_facets(request)
-    assert result.candidate.facets["entity"] == facets["entity"]
-    assert all(len(item) <= 512 for item in facets["entity"])
-    assert request.canonical_entities.http.url == value
-    assert profile.project_run_facets(_run(3, service_url=value + "changed"))["behavior_fingerprint"] == facets["behavior_fingerprint"]
-
-
-def test_raw_object_bindings_remain_replay_stable_but_review_and_matching_use_bounded_values():
-    value = "workstation-" + "a" * 700
-    run = with_entity(value, kind=EntityKind.HOST)
+@pytest.mark.parametrize("value", ["sha256:" + "a" * 64, "a" * 506 + "ß"], ids=["native-literal", "casefold-crosses-512"])
+def test_historical_object_conditions_match_raw_scope_bindings(value):
+    run = _run(1)
     run.llm_analysis_request.canonical_entities.host.host_name = value
+    condition = SocMemoryReuseCondition(facet_key="entity", value_prefix="host", values=["host:" + value])
+    spec = scope(reuse_conditions=[condition])
+    current = query("tool:p", "network_service:tcp/80")
+    current.scope_bindings = scope_bindings(run.llm_analysis_request)
+    current.facets["entity"] = ["host:" + value.casefold()]
+    frozen = [binding.model_dump(mode="json") for binding in current.scope_bindings]
+    assert evaluate(spec, current).status.value == "applicable"
+    assert [binding.model_dump(mode="json") for binding in current.scope_bindings] == frozen
+    run.llm_analysis_request.canonical_entities.host.host_name = value + "different"
+    current.scope_bindings = scope_bindings(run.llm_analysis_request)
+    assert evaluate(spec, current).status.value == "partial"
+
+
+def test_historical_binding_replay_keeps_raw_values_but_new_options_are_bounded():
+    run = _run(1)
+    value = "host-" + "a" * 700
+    run.llm_analysis_request.canonical_entities.host.host_name = value
+    original = run.model_dump(mode="json")
     repository = InMemoryMemoryPatternRepository()
     service = _service(repository)
-    observation = _observe(service, run, "long-host:1").observation
-    raw_binding = observation.signature.scope_bindings[0]
-    assert raw_binding.facets["entity"] == [f"host:{value}"]
+    observation = _observe(service, run, "legacy-binding:1").observation
+    frozen = observation.model_dump(mode="json")
     candidate = SimpleNamespace(
         tenant_id=observation.tenant_id,
         applicability=None,
@@ -120,37 +165,72 @@ def test_raw_object_bindings_remain_replay_stable_but_review_and_matching_use_bo
         source=SimpleNamespace(metadata={}, alert_id=run.alert_id),
     )
     page = option_page(candidate, repository, facet_key="entity", prefix="host")
-    assert len(page["items"]) == 1
-    selected = page["items"][0]["value"]
-    assert len(selected) <= 512
-    assert selected == memory_facets_from_analysis_run(run)["entity"][0]
-    spec = scope(reuse_conditions=[SocMemoryReuseCondition(facet_key="entity", value_prefix="host", values=[selected])])
-    current = query("tool:p", "network_service:tcp/80")
-    current.facets["entity"] = [selected]
-    current.scope_bindings = [raw_binding]
-    assert evaluate(spec, current).status.value == "applicable"
-    current.scope_bindings = [SocMemoryScopeBinding(source_ref="entities.endpoint", facets={"entity": [f"host:{value}other"]})]
-    assert evaluate(spec, current).status.value == "partial"
-    assert observation.signature.scope_bindings[0] == raw_binding
-    assert scope_samples(candidate, repository)[0]["scope_bindings"][0] == raw_binding
+    assert page["items"] == []
+    assert "host:" + value in scope_samples(candidate, repository)[0]["facets"]["entity"]
+    assert _observe(service, run, "legacy-binding:1").observation.model_dump(mode="json") == frozen
+    assert repository.get_memory_pattern_observation(observation.observation_id).model_dump(mode="json") == frozen
+    assert run.model_dump(mode="json") == original
 
 
-def test_historical_binding_only_long_values_replay_without_rewriting_observations():
-    run = _run(1)
-    run.llm_analysis_request.canonical_entities.host.host_name = "host-" + "a" * 700
+def test_old_observation_with_native_hash_literal_replays_without_rewriting():
+    run = with_entity("sha256:" + "a" * 64)
     repository = InMemoryMemoryPatternRepository()
     service = _service(repository)
-    first = _observe(service, run, "legacy-binding:1").observation
-    frozen = first.model_dump(mode="json")
-    second = _observe(service, run, "legacy-binding:1").observation
-    assert second.model_dump(mode="json") == frozen
-    assert len(first.signature.scope_bindings[0].facets["entity"][0]) > 512
+    command = memory_pattern_command_from_run(
+        run,
+        source_type=MemoryPatternSourceType.BATCH_ALERT,
+        transport_ref="legacy-literal:1",
+        environment="prd",
+        data_class=MemoryPatternDataClass.OPERATIONAL,
+        policy_fingerprint=stable_hash(service.policy.model_dump(mode="json")),
+        profile=HistoricalRawEntityProfile(),
+    )
+    old = service.ingest_observation(command, context=_context()).observation
+    frozen = old.model_dump(mode="json")
+    replay = _observe(service, run, "legacy-literal:1").observation
+    assert replay.model_dump(mode="json") == frozen
+    assert repository.get_memory_pattern_observation(old.observation_id).model_dump(mode="json") == frozen
 
 
-def test_contract_validation_errors_are_not_treated_as_normal_pattern_ineligibility():
+def test_legacy_whitespace_normalization_stays_at_pattern_contract_boundary():
+    value = "a" + " " * 700 + "z"
+    run = with_entity(value)
+    original = run.model_dump(mode="json")
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+    observation = _observe(service, run, "legacy-whitespace:1").observation
+    frozen = observation.model_dump(mode="json")
+    assert observation.signature.facets["entity"] == ["url:a z"]
+    assert memory_facets_from_analysis_run(run)["entity"] == ["url:" + value]
+    assert memory_query_from_analysis_request(run.llm_analysis_request).facets["entity"] == ["url:" + value]
+    assert _observe(service, run, "legacy-whitespace:1").observation.model_dump(mode="json") == frozen
+    assert run.model_dump(mode="json") == original
+
+
+def test_oversized_learning_entities_are_filtered_without_changing_query_or_evidence():
+    run = with_entity("a" * 509)
+    original = run.model_dump(mode="json")
+    profile = PingAnSocMemoryProfile()
+    before = memory_query_from_analysis_request(run.llm_analysis_request, profile=profile).model_dump(mode="json")
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+
+    result = _observe(service, run, "filtered-entity:1")
+
+    assert not result.observation.signature.facets.get("entity")
+    assert result.observation.signature.facets["detection_key"]
+    assert result.observation.signature.facets["behavior_fingerprint"]
+    assert result.candidate is None  # The ordinary recurrence threshold still applies.
+    assert memory_query_from_analysis_request(run.llm_analysis_request, profile=profile).model_dump(mode="json") == before
+    assert memory_facets_from_analysis_run(run)["entity"] == ["url:" + "a" * 509]
+    assert _observe(service, run, "filtered-entity:1").observation == result.observation
+    assert run.model_dump(mode="json") == original
+
+
+def test_other_oversized_pattern_contract_values_still_fail_without_mutating_evidence():
     run = _run(1)
-    # Environment is operator-owned, not an arbitrary exact entity to fingerprint.
-    with pytest.raises(ValidationError, match="1-512"):
+    original = run.model_dump(mode="json")
+    with pytest.raises(ValidationError, match="512"):
         memory_pattern_command_from_run(
             run,
             source_type=MemoryPatternSourceType.BATCH_ALERT,
@@ -159,3 +239,4 @@ def test_contract_validation_errors_are_not_treated_as_normal_pattern_ineligibil
             data_class=MemoryPatternDataClass.OPERATIONAL,
             policy_fingerprint="test-policy",
         )
+    assert run.model_dump(mode="json") == original

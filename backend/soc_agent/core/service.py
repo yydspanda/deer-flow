@@ -1695,14 +1695,17 @@ class SocReviewService:
                 }
             }
         )
-        outcome = SocMemoryCandidateSourceBridge(
-            memory_service,
-            profile_registry=self._memory_profile_registry,
-        ).admit_from_run_promotion(
-            run,
-            promotion_command,
-            context=request_context,
-        )
+        try:
+            outcome = SocMemoryCandidateSourceBridge(
+                memory_service,
+                profile_registry=self._memory_profile_registry,
+            ).admit_from_run_promotion(
+                run,
+                promotion_command,
+                context=request_context,
+            )
+        except MemoryPatternIneligibleError as exc:
+            raise SocServiceConflictError(str(exc)) from exc
         result = SocMemoryRunPromotionResult(
             run_id=run.run_id,
             alert_id=run.alert_id,
@@ -1767,11 +1770,14 @@ class SocReviewService:
     def _learning_view_for_run(self, run: AnalysisRun) -> SocMemoryLearningView | None:
         if self._memory_candidate_repository is None or run.decision is None:
             return None
-        command = memory_candidate_command_from_run_promotion(
-            run,
-            SocMemoryRunPromotionCommand(run_id=run.run_id, metadata=self._run_pattern_lineage_metadata(run)),
-            profile_registry=self._memory_profile_registry,
-        )
+        try:
+            command = memory_candidate_command_from_run_promotion(
+                run,
+                SocMemoryRunPromotionCommand(run_id=run.run_id, metadata=self._run_pattern_lineage_metadata(run)),
+                profile_registry=self._memory_profile_registry,
+            )
+        except MemoryPatternIneligibleError as exc:
+            return SocMemoryLearningView(state="closed", label="本次未生成经验", detail=str(exc), action="view_history", action_label="查看研判结果")
         candidate = resolve_learning_candidate(self._memory_candidate_repository, command, record_repository=self._memory_record_repository)
         return learning_view(self._memory_candidate_repository, candidate, record_repository=self._memory_record_repository)
 

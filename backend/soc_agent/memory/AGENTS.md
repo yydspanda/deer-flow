@@ -73,9 +73,9 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 
 ## Retrieval And Decision Use
 
-- `facets.bounded_exact_entity` projects exact entities for learning/reuse; see
-  [contracts](../../../.notes/reference-index/soc-agent-engineering-contracts.md)
-  for full-value hashing, compatibility and errors.
+- Preserve legacy query/approved conditions. New learning excludes entity values over
+  512 from features/options, retaining raw evidence and existing gates; no hash/truncation. See
+  [contracts](../../../.notes/reference-index/soc-agent-engineering-contracts.md).
 
 - Applicability policy v4 freezes both selected behaviors (required presence) and the
   complete reviewed behavior coverage. Unchecking a known behavior makes it optional;

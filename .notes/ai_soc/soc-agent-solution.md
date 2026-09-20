@@ -2028,6 +2028,10 @@ Candidate 审核先比较已有经验：同范围一致结论补充/修订，不
 前端、起草、治理预览、确认、检索和冲突检查共用同一契约，详见
 [Memory 适用条件设计](architecture/memory-applicability-design.md)第 6.4 节。
 
+新经验学习仅过滤超过 512 字符的实体匹配特征，完整证据保留，其余特征继续经过原有积累、质量和
+审核门禁；不生成摘要、截断值或替代特征，超长值也不进入新条件选择目录。此过滤不进入当前告警的
+检索/精确复用输入，不改写旧经验、审核条件或历史观察，因此第二批仍按原有匹配语义使用第一批经验。
+
 ```mermaid
 flowchart TD
     S1["📝 Source<br/>correction / accepted conclusion / reviewed finding / repeated pattern / explicit run promotion"] --> A{"🚦 MemoryAdmissionService<br/>human signal + reason + reusable anchor"}

@@ -8,7 +8,7 @@ from test_soc_corpus_experiment_repository import experiment, members, repositor
 from test_soc_corpus_experiments import context, prepare
 from test_soc_memory_patterns import _run
 
-from soc_agent.contracts import AnalysisRunStatus, PipelineStepTrace, RuntimeFailure
+from soc_agent.contracts import AnalysisRunStatus, EntityKind, EntityMention, PipelineStepTrace, RuntimeFailure
 from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
 from soc_agent.contracts.schemas import SocMemoryReuseCondition
 from soc_agent.core import SocMemoryPatternService
@@ -136,3 +136,46 @@ def test_ordinary_failed_execution_keeps_its_existing_summary_semantics(tmp_path
         assert job.result_payload["summary"]["measurements"] == repo.get_run_measurements(run_id)
     else:
         assert "summary" not in job.result_payload
+
+
+def test_oversized_learning_entity_is_filtered_and_batch_accumulation_completes(tmp_path):
+    repo = repository(tmp_path)
+    member = members()[0]
+    run = _run(member.source_index, tenant_id="pingan")
+    run.alert_id = member.alert_id
+    run.input_payload = {"alert_id": member.alert_id, "event_time": member.event_time.isoformat()}
+    run.input_hash = stable_hash(run.input_payload)
+    run.llm_analysis_request.alert_id = member.alert_id
+    run.llm_analysis_request.environment = "dev-corpus-eval"
+    value = "https://example.test/query?private=" + "a" * 600
+    run.llm_analysis_request.extracted_entities.mentions = [EntityMention(kind=EntityKind.URL, key="url:" + value, value=value)]
+    run.steps = [PipelineStepTrace(step_name="analyze_llm", status="success", metadata={"usage": {"input_tokens": 1200, "output_tokens": 300, "total_tokens": 1500}})]
+    repo.corpus_experiments().prepare(experiment(), [member.model_copy(update={"payload_hash": run.input_hash})])
+    calls = []
+
+    def analyze(payload, *, context):
+        calls.append(payload["alert_id"])
+        repo.save_run(run)
+        return run
+
+    executor = CorpusRuntimeExecutor(repository=repo, load_payload=lambda _: run.input_payload, analysis_factory=lambda _: SimpleNamespace(analyze=analyze), profile_registry=SocMemoryProfileRegistry())
+    service = SocCorpusExperimentService(repository=repo, execute=executor, configuration_provider=lambda _: {})
+    round_ = service.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning", alert_ids=[member.alert_id])), context=context())
+    service.start(round_.round_id, context=context())
+    assert service.execute_one(round_.round_id)
+
+    job = service.store.list_round_items(round_.round_id).items[0].job
+    assert job.status.value == "completed"
+    assert job.run_id == run.run_id
+    assert job.result_payload["observation_id"]
+    assert not job.result_payload.get("candidate_id")  # One sample still follows the normal quality gate.
+    assert job.result_payload["summary"]["analysis_status"] == run.status.value
+    assert job.result_payload["summary"]["measurements"]["total_tokens"] == 1500
+    assert repo.get_run(run.run_id).model_dump(mode="json") == run.model_dump(mode="json")
+    observations = repo.list_memory_pattern_observations(alert_id=run.alert_id)
+    assert len(observations) == 1
+    assert observations[0].observation_id == job.result_payload["observation_id"]
+    assert "url:" + value not in observations[0].signature.facets.get("entity", [])
+    assert observations[0].signature.facets["detection_key"]
+    assert repo.list_memory_candidates() == []
+    assert calls == [member.alert_id]

@@ -63,6 +63,7 @@ from soc_agent.integrations.pingan.corpus_validation import is_corpus_validation
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm import SocLLMSettings
 from soc_agent.memory.learning import learning_view
+from soc_agent.memory.patterns import EXACT_MEMORY_FACET_TOO_LONG, MemoryPatternIneligibleError
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.prompts.analysis import (
     ANALYSIS_PROMPT_VERSION,
@@ -1586,17 +1587,22 @@ class SocCorpusWorkbenchService:
                     self._active_executions[alert_id] = replace(claim, pattern_run_id=run.run_id)
             # Replays may acquire new semantic features. The Pattern service deduplicates
             # the same alert within the same signature; never pin a new run to old facets.
-            aggregation = self._pattern_service.observe_run(
-                run,
-                source_type=MemoryPatternSourceType.BATCH_ALERT,
-                transport_ref=f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:run:{run.run_id}",
-                environment=CORPUS_WORKBENCH_ENVIRONMENT,
-                data_class=MemoryPatternDataClass.OPERATIONAL,
-                context=request_context,
-            )
-            observation_id = aggregation.observation.observation_id
-            pattern_observation_reused = aggregation.idempotent
-            idempotent = aggregation.idempotent
+            try:
+                aggregation = self._pattern_service.observe_run(
+                    run,
+                    source_type=MemoryPatternSourceType.BATCH_ALERT,
+                    transport_ref=f"soc-corpus-dev-web:{self._source_sha256}:{alert_id}:run:{run.run_id}",
+                    environment=CORPUS_WORKBENCH_ENVIRONMENT,
+                    data_class=MemoryPatternDataClass.OPERATIONAL,
+                    context=request_context,
+                )
+            except MemoryPatternIneligibleError:
+                # Learning eligibility must not fail an already persisted analysis.
+                pass
+            else:
+                observation_id = aggregation.observation.observation_id
+                pattern_observation_reused = aggregation.idempotent
+                idempotent = aggregation.idempotent
 
         return SocCorpusWorkbenchProcessResult(
             alert_id=alert_id,
@@ -2776,6 +2782,8 @@ def _pattern_terminal_summary(status: CorpusExecutionPhaseStatus, job: CorpusRun
         return "本次未记录模式观察，研判已结束。"
     if job.batch == "validation" or job.pattern_reason == "validation_learning_disabled":
         return "第二批仅验证经验效果，本次不新增模式或经验。"
+    if job.pattern_reason == EXACT_MEMORY_FACET_TOO_LONG:
+        return EXACT_MEMORY_FACET_TOO_LONG
     return "本次未积累经验：当前告警不满足模式积累条件；研判结果已保存。"
 
 

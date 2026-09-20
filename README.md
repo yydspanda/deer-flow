@@ -254,10 +254,12 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > explicitly with the actual character count; evidence is never silently clipped to fit. This
 > character guard is separate from the provider's Token window, which also includes prompt
 > instructions and generated output; it does not guarantee that every model can accept that size.
-> Experience matching keeps its 512-character feature limit. Long exact entities (such as URLs,
-> paths and accounts) use a complete-content fingerprint for matching while retaining the full
-> evidence. Experience write failures leave the analysis result available and end the progress
-> indicator; validation-only runs do not wait for a new experience observation.
+> Experience matching preserves existing entity identities and the 512-character condition limit.
+> New experience learning excludes oversized entity values from proposed matching features and the
+> optional-condition directory, while retaining full evidence. Remaining features must pass the
+> existing stable-anchor, quality and human-review gates; no hashes or truncated substitutes are added.
+> Existing reviewed conditions, incoming-alert matching features and retrieval comparisons stay
+> unchanged; validation-only runs do not wait for a new experience observation.
 > The offline group index is a navigation aid, while completed runs use their actual behavior facets.
 > Profile upgrades do not migrate reviewed Memory or delete history. Pattern idempotency remains
 > stable within each profile/signature contract. This

@@ -1,7 +1,6 @@
 """Project canonical object lineage for joint reuse-limit evaluation."""
 
 from soc_agent.contracts.schemas import LLMAnalysisRequest, SocMemoryScopeBinding
-from soc_agent.memory.facets import bounded_exact_entity
 
 
 def scope_bindings(request: LLMAnalysisRequest) -> list[SocMemoryScopeBinding]:
@@ -43,4 +42,4 @@ def uncovered_binding_conditions(spec, query):
         return True
     # A match describes the whole alert. Every relevant connection must satisfy
     # all selected role conditions together, not merely one endpoint somewhere.
-    return any(any(not {v.casefold() for v in condition.values}.intersection(bounded_exact_entity(v).casefold() for v in binding.facets.get(condition.facet_key, [])) for condition in conditions) for binding in relevant)
+    return any(any(not {v.casefold() for v in condition.values}.intersection(v.casefold() for v in binding.facets.get(condition.facet_key, [])) for condition in conditions) for binding in relevant)

@@ -32,7 +32,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.memory.admission import MemoryAdmissionService
-from soc_agent.memory.facets import memory_facets_from_analysis_run
+from soc_agent.memory.facets import filter_learning_entity_facets, memory_facets_from_analysis_run
 from soc_agent.memory.profiles import (
     GenericSocMemoryProfile,
     SocMemoryProfile,
@@ -97,15 +97,13 @@ class SocMemoryCandidateSourceBridge:
         queue_item: ReviewQueueItem | None = None,
         context: ServiceRequestContext | None = None,
     ) -> MemoryAdmissionOutcome:
-        return self.admit_command(
-            memory_candidate_command_from_correction(
-                run,
-                correction,
-                queue_item=queue_item,
-                profile_registry=self._profile_registry,
-            ),
-            context=context,
+        command = memory_candidate_command_from_correction(
+            run,
+            correction,
+            queue_item=queue_item,
+            profile_registry=self._profile_registry,
         )
+        return self.admit_command(command, context=context)
 
     def propose_from_correction(
         self,
@@ -380,7 +378,7 @@ def memory_candidate_command_from_review_note(
     stable_key = _stable_review_note_key(run, command, queue_item=queue_item)
     evidence_refs = _review_note_evidence_refs(run, command, queue_item=queue_item)
     facets = {
-        **memory_facets_from_analysis_run(run, alert=alert),
+        **filter_learning_entity_facets(memory_facets_from_analysis_run(run, alert=alert)),
         "candidate_source": ["review_note"],
         "review_note_origin": [command.origin.value],
         **({"scenario_key": [command.scenario_key]} if command.scenario_key else {}),
@@ -574,9 +572,8 @@ def _project_run_facets(
     alert: AlertInput | None,
     profile: SocMemoryProfile,
 ) -> dict[str, list[str]]:
-    if run.llm_analysis_request is not None:
-        return profile.project_run_facets(run)
-    return memory_facets_from_analysis_run(run, alert=alert)
+    facets = profile.project_run_facets(run) if run.llm_analysis_request is not None else memory_facets_from_analysis_run(run, alert=alert)
+    return filter_learning_entity_facets(facets)
 
 
 def _tenant_scope(alert: AlertInput | None) -> str:

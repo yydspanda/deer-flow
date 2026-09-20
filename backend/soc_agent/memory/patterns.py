@@ -27,7 +27,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.memory.candidates import InMemoryMemoryCandidateRepository
-from soc_agent.memory.facets import reusable_facet_values
+from soc_agent.memory.facets import filter_learning_entity_facets, reusable_facet_values
 from soc_agent.memory.lineage import project_memory_candidates_to_pattern_lineages
 from soc_agent.memory.profiles import GenericSocMemoryProfile, SocMemoryProfile
 from soc_agent.normalizers import normalize_alert_payload
@@ -36,6 +36,9 @@ from soc_agent.utils.hashing import stable_hash
 
 class MemoryPatternIneligibleError(ValueError):
     """Raised when a Runtime result cannot safely identify a recurrence cohort."""
+
+
+EXACT_MEMORY_FACET_TOO_LONG = "研判已完成；实体匹配条件超过 512 字符，本次未生成可复用经验。"
 
 
 class MemoryPatternRepositoryConflictError(ValueError):
@@ -266,7 +269,7 @@ def memory_pattern_command_from_run(
     if not tenant_id:
         raise MemoryPatternIneligibleError("memory pattern aggregation requires an explicit tenant_id")
     resolved_profile = profile or GenericSocMemoryProfile()
-    common_facets = _common_facets(run, profile=resolved_profile)
+    common_facets = filter_learning_entity_facets(_common_facets(run, profile=resolved_profile), pattern_whitespace=True)
     # The observation environment is an operator-owned cohort boundary. Keep it
     # in the canonical feature set even when the analyzer request did not carry
     # an environment so tenant profiles can prevent cross-environment reuse.

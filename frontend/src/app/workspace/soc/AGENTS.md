@@ -53,16 +53,14 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   samples or group browsing along with the old guide. Normalization inspection remains
   directly addressable at `/workspace/soc/normalization`, not in routine operator navigation.
 
-- Completed-run notices report execution only; the experience status band owns the
-  single learning action. Do not duplicate its Candidate/Memory link in a session-local
-  completion banner. Review copy identifies automatic same-behavior learning versus
-  manual promotion from the saved source; both can serve later matching alerts after
-  review and activation. Shared candidate links mean one review, not one task per alert.
-
-- Memory learning entry labels and destinations come from `SocMemoryLearningView` on
-  the server. Never prefer a stale per-run manual candidate over the resolved current
-  candidate/revision. Manual and automatic extraction share the same review destination;
-  reference/exact/paused/expired usage is separate from whether a lesson was confirmed.
+- Completion notices report execution; the experience band owns the learning action.
+  Never duplicate Candidate/Memory links in completion banners. Review copy distinguishes
+  automatic same-behavior learning from manual promotion using the saved source. Both
+  require review and activation; shared links mean one review, not one task per alert.
+- Labels and destinations follow server `SocMemoryLearningView`, resolving the current
+  candidate/revision rather than stale per-run candidates. Manual/automatic learning share
+  review; reference/exact/paused/expired use stays separate from confirmation. Show closed
+  learning reasons even without a Candidate link; omit unavailable navigation buttons.
 - Corpus `后续运行设置` is a per-run snapshot, not global configuration. The four switches cover
   semantic review, enterprise policy and its safe-path/advisor children. Store the local selection
   in session storage, mask unavailable capabilities and submit it with each process request.

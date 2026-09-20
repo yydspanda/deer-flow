@@ -49,6 +49,7 @@ from soc_agent.demo.corpus_workbench import (
     _project_operational_outcome,
 )
 from soc_agent.llm import SocAnalyzerMode, SocLLMSettings
+from soc_agent.memory.patterns import EXACT_MEMORY_FACET_TOO_LONG, MemoryPatternIneligibleError
 
 _CORPUS = Path(__file__).resolve().parents[2] / "datas" / "source" / "full_alert_2026_month_forth_sample_200.pkl"
 
@@ -299,6 +300,67 @@ def test_corpus_workbench_pages_and_filters_alerts_on_the_server(
     assert group_page.alert_page.total == selected_group.alert_count
     assert all(item.group_id == selected_group.group_id for item in group_page.alerts)
     assert [item.alert_id for item in search_page.alerts] == [group_page.alerts[0].alert_id]
+
+
+@pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+@pytest.mark.parametrize("failure_type", [MemoryPatternIneligibleError, ValueError, RuntimeError])
+def test_corpus_workbench_preserves_analysis_when_pattern_is_ineligible_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception],
+) -> None:
+    repository = _repository(tmp_path)
+    settings = SocLLMSettings(mode=SocAnalyzerMode.STUB)
+    pattern_service = SocMemoryPatternService(
+        repository=repository,
+        candidate_repository=repository,
+        profile_registry=build_soc_memory_profile_registry(),
+    )
+    service = SocCorpusWorkbenchService(
+        repository=repository,
+        analysis_service=build_soc_analysis_service(
+            repository,
+            settings=settings,
+            runtime_environment=CORPUS_WORKBENCH_ENVIRONMENT,
+        ),
+        pattern_service=pattern_service,
+        source_path=_CORPUS,
+        settings=settings,
+        database_file="soc-corpus-workbench.sqlite",
+    )
+    alert_id = next(iter(service._cases))
+    observed_runs = []
+    failure = failure_type(EXACT_MEMORY_FACET_TOO_LONG)
+
+    def reject_pattern(run, **kwargs):
+        assert service.get_activity().active_count == 1
+        observed_runs.append(run)
+        raise failure
+
+    monkeypatch.setattr(pattern_service, "observe_run", reject_pattern)
+    context = _admin_context("pattern-ineligible", actor_id="analyst")
+    if failure_type is MemoryPatternIneligibleError:
+        result = service.process_alert(alert_id, context=context)
+        assert result.run_id == observed_runs[0].run_id
+        assert result.observation_id is None
+        assert result.pattern_observation_reused is False
+        assert result.alert.workflow_state == "analysis_only"
+    else:
+        with pytest.raises(failure_type) as raised:
+            service.process_alert(alert_id, context=context)
+        assert raised.value is failure
+
+    assert len(observed_runs) == 1
+    saved = repository.get_run(observed_runs[0].run_id)
+    assert saved.status in {AnalysisRunStatus.SUCCESS, AnalysisRunStatus.NEEDS_REVIEW}
+    assert saved.analysis is not None
+    assert not repository.list_memory_pattern_observations(alert_id=alert_id)
+    assert service.get_activity().active_count == 0
+    execution = service.get_execution(alert_id)
+    assert execution.run_id == saved.run_id
+    assert execution.status == "analysis_complete"
+    assert execution.current_phase is None
+    assert next(phase for phase in execution.phases if phase.phase == "memory").status == "skipped"
 
 
 @pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")

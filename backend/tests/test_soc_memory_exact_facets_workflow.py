@@ -1,4 +1,4 @@
-"""Persisted long-entity learning and review preserve exact future-use limits."""
+"""Existing exact conditions survive review, persistence and future retrieval."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -12,6 +12,8 @@ from soc_agent.contracts import (
     ActorContext,
     ActorType,
     Decision,
+    EntityKind,
+    EntityMention,
     EntrySurface,
     ServiceRequestContext,
     SocMemoryCandidateReviewCommand,
@@ -48,15 +50,16 @@ def _actor(role: str, key: str) -> ServiceRequestContext:
 
 
 @pytest.mark.parametrize(
-    ("promotion", "value", "expected_prefix"),
+    ("promotion", "value"),
     [
-        ("automatic", "https://example.test/query?sql=" + "a" * 1500 + "&tail=one", "url:sha256:"),
-        ("manual", "https://example.test/query?sql=" + "a" * 1500 + "&tail=one", "url:sha256:"),
-        ("manual", "a" + " " * 700 + "z", "url:a z"),
+        ("automatic", "https://example.test/" + "a" * (512 - len("url:https://example.test/"))),
+        ("manual", "https://example.test/" + "a" * (512 - len("url:https://example.test/"))),
+        ("automatic", "sha256:" + "a" * 64),
+        ("manual", "sha256:" + "a" * 64),
     ],
-    ids=["automatic-long-url", "manual-long-url", "manual-legacy-whitespace"],
+    ids=["automatic-512", "manual-512", "automatic-literal", "manual-literal"],
 )
-def test_reviewed_exact_long_entity_stays_scoped_across_sqlite_retrieval(repository, promotion, value, expected_prefix):
+def test_reviewed_exact_entity_stays_scoped_across_sqlite_retrieval(repository, promotion, value):
     store, factory = repository
     registry = build_soc_memory_profile_registry()
     run = _run(1, service_url=value)
@@ -89,10 +92,16 @@ def test_reviewed_exact_long_entity_stays_scoped_across_sqlite_retrieval(reposit
     assert candidate is not None
     exact_request = _run(3, service_url=value).llm_analysis_request
     changed_request = _run(4, service_url=value + "changed").llm_analysis_request
+    # New validation inputs may contain unrelated oversized evidence. It must
+    # remain in the query and cannot alter an existing reviewed exact limit.
+    long_evidence = "https://evidence.example/query?sql=" + "z" * 600
+    for request in (exact_request, changed_request):
+        request.extracted_entities.mentions.append(EntityMention(kind=EntityKind.URL, key="url:" + long_evidence, value=long_evidence))
     exact_query = memory_query_from_analysis_request(exact_request, profile=registry.resolve_request(exact_request))
+    assert "url:" + long_evidence in exact_query.facets["entity"]
     changed_query = memory_query_from_analysis_request(changed_request, profile=registry.resolve_request(changed_request))
     entity = next(item for item in candidate.facets["entity"] if item.startswith("url:"))
-    assert entity.startswith(expected_prefix)
+    assert entity == f"url:{value}"
     assert len(entity) <= 512
     assert entity in exact_query.facets["entity"]
     assert entity not in changed_query.facets["entity"]
@@ -155,3 +164,51 @@ def test_reviewed_exact_long_entity_stays_scoped_across_sqlite_retrieval(reposit
 
     assert reloaded_store.get_run(run.run_id).model_dump(mode="json") == frozen_run
     assert _observe(pattern_service, run, "long-exact:1").observation.model_dump(mode="json") == frozen_observation
+
+
+@pytest.mark.parametrize("promotion", ["automatic", "manual"])
+def test_oversized_entity_is_filtered_while_remaining_scope_and_query_are_preserved(repository, promotion):
+    store, _ = repository
+    value = "https://example.test/query?sql=" + "a" * 1500
+    run = _run(1, service_url=value)
+    run.decision = Decision(
+        verdict=run.analysis.verdict,
+        confidence=run.analysis.confidence,
+        suggested_action=run.analysis.recommended_action,
+        needs_review=True,
+        reason=run.analysis.reason,
+    )
+    store.save_run(run)
+    frozen = store.get_run(run.run_id).model_dump(mode="json")
+    registry = build_soc_memory_profile_registry()
+    query_before = memory_query_from_analysis_request(run.llm_analysis_request, profile=registry.resolve_request(run.llm_analysis_request))
+    assert "url:" + value in query_before.facets["entity"]
+    if promotion == "automatic":
+        service = _service(store)
+        first = _observe(service, run, "oversized:observe")
+        assert first.observation is not None
+        assert first.candidate is None
+        candidate = _observe(service, _run(2, service_url=value), "oversized:observe-2").candidate
+        assert len(store.list_memory_pattern_observations()) == 2
+    else:
+        review = SocReviewService(
+            repository=store,
+            memory_candidate_repository=store,
+            memory_pattern_observation_repository=store,
+            memory_profile_registry=registry,
+        )
+        command = SocMemoryRunPromotionCommand(run_id=run.run_id)
+        context = _actor("soc_analyst", "oversized:promote")
+        candidate = review.promote_run_to_memory(command, context=context).memory_candidate
+        assert review.promote_run_to_memory(command, context=context).memory_candidate.candidate_id == candidate.candidate_id
+    assert candidate is not None
+    assert candidate.status.value == "pending_review"
+    assert candidate.applicability is not None
+    assert candidate.facets["behavior_fingerprint"] == query_before.facets["behavior_fingerprint"]
+    assert all(len(v) <= 512 for key in ("entity", "role_entity") for v in candidate.facets.get(key, []))
+    assert "url:" + value not in candidate.facets.get("entity", [])
+    assert "sha256:" not in " ".join(candidate.facets.get("entity", []))
+    assert len(store.list_memory_candidates()) == 1
+    assert store.get_run(run.run_id).model_dump(mode="json") == frozen
+    query_after = memory_query_from_analysis_request(run.llm_analysis_request, profile=registry.resolve_request(run.llm_analysis_request))
+    assert query_after.model_dump(mode="json") == query_before.model_dump(mode="json")

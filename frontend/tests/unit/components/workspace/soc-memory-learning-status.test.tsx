@@ -71,3 +71,33 @@ test("paused experience links to inventory, rejected candidate to its history", 
     }),
   ).toBeNull();
 });
+
+test("closed learning without a candidate shows its explanation without a link", () => {
+  const view: SocMemoryLearningView = {
+    state: "closed",
+    label: "本次未生成经验",
+    detail: "关联实体超过经验条件的 512 字符上限，研判结果已保留。",
+    action: "view_history",
+    action_label: "查看记录",
+  };
+  const html = renderToStaticMarkup(<SocMemoryLearningStatus view={view} />);
+  expect(html).toContain('role="status"');
+  expect(html).toContain(view.label);
+  expect(html).toContain(view.detail);
+  expect(html).not.toContain("<a ");
+  expect(html).not.toContain("<button");
+  expect(html).not.toContain(view.action_label);
+});
+
+test("promotion without a destination remains hidden in the status band", () => {
+  const view: SocMemoryLearningView = {
+    state: "accumulating",
+    label: "正在积累样本",
+    detail: "尚未达到自动提炼条件。",
+    action: "promote",
+    action_label: "提炼经验",
+  };
+  expect(renderToStaticMarkup(<SocMemoryLearningStatus view={view} />)).toBe(
+    "",
+  );
+});

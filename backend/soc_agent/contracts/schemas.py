@@ -920,6 +920,7 @@ class MemoryAdmissionReasonCode(StrEnum):
     CONFIRMATION_ONLY = "confirmation_only"
     NO_HUMAN_PROMOTION_SIGNAL = "no_human_promotion_signal"
     NO_REUSABLE_ANCHOR = "no_reusable_anchor"
+    FEATURE_VALUE_TOO_LONG = "feature_value_too_long"
 
 
 class ReviewNoteOrigin(StrEnum):

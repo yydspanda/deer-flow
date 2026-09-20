@@ -3,7 +3,7 @@
 from collections import Counter, defaultdict
 
 from soc_agent.contracts import SocMemoryCandidateType, SocMemoryQuery
-from soc_agent.memory.facets import bounded_exact_entity
+from soc_agent.memory.facets import filter_learning_entity_facets
 from soc_agent.memory.scoring import evaluate_memory_scope
 from soc_agent.utils.model_json import model_json
 
@@ -47,8 +47,7 @@ def scope_samples(candidate, repository):
         sample["facets"] = {key: list(values) for key, values in sample["facets"].items()}
         for binding in sample.get("scope_bindings", []):
             for key, values in binding.facets.items():
-                projected = {bounded_exact_entity(value) for value in values} if key in {"entity", "role_entity"} else set(values)
-                sample["facets"][key] = sorted(set(sample["facets"].get(key, [])) | projected)
+                sample["facets"][key] = sorted(set(sample["facets"].get(key, [])) | set(values))
     return samples
 
 
@@ -56,8 +55,11 @@ def option_page(candidate, repository, *, facet_key=None, prefix=None, search=""
     samples = scope_samples(candidate, repository)
     sources = defaultdict(dict)
     for sample in samples:
+        # Source facts and object coverage remain complete; only new choices
+        # obey the applicability condition's existing strip-based limit.
+        selectable = filter_learning_entity_facets(sample["facets"])
         for key in ("entity", "role_entity"):
-            for value in sample["facets"].get(key, []):
+            for value in selectable.get(key, []):
                 kind, separator, _ = value.partition(":")
                 if separator and kind in ENTITY_PREFIXES:
                     sources[(key, kind, value)][sample["source_id"]] = sample
@@ -76,6 +78,8 @@ def option_page(candidate, repository, *, facet_key=None, prefix=None, search=""
 
 def candidate_with_scope_selections(candidate, repository, selections):
     """Validate only chosen values; never ship a complete entity union to the UI."""
+    if selections and any(len(value.strip()) > 512 for key in ("entity", "role_entity") for value in selections.get(key, [])):
+        raise ValueError("附加实体条件不能超过 512 字符，请选择其他适用条件")
     if not selections or candidate.applicability is None:
         return candidate
     optional = {key: list(values) for key, values in candidate.applicability.optional_facets.items()}
@@ -153,7 +157,7 @@ def scope_lesson_sources(candidate, repository, spec):
         update={
             "summary": f"所选适用范围内的 {len(covered)} 条告警",
             "content": model_json(lessons),
-            "facets": {k: sorted(v) for k, v in facets.items()},
+            "facets": filter_learning_entity_facets({k: sorted(v) for k, v in facets.items()}),
             "metadata": metadata,
             "evidence_refs": [],
             "source": candidate.source.model_copy(update={"alert_id": covered[0]["alert_id"], "run_id": covered[0]["run_id"], "metadata": {"observation_ids": metadata["observation_ids"]}}),

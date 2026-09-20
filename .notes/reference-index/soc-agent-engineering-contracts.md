@@ -2972,11 +2972,17 @@ tool permission denial rate
   均可缺失；generic Memory Kernel 不得规定一个所有厂商必填的多维联合硬键。Tenant Profile 可以基于
   已存在的 canonical facets 定义版本化 compound cohort/applicability，但必须保留 ruleless fallback 和
   context-only/decision-authority 边界。
-- 精确实体 `entity/role_entity` 的原文投影统一使用 `bounded_exact_entity`：保留既有 512 字符
-  门禁，超长完整值以保留类型前缀的 SHA-256 参与匹配，不截断、不扩大审核范围。写入、人工提升、
-  query、来源选项及对象关联比较必须一致；已投影 facet 不二次编码。原始证据和持久化 scope bindings
-  不改写，普通短值及既有 Pattern 空白归一身份保持兼容。摘要格式的原文字面量不能冒充生成摘要。
-  固定格式/行为/控制字段继续原校验；`ValidationError` 不得冒充正常 Pattern 不准入。
+- 精确实体 `entity/role_entity` 的原值提取与查询比较保持既有语义；不得为绕过 512 字符门禁
+  新增摘要、截断值或 URL 路径替代值。仅新学习构造（自动积累、人工提升和纠正附带经验）过滤
+  超长实体特征，合法特征继续通过原有稳定锚点、质量及人工审核门禁；不足以准入时仍不产生候选。
+  新条件目录不提供超长可选值，预览/起草/审核拒绝显式选择超长值。不得删除已审核条件来放宽范围。
+  原始证据、已存 Run/Observation、候选、审核条件与持久化 scope bindings 不自动重写，重放仍尊重
+  已冻结记录。查询、索引、对象关联比较兼容旧合法 Unicode 边界、摘要形式的原文字面量和无 typed
+  applicability 的历史参考记录；第二批匹配输入不应用新学习过滤。
+  已成功研判及人工纠正结论不因附带经验不准入而丢失，保留审计与幂等重试。无候选链接的关闭状态
+  仍展示原因，不构造无效跳转。过滤长度沿用 Pattern 的既有空白归一语义，人工条件保持 strip 边界。
+  其他契约错误仍是处理失败，不得笼统将所有 `ValidationError` 当作正常不准入。兼容回归固定旧经验
+  和告警输入，检查原有命中与排除条件均不因升级改变；不得通过重新审核或重跑第一批掩盖不兼容。
 - PingAn Profile v7（feature schema v5）把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
   `detection_key`，但该 key 只表示规则大类，不得单独复制历史 verdict。Profile 必须从 canonical
   rule name 生成版本化 `detection_signature`；不得用 `alert_id/run_id` 合成任一检测身份。
