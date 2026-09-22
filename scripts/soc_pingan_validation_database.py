@@ -15,6 +15,7 @@ import sys
 import time
 from contextlib import closing
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
@@ -25,7 +26,7 @@ else:
     import soc_pingan_dev_database as database
 
 ROOT = Path(__file__).resolve().parents[1]
-StoreOperation = Callable[[sqlite3.Connection, str], dict]
+StoreOperation = Callable[..., dict]
 
 
 def _progress(message: str) -> None:
@@ -63,9 +64,10 @@ def _runtime_environment(root: Path) -> str:
     return result.stdout.strip().lower()
 
 
-def _load_store(root: Path):
+def _load_store():
+    """Load the companion module shipped with this tool, including standalone use."""
     path = database._safe_path(
-        root, Path("backend/scripts/soc_validation_reset_store.py")
+        ROOT, Path("backend/scripts/soc_validation_reset_store.py")
     )
     if not path.is_file():
         raise ValueError(f"required validation maintenance module is missing: {path}")
@@ -169,6 +171,7 @@ def reset_validation_database(
     *,
     root: Path,
     experiment_id: str,
+    learning_round_id: str | None = None,
     apply: bool = False,
     environment: str | None = None,
     inspect_processes: database.Inspector | None = None,
@@ -188,14 +191,20 @@ def reset_validation_database(
         raise ValueError("experiment ID is required")
     inspector = inspect_processes or database.inspect_database_processes
     if preview_store is None or reset_store is None:
-        store = _load_store(root)
+        store = _load_store()
         preview_store, reset_store = store.preview, store.reset
+    if learning_round_id is not None:
+        # Bind once so the read-only preview and transaction use the same choice.
+        preview_store = partial(preview_store, learning_round_id=learning_round_id)
+        reset_store = partial(reset_store, learning_round_id=learning_round_id)
     report = {
         "schema_version": "soc.pingan_validation_database_reset.v1",
         "status": "preview",
         "database": str(paths[0]),
         "experiment_id": experiment_id,
     }
+    if learning_round_id is not None:
+        report["learning_round_id"] = learning_round_id
     if not apply:
         _require_stopped(paths, inspector)
         progress("正在只读检查第二批归属及历史引用；大数据库可能需要等待几分钟…")
@@ -242,6 +251,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--experiment", required=True)
     parser.add_argument(
+        "--learning-round",
+        metavar="ROUND-ID",
+        help="use this learning round as the explicit saved-options baseline",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="back up then clear this experiment's validation results",
@@ -249,7 +263,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         report = reset_validation_database(
-            root=args.root, experiment_id=args.experiment, apply=args.apply
+            root=args.root,
+            experiment_id=args.experiment,
+            learning_round_id=args.learning_round,
+            apply=args.apply,
         )
     except (ValueError, OSError, sqlite3.Error, subprocess.SubprocessError) as exc:
         print(f"Validation cleanup stopped: {exc}", file=sys.stderr)

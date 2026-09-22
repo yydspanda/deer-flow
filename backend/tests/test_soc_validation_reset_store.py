@@ -222,3 +222,59 @@ def test_retained_provenance_cannot_be_orphaned(database, kind):
     with pytest.raises(ValueError):
         preview(database, "EXP-test")
     assert _dump(database) == before
+
+
+def _copy_learning_round(database, *, round_id, options=None):
+    columns = [r[1] for r in database.execute("PRAGMA table_info(soc_corpus_rounds)")]
+    row = list(database.execute("SELECT * FROM soc_corpus_rounds WHERE round_id='ROUND-learning'").fetchone())
+    row[columns.index("round_id")] = round_id
+    if options is not None:
+        row[columns.index("record_payload")] = json.dumps({"options": options})
+    database.execute(f"INSERT INTO soc_corpus_rounds VALUES ({','.join('?' for _ in row)})", row)
+    database.commit()
+
+
+def test_explicit_learning_baseline_preserves_other_historical_settings(database):
+    options = preview(database, "EXP-test")["first_batch_options"]
+    _copy_learning_round(database, round_id="ROUND-old-off", options={**options, "normalization_review_mode": "off"})
+    before = _dump(database)
+    with pytest.raises(ValueError, match="different saved settings"):
+        preview(database, "EXP-test")
+    report = preview(database, "EXP-test", learning_round_id="ROUND-learning")
+    assert report["first_batch_options"] == options
+    assert report["first_batch_baseline_round_id"] == "ROUND-learning"
+    assert report["first_batch_rounds"] == 2
+    assert _dump(database) == before
+    retained_rounds = database.execute("SELECT * FROM soc_corpus_rounds WHERE batch='learning' ORDER BY round_id").fetchall()
+    retained_memory = database.execute("SELECT * FROM soc_memory_records").fetchall()
+    with database:
+        database.execute("BEGIN IMMEDIATE")
+        result = reset(database, "EXP-test", learning_round_id="ROUND-learning")
+    assert result["first_batch_options"] == options
+    assert result["first_batch_baseline_round_id"] == "ROUND-learning"
+    assert database.execute("SELECT * FROM soc_corpus_rounds WHERE batch='learning' ORDER BY round_id").fetchall() == retained_rounds
+    assert database.execute("SELECT * FROM soc_memory_records").fetchall() == retained_memory
+    assert database.execute("SELECT alert_id FROM soc_analysis_runs").fetchall() == [("L",)]
+
+
+@pytest.mark.parametrize("kind", ["missing", "validation", "other_experiment", "unrun", "bad_options", "shared_memory"])
+def test_explicit_learning_baseline_cannot_bypass_guards(database, kind):
+    baseline = "ROUND-learning"
+    if kind == "missing":
+        baseline = "ROUND-missing"
+    elif kind == "validation":
+        baseline = "ROUND-validation"
+    elif kind == "other_experiment":
+        database.execute("UPDATE soc_corpus_rounds SET experiment_id='EXP-other' WHERE round_id=?", (baseline,))
+    elif kind == "unrun":
+        _copy_learning_round(database, round_id="ROUND-unrun")
+        baseline = "ROUND-unrun"
+    elif kind == "bad_options":
+        database.execute("UPDATE soc_corpus_rounds SET record_payload=? WHERE round_id=?", (json.dumps({"options": {"normalization_review_mode": "apply"}}), baseline))
+    else:
+        database.execute("UPDATE soc_memory_records SET source_run_id=?", ("RUN-" + "V" * 12,))
+    database.commit()
+    before = _dump(database)
+    with pytest.raises(ValueError):
+        preview(database, "EXP-test", learning_round_id=baseline)
+    assert _dump(database) == before

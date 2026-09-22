@@ -22,6 +22,15 @@ constructs services, migrates, changes journal mode or starts models. New work m
 be prepared through the existing round API with all first-batch options explicitly
 supplied, as documented in `docs/soc-validation-reset.md`. Ship both maintenance
 modules, their isolated tests and that procedure in the required handoff inventory.
+When historical learning options differ, `--learning-round` explicitly selects a
+same-experiment learning round with completed work and all five valid saved options;
+do not choose a majority/newest baseline or rewrite the other learning history.
+Carry the baseline through preview, backup receipt, reset and post-delete checks.
+The CLI always loads its own matching SQL module. A separately hashed standalone
+maintenance directory may run outside the checkout with `--root` identifying only
+the target DB/environment/lock; it is not an application updater and must not copy
+code over the target. Include the existing DEV database helper, source identity,
+per-file hashes and Python/schema requirements; all deletion/backup guards still apply.
 
 PingAn corpus transfer is separate from source/config releases. The bounded
 `build_pingan_corpus_transfer.py` reads the same frozen manifest/index as

@@ -103,7 +103,7 @@ def _check_json_references(conn, schema, deletes, tokens):
                         raise ValueError(f"protected provenance in {table}; cleanup refused")
 
 
-def _plan(conn: sqlite3.Connection, experiment_id: str) -> tuple[dict, dict[str, set[int]]]:
+def _plan(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: str | None = None) -> tuple[dict, dict[str, set[int]]]:
     revision = [tuple(row) for row in conn.execute("SELECT version_num FROM soc_alembic_version")]
     if revision != [(SCHEMA,)]:
         raise ValueError(f"requires database schema {SCHEMA}; no migration is performed")
@@ -126,13 +126,34 @@ def _plan(conn: sqlite3.Connection, experiment_id: str) -> tuple[dict, dict[str,
     first_members = {r[0] for r in conn.execute("SELECT alert_id FROM soc_corpus_experiment_members WHERE experiment_id=? AND batch='learning'", (experiment_id,))}
     if first_members & member_hashes.keys():
         raise ValueError("learning and validation members overlap")
-    learning_options = conn.execute("SELECT json_extract(record_payload,'$.options') FROM soc_corpus_rounds WHERE experiment_id=? AND batch='learning' ORDER BY created_at DESC, round_id DESC", (experiment_id,)).fetchall()
-    if any(r[0] is None for r in learning_options):
+    learning_rounds = conn.execute("SELECT round_id,json_extract(record_payload,'$.options') FROM soc_corpus_rounds WHERE experiment_id=? AND batch='learning' ORDER BY created_at DESC, round_id DESC", (experiment_id,)).fetchall()
+    learning_options = [r[1] for r in learning_rounds if learning_round_id is None or r[0] == learning_round_id]
+    if learning_round_id is not None:
+        if not learning_options:
+            raise ValueError("selected baseline must be a learning round in this experiment")
+        completed = conn.execute(
+            "SELECT 1 FROM soc_corpus_round_items i JOIN soc_processing_jobs j ON j.job_id=i.job_id "
+            "WHERE i.round_id=? AND j.status='completed' AND j.workload_kind='corpus_experiment' "
+            "AND j.tenant_id='pingan' AND j.alert_id=i.alert_id LIMIT 1",
+            (learning_round_id,),
+        ).fetchone()
+        if completed is None:
+            raise ValueError("selected learning baseline has no completed alert")
+    if any(value is None for value in learning_options):
         raise ValueError("first batch has missing saved settings; cleanup refused")
-    options = {json.dumps(json.loads(r[0]), sort_keys=True) for r in learning_options}
+    options = {json.dumps(json.loads(value), sort_keys=True) for value in learning_options}
     if len(options) != 1:
-        raise ValueError("first batch has missing or different saved settings; choose a verified baseline before reset")
+        raise ValueError("first batch has missing or different saved settings; select a verified baseline with --learning-round")
     first_options = json.loads(next(iter(options)))
+    boolean_options = {"refresh_normalization", "tenant_policy_enabled", "tenant_policy_advisor_enabled", "tenant_policy_signal_providers_enabled"}
+    if (
+        not isinstance(first_options, dict)
+        or set(first_options) != boolean_options | {"normalization_review_mode"}
+        or first_options["normalization_review_mode"] not in ("off", "shadow", "apply")
+        or any(type(first_options[name]) is not bool for name in boolean_options)
+        or (not first_options["tenant_policy_enabled"] and (first_options["tenant_policy_advisor_enabled"] or first_options["tenant_policy_signal_providers_enabled"]))
+    ):
+        raise ValueError("learning baseline must contain all five valid saved settings")
     rounds = conn.execute("SELECT rowid, round_id, state FROM soc_corpus_rounds WHERE experiment_id=? AND batch='validation'", (experiment_id,)).fetchall()
     if any(r[2] == "running" for r in rounds):
         raise ValueError("pause the second batch before stopping Host DEV")
@@ -240,23 +261,24 @@ def _plan(conn: sqlite3.Connection, experiment_id: str) -> tuple[dict, dict[str,
         "runs": len(run_ids),
         "job_counts_including_history": dict(Counter(j[5] for j in jobs)),
         "first_batch_options": first_options,
-        "first_batch_rounds": len(learning_options),
+        "first_batch_baseline_round_id": learning_round_id,
+        "first_batch_rounds": len(learning_rounds),
         "protected_memory_counts": {t: conn.execute(f"SELECT count(*) FROM {_name(t)}").fetchone()[0] for t in PROTECTED_MEMORY if t in schema},
         "delete_counts": {table: len(rows) for table, rows in deletes.items()},
     }
     return report, deletes
 
 
-def preview(conn: sqlite3.Connection, experiment_id: str) -> dict:
+def preview(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: str | None = None) -> dict:
     """Read metadata and validate ownership; never write even a temporary table."""
-    return _plan(conn, experiment_id)[0]
+    return _plan(conn, experiment_id, learning_round_id=learning_round_id)[0]
 
 
-def reset(conn: sqlite3.Connection, experiment_id: str) -> dict:
+def reset(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: str | None = None) -> dict:
     """Delete only the verified dependency set inside a caller-owned transaction."""
     if not conn.in_transaction:
         raise ValueError("reset requires the maintenance caller's transaction")
-    report, deletes = _plan(conn, experiment_id)
+    report, deletes = _plan(conn, experiment_id, learning_round_id=learning_round_id)
     for table, rowids in deletes.items():
         ordered = sorted(rowids)
         for offset in range(0, len(ordered), 400):
@@ -264,10 +286,10 @@ def reset(conn: sqlite3.Connection, experiment_id: str) -> dict:
             result = conn.execute(f"DELETE FROM {_name(table)} WHERE rowid IN ({','.join('?' for _ in page)})", page)
             if result.rowcount != len(page):
                 raise ValueError("database changed during reset; rollback required")
-    after = preview(conn, experiment_id)
+    after = preview(conn, experiment_id, learning_round_id=learning_round_id)
     if after["rounds"] or after["jobs"] or after["runs"]:
         raise ValueError("validation reset did not clear all selected work")
-    for key in ("first_batch_options", "first_batch_rounds", "protected_memory_counts", "validation_members"):
+    for key in ("first_batch_options", "first_batch_baseline_round_id", "first_batch_rounds", "protected_memory_counts", "validation_members"):
         if after[key] != report[key]:
             raise ValueError("protected first-batch or Memory state changed; rollback required")
     return {**report, "status": "reset", "next_step": "start Host DEV, then create a fresh validation round using first_batch_options and reviewed Memory"}

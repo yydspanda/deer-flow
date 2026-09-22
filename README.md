@@ -204,6 +204,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > its validation attempts in one transaction while retaining learning and reviewed
 > Memory. Shared provenance blocks deletion. This is an explicit maintenance action,
 > never an upgrade or continue step; new work uses a fresh round and saved first-batch options.
+> If early learning trials used different settings, explicitly select the verified
+> learning round with `--learning-round`; its options are copied without changing any
+> learning history. A matching standalone maintenance tool can run outside the checkout
+> with `--root` while the application remains stopped, without another application deployment.
 > Isolated mock full-loop, browser and synthetic capacity checks have passed. The current
 > internal handoff preserves completed learning and experience reviews: back up the
 > stopped checkout, install the matching source/private packages, stage the existing

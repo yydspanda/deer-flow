@@ -71,6 +71,20 @@ def rows(root: Path) -> list:
         return conn.execute("SELECT * FROM sample ORDER BY batch").fetchall()
 
 
+@pytest.fixture
+def standalone_tool(checkout: Path, monkeypatch) -> Path:
+    tool_root = checkout.parent / (checkout.name + "-maintenance-tool")
+    (tool_root / "backend/scripts").mkdir(parents=True)
+    monkeypatch.setattr(maintenance, "ROOT", tool_root)
+    old_store = checkout / "backend/scripts/soc_validation_reset_store.py"
+    old_store.parent.mkdir(parents=True)
+    old_store.write_text(
+        "raise AssertionError('must not load the target checkout maintenance module')\n",
+        encoding="utf-8",
+    )
+    return tool_root
+
+
 def test_preview_neither_writes_nor_creates_backup(checkout: Path) -> None:
     before = {str(p): p.read_bytes() for p in checkout.rglob("*") if p.is_file()}
     report = invoke(checkout)
@@ -197,12 +211,11 @@ def test_startup_maintenance_lock_blocks_apply(checkout: Path) -> None:
     assert len(rows(checkout)) == 2
 
 
-def test_cli_defaults_to_preview_and_loads_store_from_target_checkout(
-    checkout: Path, capsys, monkeypatch
+def test_cli_defaults_to_preview_and_loads_store_from_standalone_tool(
+    checkout: Path, standalone_tool: Path, capsys, monkeypatch
 ) -> None:
     monkeypatch.setattr(database, "inspect_database_processes", lambda paths: [])
-    store = checkout / "backend/scripts/soc_validation_reset_store.py"
-    store.parent.mkdir(parents=True)
+    store = standalone_tool / "backend/scripts/soc_validation_reset_store.py"
     store.write_text(
         "def preview(conn, experiment_id):\n"
         "    return {'experiment_id': experiment_id}\n"
@@ -213,8 +226,52 @@ def test_cli_defaults_to_preview_and_loads_store_from_target_checkout(
     assert maintenance.main(["--root", str(checkout), "--experiment", "EXP-test"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "preview"
+    assert report["database"] == str(checkout / database.DEV_DATABASE)
     assert report["preview"]["experiment_id"] == "EXP-test"
     assert not (checkout / database.BACKUPS).exists()
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_cli_forwards_explicit_learning_round_to_each_store_phase(
+    checkout: Path, standalone_tool: Path, capsys, monkeypatch, apply: bool
+) -> None:
+    monkeypatch.setattr(database, "inspect_database_processes", lambda paths: [])
+    store = standalone_tool / "backend/scripts/soc_validation_reset_store.py"
+    store.write_text(
+        "def preview(conn, experiment_id, *, learning_round_id):\n"
+        "    assert experiment_id == 'EXP-test'\n"
+        "    assert learning_round_id == 'ROUND-selected'\n"
+        "    assert conn.execute('PRAGMA query_only').fetchone()[0] == 1\n"
+        "    return {'learning_round_id': learning_round_id}\n"
+        "def reset(conn, experiment_id, *, learning_round_id):\n"
+        "    assert experiment_id == 'EXP-test'\n"
+        "    assert learning_round_id == 'ROUND-selected'\n"
+        "    assert conn.in_transaction\n"
+        "    conn.execute(\"DELETE FROM sample WHERE batch='validation'\")\n"
+        "    return {'learning_round_id': learning_round_id}\n",
+        encoding="utf-8",
+    )
+    args = [
+        "--root",
+        str(checkout),
+        "--experiment",
+        "EXP-test",
+        "--learning-round",
+        "ROUND-selected",
+    ]
+    if apply:
+        args.append("--apply")
+    assert maintenance.main(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["learning_round_id"] == "ROUND-selected"
+    assert report["preview"]["learning_round_id"] == "ROUND-selected"
+    if apply:
+        assert report["result"]["learning_round_id"] == "ROUND-selected"
+        assert Path(report["backup_directory"], "manifest.json").is_file()
+        assert rows(checkout) == [("learning", "preserved")]
+    else:
+        assert not (checkout / database.BACKUPS).exists()
+        assert len(rows(checkout)) == 2
 
 
 def test_all_sqlite_family_files_are_backed_up(checkout: Path) -> None:
@@ -240,9 +297,8 @@ def test_backup_verification_failure_never_starts_cleanup(
     assert json.loads(manifests[0].read_text(encoding="utf-8"))["state"] == "prepared"
 
 
-def test_real_sql_store_cleanup_and_full_backup_restore(
-    checkout: Path, monkeypatch
-) -> None:
+@pytest.fixture
+def real_store_checkout(checkout: Path, standalone_tool: Path, monkeypatch) -> Path:
     repo = Path(__file__).resolve().parents[1]
     monkeypatch.syspath_prepend(str(repo / "backend"))
     spec = importlib.util.spec_from_file_location(
@@ -264,11 +320,18 @@ def test_real_sql_store_cleanup_and_full_backup_restore(
     finally:
         seeded.close()
         original.close()
-    target_store = checkout / "backend/scripts/soc_validation_reset_store.py"
-    target_store.parent.mkdir(parents=True)
+    target_store = standalone_tool / "backend/scripts/soc_validation_reset_store.py"
     shutil.copyfile(
         repo / "backend/scripts/soc_validation_reset_store.py", target_store
     )
+    return checkout
+
+
+def test_real_sql_store_cleanup_and_full_backup_restore(
+    real_store_checkout: Path,
+) -> None:
+    checkout = real_store_checkout
+    path = checkout / database.DEV_DATABASE
     before = path.read_bytes()
     with closing(sqlite3.connect(path)) as conn:
         learning = conn.execute(
@@ -332,6 +395,107 @@ def test_real_sql_store_cleanup_and_full_backup_restore(
             conn.execute("SELECT count(*) FROM soc_processing_jobs").fetchone()[0] == 4
         )
         assert conn.execute("SELECT * FROM soc_memory_records").fetchall() == memory
+
+
+@pytest.fixture
+def mixed_learning_checkout(real_store_checkout: Path) -> Path:
+    path = real_store_checkout / database.DEV_DATABASE
+    with closing(sqlite3.connect(path)) as conn:
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(soc_corpus_rounds)")]
+        row = list(
+            conn.execute(
+                "SELECT * FROM soc_corpus_rounds WHERE round_id='ROUND-learning'"
+            ).fetchone()
+        )
+        row[columns.index("round_id")] = "ROUND-old-off"
+        payload_index = columns.index("record_payload")
+        payload = json.loads(row[payload_index])
+        payload["options"]["normalization_review_mode"] = "off"
+        row[payload_index] = json.dumps(payload)
+        conn.execute(
+            f"INSERT INTO soc_corpus_rounds VALUES ({','.join('?' for _ in row)})",
+            row,
+        )
+        conn.commit()
+    return real_store_checkout
+
+
+def test_explicit_baseline_cleans_mixed_history_and_preserves_learning(
+    mixed_learning_checkout: Path,
+) -> None:
+    checkout = mixed_learning_checkout
+    path = checkout / database.DEV_DATABASE
+    protected_queries = {
+        "rounds": "SELECT * FROM soc_corpus_rounds WHERE batch='learning' ORDER BY round_id",
+        "items": "SELECT * FROM soc_corpus_round_items WHERE round_id='ROUND-learning'",
+        "jobs": "SELECT * FROM soc_processing_jobs WHERE alert_id='L'",
+        "runs": "SELECT * FROM soc_analysis_runs WHERE alert_id='L'",
+        "memory": "SELECT * FROM soc_memory_records",
+        "members": "SELECT * FROM soc_corpus_experiment_members",
+    }
+    with closing(sqlite3.connect(path)) as conn:
+        protected = {
+            key: conn.execute(query).fetchall()
+            for key, query in protected_queries.items()
+        }
+    before = path.read_bytes()
+    params = {
+        "root": checkout,
+        "experiment_id": "EXP-test",
+        "learning_round_id": "ROUND-learning",
+        "inspect_processes": lambda paths: [],
+        "progress": lambda message: None,
+    }
+    report = maintenance.reset_validation_database(**params)
+    assert (
+        report["preview"]["first_batch_options"]["normalization_review_mode"] == "apply"
+    )
+    assert report["learning_round_id"] == "ROUND-learning"
+    assert path.read_bytes() == before
+    assert not (checkout / database.BACKUPS).exists()
+    report = maintenance.reset_validation_database(**params, apply=True)
+    assert report["status"] == "applied"
+    assert (
+        report["result"]["first_batch_options"]["normalization_review_mode"] == "apply"
+    )
+    assert Path(report["backup_directory"], path.name).read_bytes() == before
+    with closing(sqlite3.connect(path)) as conn:
+        assert {
+            key: conn.execute(query).fetchall()
+            for key, query in protected_queries.items()
+        } == protected
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM soc_corpus_rounds WHERE batch='validation'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert conn.execute("SELECT alert_id FROM soc_processing_jobs").fetchall() == [
+            ("L",)
+        ]
+
+
+@pytest.mark.parametrize("baseline", [None, "ROUND-missing", "ROUND-validation"])
+@pytest.mark.parametrize("apply", [False, True])
+def test_mixed_history_requires_valid_explicit_baseline_before_backup(
+    mixed_learning_checkout: Path,
+    baseline: str | None,
+    apply: bool,
+) -> None:
+    checkout = mixed_learning_checkout
+    path = checkout / database.DEV_DATABASE
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        maintenance.reset_validation_database(
+            root=checkout,
+            experiment_id="EXP-test",
+            learning_round_id=baseline,
+            apply=apply,
+            inspect_processes=lambda paths: [],
+            progress=lambda message: None,
+        )
+    assert path.read_bytes() == before
+    assert not (checkout / database.BACKUPS).exists()
 
 
 def _runbook_start_code() -> str:

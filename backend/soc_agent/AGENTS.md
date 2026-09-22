@@ -116,6 +116,11 @@ file for SOC code. The authoritative product and engineering documents are:
   provenance, rewrite frozen options, or use this as an automatic upgrade step.
   New validation work is created through the normal API with the verified complete
   first-batch options and a fresh reviewed-Memory snapshot; no migration is added.
+  Mixed historical learning settings require an explicitly selected, completed-work
+  baseline from that same experiment's learning rounds. Validate all five options,
+  persist the selected round ID in the cleanup receipt and revalidate it inside the
+  transaction and after deletion. Selecting settings never expands the deletion set
+  or changes first-batch history/Memory; no majority or latest-round inference.
   Quick batch start/continue refreshes the existing round's concurrency from the current
   server limit. Capacity is a resource control excluded from the behavior snapshot;
   this does not replace job identities, options or Memory snapshots. Single-alert manual
