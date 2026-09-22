@@ -14,7 +14,10 @@ import {
 } from "@testing-library/react";
 
 import { SocCorpusExperiments } from "@/components/workspace/soc/soc-corpus-experiments";
-import type { SocAnalysisExecutionOptions } from "@/core/soc/types";
+import type {
+  SocAnalysisExecutionOptions,
+  SocCorpusBatch,
+} from "@/core/soc/types";
 
 const api = rs.hoisted(() => ({
   state: rs.fn(),
@@ -137,7 +140,6 @@ test("host saves shared concurrency during a batch without changing run switches
     ).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
     await waitFor(() => expect(queries[1]!.queryFn).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("switch", { name: "企业策略" }));
-    const savedSwitches = window.sessionStorage.getItem(SETTINGS_KEY);
     fireEvent.change(selector, { target: { value: "4" } });
     expect(api.concurrency).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "保存并发" }));
@@ -158,7 +160,6 @@ test("host saves shared concurrency during a batch without changing run switches
         "validation",
       ]),
     ).toMatchObject({ max_concurrency: 4 });
-    expect(window.sessionStorage.getItem(SETTINGS_KEY)).toBe(savedSwitches);
     expect(api.run).not.toHaveBeenCalled();
     expect(
       screen
@@ -407,12 +408,143 @@ test.each([true, undefined])(
       action: "start",
       options: { ...options, tenant_policy_enabled: true },
     });
-    expect(JSON.parse(window.sessionStorage.getItem(SETTINGS_KEY)!)).toEqual({
-      ...options,
-      tenant_policy_enabled: true,
-    });
+    expect(window.sessionStorage.getItem(SETTINGS_KEY)).toBeNull();
   },
 );
+
+test.each([false, true])(
+  "host restores saved batch options instead of defaults or old session preferences (stored: %s)",
+  async (stored) => {
+    const disabled = { ...options, normalization_review_mode: "off" as const };
+    if (stored)
+      window.sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(disabled));
+    api.configuration.mockResolvedValue({
+      defaults: disabled,
+      saved_options: options,
+      can_configure: true,
+    });
+    mount({ controls });
+    const semantic = await screen.findByRole("switch", { name: "语义核对" });
+    expect(semantic.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "开始积累" }));
+    await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+    expect(api.run.mock.calls[0]![0]).toMatchObject({ options });
+  },
+);
+
+test("host follows saved changes until editing and refresh discards only the unsubmitted draft", async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const disabled = { ...options, normalization_review_mode: "off" as const };
+  let savedOptions = options;
+  api.configuration.mockImplementation(async () => ({
+    defaults: disabled,
+    saved_options: savedOptions,
+    can_configure: true,
+  }));
+  const view = mount({ controls }, client);
+  const semantic = await screen.findByRole("switch", { name: "语义核对" });
+  expect(semantic.getAttribute("aria-checked")).toBe("true");
+  savedOptions = disabled;
+  await act(async () => {
+    await client.invalidateQueries({
+      queryKey: ["soc-corpus-experiments", "configuration"],
+    });
+  });
+  await waitFor(() =>
+    expect(semantic.getAttribute("aria-checked")).toBe("false"),
+  );
+  fireEvent.click(semantic);
+  await act(async () => {
+    await client.invalidateQueries({
+      queryKey: ["soc-corpus-experiments", "configuration"],
+    });
+  });
+  expect(semantic.getAttribute("aria-checked")).toBe("true");
+  view.unmount();
+  mount({ controls }, client);
+  const restored = await screen.findByRole("switch", { name: "语义核对" });
+  expect(restored.getAttribute("aria-checked")).toBe("false");
+  expect(api.run).not.toHaveBeenCalled();
+  client.clear();
+});
+
+test("batch switches keep separate drafts and never submit placeholder configuration from the previous batch", async () => {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        placeholderData: (previous: unknown) => previous,
+      },
+    },
+  });
+  const disabled = { ...options, normalization_review_mode: "off" as const };
+  let resolveValidation: (value: unknown) => void = () => {
+    throw new Error("Validation configuration was not requested");
+  };
+  api.configuration.mockImplementation(async (batch: SocCorpusBatch) => {
+    if (batch === "validation")
+      return new Promise((resolve) => {
+        resolveValidation = resolve;
+      });
+    return { defaults: disabled, saved_options: options, can_configure: true };
+  });
+  const content = (batch: SocCorpusBatch) => (
+    <QueryClientProvider client={client}>
+      <SocCorpusExperiments
+        batch={batch}
+        tier="all"
+        controls={controls}
+        requestedAlert={null}
+        onRequestHandled={rs.fn()}
+      />
+    </QueryClientProvider>
+  );
+  const view = render(content("learning"));
+  const semantic = await screen.findByRole("switch", { name: "语义核对" });
+  expect(semantic.getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("switch", { name: "企业策略" }));
+  view.rerender(content("validation"));
+  await waitFor(() =>
+    expect(api.configuration).toHaveBeenCalledWith("validation"),
+  );
+  const start = screen.getByRole("button", { name: "开始验证" });
+  expect(start.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(start);
+  expect(api.run).not.toHaveBeenCalled();
+  await act(async () =>
+    resolveValidation({
+      defaults: options,
+      saved_options: disabled,
+      can_configure: true,
+    }),
+  );
+  const validationSemantic = await screen.findByRole("switch", {
+    name: "语义核对",
+  });
+  expect(validationSemantic.getAttribute("aria-checked")).toBe("false");
+  expect(
+    screen
+      .getByRole("switch", { name: "企业策略" })
+      .getAttribute("aria-checked"),
+  ).toBe("false");
+  fireEvent.click(validationSemantic);
+  view.rerender(content("learning"));
+  expect(
+    screen
+      .getByRole("switch", { name: "企业策略" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  view.rerender(content("validation"));
+  fireEvent.click(screen.getByRole("button", { name: "开始验证" }));
+  await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+  expect(api.run.mock.calls[0]![0]).toMatchObject({
+    batch: "validation",
+    options,
+  });
+  client.clear();
+});
 
 test("a rejected remote command refreshes saved settings before an explicit retry", async () => {
   api.configuration.mockResolvedValue({

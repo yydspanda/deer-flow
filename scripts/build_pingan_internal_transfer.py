@@ -332,6 +332,11 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "scripts/soc_pingan_host_sidecars.py",
     "scripts/soc_pingan_dev_database.py",
     "scripts/test_soc_pingan_dev_database.py",
+    "scripts/soc_pingan_validation_database.py",
+    "scripts/test_soc_pingan_validation_database.py",
+    "backend/scripts/soc_validation_reset_store.py",
+    "backend/tests/test_soc_validation_reset_store.py",
+    "docs/soc-validation-reset.md",
     "scripts/soc_pingan_stage_internal_corpus.py",
     "scripts/test_build_pingan_macos_offline_bundle.py",
     "scripts/test_soc_pingan_macos_host_dev.py",
@@ -2133,6 +2138,11 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 运行配置仅部署 Mac 本机可修改，请在本机通过 `http://localhost:2026` 操作。
 同事通过局域网地址仍可启动、暂停或重跑，沿用该批次最后保存的配置；无运行记录时使用部署默认值。
 本机新选择随提交运行保存，已排队任务保留原配置。Host DEV 自动限制内部服务监听，正常启动命令不变。
+刷新页面会恢复当前批次服务器保存的设置；两批分别保存配置，第一批开启语义核对不代表第二批自动开启。
+如果升级后旧任务提示 `configuration_changed`，继续仍使用旧任务的冻结配置，不会自动改成新配置。
+只有已明确决定丢弃第二批全部旧结果时，才使用项目内 `docs/soc-validation-reset.md` 的专项流程：
+停服、完整备份、单独清理第二批，再按第一批全部保存设置重新创建全量验证任务。
+此流程保留第一批积累和审核经验；普通保留数据升级不会执行清理。
 {batch_start_instruction}
 无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。

@@ -126,7 +126,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > On Mac Host DEV, edit run settings from `http://localhost:2026` on the deployment
 > machine. LAN colleagues can start, pause and rerun using the batch's last saved
 > settings (deployment defaults before its first round). Local selections are saved
-> on submission; queued tasks keep their original settings. Host startup automatically
+> on submission; queued tasks keep their original settings. The Host also restores the
+> selected batch's saved settings when the page opens. Unsubmitted edits stay separate
+> for each batch and are discarded on a full page refresh; browser preferences do not
+> replace the saved server settings. Host startup automatically
 > binds Gateway/Next to loopback while nginx remains the shared LAN entry.
 > Explicit experiment APIs enforce the same current-plan settings; creating another
 > experiment or selecting a historical plan cannot bypass the host-only controls.
@@ -150,7 +153,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > preparation to finish. Slow list requests log stage timings, and an unavailable database
 > status now includes the specific read error instead of hiding lock contention.
 > A single request also works after a legacy limit or selected scope completes, keeping
-> other queued alerts paused. Replacing all blocked tasks clears the current stop warning;
+> other queued alerts paused. Replacing the remaining blocked tasks clears the current
+> stop warning; retained completed/failed results do not keep the batch blocked, and
 > historical blocked rounds remain available for audit.
 > Opening a running alert shows progress until its result is ready; missing in-flight
 > analysis is not reported as a failed conclusion. Claimed batch tasks count as running
@@ -194,6 +198,12 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > usage; it does not inflate alert-analysis totals. For a fresh internal DEV experiment,
 > the Host wrapper's explicit `reset-dev-data` previews and archives only the SOC DEV
 > database. Ordinary deployment never resets it; accounts, corpus and secrets remain intact.
+> To deliberately restart only the second batch after a settings mistake, use the
+> [validation-only recovery procedure](docs/soc-validation-reset.md). Its offline DEV
+> command previews one fixed experiment, verifies a full database backup, and clears
+> its validation attempts in one transaction while retaining learning and reviewed
+> Memory. Shared provenance blocks deletion. This is an explicit maintenance action,
+> never an upgrade or continue step; new work uses a fresh round and saved first-batch options.
 > Isolated mock full-loop, browser and synthetic capacity checks have passed. The current
 > internal handoff preserves completed learning and experience reviews: back up the
 > stopped checkout, install the matching source/private packages, stage the existing

@@ -352,3 +352,102 @@ def test_blocked_state_only_tracks_unsuperseded_jobs(tmp_path, blocked_alerts):
     assert historical.state == "blocked"
     assert historical.state_reason == "configuration_changed"
     assert quick.snapshot("learning")["completed"] == len(blocked_alerts)
+
+
+def test_blocked_batch_recovery_preserves_terminal_results_without_retaining_current_block(tmp_path):
+    from test_soc_corpus_experiment_repository import members
+
+    from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+
+    repo = repository(tmp_path)
+    repo.corpus_experiments().prepare(experiment(), members(4))
+    config = {"model": "before"}
+    calls = []
+    svc = service(repo, calls, config=config)
+    execute = svc._execute
+
+    def fail_one(round_, member, request):
+        if member.alert_id == "1":
+            raise ValueError("simulated failure before a Runtime run was saved")
+        return execute(round_, member, request)
+
+    svc._execute = fail_one
+    quick = CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id))
+    old = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning")), context=context())
+    svc.start(old.round_id, context=context())
+    assert svc.execute_one(old.round_id)
+    assert svc.execute_one(old.round_id)
+    preserved_jobs = {alert_id: svc.store.alert_history("EXP-test", alert_id)[0] for alert_id in ("0", "1")}
+    assert preserved_jobs["0"].status.value == "completed"
+    assert preserved_jobs["1"].status.value == "failed"
+
+    config["model"] = "after"
+    assert not svc.execute_one(old.round_id)
+    blocked_round = svc.store.get_round(old.round_id)
+    assert quick.snapshot("learning")["blocked_reason"] == "configuration_changed"
+
+    # Replace remaining jobs explicitly; retaining one old queued job must still
+    # explain why the batch cannot finish, even while the first replacement runs.
+    for alert_id, expected_block in (("2", "configuration_changed"), ("3", None)):
+        command = CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning", alert_ids=[alert_id]))
+        request = context().model_copy(update={"idempotency_key": f"replace-remaining-{alert_id}"})
+        replacement = svc.create_round(command, context=request)
+        assert svc.create_round(command, context=request).round_id == replacement.round_id
+        svc.start(replacement.round_id, context=context())
+        running = quick.snapshot("learning")
+        assert running["running"]
+        assert running["blocked_reason"] == expected_block
+        assert running["total"] == 4
+        assert running["failed"] == 1
+        assert svc.execute_one(replacement.round_id)
+        assert quick.snapshot("learning")["blocked_reason"] == expected_block
+
+    completed = quick.snapshot("learning")
+    assert not completed["running"]
+    assert completed["completed"] == 3
+    assert completed["failed"] == 1
+    assert completed["remaining"] == 0
+    assert svc.store.get_round(old.round_id) == blocked_round
+    for alert_id, job in preserved_jobs.items():
+        assert svc.store.alert_history("EXP-test", alert_id) == [job]
+    assert [call[1] for call in calls] == ["0", "2", "3"]
+
+
+def test_blocked_batch_remains_current_until_its_last_active_job_finishes(tmp_path):
+    from test_soc_corpus_experiment_repository import members
+
+    from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+
+    repo = repository(tmp_path)
+    repo.corpus_experiments().prepare(experiment(), members(1))
+    config = {"model": "before"}
+    svc = service(repo, [], config=config)
+    execute = svc._execute
+    entered, release = Event(), Event()
+
+    def wait_for_configuration_change(round_, member, request):
+        entered.set()
+        assert release.wait(20), "test did not release the simulated model"
+        return execute(round_, member, request)
+
+    svc._execute = wait_for_configuration_change
+    quick = CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id))
+    old = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning")), context=context())
+    svc.start(old.round_id, context=context())
+    with ThreadPoolExecutor(1) as pool:
+        future = pool.submit(svc.execute_one, old.round_id)
+        try:
+            assert entered.wait(20)
+            config["model"] = "after"
+            assert not svc.execute_one(old.round_id)
+            blocked = quick.snapshot("learning")
+            assert blocked["active"] == 1
+            assert blocked["blocked_reason"] == "configuration_changed"
+        finally:
+            release.set()
+        assert future.result(timeout=20)
+    completed = quick.snapshot("learning")
+    assert completed["completed"] == 1
+    assert completed["active"] == 0
+    assert completed["blocked_reason"] is None
+    assert svc.store.get_round(old.round_id).state == "blocked"

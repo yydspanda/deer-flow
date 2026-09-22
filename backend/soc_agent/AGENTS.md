@@ -102,10 +102,20 @@ file for SOC code. The authoritative product and engineering documents are:
   Prepare/start/manual admission serialize under the existing governance transaction.
   Batch statistics use the latest job per unique member across all rounds; paginated
   history retains immutable Run IDs. Current blocked state uses that same latest-job
-  projection, excluding fully superseded rounds while retaining partial blocks and audit
-  history. Browser filters never enter execution commands.
+  projection, considering only queued/active jobs that are still blocked. Superseded
+  attempts and retained terminal results cannot keep a recovered batch blocked; partial
+  unfinished blocks and historical rounds remain visible. Browser filters never enter
+  execution commands.
   No new table or migration is needed. Queued jobs keep their original configuration;
   drift blocks dispatch and only an explicit rerun may capture new settings.
+  An explicitly authorized second-batch discard is an offline DEV maintenance
+  exception, owned by `scripts/soc_pingan_validation_database.py` and the pure SQL
+  `backend/scripts/soc_validation_reset_store.py`. Stop all database owners and verify
+  a full recoverable backup before deleting the fixed validation dependency set in
+  one transaction. Never delete first-batch/Memory records, silently detach shared
+  provenance, rewrite frozen options, or use this as an automatic upgrade step.
+  New validation work is created through the normal API with the verified complete
+  first-batch options and a fresh reviewed-Memory snapshot; no migration is added.
   Quick batch start/continue refreshes the existing round's concurrency from the current
   server limit. Capacity is a resource control excluded from the behavior snapshot;
   this does not replace job identities, options or Memory snapshots. Single-alert manual

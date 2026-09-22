@@ -532,6 +532,13 @@ single-alert surface uses `run_controls.defaults`. Refresh read-only batch setti
 every 10 seconds, on window focus and after a command failure without automatically
 replaying the command. Missing permission fields retain older deployment behavior.
 The backend enforces this boundary; never derive authority from the browser hostname.
+The Host also initializes each batch from its server `saved_options` before deployment
+defaults. Keep only explicit unsubmitted edits in component state keyed by batch; switching
+batches must not copy a draft or another batch's configuration. Full page refresh restores
+server settings, and the retired shared session-storage preference must not override them.
+Background configuration reads preserve an explicit Host draft; LAN commands always follow
+the current server settings. Visible switches describe subsequent new work, not a rewrite
+of options already frozen in queued or completed jobs.
 
 Running corpus details display a neutral waiting message and suppress stale outcome cards
 until the server reports a terminal state. Missing intermediate analysis must not appear

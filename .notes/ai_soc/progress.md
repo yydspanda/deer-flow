@@ -3,8 +3,8 @@
 ## Current Pointer / 当前指针
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。PingAn DeerFlow chat 固定为 buffered non-streaming；09-18按用户确认将源码中的模型网关与 Runtime 默认并发从 `3` 统一改为 `8`，配套 `8 + 8` 私有配置已重新生成；09-20 用户反馈内网 Mac DEV 已部署并完成第一批积累，运营正在审核经验；外网按用户确认撤回长实体摘要转换，保留旧经验匹配语义与 512 门禁，新学习超长特征过滤及兼容回归已完成，待交付第二批验证所需更新。09-22 内网第二批执行遇到 SQLite 争用，用户已成功暂停；部署本机可调并发和 SQLite 版本保护已随 `54c7f40f` 交付；用户完成内网启动与真实模型 smoke，但 9.95 GiB SQLite 下列表仍慢且间歇超时。已隔离复现列表修订字段跨大 JSON 溢出页的读取开销，覆盖索引及可诊断性修复已通过本机回归，待重新交付并验证真实内网页面稳定性。SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
-- **Next Gate:** 当前先完成告警演练列表稳定性修复；保留内网数据库与审核经验，沿用提交推送、完整源码/私有配置配套交付，并重新执行绑定提交身份的强制兼容检查。新查询索引由 Host start 自动升级；最终包身份以 transfer-report 为准，内网翻页/筛选/并行读取效果需更新后验证。随后，使用已审核并开放的经验验证第二批，不重复初始化或重跑成功第一批。随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
+- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。PingAn DeerFlow chat 固定为 buffered non-streaming；09-18按用户确认将源码中的模型网关与 Runtime 默认并发从 `3` 统一改为 `8`，配套 `8 + 8` 私有配置已重新生成；09-20 用户反馈内网 Mac DEV 已部署并完成第一批积累，运营正在审核经验；外网按用户确认撤回长实体摘要转换，保留旧经验匹配语义与 512 门禁，新学习超长特征过滤及兼容回归已完成，待交付第二批验证所需更新。09-22 内网第二批执行遇到 SQLite 争用，用户已成功暂停；部署本机可调并发和 SQLite 版本保护已随 `54c7f40f` 交付；用户完成内网启动与真实模型 smoke，但 9.95 GiB SQLite 下列表仍慢且间歇超时。覆盖索引及可诊断性修复已随 `8318f518` 交付；用户确认0032、只读schema即时返回，第一批整页1413ms，当前页面恢复。随后已核实第一批语义核对apply、第二批4247完成/345失败/7691排队为off，另1条完成为apply；用户明确选择删除第二批全部旧结果后按第一批设置重跑。当前实施保留第一批/审核Memory的专项离线备份清理，内网尚未执行。SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
+- **Next Gate:** 当前先交付批次设置恢复和专项清理工具；按用户授权，在内网停服、完整备份后清理第二批全部旧尝试，保留第一批及审核Memory，再使用第一批完整设置和当前审核经验创建全量第二批。沿用提交推送、完整源码/私有配置配套交付，并重新执行绑定提交身份的强制兼容检查。源码升级本身继续保留数据库，不进行整库初始化。内网执行及结果仍需实际验收。随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-09-22`
 ## Current Constraints / 当前约束
@@ -17,13 +17,18 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+### 2026-09-22 — Restore saved batch settings and prepare validation-only recovery
+- **Task:** `PI-03E`
+- **Status:** `Done`
+- **Outcome:** Host页面恢复各批服务器保存设置，未提交草稿按批隔离；批次阻塞只取当前queued/active，历史终态不阻挡恢复。新增DEV停服维护工具，默认只读预览；显式apply先复制并校验完整SQLite家族，再事务清理固定实验第二批全部尝试和结果。保护第一批与审核Memory；共享scalar/JSON来源、缺失配置、活动任务或自定义触发器均拒绝清理。新第二批经原有API提交第一批完整设置与新审核经验快照，不重写旧冻结任务。
+- **Verification:** 后端批次41项、清理边界24项、前端组件19项及完整前端check通过；维护包装/Host/交付清单144项通过，含真实SQLite清理后第一批逐行不变、备份恢复及文档命令完整5项设置/重复提交回归。审核发现的JSON转义、结果ID反向引用及缺失配置漏洞均经TDD修复。交付清单与独立可复制操作文档同步；最终打包前另执行提交绑定兼容门禁。
+- **Delivery boundary:** 用户明确授权丢弃第二批旧结果；当前未修改内网数据库、未运行真实模型。普通升级保留数据，实际清理及12284条第二批重跑仍需内网执行；第一批和审核经验不重建。
 ### 2026-09-22 — Cover large corpus revision reads and expose database probe errors
 - **Task:** `PI-03E`
 - **Status:** `Done`
 - **Outcome:** 内网 `54c7f40f` 启动/schema0031与模型 smoke 均通过，9.95 GiB DELETE库的工作台仍间歇60秒超时。隔离复现 SQLite 为读取位于大JSON之后的 updated_at 而跨溢出页；0032仅新增六列覆盖索引，保持修订hash、旧列表投影、Run和Memory语义。Host正常启动自动创建索引；状态探针保留既有status并展示锁/其他读取错误，慢列表记录activity/index/page耗时。
 - **Verification:** 索引与列表8项、工作台/数据库迁移43项、SQLite连接/争用36项、Host/数据保留/交付128项共215项通过。TDD先复现索引缺失及探针吞错；0031重复升级保留全部测试业务行；两条实际Run相关SQL均使用覆盖索引。隔离1000×256KiB基准该查询约79～87ms降至2.6～2.8ms，不能外推内网整页速度。独立审阅、Ruff及进度治理通过。
 - **Delivery boundary:** 沿用已授权提交推送及保留数据完整交付；打包前重新执行绑定提交的62项旧记录/经验强制检查，结果以transfer-report为准。未连接或修改内网数据库，不代表实际大库页面稳定性验收完成；无手工清库、WAL切换或Memory迁移。
-
 ### 2026-09-22 — Host-owned adjustable corpus concurrency
 - **Task:** `PI-03E`
 - **Status:** `Done`
@@ -31,7 +36,6 @@
 - **SQLite compatibility:** 内网 Python SQLite 3.45.3 的 DELETE 模式继续保留；只有含官方 WAL-reset 修复的 SQLite 才启用 WAL，旧版遇到已有 WAL 明确要求先升级，不在线转模式。30秒等待和仅结果持久化的有界重试保持，不重调模型。
 - **Verification:** 受影响批次/工作台/权限回归136项（含新配置单测34项与8→2→8集成8项）、旧入口/草稿边界3项、SQLite连接与争用36项、旧记录/经验兼容62项、Host启动与数据保留77项、交付清单及Runbook53项全部通过。DELETE模式8任务/页面读写/暂停场景另连续5次通过；前端63项、ESLint/TypeScript、真实Chromium交互通过。Ruff格式/静态检查与进度治理通过。
 - **Boundary:** 以上为隔离数据和模拟模型证据，不代表内网长期容量验收；实现验收时未打包、提交或部署，未操作业务数据库；用户随后授权先提交推送，再重建保留数据交付，最终回执另存于交付目录。SQLite仍可能等待外部长事务，不承诺任意争用均不会超时。
-
 ### 2026-09-20 — Preserve reviewed experience matching and filter oversized new learning features
 - **Task:** `PI-03E`
 - **Status:** `Done`

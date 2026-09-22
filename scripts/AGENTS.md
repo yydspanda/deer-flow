@@ -10,6 +10,19 @@ requires explicit confirmation, verifies the saved file set, and never overwrite
 a new database. Next ordinary Host start owns empty-schema initialization. Tests
 must use temporary checkouts/databases, not the running DEV database.
 
+`soc_pingan_validation_database.py --experiment EXP-...` previews an explicit
+validation-only cleanup on a stopped Host DEV checkout; `--apply` requires the
+operator's decision to discard all second-batch attempts. It shares the existing
+maintenance lock, process/file checks and backup manifest with whole-DEV maintenance,
+but copies and verifies the complete SQLite family before a single transaction.
+`backend/scripts/soc_validation_reset_store.py` owns the fixed schema-0032 deletion
+allowlist and scalar/JSON provenance checks. It keeps first-batch records, experiment
+membership and governed Memory, rejects active/shared/unknown lineage, and never
+constructs services, migrates, changes journal mode or starts models. New work must
+be prepared through the existing round API with all first-batch options explicitly
+supplied, as documented in `docs/soc-validation-reset.md`. Ship both maintenance
+modules, their isolated tests and that procedure in the required handoff inventory.
+
 PingAn corpus transfer is separate from source/config releases. The bounded
 `build_pingan_corpus_transfer.py` reads the same frozen manifest/index as
 `soc_pingan_stage_internal_corpus.py`, packs only its four allowlisted artifacts in

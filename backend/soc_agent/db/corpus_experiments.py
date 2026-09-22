@@ -443,7 +443,15 @@ class SqlAlchemyCorpusExperimentRepository:
 
     def batch_control_state(self, experiment_id: str, batch: str):
         row = SocCorpusRoundRow
-        latest_jobs = self._batch_jobs_query(experiment_id, CorpusRoundSelection(batch=batch, scope="reuse" if batch == "learning" else "all")).with_only_columns(SocProcessingJobRow.job_id, maintain_column_froms=True).order_by(None)
+        # A blocked historical round may retain successful/failed results after
+        # its queued jobs are explicitly replaced. Only current unfinished work
+        # can keep the batch blocked; retain the round and terminal jobs for audit.
+        latest_jobs = (
+            self._batch_jobs_query(experiment_id, CorpusRoundSelection(batch=batch, scope="reuse" if batch == "learning" else "all"))
+            .where(SocProcessingJobRow.status.in_([ProcessingJobStatus.QUEUED.value, *[status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]]))
+            .with_only_columns(SocProcessingJobRow.job_id, maintain_column_froms=True)
+            .order_by(None)
+        )
         blocked_query = (
             select(row.record_payload)
             .join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.round_id == row.round_id)

@@ -31,12 +31,10 @@ import type {
 
 import {
   availableCorpusRunSettings,
-  readCorpusRunSettings,
   SocCorpusRunSettings,
 } from "./soc-corpus-run-settings";
 
 const QUERY = ["soc-corpus-quick"] as const;
-const SETTINGS_KEY = "soc.corpus.experiment.run-settings.v1";
 const CONFIGURATION_QUERY = [
   "soc-corpus-experiments",
   "configuration",
@@ -75,9 +73,11 @@ export function SocCorpusExperiments({
   onStateUpdated?: (state: SocCorpusQuickState) => void;
 }) {
   const cache = useQueryClient();
-  const [settings, setSettings] = useState<SocAnalysisExecutionOptions | null>(
-    null,
-  );
+  // Reload restores the server's saved batch options. Only explicit edits in
+  // this page override them, and drafts must not spill into the other batch.
+  const [settingsByBatch, setSettingsByBatch] = useState<
+    Partial<Record<SocCorpusBatch, SocAnalysisExecutionOptions>>
+  >({});
   const [concurrencyDraft, setConcurrencyDraft] = useState<number | null>(null);
   const handled = useRef<number | null>(null);
   const completion = useRef("");
@@ -137,19 +137,19 @@ export function SocCorpusExperiments({
       void configuration.refetch();
     },
   });
-  const options = configuration.data
-    ? !canConfigure
-      ? (configuration.data.saved_options ?? configuration.data.defaults)
-      : controls
-        ? availableCorpusRunSettings(
-            settings ?? configuration.data.defaults,
-            controls,
-          )
-        : configuration.data.defaults
-    : null;
-  useEffect(() => {
-    setSettings(readCorpusRunSettings(SETTINGS_KEY));
-  }, []);
+  const savedOptions =
+    configuration.data?.saved_options ?? configuration.data?.defaults;
+  const options =
+    savedOptions && !configuration.isPlaceholderData
+      ? !canConfigure
+        ? savedOptions
+        : controls
+          ? availableCorpusRunSettings(
+              settingsByBatch[batch] ?? savedOptions,
+              controls,
+            )
+          : savedOptions
+      : null;
   useEffect(() => {
     if (state.data) onStateUpdated?.(state.data);
   }, [state.data, onStateUpdated]);
@@ -222,12 +222,7 @@ export function SocCorpusExperiments({
           value={options}
           onChange={(value) => {
             if (!canConfigure) return;
-            setSettings(value);
-            try {
-              sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(value));
-            } catch {
-              /* Optional storage. */
-            }
+            setSettingsByBatch((previous) => ({ ...previous, [batch]: value }));
           }}
         >
           {configuration.data.concurrency_limit !== undefined && (
