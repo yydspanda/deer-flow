@@ -606,6 +606,60 @@ def test_soc_database_status_reads_schema_without_creating_database(
     }
 
 
+def test_database_status_reports_lock_and_recovers_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "backend/.deer-flow/data/soc_agent_dev.db"
+    database.parent.mkdir(parents=True)
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE soc_alembic_version(version_num TEXT)")
+    connection.execute("INSERT INTO soc_alembic_version VALUES ('retained-version')")
+    connection.commit()
+    original_connect = sqlite3.connect
+
+    def fast_probe(database_uri, **kwargs):
+        assert database_uri.endswith("?mode=ro")
+        return original_connect(database_uri, **{**kwargs, "timeout": 0.01})
+
+    monkeypatch.setattr(host_dev.sqlite3, "connect", fast_probe)
+    try:
+        connection.execute("BEGIN EXCLUSIVE")
+        busy = soc_database_status(root=tmp_path)
+        assert busy["status"] == "schema_unavailable"
+        assert busy["reason"] == "database_busy"
+        assert busy["sqlite_error_name"] == "SQLITE_BUSY"
+        assert busy["error"] == "database is locked"
+        connection.rollback()
+        ready = soc_database_status(root=tmp_path)
+        assert ready["schema_revision"] == "retained-version"
+        assert "error" not in ready
+    finally:
+        connection.close()
+
+
+def test_database_status_distinguishes_missing_schema_from_empty_version(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "backend/.deer-flow/data/soc_agent_dev.db"
+    database.parent.mkdir(parents=True)
+    connection = sqlite3.connect(database)
+    try:
+        unavailable = soc_database_status(root=tmp_path)
+        assert unavailable["status"] == "schema_unavailable"
+        assert unavailable["reason"] == "schema_read_failed"
+        assert "no such table" in unavailable["error"]
+        connection.execute("CREATE TABLE soc_alembic_version(version_num TEXT)")
+        connection.commit()
+        empty = soc_database_status(root=tmp_path)
+        assert empty["reason"] == "schema_version_empty"
+        assert (
+            connection.execute("SELECT count(*) FROM soc_alembic_version").fetchone()[0]
+            == 0
+        )
+    finally:
+        connection.close()
+
+
 def test_start_runtime_prepares_database_before_sidecars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

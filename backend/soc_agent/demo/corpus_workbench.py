@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
+from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -943,13 +944,16 @@ class SocCorpusWorkbenchService:
         batch: CorpusBatch | None = None,
         validation_tier: CorpusValidationTier | None = None,
     ) -> SocCorpusWorkbenchState:
+        request_started = perf_counter()
         selected_cases = self._selected_cases(batch, validation_tier)
         selected_ids = {case.alert_id for case in selected_cases}
         group_counts = Counter(case.group_id for case in selected_cases)
         active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
         active_ids = list(active_executions)
         failed_jobs = self._failed_jobs()
+        summaries_started = perf_counter()
         summaries = self._list_summaries()
+        summaries_finished = perf_counter()
         dynamic_alerts = [
             replace(item, workflow_state="running") if item.alert_id in active_ids else replace(item, workflow_state="failed") if item.alert_id in failed_jobs else item for item in summaries.values() if item.alert_id in selected_ids
         ]
@@ -1002,7 +1006,7 @@ class SocCorpusWorkbenchService:
         labeled_count = sum(item.operational_label_available for item in self._cases.values())
         first_case = cases[0]
         last_case = cases[-1]
-        return SocCorpusWorkbenchState(
+        state = SocCorpusWorkbenchState(
             batch_selection=CorpusBatchSelection(
                 plan_id=self._batch_plan.plan_id,
                 batch=batch,
@@ -1065,6 +1069,18 @@ class SocCorpusWorkbenchService:
             ),
             alerts=[alert_view(case) for case in page_cases],
         )
+        finished = perf_counter()
+        if finished - request_started >= 1:
+            logger.info(
+                "Corpus list timings: batch=%s total_ms=%d activity_ms=%d index_ms=%d page_ms=%d visible=%d",
+                batch or "all",
+                round((finished - request_started) * 1000),
+                round((summaries_started - request_started) * 1000),
+                round((summaries_finished - summaries_started) * 1000),
+                round((finished - summaries_finished) * 1000),
+                len(page_cases),
+            )
+        return state
 
     def _list_summaries(self) -> dict[str, CorpusListSummary]:
         # Only list predicates/statistics are cached. Candidate governance and

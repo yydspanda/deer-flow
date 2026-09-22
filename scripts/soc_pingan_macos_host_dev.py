@@ -15,6 +15,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -1102,17 +1103,31 @@ def soc_database_status(
     if not database_path.is_file():
         return {"status": "missing", **base}
     try:
-        with sqlite3.connect(
-            f"file:{database_path.as_posix()}?mode=ro",
-            uri=True,
+        with closing(
+            sqlite3.connect(database_path.as_uri() + "?mode=ro", uri=True)
         ) as connection:
             row = connection.execute(
                 "SELECT version_num FROM soc_alembic_version"
             ).fetchone()
-    except sqlite3.Error:
-        return {"status": "schema_unavailable", **base}
+    except sqlite3.Error as exc:
+        code = getattr(exc, "sqlite_errorcode", None)
+        busy = isinstance(code, int) and (code & 0xFF) in {
+            sqlite3.SQLITE_BUSY,
+            sqlite3.SQLITE_LOCKED,
+        }
+        return {
+            "status": "schema_unavailable",
+            **base,
+            "reason": "database_busy" if busy else "schema_read_failed",
+            "sqlite_error_name": getattr(exc, "sqlite_errorname", None),
+            "error": str(exc),
+        }
     if row is None or not row[0]:
-        return {"status": "schema_unavailable", **base}
+        return {
+            "status": "schema_unavailable",
+            **base,
+            "reason": "schema_version_empty",
+        }
     return {
         "status": "ready",
         **base,

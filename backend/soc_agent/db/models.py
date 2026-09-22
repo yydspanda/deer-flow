@@ -22,6 +22,10 @@ class SocAnalysisRunRow(SocBase):
     __table_args__ = (
         Index("ix_soc_analysis_runs_alert_status", "alert_id", "status"),
         Index("ix_soc_analysis_runs_replay_source", "replay_of_run_id"),
+        # Keep corpus revision reads off large Runtime payload records. In
+        # SQLite, reading updated_at after run_payload otherwise traverses its
+        # overflow pages even when the JSON column is not selected.
+        Index("ix_soc_analysis_runs_corpus_revision", "alert_id", "input_hash", "run_id", "started_at", "updated_at", "status"),
     )
 
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)

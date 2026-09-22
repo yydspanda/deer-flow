@@ -106,7 +106,7 @@ def test_upgrade_soc_schema_retries_transient_io_for_new_sqlite(
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         revision = connection.execute("SELECT version_num FROM soc_alembic_version").fetchone()[0]
     assert "partial_attempt" not in tables
-    assert revision == "0031_memory_working_drafts"
+    assert revision == "0032_corpus_revision_index"
 
 
 def test_upgrade_soc_schema_never_retries_or_removes_existing_sqlite(

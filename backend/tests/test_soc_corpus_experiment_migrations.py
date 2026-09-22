@@ -16,7 +16,7 @@ def test_experiment_migration_upgrades_existing_database_without_losing_history(
     upgrade_soc_schema(url)
     SqlAlchemyAlertRepository(sessionmaker(bind=engine)).corpus_experiments().require_schema()
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM soc_alembic_version")) == "0031_memory_working_drafts"
+        assert connection.scalar(text("SELECT version_num FROM soc_alembic_version")) == "0032_corpus_revision_index"
         assert connection.scalar(text("SELECT value FROM operator_owned_probe")) == "keep"
         tables = inspect(connection).get_table_names()
         assert all(t in tables for t in ("soc_corpus_experiments", "soc_corpus_experiment_members", "soc_corpus_rounds", "soc_corpus_round_items"))

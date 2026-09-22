@@ -144,6 +144,11 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > retry saving the same result without calling the model again; persistent failures remain
 > visible. Apply this through the normal service upgrade/restart, preserving existing
 > results and reviewed Memory; no database reset or corpus re-import is needed.
+> Host startup also installs the `0032_corpus_revision_index` query index, so checking
+> list freshness can read compact index entries without traversing large historical Run
+> payloads. Its first creation on a large database can take time; wait for schema
+> preparation to finish. Slow list requests log stage timings, and an unavailable database
+> status now includes the specific read error instead of hiding lock contention.
 > A single request also works after a legacy limit or selected scope completes, keeping
 > other queued alerts paused. Replacing all blocked tasks clears the current stop warning;
 > historical blocked rounds remain available for audit.

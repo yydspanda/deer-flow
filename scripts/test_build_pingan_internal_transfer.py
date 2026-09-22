@@ -96,6 +96,11 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
 
     assert "backend/soc_agent/db/engine.py" in required
     assert "backend/tests/test_soc_database_engine.py" in required
+    assert (
+        "backend/soc_agent/db/migrations/versions/0032_corpus_revision_index.py"
+        in required
+    )
+    assert "backend/tests/test_soc_corpus_revision_index.py" in required
     assert "backend/soc_agent/demo/corpus_capacity.py" in required
     assert "backend/tests/test_soc_corpus_capacity.py" in required
     assert "backend/tests/test_soc_corpus_capacity_integration.py" in required
@@ -264,6 +269,9 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     )[0]
     assert "soc_agent.cli db upgrade" not in host_install
     assert "Host DEV `start` 统一负责 SOC SQLite migration" in host_install
+    assert "创建查询索引（`0032_corpus_revision_index`）" in host_install
+    assert "无需另跑建索引命令" in host_install
+    assert "`database_busy` 表示读取时遇到锁" in runbook
     assert "新空库发生一次瞬时 `disk I/O error`" in host_install
     assert "内置 SQLite `3.45.3`" in host_install
     assert "保留现有 `DELETE` 日志模式" in host_install
@@ -287,7 +295,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "确认 Core 全部为 `true`、三个 Sidecar 都为 `running`" in runbook
     assert "首次提交这份\n新请求" in runbook
     assert "`soc_database.status=ready`" in runbook
-    assert "`soc_database.schema_revision=0031_memory_working_drafts`" in runbook
+    assert "`soc_database.schema_revision=0032_corpus_revision_index`" in runbook
     assert "pingan-corpus-batch-runbook.md" in runbook
     assert "开始积累" in runbook
     assert "第一批5条、同轮续跑50条" not in runbook

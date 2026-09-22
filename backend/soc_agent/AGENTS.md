@@ -165,6 +165,14 @@ file for SOC code. The authoritative product and engineering documents are:
   and read complete page details/governance fresh. Cohort growth invalidates member
   projections. Never cache Memory authority, truncate history at 10,000 rows, or select
   a newer foreign-scope run. Initial historical backfill is preparation, not warm latency.
+  `0032_corpus_revision_index` covers Run revision reads with
+  `(alert_id, input_hash, run_id, started_at, updated_at, status)`. SQLite's `updated_at`
+  follows the large JSON columns physically: selecting only scalars still traverses
+  overflow pages without this covering index. Keep the revision hash and late-change
+  detection unchanged; add indexes through migrations, never on a page read. Large
+  synthetic-payload tests must verify the actual covering query plan and preservation
+  of old business rows during upgrade. Slow list requests log activity/index/page timing
+  without raw evidence; a healthy schema probe alone does not establish list latency.
   Changes to projection semantics must bump its catalog version; the index is rebuildable
   and must never rewrite source runs, observations, candidates or Memory.
 

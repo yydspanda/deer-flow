@@ -277,6 +277,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/db/migrations/versions/0029_processing_job_scope.py",
     "backend/soc_agent/db/migrations/versions/0030_corpus_experiments.py",
     "backend/soc_agent/db/migrations/versions/0031_memory_working_drafts.py",
+    "backend/soc_agent/db/migrations/versions/0032_corpus_revision_index.py",
     "backend/soc_agent/contracts/memory_drafts.py",
     "backend/soc_agent/core/memory_working_drafts.py",
     "backend/soc_agent/core/memory_draft_jobs.py",
@@ -319,6 +320,8 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/tests/test_soc_corpus_pattern_execution.py",
     "backend/tests/test_soc_memory_experiment_retrieval.py",
     "backend/tests/test_soc_database_engine.py",
+    "backend/tests/test_soc_corpus_revision_index.py",
+    "backend/tests/test_soc_corpus_list_queries.py",
     "backend/tests/test_soc_corpus_capacity.py",
     "backend/tests/test_soc_corpus_capacity_integration.py",
     "backend/tests/test_soc_corpus_capacity_edges.py",
@@ -1810,7 +1813,9 @@ BASH
 
 不再手工初始化 SOC SQLite。Host DEV `start` 统一负责 SOC SQLite migration：它先从当前 checkout
 根据 `SOC_PINGAN_ENV` 解析绝对 `soc_agent_dev.db` 或 `soc_agent_stg.db` 路径，在任何 Sidecar 和 Web 服务启动前升级 Schema，并把 Sidecar 的
-重复自动迁移关闭。新空库发生一次瞬时 `disk I/O error` 时，启动器只清理本次失败产生的半库并安全
+重复自动迁移关闭。本次会为告警列表创建查询索引（`0032_corpus_revision_index`），不改写研判结果、经验或审核记录。
+首次升级大数据库时创建索引可能耗时较长，请等待 `SOC database schema upgraded to head.` 后继续；无需另跑建索引命令。
+新空库发生一次瞬时 `disk I/O error` 时，启动器只清理本次失败产生的半库并安全
 重试一次；调用前已经存在的数据库永远不会被自动删除或重建。
 
 DeerFlow 与 SOC 分别使用 `deerflow.db` 和当前环境独立的 `soc_agent_dev.db` / `soc_agent_stg.db`，不得合并。SOC 的版本表是
@@ -1883,6 +1888,7 @@ BASH
 |---|---|
 | 尚未执行 `start` | 完成第 6 节预检，并按第 6.1 节确认本次数据处理方式后，执行本节启动块 |
 | `status` 中 Core/Sidecars 全部运行，且 `soc_database.status=ready` | 不再建库或重启，直接执行模型 Smoke/后续验收 |
+| `soc_database.status=schema_unavailable` | 查看同时输出的 `reason` 和 `error`；`database_busy` 表示读取时遇到锁，其他读取错误或版本表为空需按具体信息排查，不能仅凭该状态判断数据丢失或重新初始化 |
 | `SOC database preparation failed before sidecar startup` | {database_recovery} |
 | `legacy-api exited during startup` | 只可能来自旧交付包或非数据库启动错误；先查 Sidecar 日志，不要盲目删库 |
 | `legacy-worker exited during startup` / `did not become ready` | Worker 的数据库、Runtime、Policy、ZEUS 或 Callback 初始化失败；查看 `backend/.deer-flow/internal-host-dev/sidecars/legacy-worker.log`，不得继续提交 30 分钟验收任务 |
@@ -1892,7 +1898,7 @@ Host DEV 驱动会先准备可复用的前端构建，再准备 SOC 数据库，
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
 Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机使用时加 `--local-only`。
 `status` 必须同时显示 `soc_database.status=ready`、
-`soc_database.schema_revision=0031_memory_working_drafts`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
+`soc_database.schema_revision=0032_corpus_revision_index`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
 Runtime、Tenant Policy、ZEUS lifecycle 和 Callback 初始化完成并发布 PID-bound ready 信号后才会显示
 `running`；`stale`、`not_running` 或启动时报 `did not become ready` 都不能继续真实验收。
 

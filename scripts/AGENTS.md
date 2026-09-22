@@ -90,8 +90,16 @@ operators need no extra migration or PRAGMA command. Preserve the whole stopped 
 directory, including WAL sidecars, through the existing upgrade installer.
 Before starting any sidecar, `start` must resolve the absolute local SOC SQLite URL,
 run the SOC migration once, and pass that URL to the API/worker with their own
-auto-migration disabled. `status` reports the persisted `soc_alembic_version` without
-creating a missing database. A pristine SQLite initialization may clean its own partial
+auto-migration disabled. `0032_corpus_revision_index` adds only the covering Run revision
+index used by the corpus list; on a large existing database the first creation can take
+time. Keep it in the source inventory and generated Runbook's expected schema revision;
+operators wait for normal startup preparation, never issue ad-hoc index SQL.
+`status` reports the persisted `soc_alembic_version` without creating a missing database.
+It retains `schema_unavailable` for compatibility but includes `reason=database_busy`,
+`schema_read_failed` or `schema_version_empty`, plus the SQLite name/message for read
+errors. The standard-library read-only probe closes its connection and keeps its short
+wait; a busy probe does not prove a missing schema or lost data.
+A pristine SQLite initialization may clean its own partial
 artifacts and retry one transient `disk I/O error`; an existing database is never deleted
 or retried destructively. Generated Runbooks therefore must not require operators to
 source local profiles and repeat migration manually.
