@@ -192,6 +192,8 @@ def test_active_local_claim_only_marks_its_new_run_as_writing_pattern(workbench)
     try:
         assert _memory(workbench.get_execution(old.alert_id)).status == "skipped"
         current = _saved_run(workbench, run_id="RUN-in-claim")
+        current.started_at = old.started_at + timedelta(seconds=1)
+        workbench._repository.save_run(current)
         workbench._active_executions[current.alert_id] = replace(claim, pattern_run_id=current.run_id)
         assert _memory(workbench.get_execution(current.alert_id)).status == "running"
         assert _memory(workbench.get_audit_bundle(old.alert_id, context=context(), run_id=old.run_id).execution).status == "skipped"
