@@ -286,6 +286,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/demo/corpus_batches.py",
     "backend/soc_agent/demo/corpus_experiment_cli.py",
     "backend/soc_agent/demo/corpus_experiment_dispatcher.py",
+    "backend/soc_agent/demo/corpus_capacity.py",
     "backend/soc_agent/demo/corpus_experiment_reports.py",
     "backend/soc_agent/demo/corpus_retest_selection.py",
     "backend/soc_agent/demo/corpus_round_comparison.py",
@@ -318,6 +319,9 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/tests/test_soc_corpus_pattern_execution.py",
     "backend/tests/test_soc_memory_experiment_retrieval.py",
     "backend/tests/test_soc_database_engine.py",
+    "backend/tests/test_soc_corpus_capacity.py",
+    "backend/tests/test_soc_corpus_capacity_integration.py",
+    "backend/tests/test_soc_corpus_capacity_edges.py",
     "backend/tests/test_soc_sqlite_persistence_contention.py",
     "backend/tests/fixtures/soc_memory/profile7_v5_release_20260918.json",
     "scripts/build_pingan_corpus_transfer.py",
@@ -1549,11 +1553,17 @@ BASH
 本手册保留 SOC DEV，本节没有需要执行的命令。第一批研判结果、批次进度、经验样本、待审核经验及已完成的审核记录均保留。
 第 3 节安装器已迁入完整数据库目录及 SQLite sidecars；不要清库，也不需要重新积累第一批。
 完成第 6 节预检后，直接继续第 7 节启动。启动会升级现有数据库结构，不会重新初始化已有数据。
-启动后先核对第一批完成数量、待审核经验和已审核记录，再继续审核经验或第二批验证。"""
+启动后先核对第一批完成数量、待审核经验和已审核记录，再继续审核经验或第二批验证。
+
+本次替换源码会改变运行配置版本。升级前已排队、尚未完成的任务仍保留原版本，点击“继续”时
+可能出现 `configuration_changed`（配置已变化）。这时保留旧记录，对需要执行的告警逐条点击
+“重新运行”，明确采用新版本；当前页面不提供把整批旧队列自动迁移到新版本的操作。
+已经完成的告警和已审核经验无需重跑、重审。仅在同一代码版本下修改“最大并发”不会触发
+这个版本检查，也不需要重新建立任务。"""
         database_recovery = "服务尚未启动；保留已有数据库和备份排查，查明原因后重试，不要通过清库解决启动失败"
         batch_start_instruction = (
             "已有第一批积累成果时，继续审核经验或第二批验证，跳过批次手册第 1.1 节重置。\n"
-            "若第一批尚未完成，按原批次继续积累；本次升级不重新初始化已有数据。"
+            "若仍有升级前排队任务，先按第 6.1 节处理配置版本提示；本次升级不重新初始化已有数据。"
         )
     return f"""# {title}
 
@@ -1791,6 +1801,12 @@ BASH
 
 安装器使用冻结 lock、内部镜像和独立 `backend/.venv`。不要执行 `uv lock`，
 也不要让 pnpm/Python 访问公网。
+
+数据库连接会自动设置锁等待和结果保存重试，但仍可能遇到长事务竞争。已确认的内网 Python
+内置 SQLite `3.45.3` 不具备上游 WAL 并发缺陷修复，本版本保留现有 `DELETE` 日志模式；
+不会自动升级 SQLite，也不要手工执行切换 WAL 的 PRAGMA。只有 Python 内置 SQLite 达到
+`3.51.3+`（或修复分支 `3.44.6+` / `3.50.7+`）时才自动启用 WAL。
+若旧库已经使用 WAL、Python SQLite 却未修复，启动会明确停止并要求升级运行库，保留数据库文件。
 
 不再手工初始化 SOC SQLite。Host DEV `start` 统一负责 SOC SQLite migration：它先从当前 checkout
 根据 `SOC_PINGAN_ENV` 解析绝对 `soc_agent_dev.db` 或 `soc_agent_stg.db` 路径，在任何 Sidecar 和 Web 服务启动前升级 Schema，并把 Sidecar 的
@@ -2059,11 +2075,18 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 因此不能区分个人审计 actor。需要验收账号与权限时，先停止服务，再去掉该参数启动；无需改代码或数据库：
 
 Host DEV 默认允许最多 8 条不同告警并行研判；同一告警的重复点击不会再次进入 Runtime/LLM。
-`SOC_LLM_MAX_CONCURRENCY` 和 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` 必须同步调整，后者是所有
-聊天与研判共享的最终容量门。SQLite 下的 `SOC_PINGAN_LEGACY_WORKER_CONCURRENCY` 仍固定为 `1`，它只
-控制 ZEUS 持久任务取件速度，不限制前端告警演练并发。
-配置更新后完整重启 Host；已有批次点击“继续”时采用当前服务端并发上限，保留原任务及运行开关。
-同类组的顺序执行和共享模型容量可能使实际运行数小于 8；页面显示的是当前占用与上限。
+部署 Mac 本机打开 `http://localhost:2026/workspace/soc/corpus-validation`，进入“运行设置”，
+在“最大并发”中选择 `1～8` 并点击“保存并发”。保存后直接生效，无需重启或重新准备批次；
+第一批、第二批、单条运行和后台经验起草共用此上限。调低时让已开始的任务完成，再按新上限补位；
+调高后按新上限领取后续任务。暂停中的批次仍保持暂停，需要继续时点击“继续”。
+同事通过局域网可看到新上限并运行、暂停，但不能修改并发。设置随数据库同目录的小型配置文件保存，
+服务重启及保留数据升级后继续生效；不改变已完成结果、已审核经验、排队任务或匹配规则。
+部署配置中的 `SOC_LLM_MAX_CONCURRENCY` 和 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` 仍保持 `8`，
+无需为页面调节而修改 env；后者是聊天与研判共享的最终容量门。
+SQLite 下的 `SOC_PINGAN_LEGACY_WORKER_CONCURRENCY` 仍固定为 `1`，仅控制 ZEUS 持久任务取件速度。
+同类组顺序和共享模型容量可能使实际运行数小于设定上限；页面显示当前占用与上限。
+本次内网已出现数据库锁等待，升级后建议先在本机把“最大并发”保存为 `2`，再恢复运行，
+观察页面响应和任务结果正常后逐步调高；减少并发不能保证消除其他长事务造成的锁等待。
 
 ```bash
 export TARGET_REPO="$HOME/deer-flow"

@@ -19,6 +19,7 @@ from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
 from soc_agent.demo.corpus_batches import CorpusBatch, CorpusValidationTier
+from soc_agent.demo.corpus_capacity import CorpusCapacity
 from soc_agent.demo.corpus_workbench import (
     CORPUS_WORKBENCH_ENVIRONMENT,
     CorpusComparisonFilter,
@@ -109,6 +110,7 @@ def get_soc_corpus_workbench_service(
                 ),
                 source_path=source_path,
                 settings=runtime.settings,
+                capacity=CorpusCapacity(ceiling=runtime.settings.max_concurrency, path=runtime.database_file.with_suffix(".corpus-capacity.json")),
                 database_file=runtime.database_file.name,
                 tenant_policy=runtime.tenant_policy,
                 software_path_fast_policy=runtime.software_path_fast_policy,

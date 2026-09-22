@@ -1,6 +1,7 @@
 """Durable reviewer-requested drafting on the existing SOC job queue."""
 
-from contextlib import contextmanager
+from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from datetime import UTC, datetime
 from threading import Event, Thread
 from uuid import uuid4
@@ -19,11 +20,12 @@ DRAFT_QUEUE = "deepseek-v4-flash"
 
 
 class SocMemoryDraftJobService:
-    def __init__(self, *, repository, drafter_factory, max_concurrency=3, lease_seconds=120):
+    def __init__(self, *, repository, drafter_factory, max_concurrency=3, lease_seconds=120, admission: Callable[[], AbstractContextManager[int]] | None = None):
         self.repository = repository
         self.jobs = repository.processing_jobs()
         self._drafter_factory = drafter_factory
         self._max_concurrency = max_concurrency
+        self._admission = admission or (lambda: nullcontext(self._max_concurrency))
         self._lease_seconds = lease_seconds
 
     def submit_many(self, commands: list[MemoryDraftGenerateCommand], *, context: ServiceRequestContext, external_ref: str | None = None):
@@ -100,9 +102,10 @@ class SocMemoryDraftJobService:
 
     def execute_one(self, *, now=None):
         worker = "draft-worker-" + uuid4().hex
-        with self.repository.mutation_transaction() as tx:
+        with ExitStack() as admission, self.repository.mutation_transaction() as tx:
             tx.lock_memory_governance()
-            if tx.processing_jobs().active_workload_count([DRAFT_WORKLOAD, "corpus_experiment"]) >= self._max_concurrency:
+            limit = admission.enter_context(self._admission())
+            if tx.processing_jobs().active_workload_count([DRAFT_WORKLOAD, "corpus_experiment"]) >= limit:
                 return None
             job = tx.processing_jobs().claim_next(queue_name=DRAFT_QUEUE, workload_kind=DRAFT_WORKLOAD, worker_id=worker, lease_seconds=self._lease_seconds, now=now)
         if job is None:

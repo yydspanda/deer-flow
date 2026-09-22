@@ -70,7 +70,7 @@ class CorpusExperimentDispatcher:
                     future.result()
                 except Exception:
                     logger.exception("Corpus dispatcher task failed")
-        slots = self._max_concurrency - len(self._futures)
+        slots = min(self._max_concurrency, self._service.capacity.max_concurrency) - len(self._futures)
         if slots <= 0 or self._pool is None:
             return
         rounds = self._service.store.list_rounds(state="running", limit=100, offset=self._round_cursor)

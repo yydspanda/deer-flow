@@ -5,6 +5,7 @@ import type { SocCorpusQuickState } from "./corpus-experiments";
 import type {
   SocCorpusExperiment,
   SocCorpusExperimentConfiguration,
+  SocCorpusConcurrency,
   SocCorpusRound,
   SocCorpusRoundBrief,
   SocCorpusRoundCommand,
@@ -238,6 +239,10 @@ export const getSocCorpusExperimentConfiguration = (
   corpusExperimentRequest<SocCorpusExperimentConfiguration>(
     `experiments/configuration${batch ? `?batch=${batch}` : ""}`,
   );
+export const updateSocCorpusConcurrency = (maxConcurrency: number) =>
+  corpusExperimentRequest<SocCorpusConcurrency>("experiments/concurrency", {
+    max_concurrency: maxConcurrency,
+  });
 export const prepareSocCorpusExperiment = (
   experimentId: string,
   name: string,

@@ -69,10 +69,20 @@ demonstration artifacts. The wrapper must not add Docker as a prerequisite,
 hard-code a developer home path, or create a second Gateway/frontend/nginx implementation.
 The PingAn profile and full-transfer validation keep `SOC_LLM_MAX_CONCURRENCY` and
 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` aligned at `8`; Host's missing-value fallback
-is also `8` and preserves explicit settings. A capacity update requires the matching
-private profile and a full Host restart. The SQLite legacy Worker remains single-worker.
-All SOC database owners use `backend/soc_agent/db/engine.py` for consistent SQLite
-WAL mode and a 30-second busy timeout on every connection. Result persistence retries
+is also `8` and preserves explicit settings. Changing that deployment model ceiling
+requires the matching private profile and a full Host restart. Within the existing
+ceiling, the deployment Mac can save a corpus admission limit of 1..8 from run settings
+without restart or env edits. Preserve the database-adjacent `*.corpus-capacity.json`
+through normal data-directory upgrades; include `demo/corpus_capacity.py` and its tests
+in the handoff inventory. LAN users only read the value. The SQLite legacy Worker
+remains single-worker.
+All SOC database owners use `backend/soc_agent/db/engine.py` for a 30-second SQLite
+busy timeout on every connection. WAL requires the upstream WAL-reset fix: SQLite
+`3.51.3+`, or patched `3.44.x >= 3.44.6` / `3.50.x >= 3.50.7`. Older runtimes retain
+existing rollback journaling with a warning; opening an existing WAL database for
+writes fails with an upgrade instruction instead of silently changing journal mode.
+Check the SQLite embedded in `backend/.venv/bin/python`, not the `sqlite3` shell's
+version, before promising WAL on a delivered Host runtime. Result persistence retries
 only SQLite lock contention, at most three fresh transactions, without rerunning the
 model. Include that module and its engine/contention regression tests in the required
 handoff inventory. Existing databases adopt the connection policy on service restart;

@@ -245,3 +245,10 @@ class CorpusQuickCommand(BaseModel):
         if (self.action in {"run", "rerun"}) != bool(self.alert_id):
             raise ValueError("single-alert commands require an alert ID")
         return self
+
+
+class CorpusConcurrencyCommand(BaseModel):
+    """Resource admission limit; never part of frozen alert behavior."""
+
+    model_config = ConfigDict(extra="forbid")
+    max_concurrency: int = Field(ge=1, le=8, strict=True)

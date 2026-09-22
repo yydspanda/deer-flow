@@ -509,7 +509,20 @@ bulk work stays paused. Rerun idempotency derives from the displayed previous jo
 old results remain in alert details. Counts come from the server's latest-per-alert
 batch projection, including manual tasks across internal rounds. Preserve `experiment`
 and `return_batch` through candidate list/detail navigation. Running settings apply to
-new jobs; do not expose experiment, round, budget, concurrency or comparison controls.
+new jobs; do not expose experiment, round, budget or comparison controls.
+
+The deployment-wide maximum concurrency is a separate server-owned setting shared by
+both batches. Expose the 1..`concurrency_limit` selector and explicit save inside run
+settings only when the configuration response advertises that limit. POST only
+`max_concurrency` to `/experiments/concurrency`; acknowledge changes after success,
+never persist them in browser run-switch preferences. Host-local permission owns the
+edit; LAN visitors see the saved value and retain run/pause commands. Poll configuration
+every 10 seconds and on focus, including the Host, to synchronize other tabs. After a
+save, fence older configuration reads, project the acknowledged capacity across batch
+caches and refresh configuration/activity only, without refetching lists or audits.
+Explain that reducing concurrency waits for active tasks; it never interrupts them.
+During that drain the header may correctly show `8/2`; retain the actual active count
+and explain that started tasks finish before scheduling follows the new maximum.
 
 Host DEV can restrict run-setting edits to the deployment Mac. Honor the server's
 `can_configure=false` by disabling all switches, fact refresh and reset, while keeping

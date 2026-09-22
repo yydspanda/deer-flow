@@ -19,6 +19,7 @@ from soc_agent.contracts import ACTIVE_PROCESSING_JOB_STATUSES, ProcessingJobSta
 from soc_agent.contracts.corpus_experiments import (
     Batch,
     CorpusCandidatePage,
+    CorpusConcurrencyCommand,
     CorpusExperiment,
     CorpusMemberPage,
     CorpusPrepareCommand,
@@ -150,11 +151,26 @@ def configuration(application: ConfigurationDep, request: Request, batch: Batch 
     return {
         "defaults": application.defaults.model_dump(mode="json"),
         "full_flow_defaults": application.full_flow_defaults.model_dump(mode="json"),
-        "max_concurrency": application.max_concurrency,
+        "max_concurrency": application.service.capacity.max_concurrency,
+        "concurrency_limit": application.service.capacity.ceiling,
         "dispatcher_running": application.dispatcher.is_running,
         "can_configure": can_configure_corpus(request),
         "saved_options": _saved_run_options(application, batch).model_dump(mode="json"),
     }
+
+
+@router.post("/experiments/concurrency")
+def update_concurrency(body: CorpusConcurrencyCommand, request: Request, application: ConfigurationDep):
+    context = _admin(request)
+    if not can_configure_corpus(request):
+        raise HTTPException(status_code=403, detail="最大并发仅限部署本机修改；同事沿用已保存设置。")
+    with _command_errors():
+        try:
+            application.service.capacity.set_limit(body.max_concurrency, actor_id=context.actor.actor_id)
+        except OSError as exc:
+            logger.warning("Could not persist DEV corpus capacity: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="并发设置保存失败，原设置保持不变，请重试。") from exc
+    return {"max_concurrency": application.service.capacity.max_concurrency, "concurrency_limit": application.service.capacity.ceiling}
 
 
 @router.get("/experiments", response_model=list[CorpusExperiment])

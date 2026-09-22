@@ -1811,6 +1811,169 @@ test("per-run settings travel with each alert and survive page reload", async ({
   ).toBeChecked();
 });
 
+test("host adjusts shared concurrency while LAN stays read-only and active work drains", async ({
+  page,
+  context,
+}, testInfo) => {
+  test.setTimeout(90000);
+  const options = {
+    normalization_review_mode: "apply",
+    tenant_policy_enabled: false,
+    tenant_policy_advisor_enabled: false,
+    tenant_policy_signal_providers_enabled: false,
+  };
+  let capacity = 8;
+  let activeAlertIds = Array.from(
+    { length: 8 },
+    (_, index) => `ACTIVE-${index}`,
+  );
+  const writes: unknown[] = [];
+  const install = async (visitor: Page, canConfigure: boolean) => {
+    mockLangGraphAPI(visitor, { threads: [] });
+    await visitor.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/experiments/concurrency")) {
+        writes.push(request.postDataJSON());
+        if (!canConfigure)
+          return route.fulfill({
+            status: 403,
+            json: { detail: "仅部署主机可修改" },
+          });
+        if (writes.length === 1)
+          return route.fulfill({
+            status: 503,
+            json: { detail: "并发设置暂未保存，请重试" },
+          });
+        capacity = (request.postDataJSON() as { max_concurrency: number })
+          .max_concurrency;
+        return route.fulfill({
+          json: { max_concurrency: capacity, concurrency_limit: 8 },
+        });
+      }
+      if (request.method() === "POST")
+        throw new Error(`Unexpected execution mutation: ${url.pathname}`);
+      if (url.pathname.endsWith("/experiments/configuration"))
+        return route.fulfill({
+          json: {
+            defaults: options,
+            saved_options: options,
+            full_flow_defaults: options,
+            max_concurrency: capacity,
+            concurrency_limit: 8,
+            can_configure: canConfigure,
+            dispatcher_running: true,
+          },
+        });
+      if (url.pathname.endsWith("/activity"))
+        return route.fulfill({
+          json: {
+            ...corpusActivity(activeAlertIds, "corpus-dispatcher"),
+            max_concurrent_executions: capacity,
+            available_slots: Math.max(0, capacity - activeAlertIds.length),
+          },
+        });
+      if (url.pathname.endsWith("/quick-validation"))
+        return route.fulfill({
+          json: {
+            experiment_id: "EXP-capacity",
+            total: 10,
+            completed: 0,
+            active: activeAlertIds.length,
+            remaining: 10 - activeAlertIds.length,
+            failed: 0,
+            pending_candidates: 0,
+            running: true,
+            blocked_reason: null,
+            items: [],
+          },
+        });
+      return route.fulfill({
+        json: {
+          ...corpusStateForRequest(corpusState(true), request.url()),
+          run_controls: {
+            defaults: options,
+            can_configure: canConfigure,
+            normalization_review_available: true,
+            tenant_policy_available: true,
+            tenant_policy_advisor_available: true,
+            tenant_policy_signal_providers_available: true,
+          },
+          batch_selection: {
+            plan_id: "fixture-plan",
+            batch: "learning",
+            validation_tier: "all",
+            counts: {
+              learning: 10,
+              validation_main: 2,
+              validation_supplementary: 1,
+              total: 13,
+            },
+            selected_count: 10,
+            group_count: 1,
+            labeled_count: 0,
+            execution_enabled: false,
+            existing_results_only: true,
+          },
+        },
+      });
+    });
+  };
+  const lan = await context.newPage();
+  await install(page, true);
+  await install(lan, false);
+  await page.goto("/workspace/soc/corpus-validation");
+  await lan.goto("/workspace/soc/corpus-validation");
+  await expect(page.getByText("运行中 8/8", { exact: true })).toBeVisible();
+  await expect(lan.getByText("当前生效：8", { exact: true })).toBeVisible();
+  await expect(
+    lan.getByRole("combobox", { name: "最大并发", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    lan.getByRole("button", { name: "保存并发", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    lan.getByRole("button", { name: "暂停", exact: true }),
+  ).toBeEnabled();
+  const selector = page.getByRole("combobox", {
+    name: "最大并发",
+    exact: true,
+  });
+  await selector.selectOption("2");
+  await page.getByRole("button", { name: "保存并发", exact: true }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "并发设置暂未保存，请重试" }),
+  ).toBeVisible();
+  await expect(page.getByText("当前生效：8", { exact: true })).toBeVisible();
+  await expect(selector).toHaveValue("2");
+  await page.getByRole("button", { name: "保存并发", exact: true }).click();
+  await expect(page.getByText("当前生效：2", { exact: true })).toBeVisible();
+  await expect(page.getByText("运行中 8/2", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("正在降低并发，已开始的任务完成后按新上限运行", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(lan.getByText("当前生效：2", { exact: true })).toBeVisible({
+    timeout: 15000,
+  });
+  await page.screenshot({
+    path: testInfo.outputPath("host-concurrency-draining.png"),
+  });
+  await lan.screenshot({
+    path: testInfo.outputPath("lan-concurrency-readonly.png"),
+  });
+  activeAlertIds = activeAlertIds.slice(0, 2);
+  await expect(page.getByText("运行中 2/2", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("正在降低并发，已开始的任务完成后按新上限运行", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  expect(writes).toEqual([{ max_concurrency: 2 }, { max_concurrency: 2 }]);
+  await lan.close();
+});
+
 test("counts durable batch activity outside the visible status-filtered page", async ({
   page,
 }) => {

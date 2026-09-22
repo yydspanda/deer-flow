@@ -122,6 +122,17 @@ file for SOC code. The authoritative product and engineering documents are:
   matching configuration GET and quick commands, rather than the caller-selected
   experiment's latest round. Read-only callers cannot create new rounds for historical
   plans; existing idempotent round replies and historical reads remain available.
+  DEV admission capacity is a separate Host-owned resource setting (1..min(8, deployment
+  ceiling)), shared by both batches, manual claims, legacy interactive runs and background
+  drafts. `demo/corpus_capacity.py` atomically persists the value beside the isolated DB
+  as `*.corpus-capacity.json`; include it in ordinary data-directory preservation. Saving
+  never writes SQLite or rewrites rounds, options, source hashes or Memory snapshots.
+  Acquire the DB governance lock before the short capacity guard, and hold the guard
+  through claim commit; never hold it during model work or the initial governance-lock
+  acquisition. DELETE-mode commit may still wait for existing readers.
+  Lowering drains existing claims without cancellation. Pool/model ceilings stay fixed;
+  dispatcher refill and authoritative claims read the saved cap, including after restart.
+  Capacity POST uses configuration authority and must not resume/start a dispatcher.
   Workbench permission projections are request-local copies, not cached service state.
   Dispatcher priority is server-derived from an explicit one-alert selection or a
   persisted `manual_dispatch` job intent. Paused/prepared rounds may dispatch only
@@ -402,8 +413,15 @@ file for SOC code. The authoritative product and engineering documents are:
 - PostgreSQL is the production/staging SOC store. Local DeerFlow SQLite configuration
   resolves to a separate `soc_agent_dev.db`; never reuse `deerflow.db` or present SQLite
   evidence as production proof.
-- SOC runtime connections use `db.create_soc_engine`: writable file SQLite uses WAL
-  and a 30-second busy timeout per connection; PostgreSQL keeps its existing behavior.
+- SOC runtime connections use `db.create_soc_engine`: each SQLite connection has a
+  30-second busy timeout. Writable files enable WAL only with SQLite's WAL-reset fix
+  (`3.51.3+`, or the `3.44.x >= 3.44.6` / `3.50.x >= 3.50.7` backports). Older runtimes
+  retain rollback journaling with an actionable warning; an existing WAL database
+  rejects writes until the runtime is patched, without silently converting its mode.
+  PostgreSQL keeps its existing behavior. Model concurrency never owns a DB lock;
+  short governance/claim transactions still serialize through SQLite's writer lock.
+  Busy waits and retries mitigate contention; they do not guarantee lock-free access
+  when external readers/writers hold long transactions.
   `save_run` and `save_analysis_bundle` retry only SQLite BUSY/LOCKED errors, at most
   three attempts with a fresh session after rollback. Retry the same persistence unit,
   never the analyzer or external effects. Caller-owned mutation transactions propagate

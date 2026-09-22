@@ -130,11 +130,17 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > binds Gateway/Next to loopback while nginx remains the shared LAN entry.
 > Explicit experiment APIs enforce the same current-plan settings; creating another
 > experiment or selecting a historical plan cannot bypass the host-only controls.
-> PingAn Host DEV defaults to eight concurrent alerts, with matching Runtime and model
-> gateway limits. After deploying the updated configuration and restarting Host, batch
-> continue adopts the server's current capacity while preserving queued task settings.
-> Model calls share capacity with chat and drafting, so actual occupancy may be lower.
-> Local SOC SQLite uses WAL and waits for competing writes. Brief database lock conflicts
+> PingAn Host DEV defaults to eight concurrent alerts. On the deployment Mac, open
+> **运行设置 → 最大并发** to save a limit from 1 to 8 without restarting or resuming a
+> paused batch. A reduction lets active tasks finish before admitting more; an increase
+> takes effect on subsequent claims. Both batches, manual runs and background drafting
+> share this saved limit; LAN colleagues see it but cannot change it. It survives restart
+> and data-preserving upgrades without changing queued jobs or reviewed Memory. The
+> deployment model gateway stays capped at eight; chat also shares that model capacity.
+> Local SOC SQLite waits for competing writes and enables WAL only on a SQLite runtime
+> with the WAL-reset fix (3.51.3+, 3.44.6 or 3.50.7 maintenance branches). Older DELETE-mode
+> databases keep their journal mode; existing WAL on an affected version requires upgrading
+> SQLite before use. Brief database lock conflicts
 > retry saving the same result without calling the model again; persistent failures remain
 > visible. Apply this through the normal service upgrade/restart, preserving existing
 > results and reviewed Memory; no database reset or corpus re-import is needed.

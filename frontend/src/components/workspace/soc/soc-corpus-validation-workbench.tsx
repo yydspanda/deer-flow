@@ -1862,6 +1862,14 @@ export function SocCorpusValidationWorkbench() {
               <ActivityIcon className="size-3.5" />
               运行中 {visibleActiveAlertCount}/{maxConcurrentExecutions}
             </Badge>
+            {visibleActiveAlertCount > maxConcurrentExecutions && (
+              <span
+                className="text-muted-foreground max-w-64 text-xs"
+                role="status"
+              >
+                正在降低并发，已开始的任务完成后按新上限运行
+              </span>
+            )}
             <Button
               variant="outline"
               size="icon-sm"

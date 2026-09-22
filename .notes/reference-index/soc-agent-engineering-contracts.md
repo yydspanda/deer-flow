@@ -389,7 +389,9 @@ Analysis persistence / 分析持久化约束：
   不得在 service 中逐表 commit 后假装为完整成功。
 - 任一 bundle row 写入失败必须回滚全部四类写入。Normalization maintenance 是成功主写入后的
   fail-open side path，可以单独更新 run 的 monitoring result，但不能破坏已提交业务事务。
-- SOC SQLite 文件库连接统一启用 WAL、每连接 30 秒锁等待。独立 `save_run` / final bundle
+- SOC SQLite 每连接保持 30 秒锁等待；仅在包含 WAL-reset 修复的 SQLite（3.51.3+、
+  3.44.x >=3.44.6 或 3.50.x >=3.50.7）启用 WAL。旧运行时保留已有 DELETE 等回滚日志模式；
+  若旧版本已打开 WAL 库，明确阻止使用并要求先升级 SQLite，不在线切换日志模式。独立 `save_run` / final bundle
   遇到 SQLite BUSY/LOCKED 时至多尝试三次，每次关闭并回滚旧 Session 后重新保存同一结果；
   不重调模型、不新增 Run 或审计身份。外层 mutation UoW 不允许内部局部重试；其他数据库、
   非锁错误和重试耗尽均继续抛错，final bundle 失败保留原 running journal 供既有恢复流程处理。
@@ -3222,3 +3224,15 @@ tool permission denial rate
   schema/Profile/模型版本变化或 Memory suspension 必须 fail back to full analysis。
 - 规则改进的效果声明必须绑定旧/新版本、冻结 cohort、数据/配置/模型 hash 和 before/after 或 A/B 指标；
   必须同时验证误报下降、漏报不升、错误自动忽略不升。仅观察调整后的单周期相关性不能声称因果收益。
+
+
+### DEV 工作台动态并发资源限制
+
+- 部署本机可在运行设置中保存 1..min(8, 部署上限) 的最大并发，局域网访问者只读；
+  已有运行、暂停、单条重跑权限不变。后端仍以可信客户端地址判权，不能靠伪造请求头配置。
+- 该值由单 Gateway 的 CorpusCapacity 管理，在独立 SOC DB 同目录原子保存小型 JSON，
+  含版本、操作人和时间；刷新、重启和保留数据升级继续采用。保存不写 SQLite、不启动任务。
+- 批次、手动任务与经验草稿共用调度容量；运行中的任务不取消。领取时先取得 DB 治理写锁，
+  再在短容量锁内检查活动数并提交领取，提交后释放；模型调用不持锁。
+- 调节容量不改既有 Run、Job、Memory、轮次配置快照或匹配语义，也不改底层模型网关上限。
+  这保证资源调整不会触发 configuration_changed；源码升级仍遵循原来的冻结配置校验。

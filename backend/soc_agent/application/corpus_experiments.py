@@ -55,8 +55,8 @@ def build_corpus_experiment_application(*, repository: SqlAlchemyAlertRepository
         ),
         profile_registry=build_soc_memory_profile_registry(),
     )
-    service = SocCorpusExperimentService(repository=repository, execute=executor, configuration_provider=configuration, max_concurrency=settings.max_concurrency)
-    drafts = SocMemoryDraftJobService(repository=repository, drafter_factory=lambda: build_soc_memory_lesson_draft_service(repository, settings=settings), max_concurrency=settings.max_concurrency)
+    service = SocCorpusExperimentService(repository=repository, execute=executor, configuration_provider=configuration, max_concurrency=settings.max_concurrency, capacity=workbench.capacity)
+    drafts = SocMemoryDraftJobService(repository=repository, drafter_factory=lambda: build_soc_memory_lesson_draft_service(repository, settings=settings), max_concurrency=settings.max_concurrency, admission=service.capacity.admission)
     return CorpusExperimentApplication(
         service=service,
         dispatcher=CorpusExperimentDispatcher(service, draft_jobs=drafts, max_concurrency=settings.max_concurrency),

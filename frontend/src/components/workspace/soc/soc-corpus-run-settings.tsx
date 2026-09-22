@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcwIcon, SlidersHorizontalIcon } from "lucide-react";
-import { useId } from "react";
+import { type ReactNode, useId } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -88,12 +88,14 @@ export function SocCorpusRunSettings({
   onChange,
   title = "后续运行设置",
   resetTitle = "恢复部署默认设置",
+  children,
 }: {
   controls: SocCorpusWorkbenchRunControls;
   value: SocAnalysisExecutionOptions;
   onChange: (value: SocAnalysisExecutionOptions) => void;
   title?: string;
   resetTitle?: string;
+  children?: ReactNode;
 }) {
   const controlId = useId();
   const readOnly = controls.can_configure === false;
@@ -231,6 +233,7 @@ export function SocCorpusRunSettings({
           </div>
         ))}
       </div>
+      {children}
     </section>
   );
 }

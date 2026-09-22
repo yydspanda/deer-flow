@@ -1,7 +1,7 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-09-20
+> Reconciled: 2026-09-22
 > Status: `Active internal acceptance / model, lifecycle and Worker proven; ZEUS-originated callback pending`
 > Resume action: preserve the completed first-batch database while upgrading, continue experience review and second-batch validation, then have ZEUS originate a fresh compatibility Job so callback and old-page readback can be accepted
 
@@ -32,7 +32,8 @@
 
 ### 1.1 Transfer bundle / 内网迁移包
 
-内网 Mac DEV 已完成第一批积累，运营正在审核经验。完整交付包已按保留这些成果的要求重建，本次将操作手册拆为升级和重新初始化两份。
+内网 Mac DEV 已完成第一批积累并开始第二批验证；此前出现 SQLite 锁等待，操作员现已成功暂停批次。
+本次重建包含数据库连接/结果保存改进，以及部署 Mac 本机可保存的 `1～8` 并发调节；继续使用升级和重新初始化两份独立手册。
 本次使用 `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md`，按停服备份、保留数据安装、语料落位/依赖安装、预检、启动与 Smoke 的顺序执行。
 该手册不包含可执行的重置命令；两批手册第 1.1 节也不执行，不重新初始化或重跑成功第一批。
 另一份 `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md` 是独立完整的从零部署流程：先停旧 Host、检查端口并备份整个项目，
@@ -41,10 +42,16 @@
 已装好的 Mac 基础工具可复用；完整安装器不保留 `.venv`、`node_modules` 或四个语料大文件，
 安装前必须确认 Downloads 中的语料副本。安装器的临时回滚目录在替换成功后即删除，因此必须先做仓库外独立备份。
 备份代码块显示停服、端口检查、压缩和校验阶段；`tar` 压缩和 `shasum` 校验可能较长时间没有更多输出，
-应等待 `Verified stopped-checkout backup` 成功标志后再安装。本次手册拆分只更新文档生成器与现有包的两份文档/报告，
-不改变已发布的两个 archive 或安装器；正在内网升级的操作员从尚未完成的步骤继续，无需从头重来。
+应等待 `Verified stopped-checkout backup` 成功标志后再安装。本次重新生成配套源码、私有配置包、安装器与两份手册，
+旧交付包保留至新版校验完成；当前包身份以本次 report 为准。
 新 private overlay 覆盖配置，不自动合并内网修改；先核对已调通的内网参数，并确保两处并发值均为8。
-启动后先核对第一批完成数量、待审核经验及已审核记录，再继续审核和第二批验证。
+启动后先核对第一批完成数量、待审核经验及已审核记录；本机在运行设置把最大并发先保存为 `2`，
+恢复运行并观察页面响应和任务结果后再逐步调高。该设置无需重启，不写业务库，随完整数据目录保留。
+仅调节并发不会改变排队任务的运行版本；本次源码升级则会触发旧队列的配置版本检查。
+若“继续”提示 `configuration_changed`，对需要执行的告警逐条点击“重新运行”采用新版本；
+当前没有整批迁移旧队列的操作。已完成结果和已审核经验保留，无需重跑或重审。
+内网 Python 的 SQLite 已确认是 `3.45.3`，现有数据库使用 `DELETE` 日志模式；本版保留此模式，
+不自动升级 SQLite、不要求手工切换 WAL。锁等待与结果保存重试不能保证消除其他长事务竞争。
 本机回归不替代真实内网升级、模型质量或容量验收。
 
 外网仓库根目录执行：

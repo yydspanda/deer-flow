@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from threading import Event, Thread
 from uuid import uuid4
@@ -13,6 +13,7 @@ from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome, Corpu
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict
 from soc_agent.db.jobs import ProcessingJobConflictError
+from soc_agent.demo.corpus_capacity import CorpusCapacity
 from soc_agent.demo.corpus_round_comparison import comparison_results_hash, comparison_side, job_result_row
 from soc_agent.utils.hashing import stable_hash
 
@@ -48,13 +49,15 @@ class SocCorpusExperimentService:
         configuration_provider: Callable[[SocAnalysisExecutionOptions], dict],
         max_concurrency: int = 3,
         lease_seconds: int = 120,
+        capacity: CorpusCapacity | None = None,
     ):
         self.repository = repository
         self.store = repository.corpus_experiments()
         self.jobs = repository.processing_jobs()
         self._execute = execute
         self._configuration_provider = configuration_provider
-        self._max_concurrency = max_concurrency
+        self.capacity = capacity or CorpusCapacity(ceiling=max_concurrency)
+        self._max_concurrency = self.capacity.ceiling
         self._lease_seconds = lease_seconds
 
     def prepare(self, plan, *, experiment_id: str, name: str, context: ServiceRequestContext) -> CorpusExperiment:
@@ -270,10 +273,13 @@ class SocCorpusExperimentService:
         worker_id = f"corpus-{uuid4().hex}"
         # Short DB transaction fences pause/claim and the per-round concurrency budget.
         # No HTTP/model request executes under this governance/claim lock.
-        with self.repository.mutation_transaction() as tx:
+        with ExitStack() as admission, self.repository.mutation_transaction() as tx:
             tx.lock_memory_governance()
+            # Wait for SQLite before holding the settings guard; release it after
+            # commit, so a saved reduction fences every subsequently admitted job.
+            limit = admission.enter_context(self.capacity.admission())
             store = tx.corpus_experiments()
-            if store.active_job_count() >= self._max_concurrency:
+            if store.active_job_count() >= limit:
                 return False
             ids = store.eligible_job_ids(round_id)
             job = tx.processing_jobs().claim_next(queue_name=CORPUS_QUEUE, workload_kind=CORPUS_WORKLOAD, worker_id=worker_id, lease_seconds=self._lease_seconds, job_ids=ids)

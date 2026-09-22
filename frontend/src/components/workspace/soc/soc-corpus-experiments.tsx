@@ -17,8 +17,12 @@ import {
   getSocCorpusQuickState,
   getSocCorpusQuickHistory,
   runSocCorpusQuick,
+  updateSocCorpusConcurrency,
 } from "@/core/soc/api";
-import type { SocCorpusQuickState } from "@/core/soc/corpus-experiments";
+import type {
+  SocCorpusExperimentConfiguration,
+  SocCorpusQuickState,
+} from "@/core/soc/corpus-experiments";
 import type {
   SocAnalysisExecutionOptions,
   SocCorpusBatch,
@@ -33,6 +37,10 @@ import {
 
 const QUERY = ["soc-corpus-quick"] as const;
 const SETTINGS_KEY = "soc.corpus.experiment.run-settings.v1";
+const CONFIGURATION_QUERY = [
+  "soc-corpus-experiments",
+  "configuration",
+] as const;
 
 async function invalidateWorkbenchProgress(cache: QueryClient) {
   // Audit bundles are explicit, run-pinned reads and must not follow batch progress.
@@ -70,6 +78,7 @@ export function SocCorpusExperiments({
   const [settings, setSettings] = useState<SocAnalysisExecutionOptions | null>(
     null,
   );
+  const [concurrencyDraft, setConcurrencyDraft] = useState<number | null>(null);
   const handled = useRef<number | null>(null);
   const completion = useRef("");
   const scope =
@@ -79,9 +88,10 @@ export function SocCorpusExperiments({
         ? "reuse"
         : "explore";
   const configuration = useQuery({
-    queryKey: ["soc-corpus-experiments", "configuration", batch],
+    queryKey: [...CONFIGURATION_QUERY, batch],
     queryFn: () => getSocCorpusExperimentConfiguration(batch),
     refetchInterval: (query) =>
+      query.state.data?.concurrency_limit !== undefined ||
       query.state.data?.can_configure === false ||
       controls?.can_configure === false
         ? 10000
@@ -102,6 +112,31 @@ export function SocCorpusExperiments({
   const canConfigure =
     configuration.data?.can_configure !== false &&
     controls?.can_configure !== false;
+  const concurrency = useMutation({
+    mutationFn: (value: number) => {
+      if (!canConfigure) throw new Error("仅部署主机可修改运行设置");
+      return updateSocCorpusConcurrency(value);
+    },
+    onSuccess: async (saved) => {
+      // Fence old reads before projecting the acknowledged value across batches.
+      await cache.cancelQueries({ queryKey: CONFIGURATION_QUERY });
+      cache.setQueriesData<SocCorpusExperimentConfiguration>(
+        { queryKey: CONFIGURATION_QUERY },
+        (previous) => previous && { ...previous, ...saved },
+      );
+      setConcurrencyDraft(null);
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: CONFIGURATION_QUERY }),
+        cache.invalidateQueries({
+          queryKey: ["soc-corpus-workbench", "activity"],
+        }),
+      ]);
+      toast.success(`最大并发已保存为 ${saved.max_concurrency}`);
+    },
+    onError: () => {
+      void configuration.refetch();
+    },
+  });
   const options = configuration.data
     ? !canConfigure
       ? (configuration.data.saved_options ?? configuration.data.defaults)
@@ -178,7 +213,7 @@ export function SocCorpusExperiments({
       {controls && options && configuration.data && (
         <SocCorpusRunSettings
           title="运行设置"
-          resetTitle="恢复默认设置"
+          resetTitle="恢复默认运行开关"
           controls={{
             ...controls,
             defaults: configuration.data.defaults,
@@ -194,7 +229,72 @@ export function SocCorpusExperiments({
               /* Optional storage. */
             }
           }}
-        />
+        >
+          {configuration.data.concurrency_limit !== undefined && (
+            <div className="mt-4 border-t pt-3">
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                {canConfigure ? (
+                  <>
+                    <label className="flex items-center gap-2 font-medium">
+                      最大并发
+                      <select
+                        aria-label="最大并发"
+                        className="border-input bg-background rounded-md border px-3 py-1.5 font-normal"
+                        value={
+                          concurrencyDraft ?? configuration.data.max_concurrency
+                        }
+                        disabled={concurrency.isPending}
+                        onChange={(event) =>
+                          setConcurrencyDraft(Number(event.target.value))
+                        }
+                      >
+                        {Array.from(
+                          { length: configuration.data.concurrency_limit },
+                          (_, index) => index + 1,
+                        ).map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={
+                        concurrency.isPending ||
+                        concurrencyDraft === null ||
+                        concurrencyDraft === configuration.data.max_concurrency
+                      }
+                      onClick={() => {
+                        if (concurrencyDraft !== null)
+                          concurrency.mutate(concurrencyDraft);
+                      }}
+                    >
+                      {concurrency.isPending ? "保存中…" : "保存并发"}
+                    </Button>
+                  </>
+                ) : (
+                  <span className="font-medium">最大并发</span>
+                )}
+                <span
+                  className="text-muted-foreground text-xs"
+                  aria-live="polite"
+                >
+                  当前生效：{configuration.data.max_concurrency}
+                </span>
+              </div>
+              <p className="text-muted-foreground mt-2 text-xs">
+                两批共享，保存后生效；降低后等待当前任务完成，不会中断研判。
+              </p>
+              {concurrency.error && (
+                <p role="alert" className="mt-2 text-sm text-red-700">
+                  {concurrency.error.message}
+                </p>
+              )}
+            </div>
+          )}
+        </SocCorpusRunSettings>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button

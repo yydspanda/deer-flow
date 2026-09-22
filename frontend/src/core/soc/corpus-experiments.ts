@@ -97,7 +97,13 @@ export interface SocCorpusExperimentConfiguration {
   saved_options?: SocAnalysisExecutionOptions;
   full_flow_defaults: SocAnalysisExecutionOptions;
   max_concurrency: number;
+  concurrency_limit?: number;
   dispatcher_running: boolean;
+}
+
+export interface SocCorpusConcurrency {
+  max_concurrency: number;
+  concurrency_limit: number;
 }
 
 export interface SocCorpusRoundResult {

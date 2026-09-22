@@ -20,11 +20,13 @@ const api = rs.hoisted(() => ({
   state: rs.fn(),
   run: rs.fn(),
   configuration: rs.fn(),
+  concurrency: rs.fn(),
 }));
 rs.mock("@/core/soc/api", () => ({
   getSocCorpusQuickState: api.state,
   runSocCorpusQuick: api.run,
   getSocCorpusExperimentConfiguration: api.configuration,
+  updateSocCorpusConcurrency: api.concurrency,
 }));
 const options: SocAnalysisExecutionOptions = {
   normalization_review_mode: "apply",
@@ -43,6 +45,7 @@ const SETTINGS_KEY = "soc.corpus.experiment.run-settings.v1";
 beforeEach(() => {
   window.sessionStorage.clear();
   api.configuration.mockReset().mockResolvedValue({ defaults: options });
+  api.concurrency.mockReset();
   api.run.mockReset().mockResolvedValue({ accepted: true });
   api.state.mockReset().mockResolvedValue({
     experiment_id: "EXP-test",
@@ -62,10 +65,10 @@ afterEach(() => {
 });
 function mount(
   props: Partial<React.ComponentProps<typeof SocCorpusExperiments>> = {},
-) {
-  const client = new QueryClient({
+  client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  }),
+) {
   return render(
     <QueryClientProvider client={client}>
       <SocCorpusExperiments
@@ -79,6 +82,169 @@ function mount(
     </QueryClientProvider>,
   );
 }
+
+test("host saves shared concurrency during a batch without changing run switches or refetching audit", async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  let capacity = 8;
+  const configuration = () => ({
+    defaults: options,
+    can_configure: true,
+    max_concurrency: capacity,
+    concurrency_limit: 8,
+  });
+  api.configuration.mockImplementation(async () => configuration());
+  let acknowledge: (value: unknown) => void = () => {
+    throw new Error("Concurrency save has not started");
+  };
+  api.concurrency.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        acknowledge = resolve;
+      }),
+  );
+  api.state.mockResolvedValue({
+    experiment_id: "EXP-test",
+    total: 10,
+    completed: 0,
+    active: 8,
+    remaining: 2,
+    failed: 0,
+    pending_candidates: 0,
+    running: true,
+    items: [],
+  });
+  client.setQueryData(
+    ["soc-corpus-experiments", "configuration", "validation"],
+    configuration(),
+  );
+  const queries = ["state", "activity", "audit"].map((kind) => {
+    const queryFn = rs.fn().mockResolvedValue({ kind });
+    const observer = new QueryObserver(client, {
+      queryKey: ["soc-corpus-workbench", kind],
+      queryFn,
+      staleTime: Infinity,
+    });
+    return { queryFn, unsubscribe: observer.subscribe(rs.fn()) };
+  });
+  mount({ controls }, client);
+  try {
+    const selector = await screen.findByRole("combobox", { name: "最大并发" });
+    expect((selector as HTMLSelectElement).value).toBe("8");
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
+    await waitFor(() => expect(queries[1]!.queryFn).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("switch", { name: "企业策略" }));
+    const savedSwitches = window.sessionStorage.getItem(SETTINGS_KEY);
+    fireEvent.change(selector, { target: { value: "4" } });
+    expect(api.concurrency).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存并发" }));
+    await waitFor(() => expect(api.concurrency).toHaveBeenCalledWith(4));
+    expect(screen.getByText("当前生效：8")).toBeTruthy();
+    capacity = 4;
+    await act(async () =>
+      acknowledge({ max_concurrency: 4, concurrency_limit: 8 }),
+    );
+    await screen.findByText("当前生效：4");
+    await waitFor(() => expect(queries[1]!.queryFn).toHaveBeenCalledTimes(3));
+    expect(queries[0]!.queryFn).toHaveBeenCalledTimes(2);
+    expect(queries[2]!.queryFn).toHaveBeenCalledTimes(1);
+    expect(
+      client.getQueryData([
+        "soc-corpus-experiments",
+        "configuration",
+        "validation",
+      ]),
+    ).toMatchObject({ max_concurrency: 4 });
+    expect(window.sessionStorage.getItem(SETTINGS_KEY)).toBe(savedSwitches);
+    expect(api.run).not.toHaveBeenCalled();
+    expect(
+      screen
+        .getByRole("switch", { name: "企业策略" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(screen.getByText(/降低后等待当前任务完成/)).toBeTruthy();
+  } finally {
+    for (const query of queries) query.unsubscribe();
+    client.clear();
+  }
+});
+
+test("a failed concurrency save keeps the acknowledged value and the draft for retry", async () => {
+  api.configuration.mockResolvedValue({
+    defaults: options,
+    can_configure: true,
+    max_concurrency: 8,
+    concurrency_limit: 8,
+  });
+  api.concurrency.mockRejectedValueOnce(new Error("并发设置保存失败"));
+  mount({ controls });
+  const selector = await screen.findByRole("combobox", { name: "最大并发" });
+  fireEvent.change(selector, { target: { value: "3" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存并发" }));
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "并发设置保存失败",
+  );
+  expect(screen.getByText("当前生效：8")).toBeTruthy();
+  expect((selector as HTMLSelectElement).value).toBe("3");
+  expect(
+    screen.getByRole("button", { name: "保存并发" }).hasAttribute("disabled"),
+  ).toBe(false);
+  expect(api.concurrency).toHaveBeenCalledTimes(1);
+  expect(api.run).not.toHaveBeenCalled();
+});
+
+test.each(["configuration", "controls"])(
+  "LAN concurrency is read-only under %s permission",
+  async (permission) => {
+    api.configuration.mockResolvedValue({
+      defaults: options,
+      can_configure: permission !== "configuration",
+      max_concurrency: 4,
+      concurrency_limit: 8,
+    });
+    mount({
+      controls: { ...controls, can_configure: permission !== "controls" },
+    });
+    expect(await screen.findByText("当前生效：4")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "最大并发" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存并发" })).toBeNull();
+    expect(api.concurrency).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "开始积累" }));
+    await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+  },
+);
+
+test("configuration refresh shares the acknowledged concurrency with another tab", async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  api.configuration.mockResolvedValue({
+    defaults: options,
+    can_configure: false,
+    max_concurrency: 8,
+    concurrency_limit: 8,
+  });
+  mount({ controls }, client);
+  await screen.findByText("当前生效：8");
+  api.configuration.mockResolvedValue({
+    defaults: options,
+    can_configure: false,
+    max_concurrency: 2,
+    concurrency_limit: 8,
+  });
+  await act(async () => {
+    await client.invalidateQueries({
+      queryKey: ["soc-corpus-experiments", "configuration"],
+    });
+  });
+  await screen.findByText("当前生效：2");
+  expect(api.concurrency).not.toHaveBeenCalled();
+  expect(api.run).not.toHaveBeenCalled();
+  client.clear();
+});
 test("full learning starts in one click without group filters or preparation", async () => {
   mount();
   await waitFor(() =>
@@ -233,6 +399,7 @@ test.each([true, undefined])(
     mount({ controls });
     const policy = await screen.findByRole("switch", { name: "企业策略" });
     expect(policy.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByRole("combobox", { name: "最大并发" })).toBeNull();
     fireEvent.click(policy);
     fireEvent.click(screen.getByRole("button", { name: "开始积累" }));
     await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));

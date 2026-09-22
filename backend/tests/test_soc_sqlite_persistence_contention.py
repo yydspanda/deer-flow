@@ -7,7 +7,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -287,7 +287,10 @@ def test_non_retryable_or_other_dialect_errors_are_not_replayed(store, monkeypat
     assert repository.get_run(run.run_id) is None
 
 
-def test_eight_overlapping_analyses_persist_large_bundles_with_an_open_reader(tmp_path):
+def test_eight_overlapping_analyses_persist_large_bundles_with_an_open_reader(tmp_path, monkeypatch):
+    # Select the WAL policy explicitly; this isolated topology test does not
+    # certify that the test runner's embedded SQLite includes upstream fixes.
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 51, 3))
     path = tmp_path / "eight-workers.sqlite"
     engine = create_soc_engine(f"sqlite:///{path}")
     create_soc_tables(engine)
@@ -328,4 +331,102 @@ def test_eight_overlapping_analyses_persist_large_bundles_with_an_open_reader(tm
         assert repository.get_run(original.run_id) == original
     finally:
         reader.close()
+        engine.dispose()
+
+
+def test_rollback_journal_eight_workers_complete_while_projection_and_pause_write(tmp_path, monkeypatch):
+    from dataclasses import asdict
+
+    from test_soc_corpus_experiment_repository import experiment, members
+    from test_soc_corpus_experiments import context
+
+    from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome, CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.db.corpus_lists import CorpusListSummary
+    from soc_agent.demo.corpus_experiments import SocCorpusExperimentService
+
+    # The internal Mac's version keeps its DELETE journal. Exercise real file
+    # locks and separate connections; no live DB, model, or timeout relaxation.
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 45, 3))
+    engine = create_soc_engine(f"sqlite:///{tmp_path / 'rollback-workers.sqlite'}")
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    original = AnalysisRun(run_id="RUN-OLD", alert_id="ALERT-OLD", status=AnalysisRunStatus.SUCCESS, input_payload={"retained": "old result"})
+    repository.save_run(original)
+    samples = [member.model_copy(update={"group_id": f"group-{member.alert_id}"}) for member in members()]
+    repository.corpus_experiments().prepare(experiment(), samples)
+    models_ready, release = Event(), Event()
+    barrier = Barrier(8, action=models_ready.set)
+
+    class ConcurrentAnalyzer(CountingAnalyzer):
+        def analyze(self, request):
+            barrier.wait(timeout=20)
+            assert release.wait(20), "test did not release model calls"
+            return super().analyze(request)
+
+    runtimes = {member.alert_id: ReviewRuntime(ConcurrentAnalyzer()) for member in samples}
+    payload = json.loads((Path(__file__).resolve().parents[1] / "samples/alerts/approved_scanner.json").read_text(encoding="utf-8"))
+
+    def execute(_round, member, _context):
+        run = _analyze(repository, runtimes[member.alert_id], {**payload, "alert_id": member.alert_id, "replay_evidence": "x" * 500_000})
+        return CorpusExecutionOutcome(run_id=run.run_id)
+
+    service = SocCorpusExperimentService(repository=repository, execute=execute, configuration_provider=lambda _: {"model": "fake"}, max_concurrency=8)
+    round_ = service.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning"), concurrency=8, execution_limit=100), context=context())
+    service.start(round_.round_id, context=context())
+    queries = repository.corpus_list_queries()
+    summary = CorpusListSummary(alert_id=original.alert_id, group_id="retained", behavior_fingerprint=None, decision_eligible=True, readiness="ready", run_id=original.run_id)
+    queries.insert_missing(
+        [
+            {
+                "catalog_id": "test",
+                "alert_id": original.alert_id,
+                "input_hash": "old",
+                "sequence_number": 0,
+                "source_revision": "old",
+                "search_text": "old",
+                "group_id": "retained",
+                "source_type": "test",
+                "labeled": False,
+                "projection_payload": asdict(summary),
+            }
+        ]
+    )
+
+    def refresh_projection():
+        for index in range(20):
+            assert repository.get_run(original.run_id) == original
+            assert queries.rows("test")[original.alert_id][1].run_id == original.run_id
+            queries.save("test", original.alert_id, str(index), summary)
+
+    try:
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql("PRAGMA journal_mode").scalar_one() == "delete"
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [pool.submit(service.execute_one, round_.round_id) for _ in range(8)]
+            try:
+                assert models_ready.wait(20), f"eight durable workers did not reach their models: {[future.exception() if future.done() else 'waiting' for future in futures]}"
+                assert service.store.active_job_count() == 8
+                projection = pool.submit(refresh_projection)
+                pause = pool.submit(service.pause, round_.round_id, context=context())
+            finally:
+                release.set()
+            assert pause.result(timeout=15).state == "paused"
+            projection.result(timeout=30)
+            assert all(future.result(timeout=30) for future in futures)
+        progress = service.store.round_progress(round_.round_id)
+        assert progress.round.state == "paused"
+        assert progress.completed_count == 8
+        assert progress.counts.get("failed", 0) == 0
+        assert progress.counts["queued"] == 2
+        assert service.execute_one(round_.round_id) is False
+        assert sum(runtime.analyzer.calls for runtime in runtimes.values()) == 8
+        assert repository.get_run(original.run_id) == original
+        assert len(repository.list_runs(limit=20)) == 9
+        for item in service.store.list_round_items(round_.round_id).items:
+            if item.job.run_id:
+                run = repository.get_run(item.job.run_id)
+                assert len(run.input_payload["replay_evidence"]) == 500_000
+                assert len(repository.list_audit_records(run.run_id)) == 1
+    finally:
+        release.set()
         engine.dispose()

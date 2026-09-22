@@ -53,6 +53,7 @@ from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.db.corpus_experiments import CorpusExperimentSchemaNotReady, CorpusFailedJob, CorpusRunJob
 from soc_agent.db.corpus_lists import EMPTY_REVISION, CorpusListSummary
 from soc_agent.demo.corpus_batches import CorpusBatch, CorpusBatchCase, CorpusBatchSelection, CorpusValidationTier, build_corpus_batch_plan
+from soc_agent.demo.corpus_capacity import CorpusCapacity
 from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
 from soc_agent.demo.leadership_guide import (
     SocLeadershipDemoGuide,
@@ -743,6 +744,7 @@ class SocCorpusWorkbenchService:
         normalization_review_mode: Literal["off", "shadow", "apply"] = "off",
         run_controls: SocCorpusWorkbenchRunControls | None = None,
         analysis_service_factory: Callable[[SocAnalysisExecutionOptions], SocAnalysisService] | None = None,
+        capacity: CorpusCapacity | None = None,
     ) -> None:
         self._repository = repository
         self._analysis_service = analysis_service
@@ -799,7 +801,8 @@ class SocCorpusWorkbenchService:
             }
         )
         self._active_executions: dict[str, _ActiveExecutionClaim] = {}
-        self._max_concurrent_executions = settings.max_concurrency
+        self.capacity = capacity or CorpusCapacity(ceiling=settings.max_concurrency)
+        self._max_concurrent_executions = self.capacity.ceiling
         self._group_catalog = [SocCorpusGroupDirectoryItem.model_validate(item.model_dump(exclude={"processed_count", "memory_hit_count"})) for item in _group_views(self._cases.values(), [])]
         self._batch_group_catalog = {
             (batch, tier): [SocCorpusGroupDirectoryItem.model_validate(g.model_dump(exclude={"processed_count", "memory_hit_count"})) for g in _group_views(self._selected_cases(batch, tier), [])]
@@ -1322,12 +1325,13 @@ class SocCorpusWorkbenchService:
             )
         ]
         active_count = len(executions)
+        limit = self.capacity.max_concurrency
         return SocCorpusWorkbenchActivity(
             active_count=active_count,
-            max_concurrent_executions=self._max_concurrent_executions,
+            max_concurrent_executions=limit,
             available_slots=max(
                 0,
-                self._max_concurrent_executions - active_count,
+                limit - active_count,
             ),
             executions=executions,
         )
@@ -1370,17 +1374,18 @@ class SocCorpusWorkbenchService:
         with self._execution_lock:
             if self._repository.corpus_experiments().list_experiments(limit=1):
                 raise SocCorpusWorkbenchError("当前已进入两批验证，请通过批次轮次运行；不能使用旧入口绕过固定经验与配置")
-            existing = self._active_executions.get(alert_id)
-            if existing is not None:
-                raise SocCorpusWorkbenchBusyError(
-                    self._active_execution_view(
-                        existing,
-                        now=datetime.now(UTC),
+            with self.capacity.admission() as limit:
+                existing = self._active_executions.get(alert_id)
+                if existing is not None:
+                    raise SocCorpusWorkbenchBusyError(
+                        self._active_execution_view(
+                            existing,
+                            now=datetime.now(UTC),
+                        )
                     )
-                )
-            if len(self._active_executions) >= self._max_concurrent_executions:
-                raise SocCorpusWorkbenchCapacityError("SOC DEV corpus execution capacity is full; wait for an active alert to finish")
-            self._active_executions[alert_id] = claim
+                if len(self._active_executions) >= limit:
+                    raise SocCorpusWorkbenchCapacityError("SOC DEV corpus execution capacity is full; wait for an active alert to finish")
+                self._active_executions[alert_id] = claim
         return claim
 
     def _release_execution(self, claim: _ActiveExecutionClaim) -> None:

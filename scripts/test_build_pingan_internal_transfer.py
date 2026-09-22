@@ -96,6 +96,10 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
 
     assert "backend/soc_agent/db/engine.py" in required
     assert "backend/tests/test_soc_database_engine.py" in required
+    assert "backend/soc_agent/demo/corpus_capacity.py" in required
+    assert "backend/tests/test_soc_corpus_capacity.py" in required
+    assert "backend/tests/test_soc_corpus_capacity_integration.py" in required
+    assert "backend/tests/test_soc_corpus_capacity_edges.py" in required
     assert "backend/tests/test_soc_sqlite_persistence_contention.py" in required
     assert "backend/scripts/soc_pingan_model_gateway.py" in required
     assert "backend/scripts/soc_pingan_legacy_api.py" in required
@@ -261,6 +265,14 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "soc_agent.cli db upgrade" not in host_install
     assert "Host DEV `start` 统一负责 SOC SQLite migration" in host_install
     assert "新空库发生一次瞬时 `disk I/O error`" in host_install
+    assert "内置 SQLite `3.45.3`" in host_install
+    assert "保留现有 `DELETE` 日志模式" in host_install
+    assert "不要手工执行切换 WAL 的 PRAGMA" in host_install
+    assert "不会自动升级 SQLite" in host_install
+    assert "3.51.3+" in host_install
+    assert "保存为 `2`，再恢复运行" in runbook
+    assert "保存并发" in runbook
+    assert "暂停中的批次仍保持暂停" in runbook
     assert "不要重复执行已经通过的阶段" in runbook
     assert "不再建库或重启，直接执行模型 Smoke/后续验收" in runbook
     assert "SOC database preparation failed before sidecar startup" in runbook
@@ -352,6 +364,11 @@ def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
     assert "本次从零验证" not in runbook
     assert "需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置" not in runbook
     assert "继续审核经验或第二批验证，跳过批次手册第 1.1 节重置" in runbook
+    assert "configuration_changed" in section
+    assert "逐条点击\n“重新运行”" in section
+    assert "不提供把整批旧队列自动迁移到新版本" in section
+    assert "已经完成的告警和已审核经验无需重跑、重审" in section
+    assert "仅在同一代码版本下修改“最大并发”不会触发" in section
 
 
 @pytest.mark.parametrize("initialize_soc_dev", [False, True])

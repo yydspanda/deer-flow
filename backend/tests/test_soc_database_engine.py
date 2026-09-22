@@ -10,7 +10,16 @@ from sqlalchemy.exc import OperationalError
 from soc_agent.db import create_soc_engine
 
 
-def test_existing_database_keeps_records_and_uses_wal_on_every_connection(tmp_path):
+@pytest.fixture
+def patched_sqlite(monkeypatch):
+    # Exercise the patched-runtime policy on isolated databases even when the
+    # test runner embeds an older SQLite. This does not certify that runtime.
+    import sqlite3
+
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 51, 3))
+
+
+def test_existing_database_keeps_records_and_uses_wal_on_every_connection(tmp_path, patched_sqlite):
     import sqlite3
 
     path = tmp_path / "existing.db"
@@ -65,7 +74,7 @@ def test_existing_read_only_database_does_not_switch_journal_mode(tmp_path, quer
         engine.dispose()
 
 
-def test_independent_engine_writer_can_commit_while_reader_keeps_snapshot(tmp_path):
+def test_independent_engine_writer_can_commit_while_reader_keeps_snapshot(tmp_path, patched_sqlite):
     url = f"sqlite:///{tmp_path / 'shared.db'}"
     reader_engine, writer_engine = create_soc_engine(url), create_soc_engine(url)
     try:
@@ -118,7 +127,7 @@ def test_independent_writers_wait_for_short_transaction_without_losing_writes(tm
         second_engine.dispose()
 
 
-def test_failed_connection_initialization_closes_the_dbapi_connection(tmp_path, monkeypatch):
+def test_failed_connection_initialization_closes_the_dbapi_connection(tmp_path, monkeypatch, patched_sqlite):
     import sqlite3
 
     path = tmp_path / "initialization.db"
@@ -146,6 +155,65 @@ def test_failed_connection_initialization_closes_the_dbapi_connection(tmp_path, 
             engine.connect()
         assert len(connections) == 1
         assert connections[0].closed
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "version,expected_mode",
+    [
+        ((3, 44, 5), "delete"),
+        ((3, 44, 6), "wal"),
+        ((3, 44, 7), "wal"),
+        ((3, 45, 3), "delete"),
+        ((3, 46, 0), "delete"),
+        ((3, 50, 6), "delete"),
+        ((3, 50, 7), "wal"),
+        ((3, 50, 8), "wal"),
+        ((3, 51, 2), "delete"),
+        ((3, 51, 3), "wal"),
+        ((3, 52, 0), "wal"),
+    ],
+)
+def test_wal_requires_the_upstream_fix_and_older_runtimes_keep_existing_data(tmp_path, monkeypatch, caplog, version, expected_mode):
+    import sqlite3
+
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", version)
+    path = tmp_path / "retained.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE retained (value TEXT)")
+        connection.execute("INSERT INTO retained VALUES ('reviewed memory')")
+    engine = create_soc_engine(f"sqlite:///{path}")
+    try:
+        with engine.connect() as first, engine.connect() as second:
+            for connection in (first, second):
+                assert connection.exec_driver_sql("PRAGMA journal_mode").scalar_one() == expected_mode
+                assert connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one() == 30_000
+                assert connection.exec_driver_sql("SELECT value FROM retained").scalar_one() == "reviewed memory"
+            first.exec_driver_sql("INSERT INTO retained VALUES ('new result')")
+            first.commit()
+        warnings = [record.message for record in caplog.records if "WAL-reset" in record.message]
+        assert len(warnings) == (1 if expected_mode == "delete" else 0)
+    finally:
+        engine.dispose()
+
+
+def test_old_runtime_rejects_existing_wal_without_converting_or_losing_records(tmp_path, monkeypatch):
+    import sqlite3
+
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 45, 3))
+    path = tmp_path / "already-wal.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE retained (value TEXT)")
+        connection.execute("INSERT INTO retained VALUES ('reviewed memory')")
+    engine = create_soc_engine(f"sqlite:///{path}")
+    try:
+        with pytest.raises(OperationalError, match="WAL-reset.*3.51.3"):
+            engine.connect()
+        with sqlite3.connect(path) as connection:
+            assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+            assert connection.execute("SELECT value FROM retained").fetchone()[0] == "reviewed memory"
     finally:
         engine.dispose()
 
