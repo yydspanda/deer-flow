@@ -14,7 +14,6 @@ from collections import Counter
 
 SCHEMA = "0032_corpus_revision_index"
 ACTIVE = {"claimed", "prechecking", "analyzing", "projecting"}
-NORMALIZATION_ISSUES = "soc_normalization_maintenance_issues"
 RUN_CHILDREN = (
     "soc_memory_uses",
     "soc_decision_transitions",
@@ -80,46 +79,7 @@ def _contains_reference(value, tokens: set[str]) -> bool:
     return False
 
 
-def _unique_issue_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate normalization issue JSON key; cleanup refused")
-        result[key] = value
-    return result
-
-
-def _normalization_issue_row(conn, rowid):
-    cursor = conn.execute(f"SELECT rowid,* FROM {NORMALIZATION_ISSUES} WHERE rowid=?", (rowid,))
-    row = cursor.fetchone()
-    return dict(zip((column[0] for column in cursor.description), row, strict=True)) if row is not None else None
-
-
-def _normalization_detachments(conn, schema, run_alerts):
-    """Retain shared maintenance history, removing only its deleted Run sample link."""
-    updates = {}
-    if NORMALIZATION_ISSUES not in schema:
-        return updates
-    for rowid in sorted(_matching(conn, NORMALIZATION_ISSUES, "run_id", run_alerts)):
-        before = _normalization_issue_row(conn, rowid)
-        try:
-            payload = json.loads(before["issue_payload"], object_pairs_hook=_unique_issue_object)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("invalid normalization issue JSON; cleanup refused") from exc
-        if (
-            not isinstance(payload, dict)
-            or payload.get("schema_version") != "soc.normalization_maintenance_issue.v1"
-            or any(field not in payload or payload[field] != before[field] for field in ("issue_id", "run_id", "alert_id", "tenant_id"))
-            or before["tenant_id"] != "pingan"
-            or before["alert_id"] != run_alerts[before["run_id"]]
-        ):
-            raise ValueError("normalization issue identity differs from its validation Run; cleanup refused")
-        after = {**before, "run_id": None, "issue_payload": json.dumps({**payload, "run_id": None}, ensure_ascii=False)}
-        updates[rowid] = before, after
-    return updates
-
-
-def _check_json_references(conn, schema, deletes, tokens, normalization_detachments):
+def _check_json_references(conn, schema, deletes, tokens):
     if not tokens:
         return  # The post-delete check must not reread gigabytes without targets.
     for table in schema:
@@ -131,12 +91,8 @@ def _check_json_references(conn, schema, deletes, tokens, normalization_detachme
             for offset in range(0, len(retained), 400):
                 page = retained[offset : offset + 400]
                 # Exclude deleted records in SQL before fetching large Run JSON.
-                query = f"SELECT rowid,{_name(column)} FROM {_name(table)} WHERE rowid IN ({','.join('?' for _ in page)})"
-                for rowid, payload in conn.execute(query, page):
-                    if table == NORMALIZATION_ISSUES and column == "issue_payload" and rowid in normalization_detachments:
-                        # Preview exactly one removed top-level link; every other
-                        # JSON field and reference remains subject to this check.
-                        payload = normalization_detachments[rowid][1]["issue_payload"]
+                query = f"SELECT {_name(column)} FROM {_name(table)} WHERE rowid IN ({','.join('?' for _ in page)})"
+                for (payload,) in conn.execute(query, page):
                     if not payload:
                         continue
                     try:
@@ -147,7 +103,7 @@ def _check_json_references(conn, schema, deletes, tokens, normalization_detachme
                         raise ValueError(f"protected provenance in {table}; cleanup refused")
 
 
-def _plan(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: str | None = None) -> tuple[dict, dict[str, set[int]], dict]:
+def _plan(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: str | None = None) -> tuple[dict, dict[str, set[int]]]:
     revision = [tuple(row) for row in conn.execute("SELECT version_num FROM soc_alembic_version")]
     if revision != [(SCHEMA,)]:
         raise ValueError(f"requires database schema {SCHEMA}; no migration is performed")
@@ -284,21 +240,14 @@ def _plan(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: st
             values = _row_values(conn, table, column, deletes.get(table, set()))
             for alias in aliases:
                 refs.setdefault(alias, set()).update(values)
-    normalization_detachments = _normalization_detachments(conn, schema, {r[1]: r[2] for r in candidate_runs if r[0] in run_rows})
     for table, columns in schema.items():
         for column, values in refs.items():
-            if column not in columns:
-                continue
-            retained = _matching(conn, table, column, values) - deletes.get(table, set())
-            if table == NORMALIZATION_ISSUES and column == "run_id":
-                retained -= normalization_detachments.keys()
-            if retained:
+            if column in columns and _matching(conn, table, column, values) - deletes.get(table, set()):
                 raise ValueError(f"protected reference in {table}.{column}; first-batch/Memory/other histories must be preserved")
     # Frozen requests, comparison baselines and Memory can cite multiple Runs
     # only in JSON. Check retained payloads as well as scalar reference columns.
-    _check_json_references(conn, schema, deletes, set().union(*refs.values()), normalization_detachments)
-    mutated_tables = set(deletes) | ({NORMALIZATION_ISSUES} if normalization_detachments else set())
-    if any(table in mutated_tables for _, table in conn.execute("SELECT name,tbl_name FROM sqlite_master WHERE type='trigger'")):
+    _check_json_references(conn, schema, deletes, set().union(*refs.values()))
+    if any(table in deletes for _, table in conn.execute("SELECT name,tbl_name FROM sqlite_master WHERE type='trigger'")):
         raise ValueError("custom triggers on cleanup tables require independent review")
     # Approved settings, records and first-batch identity are evidence in the
     # backup receipt, not a substitute for a fresh API-created validation round.
@@ -314,11 +263,10 @@ def _plan(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: st
         "first_batch_options": first_options,
         "first_batch_baseline_round_id": learning_round_id,
         "first_batch_rounds": len(learning_rounds),
-        "detached_normalization_issue_count": len(normalization_detachments),
         "protected_memory_counts": {t: conn.execute(f"SELECT count(*) FROM {_name(t)}").fetchone()[0] for t in PROTECTED_MEMORY if t in schema},
         "delete_counts": {table: len(rows) for table, rows in deletes.items()},
     }
-    return report, deletes, normalization_detachments
+    return report, deletes
 
 
 def preview(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: str | None = None) -> dict:
@@ -330,13 +278,7 @@ def reset(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: st
     """Delete only the verified dependency set inside a caller-owned transaction."""
     if not conn.in_transaction:
         raise ValueError("reset requires the maintenance caller's transaction")
-    report, deletes, normalization_detachments = _plan(conn, experiment_id, learning_round_id=learning_round_id)
-    for before, after in normalization_detachments.values():
-        # Compare the complete saved row, including raw JSON and operator state.
-        conditions = " AND ".join(f"{_name(column)} IS ?" for column in before)
-        changed = conn.execute(f"UPDATE {NORMALIZATION_ISSUES} SET run_id=NULL,issue_payload=? WHERE {conditions}", (after["issue_payload"], *before.values()))
-        if changed.rowcount != 1:
-            raise ValueError("normalization issue changed during reset; rollback required")
+    report, deletes = _plan(conn, experiment_id, learning_round_id=learning_round_id)
     for table, rowids in deletes.items():
         ordered = sorted(rowids)
         for offset in range(0, len(ordered), 400):
@@ -344,11 +286,8 @@ def reset(conn: sqlite3.Connection, experiment_id: str, *, learning_round_id: st
             result = conn.execute(f"DELETE FROM {_name(table)} WHERE rowid IN ({','.join('?' for _ in page)})", page)
             if result.rowcount != len(page):
                 raise ValueError("database changed during reset; rollback required")
-    for rowid, (_, expected) in normalization_detachments.items():
-        if _normalization_issue_row(conn, rowid) != expected:
-            raise ValueError("protected normalization issue state changed; rollback required")
     after = preview(conn, experiment_id, learning_round_id=learning_round_id)
-    if after["rounds"] or after["jobs"] or after["runs"] or after["detached_normalization_issue_count"]:
+    if after["rounds"] or after["jobs"] or after["runs"]:
         raise ValueError("validation reset did not clear all selected work")
     for key in ("first_batch_options", "first_batch_baseline_round_id", "first_batch_rounds", "protected_memory_counts", "validation_members"):
         if after[key] != report[key]:

@@ -121,12 +121,6 @@ file for SOC code. The authoritative product and engineering documents are:
   persist the selected round ID in the cleanup receipt and revalidate it inside the
   transaction and after deletion. Selecting settings never expands the deletion set
   or changes first-batch history/Memory; no majority or latest-round inference.
-  Shared normalization maintenance issues are retained when their representative
-  Run is deleted. The sole explicit unlinking exception clears the nullable scalar
-  and JSON-root Run ID together, validates issue/Run/alert/tenant identity and reports
-  the count. Preserve all other fields and cumulative/governance state; any further
-  references, including issue details, still block deletion. Preview remains read-only;
-  updates share the deletion transaction, trigger checks and rollback boundary.
   Quick batch start/continue refreshes the existing round's concurrency from the current
   server limit. Capacity is a resource control excluded from the behavior snapshot;
   this does not replace job identities, options or Memory snapshots. Single-alert manual
