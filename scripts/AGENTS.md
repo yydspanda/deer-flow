@@ -71,6 +71,13 @@ The PingAn profile and full-transfer validation keep `SOC_LLM_MAX_CONCURRENCY` a
 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` aligned at `8`; Host's missing-value fallback
 is also `8` and preserves explicit settings. A capacity update requires the matching
 private profile and a full Host restart. The SQLite legacy Worker remains single-worker.
+All SOC database owners use `backend/soc_agent/db/engine.py` for consistent SQLite
+WAL mode and a 30-second busy timeout on every connection. Result persistence retries
+only SQLite lock contention, at most three fresh transactions, without rerunning the
+model. Include that module and its engine/contention regression tests in the required
+handoff inventory. Existing databases adopt the connection policy on service restart;
+operators need no extra migration or PRAGMA command. Preserve the whole stopped data
+directory, including WAL sidecars, through the existing upgrade installer.
 Before starting any sidecar, `start` must resolve the absolute local SOC SQLite URL,
 run the SOC migration once, and pass that URL to the API/worker with their own
 auto-migration disabled. `status` reports the persisted `soc_alembic_version` without

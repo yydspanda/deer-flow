@@ -14,7 +14,6 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 from langgraph.runtime import Runtime
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from deerflow.utils.custom_events import aemit_custom_event, emit_custom_event
@@ -40,7 +39,7 @@ from soc_agent.contracts import (
     SocLeadAgentReviewContextArtifact,
 )
 from soc_agent.core import SocAgentApprovalService
-from soc_agent.db import SqlAlchemyAlertRepository, resolve_database_url, to_sync_database_url
+from soc_agent.db import SqlAlchemyAlertRepository, create_soc_engine, resolve_database_url
 from soc_agent.skills import SOC_LEAD_AGENT_NAME
 
 logger = logging.getLogger(__name__)
@@ -241,7 +240,7 @@ class SocLeadAgentApprovalMiddleware(AgentMiddleware[AgentState]):
 
 @lru_cache(maxsize=4)
 def _default_boundary_for_database(database_url: str) -> SocLeadAgentActionProposalBoundary:
-    engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
+    engine = create_soc_engine(database_url)
     repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
     return SocLeadAgentActionProposalBoundary(
         approval_service=SocAgentApprovalService(

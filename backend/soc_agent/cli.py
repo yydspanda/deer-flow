@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
@@ -144,9 +143,9 @@ from soc_agent.daemon import (
 )
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
+    create_soc_engine,
     create_soc_tables,
     resolve_database_url,
-    to_sync_database_url,
     upgrade_soc_schema,
 )
 from soc_agent.demo import (
@@ -4719,7 +4718,7 @@ def _demo_boss(args: argparse.Namespace) -> int:
             database_url,
             reset=args.reset,
         )
-        engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
+        engine = create_soc_engine(database_url)
         create_soc_tables(engine)
         repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
         settings = _llm_settings_from_args(args)
@@ -4814,7 +4813,7 @@ def _llm_settings_from_args(args: argparse.Namespace) -> SocLLMSettings:
 
 def _engine_from_args(args: argparse.Namespace):
     database_url = resolve_database_url(args.database_url)
-    return create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
+    return create_soc_engine(database_url)
 
 
 def _database_label(explicit_url: str | None) -> str:

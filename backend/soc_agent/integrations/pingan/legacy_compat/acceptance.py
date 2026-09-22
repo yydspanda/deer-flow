@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.pingan_compat import create_pingan_compat_app
@@ -19,7 +18,7 @@ from soc_agent.core import DeterministicAnalysisRuntime, SocAnalysisService
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
     SqlAlchemyProcessingJobRepository,
-    to_sync_database_url,
+    create_soc_engine,
     upgrade_soc_schema,
 )
 from soc_agent.integrations.pingan.legacy_compat.callback import (
@@ -61,7 +60,7 @@ def run_pingan_legacy_fake_acceptance(
     payload = _build_synthetic_alert_payload()
 
     upgrade_soc_schema(database_url)
-    engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
+    engine = create_soc_engine(database_url)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     jobs = SqlAlchemyProcessingJobRepository(session_factory)
     alerts = SqlAlchemyAlertRepository(session_factory)

@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from soc_agent.daemon.kafka_config import KafkaConsumerSettings
-from soc_agent.db import resolve_database_url, to_sync_database_url
+from soc_agent.db import create_soc_engine, resolve_database_url
 
 
 class KafkaDaemonDatabaseStatus(BaseModel):
@@ -77,9 +77,12 @@ def _database_status(database_url: str | None, *, check_database: bool) -> Kafka
         return KafkaDaemonDatabaseStatus(configured=True, reachable=False, url=_redacted_database_url(resolved_url), error="database check skipped")
 
     try:
-        engine = create_engine(to_sync_database_url(resolved_url), pool_pre_ping=True)
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
+        engine = create_soc_engine(resolved_url)
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        finally:
+            engine.dispose()
     except SQLAlchemyError as exc:
         return KafkaDaemonDatabaseStatus(
             configured=True,

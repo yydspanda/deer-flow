@@ -3,6 +3,7 @@
 from soc_agent.db.base import SocBase, create_soc_tables
 from soc_agent.db.config import resolve_database_url, to_sync_database_url
 from soc_agent.db.effectiveness import SqlAlchemySocEffectivenessRepository
+from soc_agent.db.engine import create_soc_engine
 from soc_agent.db.jobs import (
     ProcessingJobConflictError,
     ProcessingJobError,
@@ -88,6 +89,7 @@ __all__ = [
     "SqlAlchemySocEffectivenessRepository",
     "SqlAlchemySocOperationsRepository",
     "create_soc_tables",
+    "create_soc_engine",
     "resolve_database_url",
     "to_sync_database_url",
     "upgrade_soc_schema",

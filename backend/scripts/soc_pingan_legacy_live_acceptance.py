@@ -10,7 +10,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
@@ -20,6 +20,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 from soc_agent.db import (  # noqa: E402
     SqlAlchemyProcessingJobRepository,
+    create_soc_engine,
     resolve_database_url,
     to_sync_database_url,
 )
@@ -116,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     engine: Engine | None = None
     try:
         database_url = to_sync_database_url(resolve_acceptance_database_url(args.database_url))
-        engine = create_engine(database_url, pool_pre_ping=True)
+        engine = create_soc_engine(database_url)
         assert_acceptance_database_ready(engine)
     except (RuntimeError, SQLAlchemyError, ValueError) as exc:
         if engine is not None:

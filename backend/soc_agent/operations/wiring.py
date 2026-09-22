@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
@@ -12,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from soc_agent.core.effectiveness import SocEffectivenessService
 from soc_agent.core.operations import SocOperationsService
 from soc_agent.daemon import KafkaConsumerSettings
-from soc_agent.db import resolve_database_url, to_sync_database_url
+from soc_agent.db import create_soc_engine, resolve_database_url, to_sync_database_url
 from soc_agent.db.effectiveness import SqlAlchemySocEffectivenessRepository
 from soc_agent.db.operations import SqlAlchemySocOperationsRepository
 from soc_agent.operations.kafka_probe import KafkaOperationsProbe
@@ -37,7 +36,7 @@ def build_soc_operations_service(
         try:
             sync_database_url = to_sync_database_url(resolved_database_url)
             database_backend = make_url(sync_database_url).get_backend_name()
-            engine = create_engine(sync_database_url, pool_pre_ping=True)
+            engine = create_soc_engine(sync_database_url)
             session_factory = sessionmaker(bind=engine, expire_on_commit=False)
             repository = SqlAlchemySocOperationsRepository(session_factory)
         except (SQLAlchemyError, TypeError, ValueError):
@@ -67,7 +66,7 @@ def build_soc_effectiveness_service(
     else:
         try:
             sync_database_url = to_sync_database_url(resolved_database_url)
-            engine = create_engine(sync_database_url, pool_pre_ping=True)
+            engine = create_soc_engine(sync_database_url)
             session_factory = sessionmaker(bind=engine, expire_on_commit=False)
             repository = SqlAlchemySocEffectivenessRepository(session_factory)
         except (SQLAlchemyError, TypeError, ValueError):

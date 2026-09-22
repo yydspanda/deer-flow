@@ -94,6 +94,9 @@ def test_private_overlay_keeps_corpus_metadata_but_excludes_large_data() -> None
 def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None:
     required = set(REQUIRED_HANDOFF_SOURCE_PATHS)
 
+    assert "backend/soc_agent/db/engine.py" in required
+    assert "backend/tests/test_soc_database_engine.py" in required
+    assert "backend/tests/test_soc_sqlite_persistence_contention.py" in required
     assert "backend/scripts/soc_pingan_model_gateway.py" in required
     assert "backend/scripts/soc_pingan_legacy_api.py" in required
     assert "backend/scripts/soc_pingan_legacy_worker.py" in required

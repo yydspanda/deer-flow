@@ -389,6 +389,10 @@ Analysis persistence / 分析持久化约束：
   不得在 service 中逐表 commit 后假装为完整成功。
 - 任一 bundle row 写入失败必须回滚全部四类写入。Normalization maintenance 是成功主写入后的
   fail-open side path，可以单独更新 run 的 monitoring result，但不能破坏已提交业务事务。
+- SOC SQLite 文件库连接统一启用 WAL、每连接 30 秒锁等待。独立 `save_run` / final bundle
+  遇到 SQLite BUSY/LOCKED 时至多尝试三次，每次关闭并回滚旧 Session 后重新保存同一结果；
+  不重调模型、不新增 Run 或审计身份。外层 mutation UoW 不允许内部局部重试；其他数据库、
+  非锁错误和重试耗尽均继续抛错，final bundle 失败保留原 running journal 供既有恢复流程处理。
 - `AnalysisRun.status=failed` 必须带 `RuntimeFailure`，至少包含 failed step、稳定 kind、retryable、
   sanitized error type/message。Provider 原始响应、header、secret 和未裁剪异常不得写入 run/audit。
 - 不可重试失败进入 summary + ReviewQueue + audit；可重试失败保留 failed run/summary/audit，但不立即

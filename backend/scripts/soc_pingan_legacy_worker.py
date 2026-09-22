@@ -11,7 +11,6 @@ import threading
 from pathlib import Path
 
 import httpx
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +20,7 @@ from soc_agent.application import build_soc_analysis_service  # noqa: E402
 from soc_agent.db import (  # noqa: E402
     SqlAlchemyAlertRepository,
     SqlAlchemyProcessingJobRepository,
-    to_sync_database_url,
+    create_soc_engine,
     upgrade_soc_schema,
 )
 from soc_agent.integrations.pingan.legacy_compat import (  # noqa: E402
@@ -43,10 +42,7 @@ def main() -> None:
     settings = PingAnLegacyWorkerSettings.from_env()
     if settings.auto_migrate:
         upgrade_soc_schema(settings.database_url)
-    engine = create_engine(
-        to_sync_database_url(settings.database_url),
-        pool_pre_ping=True,
-    )
+    engine = create_soc_engine(settings.database_url)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     processing_repository = SqlAlchemyProcessingJobRepository(session_factory)
     alert_repository = SqlAlchemyAlertRepository(session_factory)

@@ -402,6 +402,13 @@ file for SOC code. The authoritative product and engineering documents are:
 - PostgreSQL is the production/staging SOC store. Local DeerFlow SQLite configuration
   resolves to a separate `soc_agent_dev.db`; never reuse `deerflow.db` or present SQLite
   evidence as production proof.
+- SOC runtime connections use `db.create_soc_engine`: writable file SQLite uses WAL
+  and a 30-second busy timeout per connection; PostgreSQL keeps its existing behavior.
+  `save_run` and `save_analysis_bundle` retry only SQLite BUSY/LOCKED errors, at most
+  three attempts with a fresh session after rollback. Retry the same persistence unit,
+  never the analyzer or external effects. Caller-owned mutation transactions propagate
+  errors without local retries. Exhaustion must preserve the original request journal
+  and roll back the entire final bundle; no partial success or payloads in retry logs.
 - Repositories implement protocols from `soc_agent/protocols.py`. Migrations live under
   `soc_agent/db/migrations/`, use `soc db upgrade`, and own `soc_alembic_version`.
 - A brand-new local SQLite migration may remove only the artifacts created by that same

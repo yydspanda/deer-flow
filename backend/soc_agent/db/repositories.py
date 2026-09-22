@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import sqlite3
+import time
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -11,7 +14,7 @@ from typing import Any, cast
 
 from sqlalchemy import Integer, Text, and_, case, delete, func, literal, or_, select, update
 from sqlalchemy import cast as sa_cast
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from soc_agent.authorization import AuthorizationEnrichmentConflictError
@@ -125,6 +128,8 @@ from soc_agent.memory.scoring import score_memory_record
 from soc_agent.tenant_policy import TenantPolicyDecisionConflictError
 
 MutationWriteHook = Callable[[int], None]
+logger = logging.getLogger(__name__)
+_SQLITE_ANALYSIS_WRITE_ATTEMPTS = 3
 
 
 @dataclass
@@ -267,9 +272,29 @@ class SqlAlchemyAlertRepository:
             return None
 
     def save_run(self, run: AnalysisRun) -> None:
-        with self._session_factory() as session:
-            _upsert_run(session, run)
-            session.commit()
+        self._persist_analysis_write(lambda session: _upsert_run(session, run))
+
+    def _persist_analysis_write(self, write: Callable[[Session], None]) -> None:
+        """Retry a standalone analysis write, never its Runtime or an outer UoW."""
+
+        for attempt in range(1, _SQLITE_ANALYSIS_WRITE_ATTEMPTS + 1):
+            sqlite = False
+            try:
+                # Exiting the context rolls back/closes a failed standalone Session
+                # before retrying. An outer mutation owns its own rollback instead.
+                with self._session_factory() as session:
+                    sqlite = session.get_bind().dialect.name == "sqlite"
+                    write(session)
+                    session.commit()
+                return
+            except OperationalError as exc:
+                code = getattr(exc.orig, "sqlite_errorcode", None)
+                locked = isinstance(exc.orig, sqlite3.OperationalError) and isinstance(code, int) and (code & 0xFF) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+                if not sqlite or not locked or self._transaction_state is not None or attempt == _SQLITE_ANALYSIS_WRITE_ATTEMPTS:
+                    raise
+                # Do not log the exception: SQL parameters can contain raw evidence.
+                logger.warning("SQLite contention saving SOC analysis; retrying transaction (attempt %s/%s)", attempt + 1, _SQLITE_ANALYSIS_WRITE_ATTEMPTS)
+                time.sleep(0.05 * attempt)
 
     def corpus_list_queries(self) -> SocCorpusListQueries:
         return SocCorpusListQueries(self._session_factory)
@@ -329,13 +354,14 @@ class SqlAlchemyAlertRepository:
     ) -> None:
         """Persist one Runtime result and its read models in one transaction."""
 
-        with self._session_factory() as session:
+        def write(session: Session) -> None:
             _upsert_run(session, run)
             _upsert_summary(session, summary)
             if review_item is not None:
                 _upsert_review_item(session, review_item)
             _upsert_audit_record(session, audit_record)
-            session.commit()
+
+        self._persist_analysis_write(write)
 
     def get_run(self, run_id: str) -> AnalysisRun | None:
         with self._session_factory() as session:

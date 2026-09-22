@@ -134,6 +134,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > gateway limits. After deploying the updated configuration and restarting Host, batch
 > continue adopts the server's current capacity while preserving queued task settings.
 > Model calls share capacity with chat and drafting, so actual occupancy may be lower.
+> Local SOC SQLite uses WAL and waits for competing writes. Brief database lock conflicts
+> retry saving the same result without calling the model again; persistent failures remain
+> visible. Apply this through the normal service upgrade/restart, preserving existing
+> results and reviewed Memory; no database reset or corpus re-import is needed.
 > A single request also works after a legacy limit or selected scope completes, keeping
 > other queued alerts paused. Replacing all blocked tasks clears the current stop warning;
 > historical blocked rounds remain available for audit.

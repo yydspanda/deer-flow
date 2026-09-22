@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.gateway.soc_request_context import (
@@ -20,8 +19,8 @@ from soc_agent.contracts import (
 from soc_agent.core import SocReviewService
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
+    create_soc_engine,
     resolve_database_url,
-    to_sync_database_url,
 )
 
 _ALLOWED_HEADER_SURFACES = {
@@ -40,7 +39,7 @@ def get_or_create_soc_repository(request: Request) -> SqlAlchemyAlertRepository:
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
+    engine = create_soc_engine(database_url)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     repository = SqlAlchemyAlertRepository(session_factory)
     request.app.state.soc_alert_repository = repository
