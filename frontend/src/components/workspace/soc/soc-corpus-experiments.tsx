@@ -13,6 +13,15 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
   getSocCorpusExperimentConfiguration,
   getSocCorpusQuickState,
   getSocCorpusQuickHistory,
@@ -22,6 +31,7 @@ import {
 import type {
   SocCorpusExperimentConfiguration,
   SocCorpusQuickState,
+  SocCorpusRestartValidationCommand,
 } from "@/core/soc/corpus-experiments";
 import type {
   SocAnalysisExecutionOptions,
@@ -306,6 +316,28 @@ export function SocCorpusExperiments({
                   ? "开始积累"
                   : "开始验证"}
         </Button>
+        {batch === "validation" &&
+          data?.restart_token &&
+          controls &&
+          options &&
+          configuration.data && (
+            <SocCorpusValidationRestart
+              controls={{
+                ...controls,
+                defaults: configuration.data.defaults,
+                can_configure: canConfigure,
+              }}
+              options={options}
+              disabled={mutation.isPending || !!state.error}
+              onRestarted={() =>
+                setSettingsByBatch((previous) => {
+                  const remaining = { ...previous };
+                  delete remaining.validation;
+                  return remaining;
+                })
+              }
+            />
+          )}
         {data && (
           <Button asChild variant="outline">
             <Link
@@ -338,6 +370,197 @@ export function SocCorpusExperiments({
         <p role="alert">{(state.error ?? configuration.error)?.message}</p>
       )}
     </section>
+  );
+}
+
+function completeRunOptions(
+  options: SocAnalysisExecutionOptions,
+): SocAnalysisExecutionOptions {
+  return {
+    ...options,
+    refresh_normalization: options.refresh_normalization === true,
+  };
+}
+
+function SocCorpusValidationRestart({
+  controls,
+  options,
+  disabled,
+  onRestarted,
+}: {
+  controls: SocCorpusWorkbenchRunControls;
+  options: SocAnalysisExecutionOptions;
+  disabled: boolean;
+  onRestarted: () => void;
+}) {
+  const cache = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(() => completeRunOptions(options));
+  const [attempt, setAttempt] =
+    useState<SocCorpusRestartValidationCommand | null>(null);
+  const fullState = useQuery({
+    queryKey: [...QUERY, "validation", "all", ""],
+    queryFn: () => getSocCorpusQuickState("validation", "all", 0, []),
+    enabled: open,
+    refetchInterval: open ? 2000 : false,
+    retry: false,
+  });
+  const restart = useMutation({
+    mutationFn: (command: SocCorpusRestartValidationCommand) =>
+      runSocCorpusQuick(command, `restart-validation-${command.restart_token}`),
+    onSuccess: async () => {
+      await cache.cancelQueries({ queryKey: QUERY });
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: QUERY }),
+        cache.invalidateQueries({ queryKey: CONFIGURATION_QUERY }),
+        invalidateWorkbenchProgress(cache),
+      ]);
+      onRestarted();
+      setAttempt(null);
+      setOpen(false);
+      toast.success("第二批已按确认设置全部重新运行，旧结果保留在历史中");
+    },
+  });
+  const needsRefresh =
+    restart.error &&
+    "status" in restart.error &&
+    typeof restart.error.status === "number" &&
+    [400, 403, 409, 422].includes(restart.error.status);
+  const refresh = useMutation({
+    mutationFn: async () => {
+      const [saved, current] = await Promise.all([
+        cache.fetchQuery({
+          queryKey: [...CONFIGURATION_QUERY, "validation"],
+          queryFn: () => getSocCorpusExperimentConfiguration("validation"),
+          staleTime: 0,
+        }),
+        fullState.refetch({ throwOnError: true }),
+      ]);
+      if (!current.data?.restart_token)
+        throw new Error("第二批状态尚未就绪，请刷新页面后重试");
+      return saved.saved_options ?? saved.defaults;
+    },
+    onSuccess: (saved) => {
+      setDraft(completeRunOptions(saved));
+      setAttempt(null);
+      restart.reset();
+    },
+  });
+  const value =
+    attempt?.options ??
+    (controls.can_configure === false ? completeRunOptions(options) : draft);
+  const active = (fullState.data?.active ?? 0) > 0;
+  const busy = restart.isPending || refresh.isPending;
+  const ready =
+    !!fullState.data?.restart_token &&
+    !fullState.isPlaceholderData &&
+    !fullState.isError;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (busy) return;
+        if (next && !attempt) {
+          setDraft(completeRunOptions(options));
+          restart.reset();
+          refresh.reset();
+        }
+        setOpen(next);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" disabled={disabled}>
+          重新配置并全部重跑
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>第二批：重新配置并全部重跑</DialogTitle>
+          <DialogDescription>
+            全量包含第二批成功、失败和未运行的告警，不受当前列表筛选影响。
+            旧结果保留在历史中；第一批结果和已审核经验全部保留。
+          </DialogDescription>
+        </DialogHeader>
+        <SocCorpusRunSettings
+          title="本次重跑设置"
+          controls={controls}
+          value={value}
+          disabled={busy || attempt !== null}
+          onChange={(next) => {
+            if (!attempt && controls.can_configure !== false)
+              setDraft(
+                completeRunOptions(availableCorpusRunSettings(next, controls)),
+              );
+          }}
+        />
+        {!attempt && active && (
+          <p role="alert" className="text-sm text-amber-800">
+            请先暂停第二批，并等待运行中的告警结束后再全部重跑。
+          </p>
+        )}
+        {!attempt && fullState.error && (
+          <p role="alert" className="text-sm text-red-700">
+            {fullState.error.message}
+          </p>
+        )}
+        {restart.error && (
+          <p role="alert" className="text-sm text-red-700">
+            {restart.error.message}
+          </p>
+        )}
+        {attempt && !needsRefresh && restart.isError && (
+          <p className="text-muted-foreground text-sm">
+            请求结果尚未确认。重试将使用首次提交的相同设置，不会重复创建任务。
+          </p>
+        )}
+        {refresh.error && (
+          <p role="alert" className="text-sm text-red-700">
+            {refresh.error.message}
+          </p>
+        )}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => setOpen(false)}
+          >
+            关闭
+          </Button>
+          {needsRefresh ? (
+            <Button disabled={busy} onClick={() => refresh.mutate()}>
+              刷新设置并重新确认
+            </Button>
+          ) : (
+            <Button
+              disabled={busy || (!attempt && (!ready || active))}
+              onClick={() => {
+                if (attempt) {
+                  restart.mutate(attempt);
+                  return;
+                }
+                const token = fullState.data?.restart_token;
+                if (!token || !ready || active) return;
+                const command: SocCorpusRestartValidationCommand = {
+                  batch: "validation",
+                  scope: "all",
+                  action: "restart_validation",
+                  restart_token: token,
+                  options: completeRunOptions(value),
+                };
+                setAttempt(command);
+                restart.mutate(command);
+              }}
+            >
+              {restart.isPending
+                ? "提交中…"
+                : attempt
+                  ? "重试原提交"
+                  : "全部重新运行"}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

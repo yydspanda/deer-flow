@@ -1,7 +1,10 @@
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
-import type { SocCorpusQuickState } from "./corpus-experiments";
+import type {
+  SocCorpusQuickCommand,
+  SocCorpusQuickState,
+} from "./corpus-experiments";
 import type {
   SocCorpusExperiment,
   SocCorpusExperimentConfiguration,
@@ -1447,17 +1450,14 @@ export const getSocCorpusQuickState = (
   corpusExperimentRequest<SocCorpusQuickState>(
     `quick-validation?batch=${batch}&scope=${scope}&offset=${offset}&alert_ids=${encodeURIComponent(alertIds.join(","))}`,
   );
-export const runSocCorpusQuick = (
-  body: {
-    batch: "learning" | "validation";
-    scope: "all" | "reuse" | "explore";
-    action: "start" | "pause" | "run" | "rerun";
-    alert_id?: string;
-    options: SocAnalysisExecutionOptions;
-  },
-  key?: string,
-) =>
-  corpusExperimentRequest<{ accepted: boolean }>("quick-validation", body, key);
+export const runSocCorpusQuick = (body: SocCorpusQuickCommand, key?: string) =>
+  corpusExperimentRequest<{ accepted: boolean }>(
+    "quick-validation",
+    body,
+    body.action === "restart_validation"
+      ? `restart-validation-${body.restart_token}`
+      : key,
+  );
 
 export const getSocCorpusQuickHistory = (alertId: string, offset = 0) =>
   corpusExperimentRequest<SocCorpusQuickState["items"]>(

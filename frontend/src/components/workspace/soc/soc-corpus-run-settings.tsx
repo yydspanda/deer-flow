@@ -88,6 +88,7 @@ export function SocCorpusRunSettings({
   onChange,
   title = "后续运行设置",
   resetTitle = "恢复部署默认设置",
+  disabled = false,
   children,
 }: {
   controls: SocCorpusWorkbenchRunControls;
@@ -95,6 +96,7 @@ export function SocCorpusRunSettings({
   onChange: (value: SocAnalysisExecutionOptions) => void;
   title?: string;
   resetTitle?: string;
+  disabled?: boolean;
   children?: ReactNode;
 }) {
   const controlId = useId();
@@ -165,7 +167,7 @@ export function SocCorpusRunSettings({
         <Button
           variant="ghost"
           size="sm"
-          disabled={readOnly}
+          disabled={readOnly || disabled}
           onClick={() =>
             onChange(availableCorpusRunSettings(controls.defaults, controls))
           }
@@ -184,7 +186,9 @@ export function SocCorpusRunSettings({
               aria-label={item.label}
               aria-describedby={`${controlId}-${index}-detail`}
               checked={item.checked}
-              disabled={readOnly || !item.available || item.disabled}
+              disabled={
+                disabled || readOnly || !item.available || item.disabled
+              }
               onCheckedChange={item.change}
             />
             <div className="min-w-0">
@@ -215,6 +219,7 @@ export function SocCorpusRunSettings({
                     aria-label="重新核对事实"
                     checked={value.refresh_normalization === true}
                     disabled={
+                      disabled ||
                       readOnly ||
                       !item.available ||
                       value.normalization_review_mode === "off"

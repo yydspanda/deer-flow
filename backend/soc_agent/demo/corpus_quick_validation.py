@@ -70,7 +70,12 @@ class CorpusQuickValidation:
             "blocked_reason": blocked_reason,
             "pending_candidates": self.service.store.list_learning_candidates(experiment_id, limit=1).total,
             "items": items,
+            **({"restart_token": self._restart_token(experiment_id)} if batch == "validation" else {}),
         }
+
+    def _restart_token(self, experiment_id: str) -> str:
+        latest = self.service.store.latest_round_identity(experiment_id, "validation")
+        return stable_hash(["corpus-validation-restart-v1", experiment_id, latest[0] if latest else None])
 
     def _rounds(self, experiment_id: str, batch: Batch) -> list[CorpusRound]:
         result, offset = [], 0
@@ -91,10 +96,16 @@ class CorpusQuickValidation:
                 bound = copy(self.service)
                 bound.repository, bound.store, bound.jobs = tx, tx.corpus_experiments(), tx.processing_jobs()
                 quick = CorpusQuickValidation(bound, self.plan)
+                if command.action == "restart_validation":
+                    return quick._restart_validation(command, context=context, allow_options_override=allow_options_override, default_options=default_options)
                 if command.action != "pause" and not allow_options_override:
                     _require_saved_options(bound.store, quick.experiment(), command.batch, command.options, default_options)
                 return quick._command(command, context=context)
         except CorpusExperimentConflict:
+            if command.action == "restart_validation":
+                # Rejected restarts are inert. In particular a stale browser token
+                # cannot block, pause or otherwise change newer accepted work.
+                raise
             # Failed admission rolls back all new work. Record configuration blocks
             # separately so a paused queue explains why explicit rerun is required.
             for round_ in self._rounds(self.experiment(), command.batch):
@@ -103,6 +114,52 @@ class CorpusQuickValidation:
                     if problem:
                         self.service._block(round_.round_id, problem)
             raise
+
+    def _restart_validation(self, command: CorpusQuickCommand, *, context: ServiceRequestContext, allow_options_override: bool, default_options: SocAnalysisExecutionOptions | None) -> dict:
+        svc = self.service
+        experiment_id = self.experiment()
+        if context.idempotency_key != f"restart-validation-{command.restart_token}":
+            raise ValueError("全部重跑需要与 restart_token 绑定的 Idempotency-Key")
+        round_id = "ROUND-RESTART-" + stable_hash([experiment_id, command.restart_token])[:24].upper()
+        existing = svc.store.get_round(round_id)
+        if existing:
+            if existing.experiment_id != experiment_id or existing.selection != self.selection("validation", "all") or existing.options != command.options:
+                raise CorpusExperimentConflict("本次全部重跑已使用另一组配置提交，请刷新后再操作")
+            return {"accepted": True}
+        if command.restart_token != self._restart_token(experiment_id):
+            raise CorpusExperimentConflict("第二批已有新的提交，请刷新后再重新配置并全部重跑")
+        if not allow_options_override:
+            _require_saved_options(svc.store, experiment_id, "validation", command.options, default_options)
+        if svc.store.batch_has_active_jobs(experiment_id, "validation"):
+            raise CorpusExperimentConflict("请先暂停第二批，并等待运行中的告警结束后再全部重跑")
+        if svc.store.get_experiment(experiment_id) is None:
+            svc.prepare(self.plan, experiment_id=experiment_id, name="告警快速验证", context=context)
+        selection = self.selection("validation", "all")
+        if not svc.store.list_members(experiment_id, selection=selection, limit=1).total:
+            raise ValueError("当前第二批没有可验证的告警")
+        usable = any(_eligible(record, datetime.now(UTC)) for record in svc.store.learning_memory_records(experiment_id))
+        if not usable and svc.store.list_members(experiment_id, selection=self.selection("validation", "reuse"), limit=1).total:
+            raise ValueError("请先点击“审核经验”，确认并开放第一批经验后再验证经验复用")
+        # Keep every result, job, frozen option and Memory reference. Only dispatch
+        # admission is retired, atomically with the replacement queue creation.
+        for round_ in self._rounds(experiment_id, "validation"):
+            svc.store.supersede_validation_round(round_.round_id, replacement_round_id=round_id, actor_id=context.actor.actor_id)
+        svc.store.clear_batch_manual_intents(experiment_id, "validation", replacement_round_id=round_id)
+        round_ = svc.create_round(
+            CorpusRoundCreateCommand(
+                experiment_id=experiment_id,
+                selection=selection,
+                options=command.options,
+                purpose="full_flow" if command.options.tenant_policy_enabled else "memory",
+                memory_mode="snapshot" if usable else "none",
+                execution_limit=2_147_483_647,
+                concurrency=svc._max_concurrency,
+            ),
+            context=context,
+            round_identity=round_id,
+        )
+        svc.start(round_.round_id, context=context)
+        return {"accepted": True}
 
     def _command(self, command: CorpusQuickCommand, *, context: ServiceRequestContext) -> dict:
         svc = self.service

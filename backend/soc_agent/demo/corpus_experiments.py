@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 from uuid import uuid4
 
@@ -95,12 +95,13 @@ class SocCorpusExperimentService:
         allow_options_override: bool = True,
         default_options: SocAnalysisExecutionOptions | None = None,
         current_plan_id: str | None = None,
+        round_identity: str | None = None,
     ) -> CorpusRound:
         _require_admin(context)
         if command.concurrency > self._max_concurrency:
             raise ValueError(f"concurrency exceeds the server limit {self._max_concurrency}")
         command_hash = stable_hash(command.model_dump(mode="json"))
-        round_id = "ROUND-" + (stable_hash([context.actor.actor_id, context.idempotency_key])[:24].upper() if context.idempotency_key else uuid4().hex[:16].upper())
+        round_id = round_identity or "ROUND-" + (stable_hash([context.actor.actor_id, context.idempotency_key])[:24].upper() if context.idempotency_key else uuid4().hex[:16].upper())
         config = self._configuration_provider(command.options)
         with self.repository.mutation_transaction() as tx:
             tx.lock_memory_governance()
@@ -144,6 +145,11 @@ class SocCorpusExperimentService:
                 snapshot = [_snapshot(record) for record in store.learning_memory_records(experiment.experiment_id) if record.tenant_id == experiment.tenant_id and _eligible(record, datetime.now(UTC))]
                 if not snapshot:
                     raise ValueError("no usable reviewed first-batch Memory; review learning candidates or explicitly select a no-Memory baseline")
+            created_at = datetime.now(UTC)
+            if latest := store.latest_round_identity(experiment.experiment_id, command.selection.batch):
+                # Latest-attempt projection and restart tokens must advance for
+                # every submission, including after the host clock moves backwards.
+                created_at = max(created_at, latest[1] + timedelta(microseconds=1))
             round_ = CorpusRound(
                 round_id=round_id,
                 creation_command_hash=command_hash,
@@ -161,7 +167,7 @@ class SocCorpusExperimentService:
                 execution_limit=command.execution_limit,
                 concurrency=command.concurrency,
                 created_by=context.actor.actor_id,
-                created_at=datetime.now(UTC),
+                created_at=created_at,
             )
             store.create_round(round_)
             offset = 0
@@ -209,6 +215,8 @@ class SocCorpusExperimentService:
         if concurrency is not None and not 1 <= concurrency <= self._max_concurrency:
             raise ValueError("concurrency exceeds the server limit")
         round_ = self._round(round_id)
+        if round_.superseded_by_round_id:
+            raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
         if round_.state == "blocked":
             raise CorpusExperimentConflict("snapshot changed; create a new round")
         reason = self.snapshot_problem(round_)
@@ -256,6 +264,8 @@ class SocCorpusExperimentService:
             round_ = store.get_round(round_id)
             if round_ is None:
                 raise ValueError("round not found")
+            if round_.superseded_by_round_id:
+                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
             if round_.state == "blocked" or self.snapshot_problem(round_):
                 raise CorpusExperimentConflict("运行设置或已审核经验发生变化，请显式重新运行")
             queued = store.request_manual(round_id, alert_id, actor_id=context.actor.actor_id)
@@ -264,7 +274,7 @@ class SocCorpusExperimentService:
 
     def execute_one(self, round_id: str) -> bool:
         round_ = self._round(round_id)
-        if round_.state not in {"prepared", "running", "paused"}:
+        if round_.superseded_by_round_id or round_.state not in {"prepared", "running", "paused"}:
             return False
         problem = self.snapshot_problem(round_)
         if problem:
@@ -341,6 +351,8 @@ class SocCorpusExperimentService:
     def retry_failed(self, round_id: str, *, context: ServiceRequestContext) -> dict[str, int]:
         _require_admin(context)
         round_ = self._round(round_id)
+        if round_.superseded_by_round_id:
+            raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
         reason = self.snapshot_problem(round_)
         if reason or round_.state == "blocked":
             raise CorpusExperimentConflict("snapshot changed; create a new round")
@@ -348,6 +360,9 @@ class SocCorpusExperimentService:
         with self.repository.mutation_transaction() as tx:
             tx.lock_memory_governance()
             store = tx.corpus_experiments()
+            round_ = store.get_round(round_id)
+            if round_.superseded_by_round_id:
+                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
             while True:
                 page = store.list_round_items(round_id, offset=offset, limit=500)
                 for item in page.items:

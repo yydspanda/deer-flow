@@ -106,6 +106,23 @@ file for SOC code. The authoritative product and engineering documents are:
   attempts and retained terminal results cannot keep a recovered batch blocked; partial
   unfinished blocks and historical rounds remain visible. Browser filters never enter
   execution commands.
+  Explicit `restart_validation` replaces the entire second-batch queue using existing
+  rounds/jobs, retaining all old results and first-batch/Memory provenance. Require
+  `batch=validation`, `scope=all`, no alert ID, and a server `restart_token` bound to
+  the canonical experiment's latest validation round. Bind `Idempotency-Key` to that
+  token; concurrent actors/retries resolve to one round, and changed options conflict.
+  Check token, plan-scoped settings and all historical validation active claims inside
+  the governance transaction. Pause old bulk queues and clear queued manual admission
+  before creating/starting all members with fresh settings and reviewed Memory. Any
+  failure rolls back; never block newer work as a side effect of a rejected restart.
+  Persist `superseded_by_round_id` in the existing round JSON (default absent/None for
+  old history); explicit start/manual/retry and dispatcher claims must reject retired
+  queues too. Keep per-batch creation order monotonic for every new round so clock
+  rollback cannot hide a newer single-alert submission from the restart token.
+  Latest queued jobs project as unrun before list counting/pagination, hide the previous
+  current result and reset current statistics. Active claims take priority; fixed-run
+  history remains readable. Read compact job columns and bind the full pending set once
+  per SQL query, without rewriting projections or scanning historical Run JSON.
   No new table or migration is needed. Queued jobs keep their original configuration;
   drift blocks dispatch and only an explicit rerun may capture new settings.
   An explicitly authorized second-batch discard is an offline DEV maintenance

@@ -328,9 +328,9 @@ function SummaryBand({ state }: { state: SocCorpusWorkbenchState }) {
           detail: `${batch.group_count} 个同类组 · ${batch.labeled_count} 条有处置标签`,
         },
         {
-          label: "已有历史运行",
-          value: `${summary.processed_count} 已完成`,
-          detail: "历史记录保留，未计入新实验结果",
+          label: "运行历史",
+          value: "按告警查看",
+          detail: "在告警详情中查看历次结果",
         },
         {
           label: "样本时间范围",

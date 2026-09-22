@@ -4,7 +4,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 
-from sqlalchemy import create_engine, insert, inspect, update
+from sqlalchemy import create_engine, event, insert, inspect, update
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.db import create_soc_tables
@@ -157,3 +157,31 @@ def test_run_status_filters_all_pages_and_active_reruns(tmp_path):
     assert queries.page("catalog", run_status="running", **failures) == (1, ["5"])
     assert queries.page("catalog", run_status="success", **failures) == (1, ["1"])
     assert queries.page("catalog", run_status="not_run", **failures) == (0, [])
+
+
+def test_new_queued_attempts_replace_old_outcomes_before_filters_and_pagination(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'queued.sqlite'}")
+    import sqlite3
+
+    @event.listens_for(engine, "connect")
+    def mac_parameter_limit(connection, _):
+        connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 32_766)
+
+    create_soc_tables(engine)
+    queries = SocCorpusListQueries(sessionmaker(engine))
+    rows = [_row(i) for i in range(12_284)]
+    rows[1]["projection_payload"]["workflow_state"] = "failed"
+    rows[2]["projection_payload"]["workflow_state"] = "running"
+    queries.insert_missing(rows)
+    args = dict(search=None, readiness=None, source_type=None, group_id=None, comparison=None, unprocessed_only=False, focus_alert_id=None, active_alert_ids=["0"], queued_alert_ids=[str(i) for i in range(12_284)], limit=20, offset=12_280)
+    assert queries.page("catalog", run_status="not_run", **args) == (12_283, ["12281", "12282", "12283"])
+    assert queries.page("catalog", run_status="failed", **args) == (0, [])
+    assert queries.page("catalog", run_status="success", **args) == (0, [])
+    assert queries.page("catalog", run_status="running", **{**args, "offset": 0}) == (1, ["0"])
+    # Combined filters must bind the large pending set once, staying below the
+    # deployed SQLite parameter limit while disregarding old matched decisions.
+    assert queries.page("catalog", run_status="not_run", **{**args, "comparison": "not_run", "unprocessed_only": True})[0] == 12_283
+    assert queries.page("catalog", **{**args, "comparison": "matched"}) == (0, [])
+    readiness = {"queued_readiness": {str(i): "singleton_strong" for i in range(12_284)}}
+    assert queries.page("catalog", run_status="not_run", **{**args, **readiness, "readiness": "singleton_strong", "comparison": "not_run", "unprocessed_only": True})[0] == 12_283
+    assert queries.page("catalog", **{**args, **readiness, "readiness": "candidate_window"}) == (0, [])

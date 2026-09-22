@@ -11,6 +11,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 
 import { SocCorpusExperiments } from "@/components/workspace/soc/soc-corpus-experiments";
@@ -85,6 +86,240 @@ function mount(
     </QueryClientProvider>,
   );
 }
+
+const restartToken = "a".repeat(64);
+function restartState(overrides: Record<string, unknown> = {}) {
+  return {
+    experiment_id: "EXP-test",
+    restart_token: restartToken,
+    total: 10,
+    completed: 6,
+    active: 0,
+    remaining: 2,
+    failed: 2,
+    pending_candidates: 2,
+    running: false,
+    blocked_reason: "configuration_changed",
+    items: [],
+    ...overrides,
+  };
+}
+
+async function openRestart() {
+  fireEvent.click(
+    await screen.findByRole("button", { name: "重新配置并全部重跑" }),
+  );
+  return within(await screen.findByRole("dialog"));
+}
+
+test.each(["learning", "missing-token"])(
+  "does not expose validation restart for %s",
+  async (kind) => {
+    api.state.mockResolvedValue(
+      restartState(
+        kind === "missing-token" ? { restart_token: undefined } : {},
+      ),
+    );
+    mount({ batch: kind === "learning" ? "learning" : "validation", controls });
+    await screen.findByText("完成 6");
+    expect(
+      screen.queryByRole("button", { name: "重新配置并全部重跑" }),
+    ).toBeNull();
+  },
+);
+
+test("restarts all validation alerts with the current host draft and refreshes lightweight queries only", async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const invalidate = rs.spyOn(client, "invalidateQueries");
+  api.state.mockResolvedValue(restartState({ running: true }));
+  api.configuration.mockResolvedValue({
+    defaults: { ...options, normalization_review_mode: "off" },
+    saved_options: options,
+    can_configure: true,
+  });
+  mount(
+    {
+      batch: "validation",
+      tier: "supplementary",
+      alertIds: ["filtered-alert"],
+      controls,
+    },
+    client,
+  );
+  fireEvent.click(await screen.findByRole("switch", { name: "企业策略" }));
+  const dialog = await openRestart();
+  expect(
+    dialog
+      .getByRole("switch", { name: "语义核对" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(
+    dialog
+      .getByRole("switch", { name: "企业策略" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(dialog.getByText(/成功、失败和未运行/)).toBeTruthy();
+  expect(dialog.getByText(/旧结果保留在历史/)).toBeTruthy();
+  fireEvent.click(dialog.getByRole("checkbox", { name: "重新核对事实" }));
+  const confirm = dialog.getByRole("button", { name: "全部重新运行" });
+  await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+  invalidate.mockClear();
+  fireEvent.click(confirm);
+  await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+  expect(api.run.mock.calls[0]).toEqual([
+    {
+      batch: "validation",
+      scope: "all",
+      action: "restart_validation",
+      restart_token: restartToken,
+      options: {
+        ...options,
+        tenant_policy_enabled: true,
+        refresh_normalization: true,
+      },
+    },
+    `restart-validation-${restartToken}`,
+  ]);
+  expect(api.state).toHaveBeenCalledWith("validation", "all", 0, []);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+  expect(keys).toContainEqual(["soc-corpus-quick"]);
+  expect(keys).toContainEqual(["soc-corpus-experiments", "configuration"]);
+  for (const kind of ["state", "activity", "execution"])
+    expect(keys).toContainEqual(["soc-corpus-workbench", kind]);
+  expect(keys.some((key) => key?.includes("audit"))).toBe(false);
+  client.clear();
+});
+
+test("all-batch active work blocks confirmation even when the visible scope is idle", async () => {
+  api.state.mockImplementation(async (_batch, scope) =>
+    restartState({ active: scope === "all" ? 2 : 0, running: false }),
+  );
+  mount({ batch: "validation", tier: "main", controls });
+  const dialog = await openRestart();
+  await dialog.findByText(/先暂停第二批.*等待运行中的告警结束/);
+  const confirm = dialog.getByRole("button", { name: "全部重新运行" });
+  expect(confirm.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(confirm);
+  expect(api.run).not.toHaveBeenCalled();
+});
+
+test("LAN restart displays and submits the saved five settings without allowing edits", async () => {
+  const saved = {
+    ...options,
+    refresh_normalization: true,
+    tenant_policy_enabled: true,
+  };
+  api.configuration.mockResolvedValue({
+    defaults: options,
+    saved_options: saved,
+    can_configure: false,
+  });
+  api.state.mockResolvedValue(restartState());
+  mount({ batch: "validation", controls });
+  const dialog = await openRestart();
+  for (const input of [
+    ...dialog.getAllByRole("switch"),
+    dialog.getByRole("checkbox", { name: "重新核对事实" }),
+  ])
+    expect(input.hasAttribute("disabled")).toBe(true);
+  expect(
+    dialog
+      .getByRole("switch", { name: "语义核对" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  const confirm = dialog.getByRole("button", { name: "全部重新运行" });
+  await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(confirm);
+  await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+  expect(api.run.mock.calls[0]![0]).toMatchObject({ options: saved });
+});
+
+test("an unacknowledged restart retains its payload and key through polling and reopening", async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  api.state.mockResolvedValue(restartState());
+  api.run.mockRejectedValueOnce(new Error("网络中断"));
+  mount({ batch: "validation", controls }, client);
+  const dialog = await openRestart();
+  const confirm = dialog.getByRole("button", { name: "全部重新运行" });
+  await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(confirm);
+  await dialog.findByText("网络中断");
+  const first = api.run.mock.calls[0];
+  api.state.mockResolvedValue(
+    restartState({ restart_token: "b".repeat(64), active: 1, running: true }),
+  );
+  api.configuration.mockResolvedValue({
+    defaults: { ...options, normalization_review_mode: "off" },
+  });
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["soc-corpus-quick"] });
+    await client.invalidateQueries({
+      queryKey: ["soc-corpus-experiments", "configuration"],
+    });
+  });
+  fireEvent.click(dialog.getByRole("button", { name: "关闭" }));
+  const reopened = await openRestart();
+  fireEvent.click(reopened.getByRole("button", { name: "重试原提交" }));
+  await waitFor(() => expect(api.run).toHaveBeenCalledTimes(2));
+  expect(api.run.mock.calls[1]).toEqual(first);
+  client.clear();
+});
+
+test.each([400, 403, 409, 422])(
+  "a rejected restart requires an explicit settings refresh and another confirmation (%s)",
+  async (status) => {
+    api.state.mockResolvedValue(restartState());
+    api.configuration.mockResolvedValue({
+      defaults: options,
+      saved_options: options,
+      can_configure: status !== 403,
+    });
+    api.run.mockRejectedValueOnce(
+      Object.assign(new Error("第二批运行设置已变更"), { status }),
+    );
+    mount({ batch: "validation", controls });
+    const dialog = await openRestart();
+    const confirm = dialog.getByRole("button", { name: "全部重新运行" });
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(confirm);
+    await dialog.findByText("第二批运行设置已变更");
+    expect(dialog.queryByRole("button", { name: "重试原提交" })).toBeNull();
+    const nextToken = "c".repeat(64);
+    const saved = { ...options, tenant_policy_enabled: true };
+    api.state.mockResolvedValue(restartState({ restart_token: nextToken }));
+    api.configuration.mockResolvedValue({
+      defaults: options,
+      saved_options: saved,
+      can_configure: status !== 403,
+    });
+    fireEvent.click(dialog.getByRole("button", { name: "刷新设置并重新确认" }));
+    await waitFor(() =>
+      expect(
+        dialog
+          .getByRole("switch", { name: "企业策略" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(api.run).toHaveBeenCalledTimes(1);
+    fireEvent.click(dialog.getByRole("button", { name: "全部重新运行" }));
+    await waitFor(() => expect(api.run).toHaveBeenCalledTimes(2));
+    expect(api.run.mock.calls[1]).toEqual([
+      {
+        batch: "validation",
+        scope: "all",
+        action: "restart_validation",
+        restart_token: nextToken,
+        options: { ...saved, refresh_normalization: false },
+      },
+      `restart-validation-${nextToken}`,
+    ]);
+  },
+);
 
 test("host saves shared concurrency during a batch without changing run switches or refetching audit", async () => {
   const client = new QueryClient({

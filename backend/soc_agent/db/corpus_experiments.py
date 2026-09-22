@@ -200,7 +200,7 @@ class SqlAlchemyCorpusExperimentRepository:
                     raise ValueError("parent round must belong to this experiment")
             existing = session.get(SocCorpusRoundRow, round_.round_id)
             if existing is not None:
-                if existing.record_payload != round_.model_dump(mode="json"):
+                if CorpusRound.model_validate(existing.record_payload) != round_:
                     raise CorpusExperimentConflict("round already exists with a different snapshot")
                 return
             session.add(
@@ -275,6 +275,81 @@ class SqlAlchemyCorpusExperimentRepository:
             payload = session.scalar(query)
             return SocAnalysisExecutionOptions.model_validate(payload) if payload is not None else None
 
+    def latest_round_identity(self, experiment_id: str, batch: str) -> tuple[str, datetime] | None:
+        """Stable admission revision; progress updates never invalidate it."""
+        row = SocCorpusRoundRow
+        with self._session_factory() as session:
+            latest = session.execute(select(row.round_id, row.created_at).where(row.experiment_id == experiment_id, row.batch == batch).order_by(row.created_at.desc(), row.round_id.desc()).limit(1)).first()
+            if latest is None:
+                return None
+            return latest.round_id, latest.created_at.replace(tzinfo=UTC) if latest.created_at.tzinfo is None else latest.created_at
+
+    def batch_has_active_jobs(self, experiment_id: str, batch: str) -> bool:
+        """Include old attempts and paused/manual claims, not only the latest jobs."""
+        job, item, round_ = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow
+        query = (
+            select(job.job_id)
+            .join(item, item.job_id == job.job_id)
+            .join(round_, round_.round_id == item.round_id)
+            .where(round_.experiment_id == experiment_id, round_.batch == batch, job.status.in_([status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]))
+            .limit(1)
+        )
+        with self._session_factory() as session:
+            return session.scalar(query) is not None
+
+    def clear_batch_manual_intents(self, experiment_id: str, batch: str, *, replacement_round_id: str) -> None:
+        """Caller holds governance lock and has fenced all active batch claims."""
+        job, item, round_ = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow
+        query = (
+            select(job.job_id, job.version, job.metadata_payload)
+            .join(item, item.job_id == job.job_id)
+            .join(round_, round_.round_id == item.round_id)
+            .where(round_.experiment_id == experiment_id, round_.batch == batch, job.status == "queued", job.metadata_payload["manual_dispatch"].as_boolean().is_(True))
+        )
+        with self._session_factory() as session:
+            for job_id, version, metadata in session.execute(query):
+                session.execute(update(job).where(job.job_id == job_id, job.version == version).values(version=version + 1, metadata_payload={**metadata, "manual_dispatch": False, "manual_superseded_by_round": replacement_round_id}))
+            session.commit()
+
+    def supersede_validation_round(self, round_id: str, *, replacement_round_id: str, actor_id: str) -> None:
+        """Retire dispatch authority without rewriting frozen snapshots or outcomes."""
+        with self._session_factory() as session:
+            row = session.get(SocCorpusRoundRow, round_id)
+            previous = CorpusRound.model_validate(row.record_payload)
+            if previous.selection.batch != "validation":
+                raise ValueError("only validation rounds can be superseded by a validation restart")
+            if previous.superseded_by_round_id:
+                return
+            now = datetime.now(UTC)
+            state = "paused" if previous.state == "running" else previous.state
+            history = previous.state_history
+            if previous.state == "running":
+                history = [
+                    *history,
+                    {
+                        "from": "running",
+                        "to": "paused",
+                        "reason": "validation_restarted",
+                        "actor_id": actor_id,
+                        "at": now.isoformat(),
+                        "execution_limit": previous.execution_limit,
+                        "concurrency": previous.concurrency,
+                        "replacement_round_id": replacement_round_id,
+                    },
+                ]
+            updated = previous.model_copy(
+                update={
+                    "superseded_by_round_id": replacement_round_id,
+                    "state": state,
+                    "state_reason": "validation_restarted" if previous.state == "running" else previous.state_reason,
+                    "version": previous.version + 1,
+                    "updated_at": now,
+                    "state_history": history,
+                }
+            )
+            row.state, row.version, row.record_payload = updated.state, updated.version, updated.model_dump(mode="json")
+            session.commit()
+
     def active_jobs(self, *, plan_id: str, tenant_id: str, environment: str) -> list[CorpusActiveJob]:
         """Small activity projection, including claims before Runtime saves a Run.
 
@@ -330,6 +405,22 @@ class SqlAlchemyCorpusExperimentRepository:
         with self._session_factory() as session:
             return [CorpusFailedJob(*row) for row in session.execute(query)]
 
+    def latest_queued_alert_ids(self, *, plan_id: str, tenant_id: str, environment: str, alert_id: str | None = None) -> set[str]:
+        """A fresh queued attempt supersedes prior terminal list results too."""
+        job, item, round_, experiment = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocCorpusExperimentRow
+        ranked = (
+            select(item.alert_id, item.job_id, func.row_number().over(partition_by=item.alert_id, order_by=(round_.created_at.desc(), round_.round_id.desc())).label("rank"))
+            .join(round_, round_.round_id == item.round_id)
+            .join(experiment, experiment.experiment_id == round_.experiment_id)
+            .where(experiment.plan_id == plan_id, experiment.record_payload["tenant_id"].as_string() == tenant_id, experiment.record_payload["environment"].as_string() == environment)
+        )
+        if alert_id is not None:
+            ranked = ranked.where(item.alert_id == alert_id)
+        ranked = ranked.subquery()
+        query = select(ranked.c.alert_id).join(job, ranked.c.job_id == job.job_id).where(ranked.c.rank == 1, job.status == "queued", job.workload_kind == "corpus_experiment", job.tenant_id == tenant_id, job.alert_id == ranked.c.alert_id)
+        with self._session_factory() as session:
+            return set(session.scalars(query))
+
     def run_job(self, *, plan_id: str, tenant_id: str, environment: str, alert_id: str, run_id: str, idempotency_key_hash: str | None = None) -> CorpusRunJob | None:
         """Read only one Run's downstream state, including its not-yet-linked claim.
 
@@ -374,6 +465,9 @@ class SqlAlchemyCorpusExperimentRepository:
     def request_manual(self, round_id: str, alert_id: str, *, actor_id: str) -> bool:
         """Caller holds the shared governance lock; preserve original job/configuration."""
         with self._session_factory() as session:
+            round_ = session.get(SocCorpusRoundRow, round_id)
+            if round_ and round_.record_payload.get("superseded_by_round_id"):
+                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
             job = session.scalar(
                 select(SocProcessingJobRow).join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.job_id == SocProcessingJobRow.job_id).where(SocCorpusRoundItemRow.round_id == round_id, SocCorpusRoundItemRow.alert_id == alert_id)
             )
@@ -480,6 +574,7 @@ class SqlAlchemyCorpusExperimentRepository:
                     row.state.in_(["prepared", "running", "paused"]) & (job.metadata_payload["manual_dispatch"].as_boolean().is_(True)),
                 ),
                 job.status == "queued",
+                row.record_payload["superseded_by_round_id"].as_string().is_(None),
                 job.available_at <= datetime.now(UTC),
                 ~occupied,
             )
@@ -495,6 +590,8 @@ class SqlAlchemyCorpusExperimentRepository:
             if row is None or row.version != expected_version:
                 raise CorpusExperimentConflict("round changed; reload before updating")
             previous = CorpusRound.model_validate(row.record_payload)
+            if state == "running" and previous.superseded_by_round_id:
+                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
             allowed = {"prepared": {"running", "paused", "blocked"}, "running": {"paused", "blocked", "completed"}, "paused": {"running", "blocked"}, "blocked": set(), "completed": {"running", "paused", "blocked"}}
             if state != previous.state and state not in allowed[previous.state]:
                 raise CorpusExperimentConflict(f"cannot change round from {previous.state} to {state}; start a new round after snapshot changes")
@@ -564,7 +661,7 @@ class SqlAlchemyCorpusExperimentRepository:
     def eligible_job_ids(self, round_id: str, *, limit: int = 100) -> list[str]:
         _page(limit, 0)
         progress = self.round_progress(round_id)
-        if progress.round.state not in {"prepared", "running", "paused"} or progress.active_count >= progress.round.concurrency:
+        if progress.round.superseded_by_round_id or progress.round.state not in {"prepared", "running", "paused"} or progress.active_count >= progress.round.concurrency:
             return []
         earlier = aliased(SocCorpusRoundItemRow)
         earlier_job = aliased(SocProcessingJobRow)

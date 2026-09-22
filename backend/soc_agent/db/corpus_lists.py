@@ -7,8 +7,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy.orm import Session, aliased
 
 from soc_agent.db.models import SocAnalysisRunRow as Run
 from soc_agent.db.models import SocCorpusListProjectionRow as Item
@@ -117,51 +117,70 @@ class SocCorpusListQueries:
         focus_alert_id: str | None,
         active_alert_ids: list[str],
         failed_alert_ids: list[str] | None = None,
+        queued_alert_ids: list[str] | None = None,
+        queued_readiness: dict[str, str] | None = None,
         limit: int,
         offset: int,
         batch: str | None = None,
         validation_tier: str | None = None,
     ) -> tuple[int, list[str]]:
-        filters = [Item.catalog_id == catalog_id]
-        payload = Item.projection_payload
+        item = Item
+        queued = None
+        if queued_alert_ids:
+            # Bind a full-batch pending set once even when several filters use it.
+            # Repeating 12k IDs for status/comparison/observed can exceed SQLite's
+            # parameter limit. This is a read-only overlay, never a cache rewrite.
+            readiness_groups: dict[str | None, list[str]] = defaultdict(list)
+            for alert_id in queued_alert_ids:
+                readiness_groups[(queued_readiness or {}).get(alert_id)].append(alert_id)
+            current_readiness = case(*[(Item.alert_id.in_(ids), value if value is not None else Item.projection_payload["readiness"].as_string()) for value, ids in readiness_groups.items()])
+            pending_rows = select(Item, current_readiness.label("queued_readiness")).where(Item.catalog_id == catalog_id).cte("current_corpus_rows")
+            item = aliased(Item, pending_rows)
+            queued = pending_rows.c.queued_readiness
+        pending = queued.is_not(None) if queued is not None else item.alert_id.in_([])
+        filters = [item.catalog_id == catalog_id]
+        payload = item.projection_payload
         if batch:
             filters.append(payload["batch"].as_string() == batch)
         if validation_tier:
             filters.append(payload["validation_tier"].as_string() == validation_tier)
-        focused = Item.alert_id == focus_alert_id if focus_alert_id else False
+        focused = item.alert_id == focus_alert_id if focus_alert_id else False
         if search and search.strip():
-            filters.append(Item.search_text.contains(search.strip().casefold(), autoescape=True))
+            filters.append(item.search_text.contains(search.strip().casefold(), autoescape=True))
         if readiness:
-            filters.append(or_(payload["readiness"].as_string() == readiness, focused))
+            current_readiness = func.coalesce(queued, payload["readiness"].as_string()) if queued is not None else payload["readiness"].as_string()
+            filters.append(or_(current_readiness == readiness, focused))
         if source_type:
-            filters.append(Item.source_type == source_type)
+            filters.append(item.source_type == source_type)
         if group_id:
-            filters.append(Item.group_id == group_id)
+            filters.append(item.group_id == group_id)
         if run_status:
-            active = Item.alert_id.in_(active_alert_ids)
-            failed = Item.alert_id.in_(failed_alert_ids or [])
+            active = item.alert_id.in_(active_alert_ids)
+            failed = item.alert_id.in_(failed_alert_ids or [])
             state = payload["workflow_state"].as_string()
             if run_status == "running":
-                matching = or_(and_(state == "running", ~failed), active)
+                matching = or_(and_(state == "running", ~failed, ~pending), active)
             elif run_status == "failed":
-                matching = and_(or_(state == "failed", failed), ~active)
+                matching = and_(or_(state == "failed", failed), ~active, ~pending)
+            elif run_status == "not_run":
+                matching = and_(or_(pending, and_(state == "ready", ~failed)), ~active)
             else:
-                states = {"success": ["completed", "analysis_only"], "not_run": ["ready"]}[run_status]
-                matching = and_(state.in_(states), ~active, ~failed)
+                states = ["completed", "analysis_only"]
+                matching = and_(state.in_(states), ~active, ~failed, ~pending)
             filters.append(matching)
         if unprocessed_only:
-            filters.append(or_(payload["observed"].as_boolean().is_(False), Item.alert_id.in_(active_alert_ids), focused))
+            filters.append(or_(pending, payload["observed"].as_boolean().is_(False), item.alert_id.in_(active_alert_ids), focused))
         if comparison == "labeled":
-            filters.append(or_(Item.labeled.is_(True), focused))
+            filters.append(or_(item.labeled.is_(True), focused))
         elif comparison:
             if comparison == "unlabeled":
-                matching = Item.labeled.is_(False)
+                matching = item.labeled.is_(False)
             elif comparison == "not_run":
-                matching = and_(Item.labeled.is_(True), payload["decision_available"].as_boolean().is_(False))
+                matching = and_(item.labeled.is_(True), or_(pending, payload["decision_available"].as_boolean().is_(False)))
             else:
-                matching = and_(Item.labeled.is_(True), payload["decision_available"].as_boolean().is_(True), payload["effective_label_comparison"].as_string() == comparison)
+                matching = and_(~pending, item.labeled.is_(True), payload["decision_available"].as_boolean().is_(True), payload["effective_label_comparison"].as_string() == comparison)
             filters.append(or_(matching, focused))
         with self._sessions() as session:
-            total = session.scalar(select(func.count()).select_from(Item).where(*filters)) or 0
-            ids = session.scalars(select(Item.alert_id).where(*filters).order_by(Item.sequence_number, Item.alert_id).limit(limit).offset(offset)).all()
+            total = session.scalar(select(func.count()).select_from(item).where(*filters)) or 0
+            ids = session.scalars(select(item.alert_id).where(*filters).order_by(item.sequence_number, item.alert_id).limit(limit).offset(offset)).all()
             return total, list(ids)

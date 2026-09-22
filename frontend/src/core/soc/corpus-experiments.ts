@@ -200,6 +200,7 @@ export function corpusRoundSelection(
 
 export interface SocCorpusQuickState {
   experiment_id: string;
+  restart_token?: string | null;
   total: number;
   completed: number;
   active: number;
@@ -215,3 +216,21 @@ export interface SocCorpusQuickState {
     blocked_reason?: string | null;
   })[];
 }
+
+export interface SocCorpusRestartValidationCommand {
+  batch: "validation";
+  scope: "all";
+  action: "restart_validation";
+  restart_token: string;
+  options: SocAnalysisExecutionOptions;
+}
+
+export type SocCorpusQuickCommand =
+  | SocCorpusRestartValidationCommand
+  | {
+      batch: SocCorpusBatch;
+      scope: "all" | "reuse" | "explore";
+      action: "start" | "pause" | "run" | "rerun";
+      alert_id?: string;
+      options: SocAnalysisExecutionOptions;
+    };

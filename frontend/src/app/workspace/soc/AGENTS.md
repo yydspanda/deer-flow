@@ -379,6 +379,13 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   Keep explicitly focused results through processing-driven readiness/comparison changes;
   user filter changes clear that temporary focus.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
+  The second-batch **重新配置并全部重跑** dialog edits the existing five run settings
+  only for Host-authorized users; LAN callers use saved settings. Read all-scope activity
+  before confirmation even when the visible scope is restricted. Submit explicit all
+  scope and the server restart token; preserve body/key across uncertain network retries
+  and require a refreshed confirmation on conflict. All old outcomes rerun, latest queued
+  tasks show unrun, and old fixed-run history remains accessible. Invalidate lightweight
+  list/execution/configuration and quick queries on acceptance, never audit bundles.
   Batch progress and quick-command invalidation target only lightweight workbench
   state/activity/execution keys; pinned audit bundles remain cached even as unrelated jobs finish.
   The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,

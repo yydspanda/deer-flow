@@ -48,7 +48,7 @@ cd "$TARGET_REPO"
 python3.12 scripts/soc_pingan_macos_host_dev.py status
 ```
 
-应看到 Runtime 为 `dev`、数据库 `ready`、schema `0031_memory_working_drafts`，三个 Core 和
+应看到 Runtime 为 `dev`、数据库 `ready`、schema `0032_corpus_revision_index`，三个 Core 和
 三个 Sidecar 就绪。页面入口是 `http://localhost:2026/workspace/soc/corpus-validation`。
 可信演示可以沿用 `--demo-no-auth`；有身份验证时，CLI 需在 `SOC_DEV_API_TOKEN` 中提供有效访问令牌。
 这不是修改权限的命令，未授权时返回403，不降级成匿名管理员。
@@ -108,7 +108,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 python3.12 scripts/soc_pingan_macos_host_dev.py status
 ```
 
-确认schema为 `0031_memory_working_drafts`、服务就绪后进入第2节。旧备份不会被运行或检索。
+确认schema为 `0032_corpus_revision_index`、服务就绪后进入第2节。旧备份不会被运行或检索。
 不要在浏览器中恢复先前未发送的候选编辑草稿；新实验只审核新的候选。
 
 需要撤销本次重置且尚未启动/创建新库时，可以恢复刚才的回执：
@@ -143,7 +143,9 @@ python3.12 scripts/soc_pingan_macos_host_dev.py restore-dev-data \
 
 搜索、同类组等列表筛选只改变浏览内容，不缩小批量执行范围。页面展示完成、运行中、剩余、失败和待审核经验数；同一告警重跑不会增加批次总数，旧结果保留在详情和固定运行记录中。刷新页面或重启 Gateway 后恢复持久任务，包括暂停批量中的手动任务。
 
-安装器先保留运行数据，本次再通过独立的 `reset-dev-data` 明确重置 SOC DEV；普通源码更新不自动清库。
+需要第二批从头验证时，在第二批点击 **重新配置并全部重跑**，确认完整设置后点击 **全部重新运行**。先暂停并等待运行中为0；以前成功、失败和排队告警全部重新执行，旧结果仍在历史中，第一批与审核经验保留。逐步操作见 [第二批全部重跑](../../../docs/soc-validation-restart.md)。
+
+普通源码更新保留运行数据，不执行 `reset-dev-data` 或第二批清理；需要从头验证使用上述网页按钮。
 新包须配套将 Runtime 与模型网关并发都设为8的私有配置，完整重启Host时重新构建前端。
 本轮无新增数据库迁移，未变化的语料不用重新跨网传输。完整安装仍须源码包与匹配的私有配置包一起交付，
 内网实际安装、重置与验收按随包主 Runbook 执行。

@@ -1974,6 +1974,220 @@ test("host adjusts shared concurrency while LAN stays read-only and active work 
   await lan.close();
 });
 
+for (const canConfigure of [true, false]) {
+  test(`restarts the entire second batch with preserved settings and a stable retry (${canConfigure ? "host" : "LAN"})`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(90000);
+    await page.setViewportSize({
+      width: canConfigure ? 1280 : 390,
+      height: 900,
+    });
+    mockLangGraphAPI(page, { threads: [] });
+    let saved = {
+      normalization_review_mode: "apply",
+      refresh_normalization: false,
+      tenant_policy_enabled: false,
+      tenant_policy_advisor_enabled: false,
+      tenant_policy_signal_providers_enabled: false,
+    };
+    const token = "a".repeat(64);
+    const writes: { body: Record<string, unknown>; key: string | undefined }[] =
+      [];
+    let accepted = false;
+    const audits: string[] = [];
+    await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/audit")) {
+        audits.push(url.searchParams.get("run_id") ?? "");
+        return route.fulfill({ json: corpusAudit() });
+      }
+      if (url.pathname.includes("/quick-validation/history/"))
+        return route.fulfill({
+          json: [
+            {
+              alert_id: "1984426",
+              job_id: "JOB-restarted",
+              run_id: null,
+              status: "queued",
+              summary: {},
+            },
+            {
+              alert_id: "1984426",
+              job_id: "JOB-old",
+              run_id: "RUN-CORPUS-1",
+              status: "completed",
+              summary: {},
+            },
+          ],
+        });
+      if (url.pathname.endsWith("/execution"))
+        return route.fulfill({ json: corpusExecution(!accepted) });
+      if (url.pathname.endsWith("/experiments/configuration"))
+        return route.fulfill({
+          json: {
+            defaults: { ...saved, normalization_review_mode: "off" },
+            saved_options: saved,
+            full_flow_defaults: saved,
+            max_concurrency: 8,
+            can_configure: canConfigure,
+            dispatcher_running: true,
+          },
+        });
+      if (url.pathname.endsWith("/quick-validation")) {
+        if (request.method() === "POST") {
+          const body = request.postDataJSON() as Record<string, unknown>;
+          writes.push({ body, key: request.headers()["idempotency-key"] });
+          expect(request.headers()["content-type"]).toBe("application/json");
+          if (writes.length === 1)
+            return route.fulfill({
+              status: 503,
+              json: { detail: "提交响应暂不可用，请重试" },
+            });
+          accepted = true;
+          saved = body.options as typeof saved;
+          return route.fulfill({ json: { accepted: true } });
+        }
+        return route.fulfill({
+          json: {
+            experiment_id: "EXP-restart",
+            restart_token: accepted ? "b".repeat(64) : token,
+            total: 3,
+            completed: accepted ? 0 : 1,
+            failed: accepted ? 0 : 1,
+            active: 0,
+            remaining: accepted ? 3 : 1,
+            pending_candidates: 2,
+            running: accepted,
+            blocked_reason: accepted ? null : "configuration_changed",
+            items: accepted
+              ? [
+                  {
+                    alert_id: "1984426",
+                    job_id: "JOB-restarted",
+                    run_id: null,
+                    status: "queued",
+                    summary: {},
+                  },
+                ]
+              : [],
+          },
+        });
+      }
+      if (request.method() === "POST")
+        throw new Error(`Unexpected write: ${url.pathname}`);
+      if (url.pathname.endsWith("/activity"))
+        return route.fulfill({ json: corpusActivity() });
+      const current = corpusState(!accepted);
+      if (accepted) current.alerts[0]!.workflow_state = "queued";
+      return route.fulfill({
+        json: {
+          ...corpusStateForRequest(current, request.url()),
+          run_controls: {
+            defaults: saved,
+            can_configure: canConfigure,
+            normalization_review_available: true,
+            tenant_policy_available: true,
+            tenant_policy_advisor_available: true,
+            tenant_policy_signal_providers_available: true,
+          },
+          batch_selection: {
+            plan_id: "fixture-plan",
+            batch: url.searchParams.get("batch") ?? "learning",
+            validation_tier: "all",
+            counts: {
+              learning: 10,
+              validation_main: 2,
+              validation_supplementary: 1,
+              total: 13,
+            },
+            selected_count: 3,
+            group_count: 1,
+            labeled_count: 0,
+            execution_enabled: false,
+            existing_results_only: true,
+          },
+        },
+      });
+    });
+    await page.goto("/workspace/soc/corpus-validation");
+    await page.getByRole("tab", { name: /第二批/ }).click();
+    await page.getByLabel("验证样本范围").click();
+    await page.getByRole("option", { name: /其他测试告警/ }).click();
+    await page
+      .getByRole("button", { name: "重新配置并全部重跑", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("switch", { name: "语义核对", exact: true }),
+    ).toBeChecked();
+    await expect(dialog).toContainText("旧结果保留在历史中");
+    const refresh = dialog.getByRole("checkbox", {
+      name: "重新核对事实",
+      exact: true,
+    });
+    if (canConfigure) await refresh.check();
+    else {
+      await expect(refresh).toBeDisabled();
+      await expect(
+        dialog.getByRole("switch", { name: "企业策略", exact: true }),
+      ).toBeDisabled();
+    }
+    await dialog.evaluate(async (element) => {
+      await Promise.all(
+        element.getAnimations().map((animation) => animation.finished),
+      );
+    });
+    await page.screenshot({
+      path: testInfo.outputPath(`restart-${canConfigure ? "host" : "lan"}.png`),
+      fullPage: true,
+    });
+    const initialAudits = audits.length;
+    await dialog
+      .getByRole("button", { name: "全部重新运行", exact: true })
+      .click();
+    await expect(dialog.getByRole("alert")).toContainText(
+      "提交响应暂不可用，请重试",
+    );
+    await expect(refresh).toBeDisabled();
+    await dialog
+      .getByRole("button", { name: "重试原提交", exact: true })
+      .click();
+    await expect(dialog).toHaveCount(0);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(writes[0]).toEqual({
+      key: `restart-validation-${token}`,
+      body: {
+        batch: "validation",
+        scope: "all",
+        action: "restart_validation",
+        restart_token: token,
+        options: { ...saved, refresh_normalization: canConfigure },
+      },
+    });
+    expect(audits).toHaveLength(initialAudits);
+    const pendingAlert = page.locator('[data-alert-id="1984426"]');
+    await expect(
+      pendingAlert.getByRole("button", { name: /结果与历史记录/ }),
+    ).toHaveCount(0);
+    await pendingAlert.click();
+    const history = page.getByRole("region", { name: "结果与历史记录" });
+    await history
+      .getByRole("button", { name: "查看结果 · RUN-CORPUS-1", exact: true })
+      .click();
+    expect(audits).toHaveLength(initialAudits);
+    await history.getByRole("button", { name: /打开完整审计/ }).click();
+    await expect.poll(() => audits).toEqual(["RUN-CORPUS-1"]);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  });
+}
+
 test("counts durable batch activity outside the visible status-filtered page", async ({
   page,
 }) => {

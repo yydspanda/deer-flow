@@ -951,11 +951,20 @@ class SocCorpusWorkbenchService:
         active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
         active_ids = list(active_executions)
         failed_jobs = self._failed_jobs()
+        queued_ids = self._queued_alert_ids() - set(active_ids)
         summaries_started = perf_counter()
         summaries = self._list_summaries()
         summaries_finished = perf_counter()
         dynamic_alerts = [
-            replace(item, workflow_state="running") if item.alert_id in active_ids else replace(item, workflow_state="failed") if item.alert_id in failed_jobs else item for item in summaries.values() if item.alert_id in selected_ids
+            replace(item, workflow_state="running")
+            if item.alert_id in active_ids
+            else self._list_summary(self._cases[item.alert_id], run=None, observation=None)
+            if item.alert_id in queued_ids
+            else replace(item, workflow_state="failed")
+            if item.alert_id in failed_jobs
+            else item
+            for item in summaries.values()
+            if item.alert_id in selected_ids
         ]
         alert_cache: dict[str, SocCorpusWorkbenchAlert] = {}
 
@@ -963,7 +972,7 @@ class SocCorpusWorkbenchService:
             cached = alert_cache.get(case.alert_id)
             if cached is not None:
                 return cached
-            projected = self._get_alert_view(case.alert_id, active_executions=active_executions, failed_jobs=failed_jobs)
+            projected = self._get_alert_view(case.alert_id, active_executions=active_executions, failed_jobs=failed_jobs, queued_alert_ids=queued_ids)
             if batch:
                 member = self._batch_members[case.alert_id]
                 projected = projected.model_copy(update={"batch": member.batch, "validation_tier": member.validation_tier, "batch_reason": member.reason, "batch_group_alert_count": group_counts[case.group_id], "can_process": False})
@@ -994,6 +1003,8 @@ class SocCorpusWorkbenchService:
             focus_alert_id=focus_alert_id,
             active_alert_ids=active_ids,
             failed_alert_ids=list(failed_jobs),
+            queued_alert_ids=list(queued_ids),
+            queued_readiness={item.alert_id: item.readiness for item in dynamic_alerts if item.alert_id in queued_ids},
             limit=limit,
             offset=offset,
             batch=batch,
@@ -1183,13 +1194,22 @@ class SocCorpusWorkbenchService:
         alert_id: str,
         active_executions: Mapping[str, SocCorpusWorkbenchActiveExecution] | None = None,
         failed_jobs: Mapping[str, CorpusFailedJob] | None = None,
+        queued_alert_ids: set[str] | None = None,
     ) -> _CorpusProjectionContext:
         if active_executions is None:
             active_executions = {item.alert_id: item for item in self.get_activity().executions if item.alert_id != exclude_active_alert_id}
         if failed_jobs is None:
             failed_jobs = self._failed_jobs(alert_id=alert_id)
+        if queued_alert_ids is None:
+            queued_alert_ids = self._queued_alert_ids(alert_id=alert_id)
         failure = failed_jobs.get(alert_id) if alert_id not in active_executions else None
-        run = self._run_for_case(self._cases[alert_id]) if failure is None else self._failed_job_run(self._cases[alert_id], failure)
+        if alert_id in queued_alert_ids and alert_id not in active_executions:
+            # A newly queued attempt has no current result yet. Fixed-run audit
+            # history continues to read the preserved previous attempts directly.
+            run = None
+            failed_jobs = {key: value for key, value in failed_jobs.items() if key != alert_id}
+        else:
+            run = self._run_for_case(self._cases[alert_id]) if failure is None else self._failed_job_run(self._cases[alert_id], failure)
         runs_by_alert = {alert_id: run} if run is not None else {}
         run_query = {"run_id": runs_by_alert[alert_id].run_id} if alert_id in runs_by_alert else {}
         observations_by_alert = self._observations_by_alert(runs_by_alert, alert_id=alert_id) if runs_by_alert else {}
@@ -1282,6 +1302,7 @@ class SocCorpusWorkbenchService:
         exclude_active_alert_id: str | None = None,
         active_executions: Mapping[str, SocCorpusWorkbenchActiveExecution] | None = None,
         failed_jobs: Mapping[str, CorpusFailedJob] | None = None,
+        queued_alert_ids: set[str] | None = None,
     ) -> SocCorpusWorkbenchAlert:
         case = self._cases.get(alert_id)
         if case is None:
@@ -1293,6 +1314,7 @@ class SocCorpusWorkbenchService:
                 alert_id=alert_id,
                 active_executions=active_executions,
                 failed_jobs=failed_jobs,
+                queued_alert_ids=queued_alert_ids,
             ),
         )
 
@@ -1302,6 +1324,13 @@ class SocCorpusWorkbenchService:
         except CorpusExperimentSchemaNotReady:
             return {}
         return {job.alert_id: job for job in self._experiment_store.latest_failed_jobs(plan_id=self._batch_plan.plan_id, tenant_id=CORPUS_WORKBENCH_TENANT, environment=CORPUS_WORKBENCH_ENVIRONMENT, alert_id=alert_id)}
+
+    def _queued_alert_ids(self, *, alert_id: str | None = None) -> set[str]:
+        try:
+            self._experiment_store.require_schema()
+        except CorpusExperimentSchemaNotReady:
+            return set()
+        return self._experiment_store.latest_queued_alert_ids(plan_id=self._batch_plan.plan_id, tenant_id=CORPUS_WORKBENCH_TENANT, environment=CORPUS_WORKBENCH_ENVIRONMENT, alert_id=alert_id)
 
     def _failed_job_run(self, case: _CorpusCase, failure: CorpusFailedJob) -> AnalysisRun | None:
         # No Run ID means this attempt failed before Runtime persistence. A previous
@@ -1668,9 +1697,15 @@ class SocCorpusWorkbenchService:
         if case is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id!r} is not part of the configured DEV corpus")
         failure = self._failed_jobs(alert_id=alert_id).get(alert_id)
-        if failure is not None and any(item.alert_id == alert_id for item in self.get_activity().executions):
+        queued = alert_id in self._queued_alert_ids(alert_id=alert_id)
+        active = (failure is not None or queued) and any(item.alert_id == alert_id for item in self.get_activity().executions)
+        if active:
             failure = None
-        run = self._run_for_case(case) if failure is None else self._failed_job_run(case, failure)
+        if queued and not active:
+            run = None
+            failure = None
+        else:
+            run = self._run_for_case(case) if failure is None else self._failed_job_run(case, failure)
         observations = self._repository.list_memory_pattern_observations(
             tenant_id=CORPUS_WORKBENCH_TENANT,
             environment=CORPUS_WORKBENCH_ENVIRONMENT,

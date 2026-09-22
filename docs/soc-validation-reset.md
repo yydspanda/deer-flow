@@ -1,5 +1,7 @@
 # 内网 Mac：保留第一批，清理并重跑第二批
 
+需要重新配置并重跑第二批，请使用[网页全部重跑流程](soc-validation-restart.md)，保留全部历史。下面仅为另行明确授权删除历史时的离线维护文档；当前重跑需求不执行本流程。
+
 本流程用于操作人已明确决定丢弃第二批全部旧结果的情况，包括成功、失败、历次重跑和排队任务。第一批结果、候选经验和已审核经验保留。普通升级、暂停和继续不执行此流程。
 
 先按交付包的 `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md` 完成**保留数据升级**，确认仓库包含 `scripts/soc_pingan_validation_database.py` 和 `backend/scripts/soc_validation_reset_store.py`。不要使用完全初始化手册；旧交付包没有下面的新维护命令。

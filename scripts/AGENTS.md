@@ -541,7 +541,10 @@ receive a JSON error and close code 1008.
 
 Quick corpus validation adds `backend/soc_agent/demo/corpus_quick_validation.py` to
 the required handoff source inventory. Generated operator instructions use first-batch
-start/pause/continue/review and second-batch all/reuse/explore; legacy staged CLI commands
+start/pause/continue/review and second-batch all/reuse/explore plus explicit all-alert
+restart with retained history (`docs/soc-validation-restart.md`). Include the restart
+regression in the required inventory. Do not direct routine reruns through offline
+deletion maintenance; legacy staged CLI commands
 remain optional. Host startup and source-plus-private-overlay delivery are unchanged;
 apply code updates with a frontend rebuild and service restart, preserving data.
 The required handoff inventory also includes PingAn's `corpus_validation.py` scope

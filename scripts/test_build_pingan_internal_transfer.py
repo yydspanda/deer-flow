@@ -132,6 +132,8 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "backend/scripts/soc_validation_reset_store.py" in required
     assert "backend/tests/test_soc_validation_reset_store.py" in required
     assert "docs/soc-validation-reset.md" in required
+    assert "docs/soc-validation-restart.md" in required
+    assert "backend/tests/test_soc_corpus_validation_restart.py" in required
     assert "backend/soc_agent/demo/corpus_quick_validation.py" in required
     assert "backend/soc_agent/integrations/pingan/corpus_validation.py" in required
     assert "backend/app/gateway/soc_corpus_control.py" in required
@@ -171,6 +173,15 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "installer-sha" in runbook
     assert TRANSFER_INSTALLER_NAME in runbook
     assert TRANSFER_RUNBOOK_NAME in runbook
+    evaluation = runbook.split("## 7.1 Two-Batch Memory Evaluation", maxsplit=1)[
+        1
+    ].split("## 8.", maxsplit=1)[0]
+    assert "重新配置并全部重跑" in evaluation
+    assert "docs/soc-validation-restart.md" in evaluation
+    assert "docs/soc-validation-reset.md" not in evaluation
+    upgrade = runbook.split("## 6.", maxsplit=1)[1].split("## 7.", maxsplit=1)[0]
+    assert "第二批" in upgrade and "重新配置并全部重跑" in upgrade
+    assert "当前页面不提供把整批旧队列" not in upgrade
     assert (
         "$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl" in runbook
     )
@@ -378,8 +389,9 @@ def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
     assert "需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置" not in runbook
     assert "继续审核经验或第二批验证，跳过批次手册第 1.1 节重置" in runbook
     assert "configuration_changed" in section
-    assert "逐条点击\n“重新运行”" in section
-    assert "不提供把整批旧队列自动迁移到新版本" in section
+    assert "第一批个别未完成项" in section
+    assert "重新配置并全部重跑" in section
+    assert "旧结果仍保留在历史中" in section
     assert "已经完成的告警和已审核经验无需重跑、重审" in section
     assert "仅在同一代码版本下修改“最大并发”不会触发" in section
 

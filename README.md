@@ -121,6 +121,11 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > and the shared SOC processing queue. The page offers **开始积累 → 审核经验 → 开始验证**.
 > Batch starts cover the full selected scope; pause/continue skip completed alerts. Single
 > alerts run directly even while the batch is paused, with restart recovery and deduplication.
+> To restart the whole second batch with new settings, pause and wait for zero active
+> alerts, then choose **重新配置并全部重跑 → 全部重新运行**. This reruns successful,
+> failed and unrun alerts across the entire second batch, regardless of browser filters.
+> New tasks reset current progress; old results remain in alert history, and first-batch
+> learning and reviewed Memory are preserved. See the [Mac operating steps](docs/soc-validation-restart.md).
 > The PingAn SIEM email detector `RPAADM_002192` on `T_GBD_zeus_data` is excluded
 > from both validation batches and manual execution; original corpus data is retained.
 > On Mac Host DEV, edit run settings from `http://localhost:2026` on the deployment

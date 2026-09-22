@@ -352,3 +352,47 @@ def test_failed_job_after_runtime_does_not_show_a_successful_operator_outcome(wo
     trace = workbench.get_execution("0")
     assert trace.status == "failed" and trace.run_id == run.run_id
     assert workbench._audit_run_for_case(workbench._cases["0"], run.run_id).status == run.status
+
+
+def test_queued_validation_restart_hides_old_result_but_keeps_fixed_history(workbench):
+    from test_soc_corpus_experiments import context, service
+
+    from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.core import SocAnalysisService
+
+    member = next(m for m in workbench.batch_plan.members if m.batch == "validation")
+    alert_id = member.alert_id
+    payload = json.loads((Path(__file__).resolve().parents[1] / "samples/alerts/approved_scanner.json").read_text(encoding="utf-8"))
+    prior = SocAnalysisService().analyze(payload)
+    prior.alert_id = alert_id
+    prior.input_hash = workbench._cases[alert_id].payload_hash
+    prior.llm_analysis_request = prior.llm_analysis_request.model_copy(update={"environment": "dev-corpus-eval"})
+    workbench._repository.save_run(prior)
+    query = dict(batch="validation", unprocessed_only=False, include_rehearsal=False, include_group_catalog=False)
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 1
+
+    # A previous semantic interpretation can give this alert a different readiness.
+    # The new queued attempt resets both detail and SQL filtering to source facts.
+    from dataclasses import replace
+
+    revision, summary = workbench._list_queries.rows(workbench._list_catalog_id)[alert_id]
+    workbench._list_queries.save(workbench._list_catalog_id, alert_id, revision, replace(summary, readiness="singleton_strong"))
+
+    batches = service(workbench._repository, [])
+    batches.prepare(workbench.batch_plan, experiment_id="EXP-current", name="Current corpus", context=context())
+    batches.create_round(CorpusRoundCreateCommand(experiment_id="EXP-current", selection=CorpusRoundSelection(batch="validation", scope="all"), memory_mode="none"), context=context())
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 0
+    pending = workbench.get_state(run_status="not_run", **query)
+    assert pending.alert_page.total == workbench.batch_plan.counts["validation_main"] + workbench.batch_plan.counts["validation_supplementary"]
+    row = next(a for a in pending.alerts if a.alert_id == alert_id)
+    assert row.workflow_state == "ready" and row.run_id is None
+    assert row.operator_outcome is None
+    source_readiness = workbench._cases[alert_id].readiness
+    assert row.readiness == source_readiness
+    assert workbench.get_state(search=alert_id, readiness=source_readiness, **query).alert_page.total == 1
+    assert workbench.get_state(search=alert_id, readiness="singleton_strong", **query).alert_page.total == 0
+    assert workbench._get_alert_view(alert_id).run_id is None
+    execution = workbench.get_execution(alert_id)
+    assert execution.status == "not_started" and execution.run_id is None
+    assert workbench._audit_run_for_case(workbench._cases[alert_id], prior.run_id).run_id == prior.run_id
+    assert workbench._repository.get_run(prior.run_id) is not None

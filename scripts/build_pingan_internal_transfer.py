@@ -337,6 +337,8 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/scripts/soc_validation_reset_store.py",
     "backend/tests/test_soc_validation_reset_store.py",
     "docs/soc-validation-reset.md",
+    "docs/soc-validation-restart.md",
+    "backend/tests/test_soc_corpus_validation_restart.py",
     "scripts/soc_pingan_stage_internal_corpus.py",
     "scripts/test_build_pingan_macos_offline_bundle.py",
     "scripts/test_soc_pingan_macos_host_dev.py",
@@ -1564,9 +1566,11 @@ BASH
 启动后先核对第一批完成数量、待审核经验和已审核记录，再继续审核经验或第二批验证。
 
 本次替换源码会改变运行配置版本。升级前已排队、尚未完成的任务仍保留原版本，点击“继续”时
-可能出现 `configuration_changed`（配置已变化）。这时保留旧记录，对需要执行的告警逐条点击
-“重新运行”，明确采用新版本；当前页面不提供把整批旧队列自动迁移到新版本的操作。
-已经完成的告警和已审核经验无需重跑、重审。仅在同一代码版本下修改“最大并发”不会触发
+可能出现 `configuration_changed`（配置已变化）。第一批已完成成果和已审核经验保留；仅需处理
+第一批个别未完成项时，对该告警点击“重新运行”。第二批需要按新设置从头验证时，先等待运行中为0，
+点击“重新配置并全部重跑”，确认设置后点击“全部重新运行”。这会创建整批新任务，成功、失败和未运行
+告警全部重跑，旧结果仍保留在历史中。完整步骤见 `docs/soc-validation-restart.md`。
+第一批已经完成的告警和已审核经验无需重跑、重审。仅在同一代码版本下修改“最大并发”不会触发
 这个版本检查，也不需要重新建立任务。"""
         database_recovery = "服务尚未启动；保留已有数据库和备份排查，查明原因后重试，不要通过清库解决启动失败"
         batch_start_instruction = (
@@ -2140,9 +2144,10 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 本机新选择随提交运行保存，已排队任务保留原配置。Host DEV 自动限制内部服务监听，正常启动命令不变。
 刷新页面会恢复当前批次服务器保存的设置；两批分别保存配置，第一批开启语义核对不代表第二批自动开启。
 如果升级后旧任务提示 `configuration_changed`，继续仍使用旧任务的冻结配置，不会自动改成新配置。
-只有已明确决定丢弃第二批全部旧结果时，才使用项目内 `docs/soc-validation-reset.md` 的专项流程：
-停服、完整备份、单独清理第二批，再按第一批全部保存设置重新创建全量验证任务。
-此流程保留第一批积累和审核经验；普通保留数据升级不会执行清理。
+要让第二批按新设置从头运行，先暂停并等待运行中为0，再点击“重新配置并全部重跑”，
+确认完整设置后点击“全部重新运行”。成功、失败和未运行告警全部重新排队，浏览筛选不缩小范围。
+第一批与审核经验保留，旧结果仍可在运行历史查看；当前批次按新任务重新计数。
+逐步操作见项目内 `docs/soc-validation-restart.md`，不需要停服清理数据库。
 {batch_start_instruction}
 无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。

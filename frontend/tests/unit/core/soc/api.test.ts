@@ -23,6 +23,7 @@ import {
   getSocCorpusGroups,
   getSocCorpusExperimentCandidates,
   getSocCorpusExperimentConfiguration,
+  runSocCorpusQuick,
   updateSocCorpusConcurrency,
   getSocMemoryCenterOverview,
   getSocMemoryLineage,
@@ -56,6 +57,37 @@ import {
 import { type SocMemoryCandidate } from "@/core/soc/types";
 
 const mockedFetch = rs.mocked(fetcher);
+
+test("validation restart sends full settings with the token-bound idempotency key", async () => {
+  const token = "a".repeat(64);
+  const body = {
+    batch: "validation" as const,
+    scope: "all" as const,
+    action: "restart_validation" as const,
+    restart_token: token,
+    options: {
+      normalization_review_mode: "apply" as const,
+      refresh_normalization: false,
+      tenant_policy_enabled: false,
+      tenant_policy_advisor_enabled: false,
+      tenant_policy_signal_providers_enabled: false,
+    },
+  };
+  mockedFetch.mockImplementation(async () =>
+    jsonResponse(200, { accepted: true }),
+  );
+  await runSocCorpusQuick(body);
+  await runSocCorpusQuick(body);
+  for (const [url, init] of mockedFetch.mock.calls) {
+    expect(url).toBe("/api/soc/dev/corpus-workbench/quick-validation");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(JSON.stringify(body));
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("x-soc-surface")).toBe("web");
+    expect(headers.get("Idempotency-Key")).toBe(`restart-validation-${token}`);
+  }
+});
 
 test("working-draft requests preserve version and never call review or activation", async () => {
   mockedFetch.mockResolvedValueOnce(jsonResponse(200, { draft: null }));
