@@ -31,6 +31,14 @@ maintenance directory may run outside the checkout with `--root` identifying onl
 the target DB/environment/lock; it is not an application updater and must not copy
 code over the target. Include the existing DEV database helper, source identity,
 per-file hashes and Python/schema requirements; all deletion/backup guards still apply.
+Normalization maintenance issues are shared, deduplicated records, not Run children.
+For a verified deleted Run, retain the issue and clear only its nullable scalar and
+JSON-root `run_id`, after validating issue/Run/alert/tenant identity. Preview this
+change without writes and report its count; apply it in the same deletion transaction.
+Keep every other field, including cumulative counts, governance state and alert ID.
+Other scalar/JSON references still block cleanup, including references inside issue
+details; never exempt the entire table. Reject triggers on the updated table too,
+check that all other values are unchanged, and roll back unlinking with deletion.
 
 PingAn corpus transfer is separate from source/config releases. The bounded
 `build_pingan_corpus_transfer.py` reads the same frozen manifest/index as

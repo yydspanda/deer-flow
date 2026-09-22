@@ -202,7 +202,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > [validation-only recovery procedure](docs/soc-validation-reset.md). Its offline DEV
 > command previews one fixed experiment, verifies a full database backup, and clears
 > its validation attempts in one transaction while retaining learning and reviewed
-> Memory. Shared provenance blocks deletion. This is an explicit maintenance action,
+> Memory. Shared parser-maintenance issues keep their counts and review state; only
+> the optional sample Run link is cleared when that Run is deleted. Other shared
+> provenance still blocks deletion. This is an explicit maintenance action,
 > never an upgrade or continue step; new work uses a fresh round and saved first-batch options.
 > If early learning trials used different settings, explicitly select the verified
 > learning round with `--learning-round`; its options are copied without changing any
