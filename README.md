@@ -126,6 +126,14 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > failed and unrun alerts across the entire second batch, regardless of browser filters.
 > New tasks reset current progress; old results remain in alert history, and first-batch
 > learning and reviewed Memory are preserved. See the [Mac operating steps](docs/soc-validation-restart.md).
+> After the second batch finishes, the standalone read-only
+> `scripts/soc_pingan_validation_report.py` produces a fixed-round effects summary,
+> first/second-batch group comparisons and CSV review batches. It keeps later reruns
+> separate, preserves unknown review reasons, and makes no model calls or database changes.
+> Optional `--exclude-failed` / `--exclude-semantic-failed` produce a separate effect
+> report excluding failed jobs and/or failed semantic reviews, with a deduplicated
+> exclusion receipt and recomputed evaluation denominators. The original report is preserved.
+> See the [internal Mac statistics and review procedure](docs/soc-validation-effect-report.md).
 > The PingAn SIEM email detector `RPAADM_002192` on `T_GBD_zeus_data` is excluded
 > from both validation batches and manual execution; original corpus data is retained.
 > On Mac Host DEV, edit run settings from `http://localhost:2026` on the deployment

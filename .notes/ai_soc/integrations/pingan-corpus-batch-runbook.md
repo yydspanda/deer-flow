@@ -360,6 +360,14 @@ soc resume --round "$(round_id validation)"
 
 ## 7. 导出结果与比较
 
+第二批网页全量重跑结束后，按 [第二批效果统计与分批抽查](../../../docs/soc-validation-effect-report.md)
+使用独立只读工具 `scripts/soc_pingan_validation_report.py`，生成两类样本汇总、第一二批同类组对照、
+差异清单和分批人工抽查表。无需重部署或调用模型，当前库与经验不变。工具按实际成员核对最新全量轮次，
+后续单条重跑单列；不会把最后一条单条轮次或下面旧的 CLI 回执当成整批。
+第一批候选放弃原因缺失时保留待补充，不推断业务理由；运行时经验状态与当前状态分开。
+如需排除整条运行失败及语义核对失败进行效果汇报，使用 `--exclude-failed --exclude-semantic-failed`
+生成独立报告；两种失败按告警去重排除，保留清单、原始范围及 partial，不将效果范围解释为全批成功率。
+
 轮次完成，或 pause 且在途数归零后导出：
 
 ```bash

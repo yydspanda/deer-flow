@@ -1,5 +1,33 @@
 ## Service Startup Contracts
 
+`soc_pingan_validation_report.py` is a standalone stdlib read-only statistics tool,
+with sibling `soc_validation_report_data.py` and `soc_validation_report_render.py`.
+It may run outside the installed checkout; `--root` resolves only the target DEV DB
+and report location. Never import Runtime/configuration, run migrations, call a model,
+write business data, or package the DB. Open SQLite with `mode=ro` and `query_only`,
+page bounded SELECTs with closed cursors, cap each query, and reject an export when
+the same connection's `data_version` changes during collection. Do not use a long
+read transaction or `immutable=1` on a live database. Select a fixed full validation
+round by membership, not the last single-alert round or an old CLI receipt; reject
+unfinished work and preserve later runs separately. Candidate current/as-of states
+and missing historical proof must remain distinct. Group lineage is many-to-many;
+never turn rejected candidates into inferred business reasons or missing Memory into
+matching failures. Reports retain both tiers, denominators, unmeasured usage and
+sampling provenance. Formula-escape CSV cells, create private new output directories,
+and publish the hash manifest last. Synthetic tests must prove immutable source DB,
+scope/selection, drift rejection, aggregation and no-dependency standalone invocation.
+Optional `--exclude-failed` and `--exclude-semantic-failed` produce a separate effect
+report after full-round collection/validation. Filter fixed validation jobs by the
+union of the explicitly selected conditions (job failed / semantic review failed),
+never count overlaps twice and keep `partial` semantic reviews. Apply the same filter
+to every evaluation aggregate and review selection, retain first-batch sources and
+later followups, and preserve the original full scope identity. Record selected rules,
+original/excluded/included counts, reason counts and overlap in `evaluation_scope`,
+with `excluded_alerts.csv` included in the receipt. Never present the filtered scope
+as a full-batch success rate or overwrite an earlier report.
+An independently hashed tool directory is not an application release or updater;
+it never copies files into the installed checkout and requires no service deployment.
+
 Host `reset-dev-data` is an explicit, DEV-only offline operation, never part of
 ordinary install/start/resume. Default is read-only preview; `--confirm RESET-SOC-DEV`
 archives only `soc_agent_dev.db` and its SQLite sidecars with a hash manifest before

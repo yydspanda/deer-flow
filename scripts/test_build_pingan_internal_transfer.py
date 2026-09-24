@@ -129,6 +129,14 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "scripts/test_soc_pingan_dev_database.py" in required
     assert "scripts/soc_pingan_validation_database.py" in required
     assert "scripts/test_soc_pingan_validation_database.py" in required
+    assert "scripts/soc_pingan_validation_report.py" in required
+    assert "scripts/soc_validation_report_data.py" in required
+    assert "scripts/soc_validation_report_render.py" in required
+    assert "scripts/test_soc_pingan_validation_report.py" in required
+    assert "scripts/test_soc_validation_report_data.py" in required
+    assert "scripts/test_soc_validation_report_render.py" in required
+    assert "scripts/test_soc_validation_report_integration.py" in required
+    assert "docs/soc-validation-effect-report.md" in required
     assert "backend/scripts/soc_validation_reset_store.py" in required
     assert "backend/tests/test_soc_validation_reset_store.py" in required
     assert "docs/soc-validation-reset.md" in required
