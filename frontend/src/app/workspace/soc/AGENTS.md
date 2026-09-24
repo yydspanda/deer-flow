@@ -423,10 +423,13 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
 - Keep implementation vocabulary out of primary analyst surfaces. For one alert, render
   Memory use as `未使用历史经验`, `仅作研判参考`, or `已复用审核结论`. Render record
   availability as `已开放给新告警` or `暂停用于新告警`; disabled retrieval means the
-  record is not used at all, not context-only. Call a tenant Memory Profile a `匹配规则版本`
-  in user-facing detail and hide the healthy/current profile state from primary lists;
-  preserve Profile, Directive, retrieval, and context-only terms only in explicit technical
-  audit payloads.
+  record is not used at all, not context-only. Internal tenant Profile IDs, profile/schema
+  versions and current-versus-saved version numbers do not belong in normal record,
+  match-test, review or accumulation detail. Show server-owned business state and
+  actionable compatibility explanations instead; hide healthy/current state from primary
+  lists. Preserve Profile/Directive/retrieval/context-only details and the original
+  profile/schema fields in explicit technical audit payloads. Actual Memory record revision
+  numbers remain visible and continue to fence mutations; they are not Profile versions.
 - Memory Center must keep lifecycle and future use separate. Lifecycle says only whether
   samples are accumulating, a candidate awaits review, or an experience has been persisted.
   Future use says `尚未开放`, `仅供研判参考`, or `精确匹配可复用结论`; an exact-capable

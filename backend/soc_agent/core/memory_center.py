@@ -124,7 +124,7 @@ class SocMemoryCenterService:
             registered = self._profile_registry.get(profile.profile_id)
             if registered is None:
                 unregistered_patterns += profile.pattern_count
-            elif registered.identity.profile_version != profile.profile_version or registered.identity.feature_schema_version != profile.feature_schema_version:
+            elif not _profile_is_current(registered, profile.profile_id, profile.profile_version, profile.feature_schema_version):
                 legacy_patterns += profile.pattern_count
         return SocMemoryCenterOverview(
             metrics=SocMemoryCenterMetrics(
@@ -286,7 +286,7 @@ class SocMemoryCenterService:
         else:
             current_profile_version = registered_profile.identity.profile_version
             current_feature_schema_version = registered_profile.identity.feature_schema_version
-            profile_state = SocMemoryProfileState.CURRENT if current_profile_version == stats.profile_version and current_feature_schema_version == stats.feature_schema_version else SocMemoryProfileState.LEGACY
+            profile_state = SocMemoryProfileState.CURRENT if _profile_is_current(registered_profile, stats.profile_id, stats.profile_version, stats.feature_schema_version) else SocMemoryProfileState.LEGACY
 
         snapshot_count = _candidate_snapshot_count(candidate)
         reinforcement_count = max(0, stats.support_count - snapshot_count) if candidate is not None else 0
@@ -361,6 +361,8 @@ class SocMemoryCenterService:
         current = self._profile_registry.get(profile[0])
         if current is None:
             return None
+        if _profile_is_current(current, *profile):
+            return None
         candidates = self._require_candidate_repository().list_memory_candidates(
             alert_id=candidate.source.alert_id,
             limit=200,
@@ -378,12 +380,8 @@ class SocMemoryCenterService:
                 SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
                 SocMemoryCandidateStatus.CONFIRMED,
             }
-            and _candidate_profile(item)
-            == (
-                current.identity.profile_id,
-                current.identity.profile_version,
-                current.identity.feature_schema_version,
-            )
+            and (identity := _candidate_profile(item)) is not None
+            and _profile_is_current(current, *identity)
         ]
         return eligible[0].candidate_id if eligible else None
 
@@ -527,6 +525,14 @@ def _stage_filter(
     }:
         return SocMemoryPatternStageFilter.PERSISTED
     return SocMemoryPatternStageFilter.TERMINAL
+
+
+def _profile_is_current(profile, profile_id: str, profile_version: str, feature_schema_version: str) -> bool:
+    """A presentation family does not relax retrieval or governance identities."""
+    current = getattr(profile, "is_current_identity", None)
+    if callable(current):
+        return current({"profile_id": profile_id, "profile_version": profile_version, "feature_schema_version": feature_schema_version})
+    return (profile.identity.profile_id, profile.identity.profile_version, profile.identity.feature_schema_version) == (profile_id, profile_version, feature_schema_version)
 
 
 def _future_use_state(

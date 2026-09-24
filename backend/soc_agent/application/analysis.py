@@ -68,6 +68,9 @@ def build_soc_analysis_service(
         memory_environment=memory_environment,
         runtime_environment=runtime_environment,
     )
+    assist_mode = execution_options.normalization_review_mode if execution_options is not None else os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower()
+    if assist_mode not in {"off", "shadow", "apply"}:
+        raise ValueError("SOC_NORMALIZATION_ASSIST_MODE must be off, shadow or apply")
     maintenance = (
         SocNormalizationMaintenanceService(
             baseline_repository=repository,
@@ -89,10 +92,8 @@ def build_soc_analysis_service(
         repository,
         memory_environment=resolved_environment,
         memory_record_ids=memory_record_ids,
+        normalization_review_mode=assist_mode,
     )
-    assist_mode = execution_options.normalization_review_mode if execution_options is not None else os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower()
-    if assist_mode not in {"off", "shadow", "apply"}:
-        raise ValueError("SOC_NORMALIZATION_ASSIST_MODE must be off, shadow or apply")
     reviewer = None
     if assist_mode != "off":
         if resolved_settings.mode != "llm":
@@ -112,7 +113,7 @@ def build_soc_analysis_service(
         analyzer, role_verifier = build_configured_analysis_nodes(settings=resolved_settings)
     direct_resolution = None
     if _strict_env_bool("SOC_DIRECT_RESOLUTION_ENABLED", default=True):
-        profiles = build_soc_memory_profile_registry()
+        profiles = build_soc_memory_profile_registry(normalization_review_mode=assist_mode)
         direct_resolution = SocDirectResolutionService(
             tenant_policy_service=next((observer for observer in post_analysis_observers if isinstance(observer, SocTenantPolicyEvaluationService)), None),
             memory_service=SocMemoryService(record_repository=repository, profile_registry=profiles, retrieval_record_ids=memory_record_ids) if repository is not None else None,
@@ -144,6 +145,7 @@ def _build_analysis_request_enricher(
     *,
     memory_environment: str | None,
     memory_record_ids: frozenset[str] | None = None,
+    normalization_review_mode: str | None = None,
 ) -> CompositeAnalysisRequestEnricher:
     enrichers = [
         TenantKnowledgeAnalysisRequestEnricher(
@@ -151,7 +153,7 @@ def _build_analysis_request_enricher(
         )
     ]
     if repository is not None:
-        profile_registry = build_soc_memory_profile_registry()
+        profile_registry = build_soc_memory_profile_registry(normalization_review_mode=normalization_review_mode)
         enrichers.append(
             ConfirmedMemoryAnalysisRequestEnricher(
                 SocMemoryService(
@@ -363,7 +365,7 @@ def _build_post_analysis_observers(
                 service=SocMemoryPatternService(
                     repository=repository,
                     candidate_repository=repository,
-                    profile_registry=build_soc_memory_profile_registry(),
+                    profile_registry=build_soc_memory_profile_registry(normalization_review_mode=execution_options.normalization_review_mode if execution_options is not None else None),
                 ),
                 environment=runtime_environment,
                 data_class=data_class,

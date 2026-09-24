@@ -151,21 +151,39 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   non-blocking.
 - Eligible records are confirmed, explicitly enabled, validity-current, review-current,
   and tenant/profile compatible. Alert/run IDs are lineage, not matching facets.
-- Canonical destination transport/port and public CVE IDs are vendor-neutral facets. A
+- Canonical transport/service-port pairs and public CVE IDs are vendor-neutral facets. A
   tenant Profile may combine them with a versioned behavior-family policy, but IPs and
   ephemeral source ports remain occurrence/entity context. Any component-policy change
-  requires a feature-schema/Profile bump, fail-closed old records, and a pattern-facet
+  requires a feature-schema/Profile bump, fail-closed exact reuse, and a pattern-facet
   projection that stays within the 20-group signature contract.
-  PingAn normalization `apply` selects Profile 9 / v7 semantic observation
-  features; `off/shadow` use Profile 7 / v5. The shared Memory kernel does not parse
+  New PingAn normalization `apply` executions compare the canonical facets of internal
+  Profile 9 / v7 and 10 / v8, excluding only the versioned fingerprint. Identical
+  ingredients and projection gaps retain Profile 9 and its exact reviewed reuse path; changes
+  use direction-aware Profile 10. `off/shadow` use Profile 7 / v5. Explicit execution review
+  options govern both the reviewer and new-run Profile, ahead of deployment defaults.
+  Direction-aware service projection uses only the bound object's own TCP/UDP transport
+  and valid 1..65535 port: `to_client` takes the source port, `to_server` the destination.
+  Unknown/in/out direction, zero/missing ports and cross-object protocol/port borrowing
+  cannot produce a service. Distinct or unresolved connections under an aggregate
+  subject require an explicit observation binding before producing a strong service
+  anchor; otherwise retain a projection gap. No HTTP fallback guesses a service role.
+  The shared Memory kernel does not parse
   detector vendor labels or create semantic facts. Keep old records/indexes untouched;
   the offline corpus index remains an Adapter-only navigation index, not an authority for
   a completed run's Memory scope. Workbench readers restore the frozen `memory_profile`
   identity and actual signature to select observations, even when the run's semantic-review
   mode differs. Only historical runs without a saved identity use legacy review-mode
   inference (`apply` -> Profile 8 / v6, otherwise Profile 7 / v5). Invalid saved identities
-  fail closed rather than selecting another profile; new apply candidates use actual v7 facets.
-  Restore known historical projectors for read/replay without rewriting or reactivating old Memory.
+  fail closed rather than selecting another profile; new apply candidates use the
+  actual selected identity and facets frozen on their request.
+  Restore unchanged Profile 7/8/9 projectors for read/replay without rewriting,
+  reprojecting through the current rules or reactivating old Memory.
+  Server-owned `for_request` selection applies only to requests without a saved
+  identity. Memory Center classifies currently generated off/shadow/apply identities
+  (7/9/10) as current through `is_current_identity`, regardless of process defaults;
+  Profile 8 remains historical. This display predicate must never relax retrieval,
+  scope governance or directive identity checks, or propose a replacement solely
+  because another current-family candidate exists.
   Replaying the same alert/signature does not increase support. New semantic signatures
   must not be attached to old observations or silently widen reviewed Memory scopes.
   The mandatory PingAn pre-delivery gate loads the fixed Profile 7 / v5 release baseline
@@ -173,6 +191,9 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   Keep its original serialized records and matching expectations fixed; normal tests must
   not regenerate old samples through current code. The gate uses temporary state and must
   not rewrite business records, change reviewed conditions or require internal reruns.
+  Directional-service and reference-compatibility regressions additionally verify
+  frozen Profile 7/8/9 feature hashes, explicit observation bindings and reference-only
+  authority. Ship these tests and their shared fixture modules with the required sources.
 - Retrieval policy v2 runs exact-facet and text lanes over the complete eligible corpus,
   merges bounded candidates, and requires a Memory-type-specific strong anchor.
   Source/environment/category alone cannot admit a detection lesson or benign Pattern;
@@ -181,6 +202,16 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   context-only applicability is accepted. Compatibility readers may recognize older
   canonical component encodings, but they must not read tenant raw aliases or silently
   reinterpret an unrelated behavior under the same detection key.
+- PingAn's `reference_applicability` delegates to `reference_retrieval.py` only for
+  eligible reviewed `review_hint` records without a directive whose required keys are
+  exactly `detection_key`, `detection_signature` and `environment`. A difference in
+  optional service features or a known historical Profile identity may yield only
+  `partial` with context-only permission, never direct reuse. Evaluate saved required
+  values and explicit reuse/excluded conditions under their existing authority rules;
+  do not waive tenant/environment, activation/validity, CVE or behavior-family gates.
+  Unknown identities and untranslatable explicit restrictions fail closed. Keep the
+  original record bytes and exact applicability unchanged; this is a reference
+  comparison, not a migration or an alternate directive path.
 - `M-*` is historical reasoning context, not `E-*` current evidence. Free-form Memory
   never deterministically changes a decision.
 - Before freezing the M-* catalog, `ConfirmedMemoryAnalysisRequestEnricher` applies

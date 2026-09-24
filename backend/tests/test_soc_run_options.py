@@ -104,6 +104,37 @@ def test_explicit_review_switch_constructs_only_the_selected_reviewer(tmp_path, 
     client.assert_not_called()
 
 
+@pytest.mark.parametrize("environment_mode", ["off", "apply"])
+def test_saved_memory_projection_follows_this_runs_review_setting(tmp_path, monkeypatch, environment_mode):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from test_soc_memory_reference_retrieval import reference_fixture
+
+    from soc_agent.application import analysis
+
+    monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", environment_mode)
+    monkeypatch.setattr(analysis, "get_app_config", lambda: SimpleNamespace(model_dump=lambda **_: {}))
+    monkeypatch.setattr(analysis, "build_configured_chat_client", lambda **_: (Mock(), "fixture-model"))
+    monkeypatch.setattr(analysis, "build_configured_analysis_nodes", lambda **_: (Mock(), None))
+    monkeypatch.setattr(analysis, "JsonLLMNormalizationReviewer", Mock())
+    repository = _repository(tmp_path)
+    request = reference_fixture()[0].model_copy(update={"memory_profile": {}})
+    before = dict(os.environ)
+    for mode, expected in (("off", "7"), ("apply", "10"), ("shadow", "7")):
+        service = build_soc_analysis_service(
+            repository,
+            settings=SocLLMSettings(mode=SocAnalyzerMode.LLM),
+            execution_options=SocAnalysisExecutionOptions(normalization_review_mode=mode),
+            runtime_environment="dev-corpus-eval",
+            pattern_observation_enabled=False,
+            execute_authorized_actions=False,
+        )
+        projected = service._runtime._analysis_request_enricher(request)
+        assert projected.memory_profile["profile_version"] == expected
+    assert dict(os.environ) == before
+
+
 def _workbench(tmp_path, monkeypatch, *, factory_wrapper=None):
     import pandas as pd
 

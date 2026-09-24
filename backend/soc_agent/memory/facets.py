@@ -39,6 +39,8 @@ _NETWORK_PROTOCOL_ALIASES = {
 
 def memory_facets_from_analysis_request(
     request: LLMAnalysisRequest,
+    *,
+    directional_services: bool = False,
 ) -> dict[str, list[str]]:
     """Build replay-stable pre-LLM facets from the canonical analysis request."""
 
@@ -78,7 +80,7 @@ def memory_facets_from_analysis_request(
                 _role_entity(resolution.role, resolution.selected_value),
             )
 
-    network_services = _network_services(request)
+    network_services = _network_services(request, directional=directional_services)
     vulnerability_ids = _vulnerability_ids(request)
     for service in network_services:
         _add(facets, "network_service", service)
@@ -110,11 +112,12 @@ def memory_facets_from_analysis_run(
     run: AnalysisRun,
     *,
     alert: AlertInput | None = None,
+    directional_services: bool = False,
 ) -> dict[str, list[str]]:
     """Build reusable facets for a reviewed artifact without lineage IDs."""
 
     if run.llm_analysis_request is not None:
-        facets = memory_facets_from_analysis_request(run.llm_analysis_request)
+        facets = memory_facets_from_analysis_request(run.llm_analysis_request, directional_services=directional_services)
     else:
         facets = _facets_from_alert_or_report(run, alert=alert)
 
@@ -220,11 +223,31 @@ def _behavior_components(
     return sorted(components)
 
 
-def _network_services(request: LLMAnalysisRequest) -> list[str]:
+def network_service_from_direction(*, protocol: str | None, direction: str | None, src_port: int | None, dst_port: int | None) -> str | None:
+    """Return one object's explicit service; never borrow an adjacent object's roles."""
+    transport = _normalize_network_protocol(protocol)
+    if transport not in {"tcp", "udp"}:
+        return None
+    selected_port = {"to_client": src_port, "to_server": dst_port}.get((direction or "").strip().casefold())
+    if selected_port is None or not 1 <= selected_port <= 65535:
+        return None
+    return f"{transport}/{selected_port}"
+
+
+def _network_services(request: LLMAnalysisRequest, *, directional: bool = False) -> list[str]:
     """Project transport and destination-port pairs without retaining IPs."""
 
     network = request.canonical_entities.network
     services: set[str] = set()
+
+    if directional:
+        # Historical profiles retain the original projection below. New profiles
+        # require each observation to carry its own transport and direction.
+        for subject in [network, *network.observations[:100]]:
+            service = network_service_from_direction(protocol=subject.protocol, direction=subject.direction, src_port=subject.src_port, dst_port=subject.dst_port)
+            if service is not None:
+                services.add(service)
+        return sorted(services)[:20]
 
     def add(protocol: str | None, port: int | None) -> None:
         normalized_protocol = _normalize_network_protocol(protocol)

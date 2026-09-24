@@ -299,6 +299,14 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > namespace and provenance instead of disappearing between parsing and canonical mapping.
 > Result details separate a server-generated **系统匹配说明** from **模型研判依据**. The former
 > lists the saved Memory use mode and uncovered conditions; the latter explains business impact.
+> Normal experience views describe applicability in business terms; internal matching identifiers
+> remain in audit data. A one-experience match test uses the same eligibility checks as Runtime,
+> while a real run still selects from the full eligible inventory within its context budget.
+> With semantic review applied, new PingAn runs identify the service endpoint from request/response
+> direction instead of treating a response's client port as the service. Reviewed reference-only
+> detector lessons can remain useful across optional service-port differences, with those differences
+> shown to the model. Explicit reviewed limits remain binding and this never grants direct verdict reuse.
+> Saved experiences and historical results remain intact; new runs follow their own saved review settings.
 > New experience candidates carry the same matching facts into lesson drafting. Historical model
 > text remains auditable; this does not change matching, verdicts, or add model calls.
 > SOC model-bound JSON uses compact serialization for analysis, semantic review, role verification,

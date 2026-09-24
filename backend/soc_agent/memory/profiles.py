@@ -294,7 +294,10 @@ class SocMemoryProfileRegistry:
             self._fallback,
         )
         restore = getattr(profile, "for_identity", None)
-        return restore(request.memory_profile) if request.memory_profile and callable(restore) else profile
+        if request.memory_profile:
+            return restore(request.memory_profile) if callable(restore) else profile
+        select = getattr(profile, "for_request", None)
+        return select(request) if callable(select) else profile
 
     def resolve_run(self, run: AnalysisRun) -> SocMemoryProfile:
         if run.llm_analysis_request is None:

@@ -4,6 +4,7 @@ import re
 from pathlib import PurePosixPath, PureWindowsPath
 
 from soc_agent.contracts import LLMAnalysisRequest
+from soc_agent.memory.facets import network_service_from_direction
 
 SEMANTIC_PREFIXES = ("detected_behavior:", "detected_file:", "target_port:", "web_detection_target", "observed_process:", "observed_process_edge:")
 
@@ -32,7 +33,29 @@ def _subject(entities, path):
         return None
 
 
-def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = False) -> tuple[list[str], list[str]]:
+def _directional_service(subject):
+    return network_service_from_direction(protocol=subject.get("protocol"), direction=subject.get("direction"), src_port=subject.get("src_port"), dst_port=subject.get("dst_port"))
+
+
+def _network_subject_ambiguous(subject):
+    observations = subject.get("observations", [])
+    if not observations:
+        return False
+    connections = set()
+    for item in [subject, *observations]:
+        service = _directional_service(item)
+        source, destination = item.get("source_ip"), item.get("destination_ip")
+        if not service or not source or not destination or not item.get("src_port") or not item.get("dst_port"):
+            return True
+        # A request and its response are the same connection. A different or
+        # unresolved endpoint/role cannot inherit the aggregate's service.
+        endpoints = ((source, item["src_port"]), (destination, item["dst_port"]))
+        server, client = endpoints if item["direction"].strip().casefold() == "to_client" else reversed(endpoints)
+        connections.add((service.split("/", 1)[0], server, client))
+    return len(connections) > 1
+
+
+def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = False, directional_services: bool = False) -> tuple[list[str], list[str]]:
     entities = request.canonical_entities
     components, strong = set(), set()
     for detection in entities.detections:
@@ -50,10 +73,14 @@ def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = 
             if kind == "file_detection" and (leaf := _leaf(subject.get("file_path") or subject.get("file_name"))):
                 components.add("detected_file:" + leaf)
                 binding = "file:" + leaf
-            elif kind == "network_access" and subject.get("dst_port"):
-                if stable:
+            elif kind == "network_access":
+                if directional_services:
+                    service = _directional_service(subject)
+                    if service and not _network_subject_ambiguous(subject):
+                        binding = "service:" + service
+                elif stable and subject.get("dst_port"):
                     binding = "service:" + str(subject.get("protocol") or "unknown").casefold() + "/" + str(subject["dst_port"])
-                else:
+                elif subject.get("dst_port"):
                     components.add("target_port:" + str(subject["dst_port"]))
                     binding = "port:" + str(subject["dst_port"])
             elif kind == "process_execution" and (subject.get("nodes") or subject.get("process_name")):
@@ -91,7 +118,7 @@ def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = 
     return sorted(components), sorted(strong)
 
 
-def semantic_projection_gaps(request: LLMAnalysisRequest) -> list[str]:
+def semantic_projection_gaps(request: LLMAnalysisRequest, *, directional_services: bool = False) -> list[str]:
     gaps = []
     for index, detection in enumerate(request.canonical_entities.detections):
         if detection.identity_basis == "ambiguous":
@@ -99,9 +126,12 @@ def semantic_projection_gaps(request: LLMAnalysisRequest) -> list[str]:
         for ref in detection.subject_refs or [""]:
             subject = _subject(request.canonical_entities, ref)
             kind = ref.split(".")[1] if "." in ref else None
+            if directional_services and kind == "network" and subject and _network_subject_ambiguous(subject):
+                gaps.append(f"entities.detections[{index}]:network_subject_ambiguous:{ref}")
+                continue
             supported = subject and (
                 (kind == "file" and (subject.get("file_path") or subject.get("file_name")))
-                or (kind == "network" and subject.get("dst_port"))
+                or (kind == "network" and (_directional_service(subject) if directional_services else subject.get("dst_port")))
                 or (kind == "process" and (subject.get("nodes") or subject.get("process_name")))
                 or (kind == "http" and subject.get("host"))
             )

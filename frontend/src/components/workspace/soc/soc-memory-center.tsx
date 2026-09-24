@@ -63,10 +63,10 @@ const PAGE_SIZE = 50;
 const OBSERVATION_PAGE_SIZE = 20;
 
 const ATTENTION_REASON_LABELS: Record<string, string> = {
-  unregistered_memory_profile: "匹配规则不可用",
-  legacy_memory_profile: "匹配规则版本待升级",
-  legacy_candidate_requires_reconciliation: "旧规则生成的候选需要处理",
-  legacy_memory_requires_revalidation: "旧规则生成的经验需要重新校验",
+  unregistered_memory_profile: "适用条件暂不可识别",
+  legacy_memory_profile: "适用条件待核查",
+  legacy_candidate_requires_reconciliation: "历史候选需要核查",
+  legacy_memory_requires_revalidation: "历史经验的适用条件需要重新校验",
   candidate_review_required: "存在待专家审核的经验候选",
   superseded_history: "该候选已被新版本替代",
   memory_retrieval_disabled: "已确认经验当前暂停用于新告警",
@@ -384,11 +384,9 @@ export function SocMemoryCenter({
             "Memory Center operator reconciled a same-alert candidate created by an older matching-rule contract.",
         },
       });
-      toast.success("旧匹配规则候选已标记为历史替代项");
+      toast.success("历史候选已标记为替代项");
     } catch (cause) {
-      toast.error(
-        cause instanceof Error ? cause.message : "匹配规则候选处理失败",
-      );
+      toast.error(cause instanceof Error ? cause.message : "历史候选处理失败");
     }
   };
 
@@ -452,11 +450,11 @@ export function SocMemoryCenter({
                 已替代候选 {overview?.metrics.superseded_candidate_count ?? 0}
               </span>
               <span>
-                匹配规则待升级{" "}
+                适用条件待核查{" "}
                 {overview?.metrics.legacy_profile_pattern_count ?? 0}
               </span>
               <span>
-                匹配规则不可用{" "}
+                适用条件暂不可识别{" "}
                 {overview?.metrics.unregistered_profile_pattern_count ?? 0}
               </span>
             </div>
@@ -566,7 +564,7 @@ export function SocMemoryCenter({
                     <SelectItem value="exact_match_decision">
                       精确匹配可复用结论
                     </SelectItem>
-                    <SelectItem value="blocked">匹配规则待处理</SelectItem>
+                    <SelectItem value="blocked">使用条件待核查</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -817,24 +815,26 @@ export function SocMemoryCenter({
                   <dl className="grid border-b sm:grid-cols-2">
                     <div className="border-b px-5 py-3 sm:border-r">
                       <dt className="text-muted-foreground text-xs">
-                        匹配规则版本
+                        同类识别状态
                       </dt>
                       <dd className="mt-1 text-sm">
-                        {detail.pattern.profile_id} v
-                        {detail.pattern.profile_version}
+                        {
+                          MEMORY_MATCHING_RULE_STATE_LABELS[
+                            detail.pattern.profile_state
+                          ]
+                        }
                       </dd>
                       {detail.pattern.profile_state === "legacy" ? (
                         <div className="text-muted-foreground mt-1 text-xs">
-                          当前规则版本 v{detail.pattern.current_profile_version}
-                          ，这条模式需要重新校验。
+                          这组同类行为的适用条件需要重新校验。
                         </div>
                       ) : detail.pattern.profile_state === "unregistered" ? (
                         <div className="mt-1 text-xs text-red-700">
-                          当前系统无法识别该匹配规则，不能用于新告警。
+                          当前系统无法识别这些适用条件，不能用于新告警。
                         </div>
                       ) : (
                         <div className="text-muted-foreground mt-1 text-xs">
-                          用于从告警中提取稳定的同类特征；仅供版本审计。
+                          依据告警行为和适用范围归纳同类样本。
                         </div>
                       )}
                     </div>
@@ -872,11 +872,9 @@ export function SocMemoryCenter({
                   detail.pattern.candidate?.status !== "superseded" ? (
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
                       <div>
-                        <div className="text-sm font-medium">
-                          旧匹配规则候选处理
-                        </div>
+                        <div className="text-sm font-medium">历史候选处理</div>
                         <div className="text-muted-foreground mt-1 text-xs">
-                          同一来源告警已经使用当前匹配规则生成新候选{" "}
+                          同一来源告警已经生成新的审核候选{" "}
                           {detail.suggested_successor_candidate_id}
                         </div>
                       </div>

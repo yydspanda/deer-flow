@@ -34,9 +34,9 @@ export const MEMORY_MATCHING_RULE_STATE_LABELS: Record<
   SocMemoryProfileState,
   string
 > = {
-  current: "匹配规则正常",
-  legacy: "匹配规则待升级",
-  unregistered: "匹配规则不可用",
+  current: "同类识别正常",
+  legacy: "适用条件待核查",
+  unregistered: "适用条件暂不可识别",
 };
 
 export interface MemoryRunUsageCopy {
@@ -69,9 +69,9 @@ export function memoryFutureUseStateCopy(
       };
     case "blocked":
       return {
-        label: "匹配规则待处理",
+        label: "使用条件待核查",
         detail:
-          "经验虽已开放，但匹配规则或有效期需要处理，完成前不会用于新告警。",
+          "经验虽已开放，但适用条件或有效期需要核查，完成前不会用于新告警。",
         tone: "blocked",
       };
     case "exact_match_decision":

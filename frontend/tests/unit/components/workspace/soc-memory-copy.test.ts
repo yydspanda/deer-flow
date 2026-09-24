@@ -67,7 +67,7 @@ describe("SOC Memory analyst-facing copy", () => {
         decisionDirectiveReady: true,
       }).label,
     ).toBe("精确匹配可复用结论");
-    expect(memoryFutureUseStateCopy("blocked").label).toBe("匹配规则待处理");
+    expect(memoryFutureUseStateCopy("blocked").label).toBe("使用条件待核查");
   });
 
   test("uses analyst language for lifecycle and matching-rule states", () => {
@@ -76,6 +76,6 @@ describe("SOC Memory analyst-facing copy", () => {
     expect(MEMORY_PATTERN_STAGE_DETAILS.memory_active).toContain(
       "使用状态决定",
     );
-    expect(MEMORY_MATCHING_RULE_STATE_LABELS.legacy).toBe("匹配规则待升级");
+    expect(MEMORY_MATCHING_RULE_STATE_LABELS.legacy).toBe("适用条件待核查");
   });
 });

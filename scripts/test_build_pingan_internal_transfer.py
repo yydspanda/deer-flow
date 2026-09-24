@@ -74,6 +74,28 @@ def test_required_handoff_inventory_exists_in_current_repo() -> None:
     assert missing == []
 
 
+@pytest.mark.parametrize(
+    "required_path",
+    [
+        "backend/soc_agent/integrations/pingan/memory/reference_retrieval.py",
+        "backend/tests/test_soc_memory_reference_retrieval.py",
+        "backend/tests/test_soc_memory_reference_compatibility_safety.py",
+        "backend/tests/test_soc_pingan_memory_service_direction.py",
+        "backend/tests/test_soc_memory_revision_workflow.py",
+        "backend/tests/test_soc_pingan_memory_profile.py",
+    ],
+)
+def test_handoff_requires_memory_reference_and_direction_regressions(
+    required_path: str,
+) -> None:
+    assert required_path in REQUIRED_HANDOFF_SOURCE_PATHS
+    incomplete = [
+        Path(item) for item in REQUIRED_HANDOFF_SOURCE_PATHS if item != required_path
+    ]
+    with pytest.raises(ValueError, match=re.escape(required_path)):
+        _assert_required_handoff_sources(incomplete)
+
+
 def test_private_overlay_keeps_corpus_metadata_but_excludes_large_data() -> None:
     paths = set(PRIVATE_OVERLAY_PATHS)
 

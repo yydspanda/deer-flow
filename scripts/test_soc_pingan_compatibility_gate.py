@@ -11,6 +11,39 @@ import pytest
 from scripts import soc_pingan_compatibility_gate as gate
 
 
+_REFERENCE_DIRECTION_BEHAVIORS = {
+    "backend/tests/test_soc_memory_reference_retrieval.py": (
+        "test_optional_service_difference_retains_reviewed_reference_without_directive",
+        "test_known_profile_change_can_only_recall_rule_context_as_reference",
+        "test_current_response_projection_recalls_old_reference_with_explicit_port_comparison",
+        "test_match_preview_uses_same_profile_conflicts_as_runtime",
+    ),
+    "backend/tests/test_soc_memory_reference_compatibility_safety.py": (
+        "test_optional_port_compatibility_is_context_only_and_preserves_frozen_record",
+        "test_compatibility_never_drops_reviewed_conditions",
+        "test_cross_tenant_query_never_sees_reference_compatibility_record",
+        "test_decision_bearing_records_never_enter_reference_compatibility",
+    ),
+    "backend/tests/test_soc_pingan_memory_service_direction.py": (
+        "test_service_and_strong_anchor_follow_the_same_explicit_direction",
+        "test_unknown_direction_does_not_guess_a_service",
+        "test_aggregate_with_distinct_connections_needs_an_explicit_observation_binding",
+        "test_historical_profile_features_remain_byte_equivalent",
+        "test_fresh_requests_select_new_identity_only_when_canonical_features_change",
+        "test_new_projection_gap_is_not_hidden_when_duplicate_service_anchors_collapse",
+        "test_saved_identity_never_runs_fresh_feature_selection",
+        "test_invalid_saved_identity_is_not_replaced_by_an_unchanged_projection",
+        "test_unchanged_features_keep_reviewed_v9_directive_on_its_exact_path",
+    ),
+}
+
+
+def test_gate_requires_reference_authority_and_historical_direction_checks():
+    for relative, names in _REFERENCE_DIRECTION_BEHAVIORS.items():
+        assert relative in gate.REQUIRED_TEST_FILES
+        assert set(names) <= set(gate.REQUIRED_TEST_NAMES.get(relative, ()))
+
+
 @pytest.fixture
 def checkout(tmp_path: Path) -> Path:
     python = tmp_path / "backend/.venv/bin/python"
@@ -241,10 +274,16 @@ def test_gate_rejects_malformed_junit(checkout, monkeypatch):
         _invoke(checkout)
 
 
+@pytest.mark.parametrize(
+    "required",
+    [
+        "test_frozen_reviewed_memory_still_reuses_in_validation",
+        *(name for names in _REFERENCE_DIRECTION_BEHAVIORS.values() for name in names),
+    ],
+)
 def test_gate_rejects_missing_behavior_even_when_its_file_has_other_passing_tests(
-    checkout, monkeypatch
+    checkout, monkeypatch, required
 ):
-    required = "test_frozen_reviewed_memory_still_reuses_in_validation"
     _mock_run(monkeypatch, omitted_name=required)
     with pytest.raises(gate.CompatibilityGateError, match=required):
         _invoke(checkout)

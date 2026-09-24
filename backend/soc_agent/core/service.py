@@ -3555,6 +3555,7 @@ class SocMemoryService:
         retrieval = SocMemoryService(
             record_repository=isolated_repository,
             now_provider=self._now_provider,
+            profile_registry=self._profile_registry,
         ).find_relevant_records(query)
         match = next(
             (item for item in retrieval.matches if item.memory_id == record.memory_id),
@@ -3794,7 +3795,7 @@ class SocMemoryService:
         """Evaluate complete enabled inventory, not a prompt-budgeted shortlist."""
         if self._record_repository is None:
             raise SocServiceNotImplementedError("direct retrieval requires a MemoryRecordRepository")
-        return self._retrieve_records(query, records=self._scope_inventory(query), apply_budget=False)
+        return self._retrieve_records(query, records=self._scope_inventory(query), apply_budget=False, allow_reference=False)
 
     def _scope_inventory(self, query: SocMemoryQuery) -> list[SocMemoryRecord]:
         if self._record_repository is None:
@@ -3818,7 +3819,7 @@ class SocMemoryService:
     def find_relevant_records(self, query: SocMemoryQuery) -> SocMemoryRetrievalResult:
         return self._retrieve_records(query, records=self._scope_inventory(query))
 
-    def _retrieve_records(self, query: SocMemoryQuery, *, records: list[SocMemoryRecord] | None = None, apply_budget: bool = True) -> SocMemoryRetrievalResult:
+    def _retrieve_records(self, query: SocMemoryQuery, *, records: list[SocMemoryRecord] | None = None, apply_budget: bool = True, allow_reference: bool = True) -> SocMemoryRetrievalResult:
         """Return retrieval-enabled confirmed memory records with scoring metadata."""
 
         if self._record_repository is None:
@@ -3872,6 +3873,9 @@ class SocMemoryService:
 
         for record in deduped_records.values():
             if self._retrieval_record_ids is not None and record.memory_id not in self._retrieval_record_ids:
+                continue
+            if (query.tenant_id is not None and record.tenant_id != query.tenant_id) or (query.tenant_scope is not None and record.tenant_scope != query.tenant_scope):
+                skipped_status += 1
                 continue
             if query.statuses and record.status not in query.statuses:
                 skipped_status += 1
@@ -3930,9 +3934,14 @@ class SocMemoryService:
                 if profile is not None
                 else []
             )
+            reference_resolver = getattr(profile, "reference_applicability", None)
+            reference_report = reference_resolver(record, query, applicability_report, profile_conflicts) if allow_reference and callable(reference_resolver) else None
+            if reference_report is not None:
+                applicability_report = reference_report
             coverage_reference = record.applicability is not None and record.applicability.covered_behavior_components is not None and applicability_report.context_only_allowed and bool(applicability_report.uncovered_behavior_components)
             if (
                 profile_conflicts
+                and reference_report is None
                 and not coverage_reference
                 and not (record.applicability is not None and record.applicability.selected_behavior_components is not None and applicability_report.status is SocMemoryApplicabilityStatus.APPLICABLE)
             ):

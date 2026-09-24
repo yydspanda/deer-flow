@@ -3043,6 +3043,23 @@ tool permission denial rate
   canonical scope conflicts such as different network service, CVE, or attack-behavior family. Compatibility with
   older records may derive these scopes from canonical `behavior_component*` prefixes, but never from tenant raw
   aliases. A same-rule cross-behavior record rejected here must count as `skipped_not_applicable`.
+- PingAn's registered `reference_applicability` hook is a narrow exception for confirmed, governed
+  `review_hint` records without a directive or selected/covered behavior. Required keys must be exactly
+  detection key/signature/environment and all must match with the original thresholds and tenant scope.
+  Only optional service differences and known saved Profile identities may be bridged, always as
+  `partial/context_only`; CVE/family conflicts and explicit required/reuse/excluded limits still reject.
+  Cross-identity opaque exclusions must fail closed. The hook is disabled in `find_directive_records`.
+  Match-test composition carries the real Profile registry, while remaining a single-record eligibility test.
+- PingAn apply Profile 10 / feature schema v8 corrects service direction without rewriting Profiles 7/8/9:
+  `to_client` takes its own `src_port`, `to_server` its own `dst_port`, with valid TCP/UDP ports 1–65535.
+  Unknown fields do not borrow values from another observation or HTTP fallback. Strong detector service
+  bindings require a resolved single connection or an explicit observation reference; ambiguous aggregates
+  emit a projection gap. New requests use their execution option's review mode; historical readers restore
+  the frozen identity. Internal identities remain auditable but normal Memory views use business descriptions.
+  Server-side `resolve_request` may select the previous semantic projector for a fresh request only when
+  all projected facets except the versioned fingerprint and all projection gaps are exactly equal. Never switch a saved identity.
+  The selected identity is frozen for the run; directive matching stays identity-exact. Memory Center's
+  current-family display may recognize both generated identities without granting retrieval or decision rights.
 - 没有 typed applicability 的 legacy record 最多作为 bounded `M-*` 背景存在，即使历史上携带 directive
   也不得改判。确定性 Memory Decision 必须同时满足 record `decision_impact=detection_decision`、typed
   applicability 和当前 projection `status=applicable`；客户端 metadata 不能恢复该权限。

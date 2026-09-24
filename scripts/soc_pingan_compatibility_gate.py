@@ -20,6 +20,9 @@ REQUIRED_TEST_FILES = (
     "backend/tests/test_soc_pingan_memory_profile_restore.py",
     "backend/tests/test_soc_corpus_pattern_execution.py",
     "backend/tests/test_soc_memory_experiment_retrieval.py",
+    "backend/tests/test_soc_memory_reference_retrieval.py",
+    "backend/tests/test_soc_memory_reference_compatibility_safety.py",
+    "backend/tests/test_soc_pingan_memory_service_direction.py",
 )
 # Keep these behavioral checks mandatory even if a file still contains other tests.
 REQUIRED_TEST_NAMES: dict[str, tuple[str, ...]] = {
@@ -40,6 +43,40 @@ REQUIRED_TEST_NAMES: dict[str, tuple[str, ...]] = {
     "backend/tests/test_soc_memory_experiment_retrieval.py": (
         "test_round_allowlist_applies_to_both_context_and_direct_lookup_without_changing_authority",
         "test_empty_allowlist_survives_transactional_governance_clone",
+    ),
+    "backend/tests/test_soc_memory_reference_retrieval.py": (
+        "test_optional_service_difference_retains_reviewed_reference_without_directive",
+        "test_known_profile_change_can_only_recall_rule_context_as_reference",
+        "test_current_response_projection_recalls_old_reference_with_explicit_port_comparison",
+        "test_match_preview_uses_same_profile_conflicts_as_runtime",
+    ),
+    "backend/tests/test_soc_memory_reference_compatibility_safety.py": (
+        "test_optional_port_compatibility_is_context_only_and_preserves_frozen_record",
+        "test_no_registered_tenant_profile_cannot_authorize_cross_version_compatibility",
+        "test_unknown_query_identity_is_not_a_known_compatibility_family",
+        "test_unknown_saved_profile_identity_is_not_reinterpreted",
+        "test_cross_tenant_query_never_sees_reference_compatibility_record",
+        "test_compatibility_never_drops_reviewed_conditions",
+        "test_non_port_semantic_conflicts_still_reject_reference",
+        "test_decision_bearing_records_never_enter_reference_compatibility",
+        "test_match_test_uses_same_tenant_policy_as_runtime_retrieval",
+    ),
+    "backend/tests/test_soc_pingan_memory_service_direction.py": (
+        "test_service_and_strong_anchor_follow_the_same_explicit_direction",
+        "test_unknown_direction_does_not_guess_a_service",
+        "test_invalid_service_port_does_not_fall_back_to_other_endpoint_or_http",
+        "test_unknown_transport_does_not_create_service_anchor",
+        "test_bound_observation_uses_only_its_own_direction_transport_and_ports",
+        "test_aggregate_with_distinct_connections_needs_an_explicit_observation_binding",
+        "test_reversed_request_response_observations_do_not_invent_two_connections",
+        "test_current_identity_and_run_projection_use_directional_features",
+        "test_current_scope_expands_only_its_verified_directional_fingerprint",
+        "test_historical_profile_features_remain_byte_equivalent",
+        "test_fresh_requests_select_new_identity_only_when_canonical_features_change",
+        "test_new_projection_gap_is_not_hidden_when_duplicate_service_anchors_collapse",
+        "test_saved_identity_never_runs_fresh_feature_selection",
+        "test_invalid_saved_identity_is_not_replaced_by_an_unchanged_projection",
+        "test_unchanged_features_keep_reviewed_v9_directive_on_its_exact_path",
     ),
 }
 TIMEOUT_SECONDS = 600

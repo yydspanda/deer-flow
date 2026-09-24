@@ -2310,6 +2310,22 @@ Rules:
 - A quality-gated candidate carries `SocMemoryApplicabilitySpec`: profile/version/feature-schema identity, exact
   required/optional/excluded facets, and strong-anchor threshold. Retrieval evaluates this independently of ranking.
   A profile mismatch, exclusion hit, or missing required facet cannot produce an effective decision change.
+- New PingAn semantic-review `apply` runs project service endpoints from canonical direction:
+  `to_client` uses the source port and `to_server` uses the destination port. Unknown direction or
+  transport does not invent a service. Detector bindings use their referenced observation; a
+  multi-connection aggregate does not create a strong service anchor. Saved historical projectors
+  and records remain unchanged, and per-run options select new-run features independently of process defaults.
+  A fresh request keeps the previous projector when its complete facets, excluding only the versioned
+  fingerprint, and its projection gaps equal the corrected projection. The selected identity is frozen before use; this preserves
+  unchanged behavior scopes without interpreting a directive across identities.
+- A registered PingAn Profile may retain a reviewed, enabled `review_hint` with no directive as
+  reference across optional service differences or known historical feature identities only when
+  its required scope is exactly detection key, detection signature and environment. All three
+  conditions, tenant boundaries, original thresholds, exclusions and reuse conditions still apply.
+  Opaque historical restrictions are not reinterpreted; CVE or attack-family conflicts still reject.
+  This path always returns `partial/context_only`, displays the difference, and is excluded from
+  direct resolution. A one-record match test must use the same Profile checks as real retrieval;
+  it does not simulate full-inventory ranking or prove that a past run used the Memory.
 - Retrieval activation and decision authority are two separate reviewer choices. `retrieval_enabled` means the
   lesson may be found; only a reviewed typed directive on a `detection_decision` record may change the effective
   verdict. The Candidate/record UI must show these as “可检索” and “精确匹配后可参与结论” rather than one ambiguous

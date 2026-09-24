@@ -8,10 +8,11 @@ from soc_agent.integrations.pingan.memory import PingAnSocMemoryProfile
 from soc_agent.memory.profiles import SocMemoryProfileRegistry
 
 
-def build_soc_memory_profile_registry() -> SocMemoryProfileRegistry:
+def build_soc_memory_profile_registry(*, normalization_review_mode: str | None = None) -> SocMemoryProfileRegistry:
     """Register reviewed tenant profiles ahead of the generic fallback."""
 
-    semantic_features = os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower() == "apply"
+    mode = normalization_review_mode if normalization_review_mode is not None else os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off")
+    semantic_features = mode.strip().lower() == "apply"
     return SocMemoryProfileRegistry([PingAnSocMemoryProfile(semantic_features=semantic_features)])
 
 

@@ -46,16 +46,40 @@ generic `soc_agent` code.
   vendor fields can still arrive as typed model proposals. Do not infer detector IDs from hashes
   or copy one message's identity to another message. Newly discovered behavior stays visible
   even if an older reviewed Memory does not cover it.
-  PingAn semantic feature consumption is Profile 9 / v7 only in `apply`; `off/shadow`
-  retain Profile 7 / v5. Detector category/name plus the detected file can differentiate
+  New `apply` executions select the direction-aware Profile 10 / feature schema v8
+  only when its canonical facets or projection gaps differ from Profile 9 / v7 after
+  excluding the versioned fingerprint. Fully identical ingredients and gaps retain Profile 9 and its exact
+  matching path; this does not compare or reinterpret directives across identities.
+  `off/shadow` retain Profile 7 / v5. Explicit execution review options select both the reviewer
+  and Memory profile; the deployment default applies only when no override is supplied.
+  Service features use the bound canonical object's own transport and direction:
+  `to_client` selects `src_port`, `to_server` selects `dst_port`. Require TCP/UDP and
+  a port in 1..65535; do not guess unknown/in/out direction, reuse another object's
+  protocol/port, or fall back to an HTTP port. A detector bound only to a network
+  aggregate with distinct or unresolved connections produces a projection gap,
+  not a strong service anchor. Explicit single-observation bindings remain independent.
+  Detector category/name plus the detected file can differentiate
   events sharing a parent process; hashes, IPs and user-specific directories are not these
   new feature anchors. Do not claim full coverage or migrate old Memory automatically.
   The deployment default remains off; external DEV explicitly opts into apply. Historical
   readers use `PingAnSocMemoryProfile.for_run`, restoring the complete frozen request
   Profile identity, exactly as the learning writer does. A per-run review setting may
   differ from that identity; it must not cause a reader to infer another version.
+  Frozen Profile 7/8/9 projectors retain their original features and fingerprints;
+  do not apply new direction rules to old observations or approved conditions.
+  A saved identity always precedes fresh-request selection. Memory Center treats
+  currently generated off/shadow/apply identities (7, 9 and 10) as current for display
+  regardless of the process default; 8 remains historical. It must not suggest
+  replacing a still-current candidate simply because the other identity exists.
   Only unmarked historical runs retain review-mode inference (apply -> 8, otherwise 7).
   Reject invalid saved identities rather than silently falling back to another Profile.
+  `memory/reference_retrieval.py` is the narrow reference-only compatibility boundary:
+  eligible reviewed `review_hint` records with no directive and exactly detector key,
+  detection signature and environment as required keys may remain model context across
+  an optional service difference or known frozen Profile identities. The result is
+  always partial/context-only. Preserve required values, explicit reuse/exclusion rules,
+  tenant/environment isolation, activation/validity and CVE/behavior-family conflict
+  gates; never reinterpret an old fingerprint or grant automatic verdict reuse.
   Inspection is an
   on-demand read of per-run facts, not an analyst maintenance prerequisite. Phishing-email
   specialization remains deferred by user decision; trust the upstream ML/LLM detection.

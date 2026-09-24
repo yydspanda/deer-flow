@@ -286,21 +286,11 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                     ) : null}
                   </div>
                 </div>
-                <dl className="grid text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <dl className="grid text-sm sm:grid-cols-2 lg:grid-cols-3">
                   <div className="border-b px-4 py-3 lg:border-r">
                     <dt className="text-muted-foreground text-xs">租户范围</dt>
                     <dd className="mt-1">
                       {record.tenant_id ?? record.tenant_scope}
-                    </dd>
-                  </div>
-                  <div className="border-b px-4 py-3 lg:border-r">
-                    <dt className="text-muted-foreground text-xs">
-                      匹配规则版本
-                    </dt>
-                    <dd className="mt-1">
-                      {record.applicability
-                        ? `${record.applicability.profile_id} v${record.applicability.profile_version}`
-                        : "-"}
                     </dd>
                   </div>
                   <div className="border-b px-4 py-3 lg:border-r">
@@ -605,10 +595,6 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                           ? "新告警会找到这条经验"
                           : "新告警不会找到这条经验"}
                       </span>
-                      <Badge variant="outline">
-                        匹配规则 {matchMutation.data.profile_id} v
-                        {matchMutation.data.profile_version}
-                      </Badge>
                       {matchMutation.data.match ? (
                         <Badge variant="secondary">
                           相关度 {matchMutation.data.match.score}
