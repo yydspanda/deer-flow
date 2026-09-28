@@ -183,6 +183,87 @@ def test_manual_review_entry_survives_pattern_accumulation_and_refresh(workbench
         assert projected.learning.action_label == ("审核同类经验" if has_pattern_candidate else "审核人工提炼经验")
 
 
+def _promote_shared_workbench_candidates(workbench):
+    from test_soc_memory_patterns import _context
+    from test_soc_pingan_memory_profile import _run
+
+    from soc_agent.application.memory import build_soc_memory_profile_registry
+    from soc_agent.contracts import Decision, SocMemoryRunPromotionCommand
+    from soc_agent.core import SocReviewService
+
+    repository = workbench._repository
+    review = SocReviewService(repository=repository, memory_candidate_repository=repository, memory_record_repository=repository, memory_profile_registry=build_soc_memory_profile_registry())
+    promotions = []
+    for index in (0, 1):
+        run = _run(index + 1, techniques=["T1059"])
+        run.alert_id = str(index)
+        run.input_hash = workbench._cases[str(index)].payload_hash
+        run.llm_analysis_request = run.llm_analysis_request.model_copy(update={"environment": "dev-corpus-eval", "source": run.llm_analysis_request.source.model_copy(update={"integration_name": "pingan_legacy_alert_platform"})})
+        run.decision = Decision(verdict=run.analysis.verdict, confidence=run.analysis.confidence, suggested_action="review", needs_review=True, reason=run.analysis.reason)
+        repository.save_run(run)
+        promotions.append(review.promote_run_to_memory(SocMemoryRunPromotionCommand(run_id=run.run_id), context=_context("soc_analyst")))
+
+    shared = promotions[0].memory_candidate
+    assert promotions[1].memory_candidate.candidate_id == shared.candidate_id
+    assert promotions[1].learning.action == "review"
+    assert repository.list_memory_candidates(run_id=promotions[1].run_id) == []
+    return promotions
+
+
+@pytest.mark.parametrize("candidate_state", ["pending", "confirmed", "rejected", "superseded"])
+def test_shared_manual_promotion_remains_reachable_after_refresh(workbench, candidate_state):
+    from test_soc_memory_learning import record
+
+    from soc_agent.contracts import SocMemoryCandidateStatus
+
+    repository = workbench._repository
+    promotions = _promote_shared_workbench_candidates(workbench)
+    shared = promotions[0].memory_candidate
+    expected_candidate_id = shared.candidate_id
+    expected_action = "review"
+    if candidate_state == "confirmed":
+        published = record(repository, shared)
+        expected_action = "view_memory"
+    elif candidate_state == "rejected":
+        repository.save_memory_candidate(shared.model_copy(update={"status": SocMemoryCandidateStatus.REJECTED}))
+        expected_action = "view_history"
+    elif candidate_state == "superseded":
+        successor = shared.model_copy(update={"candidate_id": "MC-shared-successor", "idempotency_key": "shared-successor", "source": shared.source.model_copy(update={"source_id": "shared-successor", "run_id": "RUN-successor"})})
+        repository.save_memory_candidate(successor)
+        repository.save_memory_candidate(shared.model_copy(update={"status": SocMemoryCandidateStatus.SUPERSEDED, "superseded_by_candidate_id": successor.candidate_id}))
+        expected_candidate_id = successor.candidate_id
+
+    for _ in range(2):
+        state = workbench.get_state(batch="learning", search="1", unprocessed_only=False, include_group_catalog=False, include_rehearsal=False)
+        projected = next(item for item in state.alerts if item.alert_id == "1")
+        assert projected.learning.action == expected_action
+        assert projected.learning.candidate_id == expected_candidate_id
+        if candidate_state == "confirmed":
+            assert projected.learning.memory_id == published.memory_id
+
+
+@pytest.mark.parametrize("mismatch", ["alert", "tenant", "result_ref"])
+def test_shared_promotion_entry_rejects_unrelated_audit_links(workbench, monkeypatch, mismatch):
+    from soc_agent.contracts import SocMutationOperation
+
+    repository = workbench._repository
+    promotions = _promote_shared_workbench_candidates(workbench)
+    run_id = promotions[1].run_id
+    audit = repository.list_mutation_audits(operation=SocMutationOperation.MEMORY_RUN_PROMOTE, run_id=run_id)[0]
+    if mismatch == "alert":
+        audit = audit.model_copy(update={"alert_id": "unrelated-alert"})
+    elif mismatch == "result_ref":
+        audit = audit.model_copy(update={"result_ref": "MC-unrelated-result"})
+    else:
+        candidate = promotions[0].memory_candidate.model_copy(update={"tenant_id": "unrelated-tenant", "tenant_scope": "unrelated-tenant"})
+        repository.save_memory_candidate(candidate)
+    monkeypatch.setattr(repository, "list_mutation_audits", lambda **kwargs: [audit])
+    state = workbench.get_state(batch="learning", search="1", unprocessed_only=False, include_group_catalog=False, include_rehearsal=False)
+    projected = next(item for item in state.alerts if item.alert_id == "1")
+    assert projected.learning.action == "promote"
+    assert projected.learning.candidate_id is None
+
+
 def test_experiment_payload_loader_cannot_substitute_member_identity(workbench):
     from soc_agent.contracts.corpus_experiments import CorpusExperimentMember
 

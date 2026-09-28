@@ -2678,6 +2678,96 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
   expect(promotionRequestBody).toEqual({});
 });
 
+test("keeps the acknowledged manual review entry when the list refresh fails", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const state = corpusState(true);
+  const current = {
+    ...state,
+    alerts: [
+      {
+        ...state.alerts[0]!,
+        memory_id: null,
+        memory_status: null,
+        learning: {
+          state: "accumulating",
+          label: "正在积累同类样本",
+          detail: "尚未形成适用经验，可以主动提炼。",
+          action: "promote",
+          action_label: "提炼经验",
+        },
+      },
+    ],
+  };
+  let promoted = false;
+  let failedReads = 0;
+  let promotionCalls = 0;
+  await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/activity"))
+      return route.fulfill({ json: corpusActivity() });
+    if (url.pathname.endsWith("/execution"))
+      return route.fulfill({ json: corpusExecution(true) });
+    if (promoted && url.pathname.endsWith("/corpus-workbench")) {
+      failedReads += 1;
+      return route.fulfill({
+        status: 503,
+        json: {
+          detail: "Simulated list refresh failure after successful promotion",
+        },
+      });
+    }
+    return route.fulfill({
+      json: corpusStateForRequest(current, url.toString()),
+    });
+  });
+  await page.route("**/api/soc/memory/runs/*/promote", async (route) => {
+    promoted = true;
+    promotionCalls += 1;
+    return route.fulfill({
+      json: {
+        schema_version: "soc.memory_run_promotion_result.v1",
+        run_id: "RUN-CORPUS-1",
+        alert_id: "1984426",
+        memory_candidate: { candidate_id: "MC-MANUAL-ACK" },
+        memory_admission: {
+          status: "admitted",
+          reason_codes: ["explicit_promotion_requested"],
+        },
+        learning: {
+          state: "pending_review",
+          label: "人工提炼经验待审核",
+          detail: "提炼已保存，继续审核已有候选。",
+          action: "review",
+          action_label: "审核人工提炼经验",
+          candidate_id: "MC-MANUAL-ACK",
+        },
+      },
+    });
+  });
+
+  await page.goto("/workspace/soc/corpus-validation");
+  await page.getByRole("button", { name: "查看 Alert 1984426 结果" }).click();
+  await page.getByRole("button", { name: "提炼经验", exact: true }).click();
+  await page.getByRole("button", { name: "确认提前提炼" }).click();
+  await expect.poll(() => failedReads).toBeGreaterThan(0);
+  const reviewLink = page.getByRole("link", {
+    name: "审核人工提炼经验",
+    exact: true,
+  });
+  await expect(reviewLink).toBeVisible();
+  await expect(reviewLink).toHaveCount(1);
+  await expect(reviewLink).toHaveAttribute(
+    "href",
+    "/workspace/soc/review/memory-candidates/MC-MANUAL-ACK",
+  );
+  await expect(
+    page.getByRole("button", { name: "提炼经验", exact: true }),
+  ).toHaveCount(0);
+  expect(promotionCalls).toBe(1);
+});
+
 test("announces a newly generated Pattern Candidate in the current alert", async ({
   page,
 }) => {

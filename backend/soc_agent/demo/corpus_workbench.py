@@ -37,6 +37,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SocCaseOutcomeView,
     SocMemoryCandidateSourceType,
+    SocMutationOperation,
     SocOperationalDisposition,
 )
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
@@ -1241,6 +1242,19 @@ class SocCorpusWorkbenchService:
             candidates_by_id[item.candidate_id] = item
             if item.source.source_type is SocMemoryCandidateSourceType.MANUAL_NOTE and item.source.run_id is not None:
                 manual_candidate_by_run.setdefault(item.source.run_id, item)
+        if run is not None and run.run_id not in manual_candidate_by_run:
+            # Promotion can reuse another run's governed candidate. Its immutable
+            # source remains unchanged; the promotion audit owns this run's link.
+            # Use the indexed run lookup instead of rebuilding every row's facets.
+            for audit in self._repository.list_mutation_audits(operation=SocMutationOperation.MEMORY_RUN_PROMOTE, run_id=run.run_id, target_id=run.run_id, limit=20):
+                candidate_id = audit.payload.get("candidate_id")
+                if audit.alert_id != run.alert_id or not candidate_id or candidate_id != audit.result_ref:
+                    continue
+                promoted = candidates_by_id.get(candidate_id) or self._repository.get_memory_candidate(candidate_id)
+                tenant_id = run.llm_analysis_request.tenant_id if run.llm_analysis_request is not None else None
+                if promoted is not None and tenant_id is not None and promoted.tenant_id == tenant_id and promoted.tenant_scope == tenant_id:
+                    manual_candidate_by_run[run.run_id] = promoted
+                    break
         for aggregation_key, replay in replay_by_key.items():
             if replay.candidate_id is not None:
                 candidate = candidates_by_id.get(replay.candidate_id) or self._repository.get_memory_candidate(replay.candidate_id)

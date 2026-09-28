@@ -30,6 +30,9 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   for the final verdict and optional business fact once; the service generates audit prose
   from the reviewed outcome and future-use mode. A separate reason is required only for a
   later retrieval enable/disable mutation.
+  Learning views follow superseded candidates or replaced Memory through the shared
+  scope-aware resolver. If no covering successor exists, retain the original history
+  link; navigation must not widen applicability or reactivate an old record.
 - Explicit run promotion and correction must resolve the tenant `SocMemoryProfile`, project
   facets from the exact persisted run, and build applicability through that Profile. When a
   Pattern observation exists, its server-owned environment overrides caller metadata. Do not

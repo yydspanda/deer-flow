@@ -61,6 +61,12 @@ can adopt a reviewed lesson, while the program does not directly copy its histor
   candidate/revision rather than stale per-run candidates. Manual/automatic learning share
   review; reference/exact/paused/expired use stays separate from confirmation. Show closed
   learning reasons even without a Candidate link; omit unavailable navigation buttons.
+  A successful promotion's server-returned learning view must remain usable if the
+  subsequent list refresh fails. Cancel older in-flight reads before updating only the
+  matching alert/Run's cached learning state; never apply a receipt to another rerun or
+  invent governance state. Review completion invalidates lightweight corpus lists and
+  alert learning views so returning within the navigation cache window shows fresh state.
+  These learning updates must not invalidate immutable full-audit bundles.
 - Corpus `后续运行设置` is a per-run snapshot, not global configuration. The four switches cover
   semantic review, enterprise policy and its safe-path/advisor children. Store the local selection
   in session storage, mask unavailable capabilities and submit it with each process request.

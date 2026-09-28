@@ -136,8 +136,13 @@ def learning_view(repository: MemoryCandidateRepository, candidate: SocMemoryCan
     now = now or datetime.now(UTC)
     if candidate is None:
         return SocMemoryLearningView(state="accumulating", label="正在积累同类样本", detail="尚未形成适用经验，可以主动提炼。", action="promote", action_label="提炼经验")
-    common = {"candidate_id": candidate.candidate_id}
     record = _record(record_repository or repository, candidate)
+    if candidate.status is SocMemoryCandidateStatus.SUPERSEDED or (record is not None and record.superseded_by_memory_id):
+        successor = resolve_learning_candidate(repository, candidate, record_repository=record_repository, now=now)
+        if successor is not None and successor.candidate_id != candidate.candidate_id:
+            candidate = successor
+            record = _record(record_repository or repository, candidate)
+    common = {"candidate_id": candidate.candidate_id}
     if record is not None and record.metadata.get("revision_pending"):
         revisions = repository.list_memory_candidates(revision_of_memory_id=record.memory_id, limit=200)
         pending = [item for item in revisions if item.status in _PENDING]

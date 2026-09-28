@@ -71,6 +71,7 @@ import {
 import type { SocVerdict } from "./types";
 import type {
   SocAlertAttentionLevel,
+  SocAlertInvestigationContext,
   SocApprovalResolutionRequest,
   SocAgentApprovalRequestStatus,
   SocDispositionOutcomeRecordRequest,
@@ -81,6 +82,7 @@ import type {
   SocMemoryCandidateReviewStage,
   SocMemoryCandidateSupersessionRequest,
   SocCorpusWorkbenchQuery,
+  SocCorpusWorkbenchState,
   SocAnalysisExecutionOptions,
   SocMemoryFutureUseState,
   SocMemoryQuery,
@@ -761,9 +763,47 @@ export function usePromoteSocRunToMemory() {
       runId: string;
       request: SocMemoryRunPromotionRequest;
     }) => promoteSocRunToMemory(runId, request, context),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
+      const statePrefix = [...socCorpusWorkbenchQueryKeys.all, "state"];
+      const contextKey = socAlertQueryKeys.context(result.run_id);
+      if (result.learning) {
+        // The write receipt is already authoritative. Fence older reads before
+        // retaining its destination, even when the follow-up list read fails.
+        await Promise.all([
+          queryClient.cancelQueries({ queryKey: statePrefix }),
+          queryClient.cancelQueries({ queryKey: contextKey, exact: true }),
+        ]);
+        queryClient.setQueriesData<SocCorpusWorkbenchState>(
+          { queryKey: statePrefix },
+          (state) => {
+            if (!state) return state;
+            const matches = (
+              alert: SocCorpusWorkbenchState["alerts"][number],
+            ) =>
+              alert.alert_id === result.alert_id &&
+              alert.run_id === result.run_id;
+            if (!state.alerts.some(matches)) return state;
+            return {
+              ...state,
+              alerts: state.alerts.map((alert) =>
+                matches(alert)
+                  ? { ...alert, learning: result.learning }
+                  : alert,
+              ),
+            };
+          },
+        );
+        queryClient.setQueryData<SocAlertInvestigationContext>(
+          contextKey,
+          (context) =>
+            context?.run.run_id === result.run_id &&
+            context.run.alert_id === result.alert_id
+              ? { ...context, learning: result.learning }
+              : context,
+        );
+      }
       void queryClient.invalidateQueries({
-        queryKey: socCorpusWorkbenchQueryKeys.all,
+        queryKey: statePrefix,
       });
       void queryClient.invalidateQueries({
         queryKey: socCorpusWorkbenchQueryKeys.execution(result.alert_id),
@@ -1064,7 +1104,18 @@ export function useReviewSocMemoryCandidate() {
       request: SocMemoryCandidateReviewRequest;
     }) => reviewSocMemoryCandidate(candidateId, request, context),
     onSuccess: async (result) => {
+      const statePrefix = [...socCorpusWorkbenchQueryKeys.all, "state"];
+      // Navigating to review can leave an old list request in flight without an
+      // observer. Cancel it too, so it cannot make the pre-review state fresh.
       await Promise.all([
+        queryClient.cancelQueries({ queryKey: statePrefix }),
+        queryClient.cancelQueries({ queryKey: socAlertQueryKeys.all }),
+      ]);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: statePrefix,
+        }),
+        queryClient.invalidateQueries({ queryKey: socAlertQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all }),
         queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all }),
         queryClient.invalidateQueries({

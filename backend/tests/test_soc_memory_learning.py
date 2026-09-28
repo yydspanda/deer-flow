@@ -214,6 +214,37 @@ def test_open_revision_wins_over_original_memory_and_stale_manual_link():
     assert not repository.get_memory_record(saved.memory_id).retrieval_enabled
 
 
+@pytest.mark.parametrize("covered", [False, True])
+def test_superseded_learning_entry_follows_only_a_covering_successor(covered):
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, now_provider=lambda: NOW)
+    predecessor = service.propose_candidate(command(), coordinate_learning=True)
+    successor = predecessor.model_copy(update={"candidate_id": "MC-replacement", "idempotency_key": "replacement", "applicability": command(behavior="shell" if covered else "unrelated").applicability})
+    repository.save_memory_candidate(successor)
+    predecessor = predecessor.model_copy(update={"status": SocMemoryCandidateStatus.SUPERSEDED, "superseded_by_candidate_id": successor.candidate_id})
+    repository.save_memory_candidate(predecessor)
+    view = learning_view(repository, predecessor, now=NOW)
+    assert view.candidate_id == (successor.candidate_id if covered else predecessor.candidate_id)
+    assert view.action == ("review" if covered else "view_history")
+
+
+@pytest.mark.parametrize("covered", [False, True])
+def test_replaced_memory_entry_follows_only_a_covering_record(covered):
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, now_provider=lambda: NOW)
+    predecessor = service.propose_candidate(command(), coordinate_learning=True)
+    old_record = record(repository, predecessor)
+    successor = service.propose_candidate(command(2, behavior="shell" if covered else "unrelated"))
+    new_record = record(repository, successor)
+    repository.save_memory_record(old_record.model_copy(update={"status": SocMemoryRecordStatus.DEPRECATED, "retrieval_enabled": False, "superseded_by_memory_id": new_record.memory_id}))
+    stored = repository.get_memory_candidate(predecessor.candidate_id)
+    assert stored.status is SocMemoryCandidateStatus.CONFIRMED
+    view = learning_view(repository, stored, now=NOW)
+    assert view.action == "view_memory"
+    assert view.candidate_id == (successor.candidate_id if covered else predecessor.candidate_id)
+    assert view.memory_id == (new_record.memory_id if covered else old_record.memory_id)
+
+
 def test_old_automatic_key_does_not_block_new_window_after_rejection():
     repository = InMemoryMemoryCandidateRepository()
     service = SocMemoryService(candidate_repository=repository, now_provider=lambda: NOW)

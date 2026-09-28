@@ -64,6 +64,11 @@ file for SOC code. The authoritative product and engineering documents are:
   Learning navigation uses the resolved pattern candidate when present, otherwise the
   current Run's manual candidate. A persisted observation without a pattern candidate
   must not hide manual review or its subsequent governance state; page reads stay fresh.
+  Coordinated promotion may reuse another Run's candidate. Recover that relationship
+  from the current Run's persisted promotion audit instead of assuming candidate source
+  ownership; keep tenant/alert boundaries and use the shared learning resolver for
+  replacements. This is read-only navigation, never reconstruction of matching features
+  or mutation of candidate/Memory state on list reads.
   Round result/audit reads pin Run ID and source hash, never the latest alert result.
   Reports separate matched-group validation from sparse exploration and unknown usage.
   Offline comparisons require the same experiment, dataset identity and explicit batch;

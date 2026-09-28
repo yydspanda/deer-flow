@@ -123,6 +123,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > alerts run directly even while the batch is paused, with restart recovery and deduplication.
 > After manually extracting an experience, the alert result shows **审核人工提炼经验**
 > even when automatic pattern accumulation has not yet produced a candidate.
+> Successful extraction keeps its review link if the following list refresh fails.
+> Alerts sharing an existing candidate retain that link after refresh; completing review
+> refreshes the alert's learning state when returning to the workbench.
 > To restart the whole second batch with new settings, pause and wait for zero active
 > alerts, then choose **重新配置并全部重跑 → 全部重新运行**. This reruns successful,
 > failed and unrun alerts across the entire second batch, regardless of browser filters.
