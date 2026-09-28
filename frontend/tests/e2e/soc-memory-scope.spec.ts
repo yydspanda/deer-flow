@@ -475,3 +475,82 @@ test("confirmed record uses the same scope without editable restrictions", async
     ),
   ).not.toBeVisible();
 });
+
+test("HTTP observation stays one readable condition through lesson drafting and review", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const state = await mockSocAPI(page, {
+    standaloneMemoryCandidate: true,
+    includeQueueItem: false,
+  });
+  const directory =
+    "http_observation:response=directory_listing;server=simplehttp";
+  const commandOutput = "http_observation:response=command_output";
+  const behaviors = [directory, commandOutput];
+  const networkFixture = structuredClone(fixture);
+  networkFixture.applicability.profile_version = "11";
+  networkFixture.applicability.feature_schema_version =
+    "pingan.soc.memory_features.v9";
+  networkFixture.facets.pattern_origin = ["pingan.soc.memory_features.v9"];
+  networkFixture.facets.behavior_component = behaviors;
+  networkFixture.facets.behavior_component_strong = behaviors;
+  networkFixture.applicability.optional_facets.behavior_component = behaviors;
+  networkFixture.applicability.optional_facets.behavior_component_strong =
+    behaviors;
+  networkFixture.scope_view.required_details.behavior_fingerprint.behavior_component =
+    behaviors;
+  networkFixture.scope_view.options = [];
+  await page.route("**/api/soc/memory/candidates/MC-ALPHA-001", (route) =>
+    route.fulfill({
+      json: { ...memoryCandidate(state), ...networkFixture },
+    }),
+  );
+  await page.goto("/workspace/soc/review/memory-candidates/MC-ALPHA-001");
+  const scope = page.getByRole("region", { name: "经验适用范围" }).first();
+  const core = scope.locator("[data-memory-scope-behavior]");
+  await expect(core.getByRole("checkbox")).toHaveCount(2);
+  const directoryChoice = core.getByRole("checkbox", {
+    name: "要求核心行为 HTTP 请求与响应 响应返回目录列表；Server 头标识 SimpleHTTP（同一 HTTP 事务）",
+    exact: true,
+  });
+  await expect(directoryChoice).toBeChecked();
+  await core
+    .getByRole("checkbox", {
+      name: "要求核心行为 HTTP 请求与响应 响应包含命令输出（同一 HTTP 事务）",
+      exact: true,
+    })
+    .uncheck();
+  await expect(directoryChoice).toBeDisabled();
+  await expect(core).not.toContainText("10.0.0.1");
+  await expect(core).not.toContainText("http_observation:");
+
+  await page.getByRole("combobox", { name: "最终业务判断" }).click();
+  await page.getByRole("option", { name: "误报", exact: true }).click();
+  const draftRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/lesson-draft") && request.method() === "POST",
+  );
+  await page
+    .getByRole("button", { name: "AI 生成研判经验", exact: true })
+    .click();
+  expect(
+    (await draftRequest).postDataJSON().selected_behavior_components,
+  ).toEqual([directory]);
+  const reviewRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/MC-ALPHA-001/review") &&
+      request.method() === "POST",
+  );
+  await page
+    .getByRole("button", { name: "确认并启用经验", exact: true })
+    .click();
+  const reviewed = (await reviewRequest).postDataJSON().record_applicability;
+  expect(reviewed.selected_behavior_components).toEqual([directory]);
+  expect(new Set(reviewed.covered_behavior_components)).toEqual(
+    new Set(behaviors),
+  );
+  expect(reviewed.required_facets).toEqual(
+    networkFixture.applicability.required_facets,
+  );
+});

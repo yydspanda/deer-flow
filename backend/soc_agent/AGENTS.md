@@ -289,9 +289,12 @@ file for SOC code. The authoritative product and engineering documents are:
   charging historical usage/latency again. Match the full input, tenant and versioned request;
   inspect at most 20 recent runs for that alert. `refresh_normalization=true` explicitly
   rechecks facts and records before/after hashes. Failed/skipped reviews never seed reuse.
+  The reviewer configuration hash also includes the deterministic acceptance policy;
+  bump it when merger semantics change, even if the prompt is unchanged. Existing saved
+  Runs remain immutable; later execution rechecks rather than reusing old acceptance results.
   This is not a global single-flight cache: concurrent first runs may each call the provider.
   Rebuild current Memory/policy decisions on every run; never cache a verdict or authority.
-  Prompt v9 proposes objects, bound detector events and
+  Prompt v10 proposes objects, bound detector events and
   supplementary facts. Merge into existing canonical observations, not a parallel alert.
   Readable business clues in packet content use existing supplementary facts, not assumed
   connection destinations or benign verdicts. Prompt examples keep cross-log facts under
@@ -299,6 +302,17 @@ file for SOC code. The authoritative product and engineering documents are:
   Optional `clue_type` classifies supplementary URL/domain/application/file-path/process
   mentions for tenant knowledge selection; free-form `name` is never a matching API.
   Old untyped facts remain readable but are not guessed into a typed knowledge match.
+  Optional `network_behavior` uses a closed request/response behavior vocabulary and Server
+  product families, independent of `clue_type`. The merger alone marks verified facts after
+  exact source grounding, HTTP subject ownership and content-role validation. Adapter-declared
+  request/response fields establish that role; rule labels, status codes and LLM assertions alone
+  cannot establish observed content. Unsupported types or unresolved bindings retain ordinary
+  facts and issues. Memory consumes only verified metadata, combines facts within one HTTP
+  transaction and excludes raw values, IDs, IPs, timestamps and evidence offsets from its keys.
+  After an HTTP summary alias resolves to an existing observation, validate model writes
+  to that actual observation; unrelated summary attributes must not block independently
+  verified content. Summary/observation conflicts and modified observation aliases still fail closed.
+  Frozen requests keep their original projection; no automatic historical candidate rewrite.
   Selected supplementary sources use independent L* IDs within eight sources/48k characters;
   catalog and source omissions, deduplication and truncation remain visible. Item-level errors
   must not erase valid sibling facts. Existing O* references allow sparse corrections without

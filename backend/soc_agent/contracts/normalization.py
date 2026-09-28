@@ -2,12 +2,37 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ObjectKind = Literal["host", "user", "container", "process", "file", "network", "http"]
 EventKind = Literal["file_detection", "process_execution", "network_access", "web_detection", "configuration_detection", "statistical_detection", "other_detection"]
 Scalar = str | int | float | bool
 BusinessClueType = Literal["url", "domain", "application", "file_path", "process"]
+NetworkBehaviorKind = Literal[
+    "http_response_directory_listing",
+    "http_response_command_output",
+    "http_response_file_content",
+    "http_request_directory_traversal",
+    "http_request_command_execution",
+    "http_request_file_upload",
+    "http_response_server_banner",
+]
+HttpServerProduct = Literal["simplehttp", "apache", "nginx", "iis", "tomcat", "jetty", "envoy", "gunicorn", "uvicorn"]
+
+
+class NetworkBehaviorDescriptor(BaseModel):
+    """Bounded observable meaning; original evidence and prose stay on the fact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: NetworkBehaviorKind
+    server_product: HttpServerProduct | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def constrain_product_to_banner(self):
+        if (self.kind == "http_response_server_banner") != (self.server_product is not None):
+            raise ValueError("server_product is required only for an observed response Server banner")
+        return self
 
 
 class SourceQuote(BaseModel):
@@ -57,6 +82,7 @@ class NormalizationAdditionalFactProposal(SourceQuote):
     meaning: str = Field(min_length=1, max_length=500)
     subject_ref: str | None = Field(default=None, max_length=40)
     clue_type: BusinessClueType | None = None
+    network_behavior: NetworkBehaviorDescriptor | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class NormalizationReviewOutput(BaseModel):
@@ -101,6 +127,10 @@ class SupplementaryFactRef(CanonicalObservation):
     meaning: str = Field(min_length=1, max_length=500)
     subject_ref: str | None = Field(default=None, max_length=512)
     clue_type: BusinessClueType | None = None
+    # Absent fields must not alter historical alert/request serialization or hashes.
+    network_behavior: NetworkBehaviorDescriptor | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Populated by the merger only, never accepted from an LLM proposal.
+    network_behavior_verification: Literal["source_bound_v1"] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class NormalizationSource(BaseModel):

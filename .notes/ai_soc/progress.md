@@ -3,10 +3,10 @@
 ## Current Pointer / 当前指针
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 正在真实内网验收。项目 DEV 已证明 EAGW completion、ZEUS PRD 待审 lifecycle `code=200/status=1/mocked=false`，并由兼容 Worker 完成 SOC Runtime、持久化结果和 Callback Outbox。当前本机自提交回调因 ZEUS 未登记对应 `taskId` 返回业务码 `40020`，因此不能替代 ZEUS 上游真实发起。PingAn DeerFlow chat 固定为 buffered non-streaming；09-18按用户确认将源码中的模型网关与 Runtime 默认并发从 `3` 统一改为 `8`，配套 `8 + 8` 私有配置已重新生成；09-20 用户反馈内网 Mac DEV 已部署并完成第一批积累，运营正在审核经验；外网按用户确认撤回长实体摘要转换，保留旧经验匹配语义与 512 门禁，新学习超长特征过滤及兼容回归已完成，待交付第二批验证所需更新。09-22 内网第二批执行遇到 SQLite 争用，用户已成功暂停；部署本机可调并发和 SQLite 版本保护已随 `54c7f40f` 交付；用户完成内网启动与真实模型 smoke，但 9.95 GiB SQLite 下列表仍慢且间歇超时。覆盖索引及可诊断性修复已随 `8318f518` 交付；用户确认0032、只读schema即时返回，第一批整页1413ms，当前页面恢复。随后已核实第一批语义核对apply、第二批4247完成/345失败/7691排队为off，另1条完成为apply；清理尝试因第一批混合历史及共享维护引用在只读预检停止，没有删除数据。用户现已取消删库，改为网页“重新配置并全部重跑”第二批：全部成功/失败/排队重跑，保留旧结果、第一批和已审核经验。网页入口、整批任务替换、跨页统计和幂等恢复已完成并通过回归，用户已授权先提交推送再重建完整配套部署包，交付验收以绑定本次提交的transfer报告为准，尚未更新内网。SQLite compatibility Worker 仍独立保持单 Worker。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
-- **Next Gate:** 第二批网页全量重跑及历史保留的前后端、浏览器和交付清单检查已通过；源码可供审核，后续交付新版应用后在内网验收。当前不执行数据库清理；后续应用升级沿用保留数据流程、源码/私有配置配套交付及绑定提交的旧记录/经验兼容门禁。内网更新后由用户在部署Mac确认语义核对apply等完整设置，点击按钮重新验证第二批；内网结果仍需实际验收。随后由 ZEUS 上游真实调用 `/workflow/task` 并完成 callback/旧页面回读。再使用已审阅的 IP/Host/UM 发现种子运行 D12-B 资产 direct smoke，核对 ZEUS 命中与 Agent Platform 降级 attempts，完成 MCP、`InvestigationEvidence` 回读；最后验证 TI/标签 PRD `mocked=false` 证据并进入 shadow/容量验收。
+- **Current Objective:** `PI-01H / D12-B` 真实内网集成验收继续保持未关闭。用户已确认内网第二批全量验证完成，当前在分组抽查经验使用和历史处置差异；第一批及已审核经验继续保留。本机2453332真实复验已生成来源验证的同事务HTTP核心条件；2456233服务证据读取及受治理参考召回已优化；保存事实只读重放恢复缺失的3项条件，最新事实完整匹配原范围；仍不以单条证明所有告警匹配质量。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
+- **Next Gate:** 用户已确认2456233新候选显示4项检测行为与对象，后续继续人工审核及跨告警经验匹配验证；历史保存条件保持不变，旧候选和已审核经验不自动迁移。内网更新仍需用户安排打包及保留数据升级，绑定最终提交重新执行交付门禁。`PI-01H / D12-B` 仍需 ZEUS 上游真实调用、callback/旧页面回读及资产/TI/标签的真实 Provider 证据，外网模拟不能替代。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-22`
+- **Last Updated:** `2026-09-28`
 ## Current Constraints / 当前约束
 | Boundary | Current fact |
 |---|---|
@@ -17,6 +17,14 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+### 2026-09-28 — Source-verified HTTP behavior in expert Memory review
+- **Task:** `PI-03E`
+- **Status:** `Done`
+- **Outcome:** 补充事实可携带闭集 HTTP 请求/响应行为及 Server 产品族；合并器强制校验原文、Adapter 内容角色和唯一 HTTP 对象。每事务形成一个组合条件，措辞、目录、IP、时间、编号和产品版本不进入新匹配值；规则描述、跨源/跨响应及歧义不能冒充行为。审核页显示可读整体选项，沿用草稿和人工确认入口。旧保存身份、旧直接复用与参考经验均保留；新行为不授予旧结论额外权限，无数据库迁移或自动审核。
+- **Verification:** 43 项网络事实专项、22 项行为/兼容专项、既有 Memory/规范化/架构回归、前端4项单测和完整check通过；本机预构建后Chromium模拟草稿/确认全链路通过，真实页面只读返回200。交付清单141项及扩充后的强制兼容门禁151项通过，覆盖旧投影、已审核参考、旧direct正控与新行为拒绝；回执位于本机临时验收目录，正式打包须重新绑定提交执行。
+- **Boundary:** 实现阶段未调用真实模型或改写实际 Run/候选/Memory；随后由用户在本机发起真实复验，具体证据见后续记录。用户已授权本轮提交推送；本轮不构建内网包，不以单条成功代表所有场景质量。
+- **User verification follow-up:** 用户重跑2453332并提炼MC-0201571F781C；核对已提出目录标题和Server头，但摘要协议的引用校验错误地连带拒收两项。按最终绑定的独立HTTP观察验证模型写入，保留摘要冲突、伪造观察和跨事务拒绝；接受策略加入缓存哈希，现存候选不回写。用户再次执行RUN-AEDA462710A0并提炼MC-7FA8953CA37F，已保存来源验证的目录列表+SimpleHTTP组合核心条件，用户确认页面可见；自动校验仍与人工业务结论分开。
+- **APT regression follow-up:** 用户重跑2456233得到MC-3573D4C705D4；只读比对相同输入与两次保存事实，旧投影均为11项、当前投影均为8项，差集固定为http/80及两项检测关联，来源是09-24方向规则；旧Run/Observation原文哈希未变。新增6项合成APT测试并列为交付必测，覆盖无新HTTP时原核心不变、真实HTTP增量只加条件、冻结历史及新请求服务门槛区别；本轮相关测试176项通过。后续经用户授权优化：使用同源可信网络字段、会话角色及唯一HTTP事务证明服务，保留未知/冲突/代理和跨对象边界；最新保存事实只读重放8→11项且与旧完整条件一致。受治理的已审核行为经验可在服务缺项时仅供参考；直接权限不扩大，旧Run原文哈希不变。304项强制兼容门禁及新增保存身份回读1项、111项方向/HTTP/范围回归、125项检索/架构回归、161项交付清单与前后各119项阻塞I/O通过（组间有重叠）；全仓受本机配置与其他模块失败影响未全绿；隔离配置后相关两项复查通过，后置fail-fast停在既有Frontend指南预算检查（HEAD 45511字节已超40960）。实现阶段未调用模型或改写业务库；用户随后重跑2456233得到RUN-E9D6E9BB861D / MC-05D0F1D52C01，已保存11项核心条件，其中4项检测行为与对象（两条检测各关联HTTP POST与HTTP/80），用户确认页面可见。提交前前端check及4项范围单测通过；本轮不打包。
 ### 2026-09-22 — Restore saved batch settings and add history-preserving validation restart
 - **Task:** `PI-03E`
 - **Status:** `Done`
@@ -216,14 +224,6 @@ Prompt v40、75 项聚焦测试和真实保存请求 `2448168` 的三组隔离�
 - **Verification:** DEV -> PRD 与完整 STG -> STG 配置回归、错配/缺确认/部分 STG profile 的 fail-closed 回归、Host/transfer 私有 overlay 检查通过；Runbook 增加只读 IP/Host/UM 发现 smoke。外网结果只证明配置和无网络边界，真实 Agent Platform/ZEUS `mocked=false` 调用仍属于 D12-B 内网 gate。
   内网随后已证明真实待审告警 lifecycle `code=200/status=1/mocked=false`；完整任务因 Worker 缺少共享 Policy 配置停留 `PENDING`。修复新增 PID-bound Worker readiness，并通过 Host/compat/Processing Job/架构聚焦回归；需随下一交付在内网用 fresh Job 复验。
   后续 fresh Job 已完成 Runtime 并写入结果，证明 Worker 修复有效；本机自提交 callback 因 ZEUS 未登记该 `taskId` 返回 `40020`，最终 callback 门禁必须由 ZEUS 上游真实发起关闭。PingAn chat 另发现 EAGW 不支持流式请求，现由专用 model profile 使用 LangChain buffered fallback，并把 gateway/Runtime 并发统一为 `3`。
-
-### 2026-09-02 — Legacy live-acceptance recovery and signed-wire hardening
-
-- **Task:** `PI-01`
-- **Status:** `Done`
-- **Outcome:** Host 路径解析器统一导出 checkout-owned 绝对 `SOC_DATABASE_URL`；启动器在任何 Sidecar/Web 进程前集中完成 SOC migration，并关闭 API/Worker 的重复自动迁移。新建 SQLite 首次发生瞬时 `disk I/O error` 时，只清理本次失败产生的半库并重试一次；调用前已存在的数据库绝不自动删除。`status` 增加数据库路径、状态和 revision，生成式 Runbook 删除手工建库分支；无状态重装确认从 `/dev/tty` 读取，避免 heredoc 吞掉后续 Shell。live acceptance 在任何 `8090` 请求前验证 SQLite 文件、`soc_alembic_version` 和 Processing Job/Callback 表，并提供显式恢复模式。内网首轮真实证据进一步定位 `code=40100/签名验证失败`：旧实现签名 `json.dumps`，却让 HTTPX `json=` 重新压缩 wire body。现已让 lifecycle/callback/asset/TI/security-tag 五个 ISEC Provider 一次序列化并以相同 bytes 签名和发送；报告契约升级为 v3，失败 callback 的 HTTP/provider code 与 response hash 可安全持久化。新增模型调用前的只读 lifecycle/signature smoke，并把 local self-submit 与 ZEUS-originated 最终验收分开。内网复验已从 `40100` 推进到业务码 `65505`；新增显式完整响应探针，复用 Worker 的真实 Provider，只在忽略目录以 `0600` 保存完整响应，且不创建 Job、调用模型、触发回调或放宽 bounded smoke 门禁。根据内网联调约束，新增受治理部署 profile：DEV/STG 分别绑定独立 SOC SQLite、Memory/Policy/Automation scope，STG 禁用 DEV Workbench/免登录，两者均关闭真实动作；私有 env 保存 ZEUS PRD/STG 两套 profile，切换原子应用 `项目 DEV -> ZEUS PRD`、`项目 STG -> ZEUS STG`，Host/preflight 对错配 fail closed。模型目标、Provider mode 和权限保持独立；Agent Platform target 后续与 ZEUS 一样纳入 Runtime 环境映射治理，生命周期和回写仍默认 `fake`。
-- **Verification:** 外网 350 项 PingAn 集成/Host/签名/Provider/transfer 回归及 12 项 SOC 架构边界回归通过；真实形状私有 env 副本完成 DEV -> STG -> DEV 往返，除 Runtime selector 外其余内容哈希不变，STG 解析到独立数据库并使用 `--prod`。migration/legacy/Processing Job 回归继续覆盖瞬时新库失败、已有库非破坏性失败、数据库先于 Sidecar 启动及只读状态检查。真实内网已人工证明 SQLite 可升级到 `0027_processing_jobs`、六个进程全部启动、模型网关 completion 通过；新签名代码和 lifecycle smoke 仍需随下一交付在内网复验。
-
 
 ## Update Contract / 更新约定
 

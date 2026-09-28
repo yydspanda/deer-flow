@@ -47,6 +47,9 @@ class _Fact(BaseModel):
 class JsonLLMNormalizationReviewer:
     step_name = "normalization_assist"
     prompt_version = NORMALIZATION_PROMPT_VERSION
+    # Reusing accepted facts also depends on deterministic merger semantics,
+    # even when the model prompt and raw input have not changed.
+    acceptance_version = "soc-normalization-acceptance-v1"
 
     def __init__(
         self,
@@ -71,6 +74,7 @@ class JsonLLMNormalizationReviewer:
                 "mode": mode,
                 "reference_validation_enabled": reference_validation_enabled,
                 "configuration": configuration_hash,
+                "acceptance": self.acceptance_version,
                 "prompt": build_normalization_prompt(NormalizationAssistRequest(alert_id="", source={}, detection={}, configuration_hash="", reference_validation_enabled=reference_validation_enabled))[0],
                 "sensitive_mode": sensitive_evidence_mode,
             }

@@ -1608,6 +1608,19 @@ normalizers/hids.py
 
 ### Normalization maintenance / 归一化维护约束
 
+2026-09-28 HTTP 行为补充契约：`network_behavior` 为有限枚举，Server 产品为产品族；
+合并器独占 `network_behavior_verification`，验证同来源、单一 HTTP 事务、原文引用和
+内容角色。内容角色来自 Adapter 的 source semantics 或明确的标准 HTTP 报文结构，
+不能仅凭规则名称/状态码或另一个模型标记。无效描述保留普通事实并记录问题。
+摘要别名已解析为独立观察时，仅核验最终观察的模型改写，保留已知字段冲突检查；
+摘要无关属性不能连带拒收观察内容。接受规则标识进入核对配置哈希，变更后新执行
+重新核对，禁止沿用旧接受结果；旧 Run、候选及审核记录仍保持原样。
+Memory 每事务生成一个固定词汇组合，不使用自由文本/地址/时间/编号/偏移作匹配值。
+同事务产品歧义、无法确定对象等投影缺口不得退回旧精确匹配。新增内部身份仅用于
+有新验证元数据的请求；旧保存身份和序列化保持原样，既有参考召回不授予直接处置权。
+无新增数据库迁移、后台任务或自动审核；模拟模型验证只证明契约和流程，不代表真实
+模型分类质量已经验收。
+
 2026-09-14 补充：常规语义核对以
 [`normalization-assistance-design.md`](../ai_soc/architecture/normalization-assistance-design.md) 为准。
 旧 maintenance API 仍兼容，但不是调用门槛。核对在实体/指纹/Memory 前，启用后对范围内
@@ -3043,13 +3056,20 @@ tool permission denial rate
   canonical scope conflicts such as different network service, CVE, or attack-behavior family. Compatibility with
   older records may derive these scopes from canonical `behavior_component*` prefixes, but never from tenant raw
   aliases. A same-rule cross-behavior record rejected here must count as `skipped_not_applicable`.
-- PingAn's registered `reference_applicability` hook is a narrow exception for confirmed, governed
+- PingAn's detector-scope `reference_applicability` branch is a narrow exception for confirmed, governed
   `review_hint` records without a directive or selected/covered behavior. Required keys must be exactly
   detection key/signature/environment and all must match with the original thresholds and tenant scope.
   Only optional service differences and known saved Profile identities may be bridged, always as
   `partial/context_only`; CVE/family conflicts and explicit required/reuse/excluded limits still reject.
   Cross-identity opaque exclusions must fail closed. The hook is disabled in `find_directive_records`.
   Match-test composition carries the real Profile registry, while remaining a single-record eligibility test.
+- Its semantic-scope branch may bridge known frozen PingAn 9–12 identities only for a verified saved
+  selected/covered scope with a common concrete strong behavior from the reviewed selection. Selected
+  missing conditions may only be services, without contrary known service facts. All explicit business
+  required/reuse/excluded/object restrictions must pass; unknown encodings and CVE/family conflicts reject.
+  A former direct-use record may enter model context, but the report must remain partial/context-only,
+  retain missing/uncovered behavior and projection gaps, and set decision-directive applicability false.
+  This branch does not participate in direct lookup or rewrite the saved record.
 - PingAn apply Profile 10 / feature schema v8 corrects service direction without rewriting Profiles 7/8/9:
   `to_client` takes its own `src_port`, `to_server` its own `dst_port`, with valid TCP/UDP ports 1–65535.
   Unknown fields do not borrow values from another observation or HTTP fallback. Strong detector service
@@ -3060,6 +3080,12 @@ tool permission denial rate
   all projected facets except the versioned fingerprint and all projection gaps are exactly equal. Never switch a saved identity.
   The selected identity is frozen for the run; directive matching stays identity-exact. Memory Center's
   current-family display may recognize both generated identities without granting retrieval or decision rights.
+- PingAn Profile 12 / schema v10 adds source-proven application services to the frozen HTTP-capable
+  projector. Only same-source trusted canonical network provenance, declared initiator/responder roles
+  and one HTTP transaction can establish HTTP/HTTPS service identity; do not guess TCP or packet direction.
+  Ports and subject ownership remain exact; missing, conflicting or forwarded evidence cannot inherit
+  another observation's service. Saved Profiles 7–11 stay frozen. Fresh-request selection can retain
+  an older exact identity only when every facet except fingerprint and every projection gap is identical.
 - 没有 typed applicability 的 legacy record 最多作为 bounded `M-*` 背景存在，即使历史上携带 directive
   也不得改判。确定性 Memory Decision 必须同时满足 record `decision_impact=detection_decision`、typed
   applicability 和当前 projection `status=applicable`；客户端 metadata 不能恢复该权限。

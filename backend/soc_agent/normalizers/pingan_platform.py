@@ -1259,6 +1259,32 @@ def _source_field_semantics(
                         "participates_in_reasoning": True,
                     }
                 )
+            # Content position is adapter-owned. The generic semantic merger may
+            # classify observed contents but cannot infer these roles from aliases
+            # or a detector description that happens to mention the same words.
+            for field, semantic_type in (
+                ("response_headers", "observed_HTTP_response_headers"),
+                ("request_headers", "observed_HTTP_request_headers"),
+                ("http_response_body_printable", "observed_HTTP_response_body"),
+                ("http_response_body", "observed_HTTP_response_body"),
+                ("http_request_body_printable", "observed_HTTP_request_body"),
+                ("http_request_body", "observed_HTTP_request_body"),
+                ("url", "observed_HTTP_request_target"),
+            ):
+                content = _nested_value(parsed.fields, ("http", field))
+                if not isinstance(content, (str, dict, list)) or not content:
+                    continue
+                if field == "url" and "libhtp::request_uri_not_seen" in str(content):
+                    continue
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.http.{field}",
+                        "semantic_type": semantic_type,
+                        "meaning": "observed_HTTP_transaction_content_not_detection_description_or_attack_success_proof;_encoded_contents_remain_literal",
+                        "participates_in_entities": False,
+                        "participates_in_reasoning": True,
+                    }
+                )
             if _nested_str(parsed.fields, ("alert", "source", "ip")):
                 observations.append(
                     {

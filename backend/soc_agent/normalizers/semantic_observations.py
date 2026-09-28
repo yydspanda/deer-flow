@@ -18,6 +18,7 @@ from soc_agent.contracts.normalization import (
     ContextObservationRef,
     DetectionIdentifier,
     DetectionObservationRef,
+    NetworkBehaviorDescriptor,
     NormalizationAdditionalFactProposal,
     NormalizationEventProposal,
     NormalizationObjectProposal,
@@ -39,6 +40,7 @@ OBJECT_FIELDS = {
 }
 _HASH_LENGTHS = {"md5": 32, "sha1": 40, "sha256": 64}
 _MAX_OBSERVATIONS = 40
+_HTTP_MESSAGE_START = re.compile(r"^(?:HTTP/\d(?:\.\d)?[ \t]+\d{3}(?:[ \t]+[^\r\n]*)?|[A-Z]{3,12}[ \t]+\S+[ \t]+HTTP/\d(?:\.\d)?)\r?$", re.MULTILINE)
 
 
 def _get(root, path):
@@ -92,17 +94,17 @@ def build_object_catalog(alert: AlertInput, sources: list[NormalizationSource], 
     return catalog
 
 
-def _quote(proposal, request):
+def _quote(proposal, request, *, force=False, allow_repeated=False):
     sources = request.sources or [NormalizationSource(source_id="L0", source_path=request.source_path or "", text=request.source_text)]
     source = next((s for s in sources if s.source_id == proposal.source_id), None)
     if source is None:
         raise ValueError("unknown_source")
-    if not request.reference_validation_enabled:
+    if not request.reference_validation_enabled and not force:
         return source, None
     start = proposal.quote_start
     if start is None:
         count = source.text.count(proposal.source_quote)
-        if count != 1:
+        if count == 0 or (count != 1 and not allow_repeated):
             raise ValueError("missing_quote" if count == 0 else "ambiguous_quote")
         start = source.text.index(proposal.source_quote)
     if source.text[start : start + len(proposal.source_quote)] != proposal.source_quote:
@@ -119,6 +121,142 @@ def _check_values(values, quote, *, reference_validation_enabled=True):
             raise ValueError("oversized_or_omitted_value")
         if reference_validation_enabled and text not in quote and text not in decoded and json.dumps(value, ensure_ascii=False).strip('"') not in quote:
             raise ValueError("value_not_in_quote")
+
+
+def _network_behavior_subject(path, source, working):
+    """Require one HTTP observation, never aggregate separate transactions."""
+    if path != "entities.http" and not re.fullmatch(r"entities\.http\.observations\[\d+\]", path or ""):
+        raise ValueError("network_behavior_requires_http_subject")
+    observations = working["entities"]["http"]["observations"]
+    scoped = [(index, observation) for index, observation in enumerate(observations) if _scope_matches(observation["evidence_path"], source.source_path)]
+    # HTTP refs currently lack transaction offsets inside a shared raw record.
+    # Even an explicit ref cannot prove which same-source response owns a fact.
+    if len(scoped) > 1:
+        raise ValueError("ambiguous_http_transaction")
+    if scoped:
+        index, observation = scoped[0]
+        canonical_path = f"entities.http.observations[{index}]"
+        if path != "entities.http" and path != canonical_path:
+            raise ValueError("unknown_or_cross_event_subject")
+        if path == "entities.http":
+            aggregate = working["entities"]["http"]
+            if any(aggregate.get(key) is not None and observation.get(key) is not None and aggregate[key] != observation[key] for key in OBJECT_FIELDS["http"]):
+                raise ValueError("ambiguous_http_transaction")
+        return canonical_path
+    if observations or path != "entities.http":
+        raise ValueError("unknown_or_cross_event_subject")
+    return path
+
+
+def _check_server_product(descriptor, value, quote):
+    if descriptor.kind != "http_response_server_banner":
+        return
+    products = {
+        "simplehttp": r"simplehttp",
+        "apache": r"apache(?:-coyote)?",
+        "nginx": r"nginx",
+        "iis": r"(?:microsoft-)?iis",
+        "tomcat": r"(?:apache[- ])?tomcat",
+        "jetty": r"jetty",
+        "envoy": r"envoy",
+        "gunicorn": r"gunicorn",
+        "uvicorn": r"uvicorn",
+    }
+    # Only a declared product family: no version, IP, hostname or free text key.
+    if not isinstance(value, str) or not re.match(products[descriptor.server_product] + r"(?=/|\s|$)", value, flags=re.IGNORECASE):
+        raise ValueError("server_product_not_observed")
+    decoded = html.unescape(quote).replace('\\"', '"')
+    banners = re.findall(r"(?<![\w-])server\s*:\s*([^\r\n]*)", decoded, flags=re.IGNORECASE)
+    # Structured packet adapters commonly retain HTTP headers as {name, value}.
+    # Read each complete header object independently; never join adjacent headers.
+    for match in re.finditer(r"\{[^{}]*\}", decoded):
+        try:
+            header = json.loads(match.group())
+        except ValueError:
+            continue
+        if isinstance(header, dict) and str(header.get("name", "")).casefold() == "server" and isinstance(header.get("value"), str):
+            banners.append(header["value"])
+        if isinstance(header, dict):
+            banners.extend(item for key, item in header.items() if key.casefold() == "server" and isinstance(item, str))
+    if not any(banner.startswith(value) for banner in banners):
+        raise ValueError("server_header_not_observed")
+
+
+def _check_http_observation(descriptor, subject, working):
+    observed = _get(working, subject)
+    # A rule mentioning HTTP/protocol alone is not an observed request/response.
+    if descriptor.kind.startswith("http_response_") and observed.get("status_code") is None:
+        raise ValueError("http_response_not_observed")
+    if descriptor.kind.startswith("http_request_") and not any(observed.get(key) for key in ("method", "path", "url")):
+        raise ValueError("http_request_not_observed")
+
+
+def _http_content_regions(descriptor, source, request, alert):
+    """Use adapter-owned source roles or literal HTTP framing, never field guesses."""
+    lines = source.text.replace("\r\n", "\n")
+    if len(_HTTP_MESSAGE_START.findall(lines)) > 1:
+        # One model object is not transaction-level proof when a transcript
+        # actually contains multiple requests/responses. Keep ordinary facts.
+        return
+    if descriptor.kind == "http_response_server_banner":
+        roles = {"observed_http_response_headers"}
+    elif descriptor.kind.startswith("http_response_"):
+        roles = {"observed_http_response_body"}
+    elif descriptor.kind == "http_request_file_upload":
+        roles = {"observed_http_request_body"}
+    else:
+        roles = {"observed_http_request_body", "observed_http_request_target", "observed_http_endpoint", "observed_request_parameter"}
+    prefix = source.source_path + "#parsed."
+    parsed = [item for item in alert.extensions.get("parsed_raw_messages", []) if isinstance(item, dict) and item.get("source_path") == source.source_path]
+    for semantic in request.source_semantics:
+        path = semantic.get("field_path", "")
+        if not isinstance(path, str) or not path.startswith(prefix) or str(semantic.get("semantic_type", "")).casefold() not in roles or semantic.get("participates_in_reasoning") is not True:
+            continue
+        for record in parsed:
+            try:
+                content = _get(record["fields"], path[len(prefix) :])
+            except (ValueError, TypeError, KeyError, IndexError):
+                continue
+            if isinstance(content, (dict, list)):
+                content = json.dumps(content, ensure_ascii=False)
+            if isinstance(content, str) and content:
+                frames = _HTTP_MESSAGE_START.findall(content)
+                if len(frames) > 1 or (frames and "headers" not in str(semantic["semantic_type"]).casefold()):
+                    # Do not promote examples or nested protocol messages in a
+                    # body as if they were the outer transaction's behavior.
+                    continue
+                yield content
+    # A standalone protocol transcript has its own generic, unambiguous framing.
+    # Structured records require declared roles; `rule`, aliases, or arbitrary
+    # prose containing protocol words are never scanned as packet contents.
+    first = lines.partition("\n")[0]
+    response = re.fullmatch(r"HTTP/\d(?:\.\d)?\s+\d{3}(?:\s+.*)?", first)
+    request_line = re.fullmatch(r"([A-Z]{3,12})\s+(\S+)\s+HTTP/\d(?:\.\d)?", first)
+    head, separator, body = lines.partition("\n\n")
+    headers = head.partition("\n")[2]
+    if descriptor.kind.startswith("http_response_") and response:
+        if descriptor.kind == "http_response_server_banner":
+            yield headers
+        elif separator:
+            yield body
+    elif descriptor.kind.startswith("http_request_") and request_line:
+        if descriptor.kind != "http_request_file_upload":
+            yield request_line.group(2)
+        if separator:
+            yield body
+
+
+def _check_http_content(descriptor, value, source, request, alert):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("network_behavior_requires_content_excerpt")
+    for content in _http_content_regions(descriptor, source, request, alert):
+        try:
+            _check_values([value], content)
+            _check_server_product(descriptor, value, content)
+        except (ValueError, TypeError):
+            continue
+        return
+    raise ValueError("network_behavior_content_role_not_verified")
 
 
 def _validate_attributes(kind, attrs):
@@ -182,6 +320,7 @@ def _object_record(proposal, source):
 def collect_observation_changes(alert: AlertInput, request: NormalizationAssistRequest, payload: dict[str, Any], report: NormalizationAssistResult) -> None:
     working = alert.model_dump(mode="json")
     refs = {}
+    object_proposals = {}
     objects = payload.get("objects", [])
     counts = Counter(o["id"] for o in objects if isinstance(o, dict) and isinstance(o.get("id"), str))
 
@@ -202,7 +341,7 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
             source_quote=proposal.source_quote,
             source_start=start,
             source_end=start + len(proposal.source_quote) if start is not None else None,
-            reference_validation_status="verified" if request.reference_validation_enabled else "not_checked",
+            reference_validation_status="verified" if start is not None else "not_checked",
             reason="按原始日志核对对象、检测及其归属。",
             canonical_status="shadow" if report.mode == "shadow" else "applied",
         )
@@ -272,6 +411,7 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                 path = collection + f"[{same if same is not None else len(records)}]"
             write(path, record, proposal, source, start)
             refs[proposal.id] = (path, source.source_id)
+            object_proposals[proposal.id] = proposal
             report.reviewed_fact_count += len(attrs)
         except (ValueError, ValidationError, TypeError, KeyError) as exc:
             report.issues.append(f"对象 {index + 1} 未采纳：{_error_code(exc)}；其他对象继续处理。")
@@ -289,6 +429,19 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
     for group, cls, target in (("events", NormalizationEventProposal, "detections"), ("additional_facts", NormalizationAdditionalFactProposal, "supplementary_facts")):
         for index, item in enumerate(payload.get(group, [])):
             try:
+                network_metadata_attempted = False
+                if group == "additional_facts" and isinstance(item, dict):
+                    item = dict(item)
+                    network_metadata_attempted = item.get("network_behavior") is not None
+                    if "network_behavior_verification" in item:
+                        item.pop("network_behavior_verification")
+                        report.issues.append(f"补充事实 {index + 1} 的网络行为校验标记由程序生成，模型提供值未采纳。")
+                    if network_metadata_attempted:
+                        try:
+                            item["network_behavior"] = NetworkBehaviorDescriptor.model_validate(item["network_behavior"])
+                        except ValidationError:
+                            item.pop("network_behavior")
+                            report.issues.append(f"补充事实 {index + 1} 的网络行为类型或限定值未识别，保留普通事实。")
                 if group == "events" and isinstance(item, dict):
                     item = dict(item)
                     raw_identifiers = item.get("identifiers", [])
@@ -319,9 +472,39 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                     cls_out = DetectionObservationRef
                 else:
                     _check_values([proposal.value], proposal.source_quote, reference_validation_enabled=request.reference_validation_enabled)
-                    attrs = {"name": proposal.name, "value": proposal.value, "meaning": proposal.meaning, "subject_ref": subject(proposal.subject_ref, source) if proposal.subject_ref else None}
+                    bound_subject = None
+                    try:
+                        bound_subject = subject(proposal.subject_ref, source) if proposal.subject_ref else None
+                    except ValueError:
+                        if not network_metadata_attempted:
+                            raise
+                        report.issues.append(f"补充事实 {index + 1} 的对象归属未确认，保留未绑定的普通事实。")
+                    attrs = {"name": proposal.name, "value": proposal.value, "meaning": proposal.meaning, "subject_ref": bound_subject}
                     if proposal.clue_type is not None:
                         attrs["clue_type"] = proposal.clue_type
+                    if proposal.network_behavior is not None:
+                        try:
+                            checked_subject = _network_behavior_subject(bound_subject, source, working)
+                            _check_http_observation(proposal.network_behavior, checked_subject, working)
+                            # A single source-owned HTTP object may be represented
+                            # in both raw and decoded evidence. Locate a genuine
+                            # occurrence; its offset is not extra transaction proof.
+                            repeated = not request.reference_validation_enabled
+                            _, checked_start = _quote(proposal, request, force=True, allow_repeated=repeated)
+                            _check_values([proposal.value], proposal.source_quote)
+                            for object_id, object_proposal in object_proposals.items():
+                                # An aggregate alias may contain unrelated unchecked
+                                # attributes. After resolving to the unique adapter
+                                # observation, verify writes to that actual subject.
+                                # With no observation, checked_subject stays aggregate.
+                                if refs[object_id][0] == checked_subject:
+                                    _quote(object_proposal, request, force=True, allow_repeated=repeated)
+                                    _check_values(object_proposal.attributes.values(), object_proposal.source_quote)
+                            _check_http_content(proposal.network_behavior, proposal.value, source, request, alert)
+                            attrs.update(network_behavior=proposal.network_behavior.model_dump(mode="json"), network_behavior_verification="source_bound_v1", subject_ref=checked_subject)
+                            start = checked_start
+                        except (ValueError, TypeError) as exc:
+                            report.issues.append(f"补充事实 {index + 1} 的网络行为未采纳：{_error_code(exc)}；保留普通事实。")
                     cls_out = SupplementaryFactRef
                 record = cls_out(observation_id="SEM-" + stable_hash([source.source_path, attrs])[:16], evidence_path=source.source_path + "#semantic", event_scope_id=source.source_path, **attrs)
                 records = working["entities"][target]

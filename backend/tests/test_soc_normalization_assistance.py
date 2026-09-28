@@ -315,6 +315,23 @@ def test_recovery_reuses_saved_review_only_with_identical_input_and_configuratio
     assert len(client.calls) == 2
 
 
+def test_acceptance_policy_change_rechecks_without_rewriting_saved_review(monkeypatch):
+    client = Client([fact()])
+    monkeypatch.setattr(JsonLLMNormalizationReviewer, "acceptance_version", "previous-acceptance", raising=False)
+    reviewer = JsonLLMNormalizationReviewer(client=client, model_name="test")
+    original = payload(alert())
+    first = analyze_alert(original, normalization_reviewer=reviewer)
+    frozen = first.model_dump(mode="json")
+    analyze_alert(original, normalization_reviewer=reviewer, normalization_reuse=first)
+    assert len(client.calls) == 1
+    monkeypatch.setattr(JsonLLMNormalizationReviewer, "acceptance_version", "corrected-acceptance")
+    corrected = JsonLLMNormalizationReviewer(client=client, model_name="test")
+    rerun = analyze_alert(original, normalization_reviewer=corrected, normalization_reuse=first)
+    assert len(client.calls) == 2
+    assert "reused_from_run_id" not in rerun.normalization_assistance.metadata
+    assert first.model_dump(mode="json") == frozen
+
+
 def test_service_rerun_reuses_facts_but_executes_current_analysis(tmp_path):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker

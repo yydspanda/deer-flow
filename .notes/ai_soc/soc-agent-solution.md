@@ -665,6 +665,19 @@ Schema drift workflow / 结构漂移流程：
 不是运营每日维护任务。实施与验收以
 [`normalization-assistance-design.md`](architecture/normalization-assistance-design.md) 为准。
 
+2026-09-28：网络请求/响应补充事实增加有限的结构化行为类型（如目录列表、命令输出、
+文件上传），Server 产品使用固定产品族。模型负责分类，合并器校验原文、HTTP 对象与
+请求/响应内容归属；规则名称、状态码或模型描述不能单独产生核心行为。相同事务内的
+行为作为一个组合审核条件，避免跨响应拼接；自由文本、IP、时间、编号和具体目录不
+进入新条件的匹配值。无法可靠表达的内容仍保留为补充事实，不自动猜测。专家决定业务
+结论和使用权限；本次不迁移旧候选、历史运行或审核经验。旧经验按冻结条件回读及复用，
+新输入与旧身份不兼容时，仅通过受治理参考召回路径，不放宽直接处置权限。
+同日补齐服务证据消费：来源已声明会话发起/响应角色且同源网络字段与唯一 HTTP 事务
+来源完整时，可以识别观察到的 HTTP 服务，不猜 TCP 或报文方向。完整条件与缺口均
+不变时保持既有精确匹配；其他新条件独立冻结。已审核行为经验在具有共同具体强行为、
+业务限制满足且无已知冲突时，可在缺少服务条件的情况下作为参考召回；缺项、新增行为
+与不完整投影继续明示，不赋予直接采用结论的权限。旧记录与审核条件不回写。
+
 1. Offline onboarding still uses `soc normalize drift` and `--schema-baseline` to compare a reviewed
    sample corpus before deployment.
 2. An engineer accepts production baselines with `soc normalize baseline-accept` or

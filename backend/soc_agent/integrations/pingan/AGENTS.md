@@ -58,6 +58,28 @@ generic `soc_agent` code.
   protocol/port, or fall back to an HTTP port. A detector bound only to a network
   aggregate with distinct or unresolved connections produces a projection gap,
   not a strong service anchor. Explicit single-observation bindings remain independent.
+  Verified HTTP request/response descriptors select internal Profile 11 / feature schema v9;
+  descriptor projection failures also retain that identity and gaps, never falling back to
+  an older exact scope. Adapters declare content-role semantics for their source fields;
+  the generic merger validates provenance and the Memory kernel consumes fixed descriptors,
+  never PingAn raw aliases. Same-transaction response behavior and Server product form one
+  review condition; IPs, times, IDs, version strings and paths do not enter that condition.
+  `memory/service_identity.py` can prove an application service from canonical observation
+  provenance and Adapter-declared session initiator/responder semantics, without filling in
+  packet direction or inventing TCP. Require same-source, high-trust HTTP/HTTPS network fields,
+  complete endpoint/port provenance and one source-bound HTTP transaction; conflicts,
+  alternatives, explicit unknown direction or forwarding remain unresolved. Bind each proven
+  service to its exact network subject; aggregate proof requires one identical observation.
+  Only fresh requests with such proof consider Profile 12 / schema v10. Full facets excluding
+  the fingerprint and all gaps must equal a frozen 9/10/11 projector to retain that older
+  identity; otherwise use 12. All saved 7–11 projectors remain unchanged.
+  Mandatory synthetic APT replay checks compare complete core-condition sets before and
+  after HTTP enrichment, including unrelated SQL detections. Frozen legacy service anchors
+  survive historical reads; a fresh request without either direction or verified session-role
+  evidence can still lose those anchors. Test that boundary separately
+  from HTTP additions; passing historical preservation is not proof of identical fresh-run reuse.
+  Old identities remain frozen; reviewed reference-only lessons can use the existing governed
+  cross-identity reference retrieval, without widening direct-verdict authority.
   Detector category/name plus the detected file can differentiate
   events sharing a parent process; hashes, IPs and user-specific directories are not these
   new feature anchors. Do not claim full coverage or migrate old Memory automatically.
@@ -68,7 +90,7 @@ generic `soc_agent` code.
   Frozen Profile 7/8/9 projectors retain their original features and fingerprints;
   do not apply new direction rules to old observations or approved conditions.
   A saved identity always precedes fresh-request selection. Memory Center treats
-  currently generated off/shadow/apply identities (7, 9 and 10) as current for display
+  currently generated off/shadow/apply identities (7, 9, 10, 11 and 12) as current for display
   regardless of the process default; 8 remains historical. It must not suggest
   replacing a still-current candidate simply because the other identity exists.
   Only unmarked historical runs retain review-mode inference (apply -> 8, otherwise 7).
@@ -80,6 +102,13 @@ generic `soc_agent` code.
   always partial/context-only. Preserve required values, explicit reuse/exclusion rules,
   tenant/environment isolation, activation/validity and CVE/behavior-family conflict
   gates; never reinterpret an old fingerprint or grant automatic verdict reuse.
+  A separate modern semantic branch can recall a reviewed selected/covered scope, including
+  a direct-use record, across known 9–12 identities only as partial context. Verify the frozen
+  scope's fingerprint ingredients; require a shared concrete strong anchor from the reviewed
+  selection and optional strong anchors. Missing selected conditions may only be services,
+  with no opposite known service; every explicit required/reuse/excluded/object restriction
+  still applies. Keep actual missing/uncovered behavior and projection gaps in the model
+  comparison. The directive lookup never enables this compatibility hook.
   Inspection is an
   on-demand read of per-run facts, not an analyst maintenance prerequisite. Phishing-email
   specialization remains deferred by user decision; trust the upstream ML/LLM detection.

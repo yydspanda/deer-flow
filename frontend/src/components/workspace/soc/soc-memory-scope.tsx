@@ -71,6 +71,7 @@ const componentLabels: Record<string, string> = {
   target_class: "目标类型",
   target_file: "目标文件",
   http_method: "请求方法",
+  http_observation: "HTTP 请求与响应",
   account: "账号",
   service_uri: "服务地址",
   detected_behavior: "检测行为与对象",
@@ -79,6 +80,27 @@ const componentLabels: Record<string, string> = {
   observed_process: "日志中的进程",
   observed_process_edge: "父子进程关系",
   web_detection_target: "Web 检测对象",
+};
+const httpRequestLabels: Record<string, string> = {
+  directory_traversal: "请求包含目录穿越载荷",
+  command_execution: "请求包含命令执行载荷",
+  file_upload: "请求上传文件",
+};
+const httpResponseLabels: Record<string, string> = {
+  directory_listing: "响应返回目录列表",
+  command_output: "响应包含命令输出",
+  file_content: "响应返回文件内容",
+};
+const httpServerLabels: Record<string, string> = {
+  simplehttp: "SimpleHTTP",
+  apache: "Apache",
+  nginx: "nginx",
+  iis: "IIS",
+  tomcat: "Tomcat",
+  jetty: "Jetty",
+  envoy: "Envoy",
+  gunicorn: "Gunicorn",
+  uvicorn: "Uvicorn",
 };
 const entityLabels: Record<string, string> = {
   asset: "资产组",
@@ -109,13 +131,39 @@ function splitValue(value: string): [string, string] {
 function valueLabel(value: string): string {
   return terms[value] ?? value.replace(/^source_category:/, "");
 }
+function componentValueLabel(value: string): string {
+  const [prefix, detail] = splitValue(value);
+  if (prefix !== "http_observation") return valueLabel(detail);
+  // Translate the server's indivisible transaction condition for display only.
+  // Selection and submission always preserve the original component verbatim.
+  const sections = detail.split(";").map((section) => {
+    const index = section.indexOf("=");
+    const key = section.slice(0, index);
+    const values = section.slice(index + 1);
+    if (key === "server")
+      return `Server 头标识 ${httpServerLabels[values] ?? values}`;
+    const labels =
+      key === "request"
+        ? httpRequestLabels
+        : key === "response"
+          ? httpResponseLabels
+          : null;
+    return labels
+      ? values
+          .split(",")
+          .map((item) => labels[item] ?? item)
+          .join("、")
+      : section;
+  });
+  return `${sections.join("；")}（同一 HTTP 事务）`;
+}
 function conditionLabel(key: string, prefix?: string | null): string {
   if (prefix) return entityLabels[prefix] ?? componentLabels[prefix] ?? prefix;
   return labels[key] ?? key;
 }
 function displayValues(values: string[], prefixed = false): string[] {
   return values.map((value) =>
-    valueLabel(prefixed ? splitValue(value)[1] : value),
+    prefixed ? componentValueLabel(value) : valueLabel(value),
   );
 }
 function ScopeRows({ rows }: { rows: Map<string, string[]> }) {
@@ -276,7 +324,7 @@ export function SocMemoryScope({
                 <div className="grid min-w-0 gap-2">
                   {values.map((value) => {
                     const checked = checkedBehavior.includes(value);
-                    const label = valueLabel(splitValue(value)[1]);
+                    const label = componentValueLabel(value);
                     return (
                       <label
                         key={value}

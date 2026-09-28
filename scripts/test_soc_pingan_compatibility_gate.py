@@ -12,6 +12,33 @@ from scripts import soc_pingan_compatibility_gate as gate
 
 
 _REFERENCE_DIRECTION_BEHAVIORS = {
+    "backend/tests/test_soc_memory_behavior_reference.py": (
+        "test_source_proven_service_restores_exact_directive_while_missing_proof_only_recalls_context",
+        "test_saved_behavior_scope_with_missing_service_is_reference_only",
+        "test_matching_selected_behavior_across_identity_still_cannot_reuse_directive",
+        "test_semantic_reference_preserves_governance_and_saved_scope",
+    ),
+    "backend/tests/test_soc_memory_service_identity.py": (
+        "test_each_network_field_must_have_its_own_verified_source_provenance",
+        "test_only_reviewed_opposite_session_roles_prove_endpoint_roles",
+        "test_two_verified_network_objects_cannot_share_one_unbound_http_transaction",
+        "test_unscoped_conflict_role_keys_are_not_mistaken_for_unrelated_paths",
+        "test_proven_fresh_request_retains_complete_legacy_identity_and_eleven_core_conditions",
+        "test_proven_service_preserves_reviewed_v9_directive_but_missing_proof_cannot_reuse_it",
+        "test_saved_profiles_never_apply_new_service_proof_to_their_frozen_projection",
+        "test_a_proven_service_does_not_clear_another_subjects_projection_gap",
+        "test_saved_application_service_scope_restores_and_explains_its_own_fingerprint",
+    ),
+    "backend/tests/test_soc_memory_http_behaviors.py": (
+        "test_frozen_profiles_do_not_reinterpret_new_metadata",
+        "test_saved_http_identity_restores_scope_without_fresh_selection",
+        "test_failed_http_projection_cannot_fall_back_to_exact_legacy_scope",
+        "test_old_reviewed_reference_is_recalled_without_rewriting_its_scope",
+        "test_old_override_remains_direct_for_unchanged_behavior_but_not_new_http_behavior",
+        "test_apt_core_without_http_descriptors_is_unchanged_by_http_extension",
+        "test_frozen_apt_service_conditions_survive_fresh_directional_projection",
+        "test_verified_http_addition_preserves_existing_apt_core",
+    ),
     "backend/tests/test_soc_memory_reference_retrieval.py": (
         "test_optional_service_difference_retains_reviewed_reference_without_directive",
         "test_known_profile_change_can_only_recall_rule_context_as_reference",

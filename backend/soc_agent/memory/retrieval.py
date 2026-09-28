@@ -378,7 +378,11 @@ def _memory_context_comparison(
         missing_behavior_components=(report.missing_behavior_components if report else [])[:100],
         uncovered_behavior_components=(report.uncovered_behavior_components if report else [])[:100],
         applicability_explanation=(
-            "同一检测场景的已审核经验可供参考，但服务端口不同；请结合当前业务和证据判断差异，不直接沿用旧结论。"
+            "已审核经验与当前核心行为相关，但部分服务条件尚未确认。本次仅供参考，请核对列出的缺失条件及新增行为，不直接沿用旧结论。"
+            if report and "missing_service_reference_only" in report.reason_codes
+            else "已审核经验与当前核心行为相关，本次仅供参考；请比较缺失条件、新增行为和当前证据，不直接沿用旧结论。"
+            if report and "compatible_semantic_scope_reference_only" in report.reason_codes
+            else "同一检测场景的已审核经验可供参考，但服务端口不同；请结合当前业务和证据判断差异，不直接沿用旧结论。"
             if report and "optional_network_service_difference" in report.reason_codes
             else "按已审核的检测条件找到相关经验，本次仅供参考；请比较当前事实与经验适用边界，不直接沿用旧结论。"
             if report and "compatible_profile_reference_only" in report.reason_codes

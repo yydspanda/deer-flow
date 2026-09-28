@@ -170,6 +170,24 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   cannot produce a service. Distinct or unresolved connections under an aggregate
   subject require an explicit observation binding before producing a strong service
   anchor; otherwise retain a projection gap. No HTTP fallback guesses a service role.
+  The PingAn-only service-identity helper may separately prove an observed application
+  service from trusted same-source endpoint/port/protocol provenance, explicit Adapter session
+  roles and a unique HTTP transaction. It neither guesses transport nor rewrites direction.
+  Fresh requests with this proof consider internal Profile 12 / schema v10; complete facets
+  (excluding only the fingerprint) and gaps may preserve an identical frozen 9/10/11 scope.
+  Missing/conflicting/forwarded evidence cannot borrow another subject's service.
+  Verified typed HTTP facts select internal Profile 11 / feature schema v9 (including when
+  projection produces only a gap). `memory/http_behaviors.py` consumes the merger's verified
+  descriptors, grouped by owned source and HTTP subject. One indivisible `http_observation:`
+  component contains fixed request/response types and optional Server product family; never
+  hash supplementary prose, addresses, IDs, timestamps, product versions or directory paths.
+  Server banner alone is weak. An observed request/response behavior is a matching anchor,
+  not proof of maliciousness or success. Multiple HTTP subjects under one source, unbound
+  facts or conflicting products cannot silently become a global union or legacy exact reuse.
+  Rejected/untyped facts stay ordinary evidence. Closed types intentionally leave other
+  traffic unclassified; expanding the vocabulary requires contract, validation and replay tests.
+  Verified HTTP additions use the existing selected/covered behavior review path. Preserve
+  detector and service projection gaps; HTTP content does not cure unrelated uncertainty.
   The shared Memory kernel does not parse
   detector vendor labels or create semantic facts. Keep old records/indexes untouched;
   the offline corpus index remains an Adapter-only navigation index, not an authority for
@@ -179,11 +197,11 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   inference (`apply` -> Profile 8 / v6, otherwise Profile 7 / v5). Invalid saved identities
   fail closed rather than selecting another profile; new apply candidates use the
   actual selected identity and facets frozen on their request.
-  Restore unchanged Profile 7/8/9 projectors for read/replay without rewriting,
+  Restore unchanged Profile 7/8/9/10/11 projectors for read/replay without rewriting,
   reprojecting through the current rules or reactivating old Memory.
   Server-owned `for_request` selection applies only to requests without a saved
   identity. Memory Center classifies currently generated off/shadow/apply identities
-  (7/9/10) as current through `is_current_identity`, regardless of process defaults;
+  (7/9/10/11/12) as current through `is_current_identity`, regardless of process defaults;
   Profile 8 remains historical. This display predicate must never relax retrieval,
   scope governance or directive identity checks, or propose a replacement solely
   because another current-family candidate exists.
@@ -205,7 +223,7 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   context-only applicability is accepted. Compatibility readers may recognize older
   canonical component encodings, but they must not read tenant raw aliases or silently
   reinterpret an unrelated behavior under the same detection key.
-- PingAn's `reference_applicability` delegates to `reference_retrieval.py` only for
+- PingAn's detector-scope `reference_applicability` branch delegates to `reference_retrieval.py` for
   eligible reviewed `review_hint` records without a directive whose required keys are
   exactly `detection_key`, `detection_signature` and `environment`. A difference in
   optional service features or a known historical Profile identity may yield only
@@ -215,6 +233,13 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   Unknown identities and untranslatable explicit restrictions fail closed. Keep the
   original record bytes and exact applicability unchanged; this is a reference
   comparison, not a migration or an alternate directive path.
+  A separate selected/covered semantic-scope branch recognizes frozen PingAn 9–12 identities.
+  It verifies saved fingerprint ingredients, a shared reviewed concrete strong behavior,
+  all explicit required/reuse/excluded/object limits and absence of known conflicts. Only
+  service conditions may be missing from the selected behavior. It may recall a direct-use
+  record as partial/context-only, preserving gaps and missing/uncovered conditions; the
+  model receives explicit comparison text and `decision_directive_applicable=false`.
+  `find_directive_records` continues to disable all reference compatibility.
 - `M-*` is historical reasoning context, not `E-*` current evidence. Free-form Memory
   never deterministically changes a decision.
 - Before freezing the M-* catalog, `ConfirmedMemoryAnalysisRequestEnricher` applies

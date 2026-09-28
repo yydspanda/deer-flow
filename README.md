@@ -278,6 +278,24 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > details for grouping/audit, with order-independent normalization. Additional IP/host/account limits narrow direct
 > verdict reuse, without blocking otherwise eligible reference Memory. Source and destination limits
 > are separate AND conditions. Existing reviewed legacy scopes keep their original semantics.
+> Observed HTTP requests and responses can supply stable core conditions such as directory
+> listing or command output. Semantic review classifies source-verified content into fixed
+> types; equivalent wording, IPs, timestamps, log IDs and directory names do not become matching
+> values. Behaviors from the same HTTP transaction stay together as one readable checkbox,
+> preventing facts from different responses being combined. Unsupported or unbound descriptions
+> remain supplementary evidence. These conditions describe observed behavior; reviewers still
+> decide its business meaning and permitted use. Existing runs and reviewed lessons are unchanged.
+> Unrelated HTTP summary supplements cannot block content bound to an unchanged observed
+> response. Acceptance-rule updates invalidate reusable fact-review caches for subsequent runs.
+> Historical preservation and fresh-run matching are checked separately. A rerun with
+> unproven transport or service direction can omit former service-port conditions;
+> compare the actual core-condition sets before claiming unchanged experience reuse.
+> PingAn session-role evidence can also establish an observed HTTP service when the
+> network fields and one HTTP transaction have consistent, verified source provenance.
+> This preserves supported service conditions without guessing packet direction or TCP.
+> Related reviewed behavior lessons can remain model context across supported matching-rule
+> changes when service details are missing. The model sees missing conditions and new behavior;
+> business limits and known conflicts still apply, and this path cannot directly reuse a verdict.
 > Confirmed Memory keeps temporary pause/reopen under `管理使用状态`; the terminal
 > `废止这条经验` action requires an explicit audited reason and disables both reference and
 > decision reuse without deleting historical evidence. It is available directly from experience

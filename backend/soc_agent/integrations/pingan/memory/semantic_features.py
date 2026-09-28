@@ -55,19 +55,19 @@ def _network_subject_ambiguous(subject):
     return len(connections) > 1
 
 
-def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = False, directional_services: bool = False) -> tuple[list[str], list[str]]:
+def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = False, directional_services: bool = False, proven_services: dict[str, str] | None = None) -> tuple[list[str], list[str]]:
     entities = request.canonical_entities
     components, strong = set(), set()
     for detection in entities.detections:
         if detection.identity_basis == "ambiguous":
             continue
-        subjects = [(ref.split(".")[1], _subject(entities, ref)) for ref in detection.subject_refs]
-        subjects = [(kind, s) for kind, s in subjects if s is not None]
+        subjects = [(ref, ref.split(".")[1], _subject(entities, ref)) for ref in detection.subject_refs]
+        subjects = [(ref, kind, s) for ref, kind, s in subjects if s is not None]
         if not subjects:
             continue
         label = ":".join([detection.kind, (detection.category or "").casefold(), detection.name.casefold()])
         label = re.sub(r"\s+", "_", label)[:512]
-        for subject_kind, subject in subjects:
+        for ref, subject_kind, subject in subjects:
             binding = None
             kind = {"file": "file_detection", "network": "network_access", "process": "process_execution", "http": "web_detection"}.get(subject_kind, detection.kind) if stable else detection.kind
             if kind == "file_detection" and (leaf := _leaf(subject.get("file_path") or subject.get("file_name"))):
@@ -75,8 +75,9 @@ def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = 
                 binding = "file:" + leaf
             elif kind == "network_access":
                 if directional_services:
-                    service = _directional_service(subject)
-                    if service and not _network_subject_ambiguous(subject):
+                    proven = (proven_services or {}).get(ref)
+                    service = proven or _directional_service(subject)
+                    if service and (proven or not _network_subject_ambiguous(subject)):
                         binding = "service:" + service
                 elif stable and subject.get("dst_port"):
                     binding = "service:" + str(subject.get("protocol") or "unknown").casefold() + "/" + str(subject["dst_port"])
@@ -118,7 +119,7 @@ def semantic_behavior_components(request: LLMAnalysisRequest, *, stable: bool = 
     return sorted(components), sorted(strong)
 
 
-def semantic_projection_gaps(request: LLMAnalysisRequest, *, directional_services: bool = False) -> list[str]:
+def semantic_projection_gaps(request: LLMAnalysisRequest, *, directional_services: bool = False, proven_services: dict[str, str] | None = None) -> list[str]:
     gaps = []
     for index, detection in enumerate(request.canonical_entities.detections):
         if detection.identity_basis == "ambiguous":
@@ -126,12 +127,13 @@ def semantic_projection_gaps(request: LLMAnalysisRequest, *, directional_service
         for ref in detection.subject_refs or [""]:
             subject = _subject(request.canonical_entities, ref)
             kind = ref.split(".")[1] if "." in ref else None
-            if directional_services and kind == "network" and subject and _network_subject_ambiguous(subject):
+            proven = (proven_services or {}).get(ref)
+            if directional_services and kind == "network" and subject and not proven and _network_subject_ambiguous(subject):
                 gaps.append(f"entities.detections[{index}]:network_subject_ambiguous:{ref}")
                 continue
             supported = subject and (
                 (kind == "file" and (subject.get("file_path") or subject.get("file_name")))
-                or (kind == "network" and (_directional_service(subject) if directional_services else subject.get("dst_port")))
+                or (kind == "network" and (proven or _directional_service(subject) if directional_services else subject.get("dst_port")))
                 or (kind == "process" and (subject.get("nodes") or subject.get("process_name")))
                 or (kind == "http" and subject.get("host"))
             )

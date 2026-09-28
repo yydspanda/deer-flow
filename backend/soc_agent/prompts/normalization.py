@@ -4,7 +4,7 @@ from soc_agent.contracts import NormalizationAssistRequest
 from soc_agent.normalizers.semantic_observations import OBJECT_FIELDS
 from soc_agent.utils.model_json import model_json
 
-NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v9"
+NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v10"
 # Retained for reading the original scalar draft and v1 output compatibility.
 NORMALIZATION_TARGETS = (
     "entities.host.host_name",
@@ -55,6 +55,23 @@ source_identifiers：接入方按 L* 日志声明的检测标识及原始字段�
    file_path（文件路径）、process（进程名）。name 可以沿用日志字段名，clue_type 使用上述稳定类型。
    value 保留一条完整、具体的线索，不混合多个地址；域名与路径属于同一地址时一起保留。
    未明确类型的普通字段、编号或计数不填 clue_type。不猜业务归属，由后续企业知识解释。
+   对实际观察到的 HTTP 请求/响应内容，可加 network_behavior={"kind":"固定类型"}，必须同时以
+   subject_ref 绑定同一 L* 中一个明确 HTTP 对象；kind 只能选：
+   http_response_directory_listing（响应实际返回目录列表）、http_response_command_output（响应实际包含命令回显）、
+   http_response_file_content（响应实际返回文件内容）、http_request_directory_traversal（请求含目录穿越载荷）、
+   http_request_command_execution（请求含命令执行载荷）、http_request_file_upload（请求实际携带上传文件）。
+   Server 响应头另用 {"kind":"http_response_server_banner","server_product":"固定软件族"}，
+   server_product 仅 simplehttp/apache/nginx/iis/tomcat/jetty/envoy/gunicorn/uvicorn；只保留头声明的软件族，
+   不把它当成已验证的服务身份。未知软件照常保留普通补充事实，不创造编码或勉强选相近类型。
+   相同含义始终选相同 kind，name/meaning 可用自然语言解释；value 保留实际报文内容的短片段。
+   network_behavior 不接收 IP、时间戳、编号、端口、具体路径、版本或自由描述，不把这些值组成核心行为。
+   即使未启用全局精确引用检查，此类事实及所绑定对象的 source_quote 仍须逐字来自对应 L*，
+   value 须在引用中出现；优先摘录带字段名的片段，引用重复时可提供零起始 quote_start。响应对象须有实际 status_code，
+   请求对象须有实际 method/path/url。不能确定来源和对象时保留普通事实，不填 network_behavior。
+   同一报文中多个特征必须绑定同一个 HTTP 对象；有多个事务但归属不明时不得合并。
+   规则名称/规则说明/攻击描述提到“目录列表”不代表本次响应包含目录列表；Referer 请求头包含某页地址
+   不代表本次请求访问该页，更不代表响应返回该页。示例中的载荷、处置建议、模型猜测均不填 network_behavior。
+   请求的攻击载荷不能当作执行成功或响应回显；目录中的文件名不能当作文件已被传输。
 4. unresolved 只描述真正未解释的歧义或缺损，不重复列举已成功整理的信息，不因没有授权说明就质疑事件存在。
 </workflow>
 <field_rules>
@@ -91,7 +108,34 @@ objects/events/additional_facts 各最多 40 项；unresolved 最多 20 项。
 
 def build_normalization_prompt(request: NormalizationAssistRequest) -> list[dict[str, str]]:
     packet_example = "00000000: 70 6f 72 74 61 6c 2e 65 78 61 6d 70 6c 65 2e 69  portal.example.i\n00000010: 6e 76 61 6c 69 64 2f 61 70 70 73 2f 68 65 6c 70  nvalid/apps/help\n00000020: 64 65 73 6b                                      desk"
+    http_example = "HTTP/1.1 200 OK\nServer: SimpleHTTP/0.6 Python/2.7.5\n\n<title>Directory listing for /shared/</title>"
     examples = [
+        {
+            "source": http_example,
+            "output": {
+                "objects": [{"id": "h1", "kind": "http", "attributes": {"status_code": 200}, "source_quote": "HTTP/1.1 200 OK"}],
+                "events": [],
+                "additional_facts": [
+                    {
+                        "name": "response_title",
+                        "value": "Directory listing for /shared/",
+                        "meaning": "响应返回目录列表，不证明发生文件下载或业务已授权。",
+                        "subject_ref": "h1",
+                        "source_quote": "<title>Directory listing for /shared/</title>",
+                        "network_behavior": {"kind": "http_response_directory_listing"},
+                    },
+                    {
+                        "name": "response_server",
+                        "value": "SimpleHTTP/0.6 Python/2.7.5",
+                        "meaning": "Server 响应头声明的软件。",
+                        "subject_ref": "h1",
+                        "source_quote": "Server: SimpleHTTP/0.6 Python/2.7.5",
+                        "network_behavior": {"kind": "http_response_server_banner", "server_product": "simplehttp"},
+                    },
+                ],
+                "unresolved": [],
+            },
+        },
         {
             "source": 'rule_id="0x5dc9" sig_id="3518" event="VPN通信" proto="udp" dport="1194"',
             "output": {

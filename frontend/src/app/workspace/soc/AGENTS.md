@@ -12,6 +12,12 @@ applicability. Do not compute hashes or match scores in React. At least one core
 remains selected; clearing a behavior is an explicit scope change, not an exclusion.
 Additional conditions gate direct reuse only. Reference copy must explain that a model
 can adopt a reviewed lesson, while the program does not directly copy its historical verdict.
+Typed HTTP observations render their fixed request/response behavior and Server product
+codes in Chinese through `SocMemoryScope`. Each server-owned `http_observation:` component
+is one checkbox for one HTTP transaction; do not split its request, response, or banner
+into independently matchable conditions. Translate labels only, preserve complete tokens
+in drafting/preview/review commands, and leave evidence in the existing audit view. Never
+derive core behaviors from free text, IPs, timestamps, or identifiers in the browser.
 
 ## API And Navigation
 
