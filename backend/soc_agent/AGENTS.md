@@ -61,6 +61,9 @@ file for SOC code. The authoritative product and engineering documents are:
   This browse filter never enters quick-validation dispatch commands.
   Corpus alert projections omit operator outcomes while a run is pending/running or an
   active execution owns the alert; absent intermediate analysis is not a terminal failure.
+  Learning navigation uses the resolved pattern candidate when present, otherwise the
+  current Run's manual candidate. A persisted observation without a pattern candidate
+  must not hide manual review or its subsequent governance state; page reads stay fresh.
   Round result/audit reads pin Run ID and source hash, never the latest alert result.
   Reports separate matched-group validation from sparse exploration and unknown usage.
   Offline comparisons require the same experiment, dataset identity and explicit batch;

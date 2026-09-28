@@ -101,6 +101,88 @@ def test_batch_group_directory_counts_and_alert_search_are_scoped(workbench):
         workbench.get_state(batch="learning", validation_tier="main")
 
 
+@pytest.mark.parametrize("has_observation,has_pattern_candidate", [(False, False), (True, False), (True, True)])
+def test_manual_review_entry_survives_pattern_accumulation_and_refresh(workbench, has_observation, has_pattern_candidate):
+    from test_soc_memory_patterns import _context, _run
+
+    from soc_agent.application.memory import build_soc_memory_profile_registry
+    from soc_agent.contracts import (
+        MemoryPatternDataClass,
+        MemoryPatternSourceType,
+        SocMemoryCandidateCreateCommand,
+        SocMemoryCandidateSource,
+        SocMemoryCandidateSourceType,
+        SocMemoryCandidateType,
+        SocMemoryCandidateValidity,
+        SocMemoryTargetArtifact,
+    )
+    from soc_agent.core import SocMemoryPatternService, SocMemoryService
+
+    repo = workbench._repository
+    run = _run(1, tenant_id="pingan")
+    run.alert_id = "0"
+    run.input_hash = workbench._cases["0"].payload_hash
+    run.llm_analysis_request = run.llm_analysis_request.model_copy(update={"environment": "dev-corpus-eval", "source": run.llm_analysis_request.source.model_copy(update={"integration_name": "pingan_legacy_alert_platform"})})
+    repo.save_run(run)
+    patterns = SocMemoryPatternService(repository=repo, candidate_repository=repo, profile_registry=build_soc_memory_profile_registry())
+    workbench._pattern_service = patterns
+    observation = None
+    if has_observation:
+        result = patterns.observe_run(
+            run,
+            source_type=MemoryPatternSourceType.BATCH_ALERT,
+            transport_ref="synthetic:manual-review-entry",
+            environment="dev-corpus-eval",
+            data_class=MemoryPatternDataClass.OPERATIONAL,
+            context=_context(),
+        )
+        observation = result.observation
+        assert result.candidate is None  # One observation has not reached the automatic threshold.
+
+    memory = SocMemoryService(candidate_repository=repo)
+    command = SocMemoryCandidateCreateCommand(
+        candidate_type=SocMemoryCandidateType.DETECTION_LESSON,
+        target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+        summary="Synthetic manual lesson for a saved corpus run",
+        content="Manual review remains reachable while repeated observations accumulate.",
+        tenant_scope="pingan",
+        tenant_id="pingan",
+        source=SocMemoryCandidateSource(
+            source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
+            source_id=f"manual_run_promotion:{run.run_id}",
+            run_id=run.run_id,
+            alert_id=run.alert_id,
+        ),
+        metadata={"source": "manual_run_promotion", "data_class": "operational"},
+        evidence_refs=[f"run:{run.run_id}"],
+        validity=SocMemoryCandidateValidity(notes="Synthetic regression only."),
+        idempotency_key="synthetic:manual-review-entry",
+    )
+    manual = memory.propose_candidate(command)
+    expected = manual
+    if has_pattern_candidate:
+        expected = memory.propose_candidate(
+            command.model_copy(
+                update={
+                    "source": command.source.model_copy(update={"source_type": SocMemoryCandidateSourceType.REPEATED_PATTERN, "source_id": f"memory_pattern:{observation.aggregation_key}"}),
+                    "metadata": {"data_class": "operational", "aggregation_key": observation.aggregation_key, "lineage_key": observation.lineage_key},
+                    "idempotency_key": "synthetic:pattern-review-entry",
+                }
+            )
+        )
+
+    for _ in range(2):
+        state = workbench.get_state(batch="learning", search="0", unprocessed_only=False, include_group_catalog=False, include_rehearsal=False)
+        projected = next(item for item in state.alerts if item.alert_id == "0")
+        assert projected.run_id == run.run_id
+        assert projected.observation_id == (observation.observation_id if observation else None)
+        assert projected.manual_candidate_id == manual.candidate_id
+        assert projected.candidate_id == (expected.candidate_id if has_pattern_candidate else None)
+        assert projected.learning.action == "review"
+        assert projected.learning.candidate_id == expected.candidate_id
+        assert projected.learning.action_label == ("审核同类经验" if has_pattern_candidate else "审核人工提炼经验")
+
+
 def test_experiment_payload_loader_cannot_substitute_member_identity(workbench):
     from soc_agent.contracts.corpus_experiments import CorpusExperimentMember
 

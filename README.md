@@ -121,6 +121,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > and the shared SOC processing queue. The page offers **开始积累 → 审核经验 → 开始验证**.
 > Batch starts cover the full selected scope; pause/continue skip completed alerts. Single
 > alerts run directly even while the batch is paused, with restart recovery and deduplication.
+> After manually extracting an experience, the alert result shows **审核人工提炼经验**
+> even when automatic pattern accumulation has not yet produced a candidate.
 > To restart the whole second batch with new settings, pause and wait for zero active
 > alerts, then choose **重新配置并全部重跑 → 全部重新运行**. This reruns successful,
 > failed and unrun alerts across the entire second batch, regardless of browser filters.

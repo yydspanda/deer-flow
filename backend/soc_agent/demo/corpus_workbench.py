@@ -2082,7 +2082,7 @@ class SocCorpusWorkbenchService:
             candidate_status=(candidate.status.value if candidate is not None else None),
             manual_candidate_id=(manual_candidate.candidate_id if manual_candidate is not None else None),
             manual_candidate_status=(manual_candidate.status.value if manual_candidate is not None else None),
-            learning=learning_view(self._repository, candidate if observation is not None else manual_candidate) if run is not None else None,
+            learning=learning_view(self._repository, candidate or manual_candidate) if run is not None else None,
             memory_id=(record.memory_id if record is not None else None),
             memory_status=(record.status.value if record is not None else None),
             memory_contexts=memory_contexts,
