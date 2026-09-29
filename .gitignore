@@ -89,3 +89,5 @@ backend/soc_agent/.understand-anything/
 # Monocle agent-observability trace output (local file exporter)
 .monocle/
 validation/git-commit-pack.zip
+validation/detector_celery
+validation/detector-python-agent-v3.2.3.zip
