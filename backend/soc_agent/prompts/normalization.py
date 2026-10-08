@@ -4,7 +4,7 @@ from soc_agent.contracts import NormalizationAssistRequest
 from soc_agent.normalizers.semantic_observations import OBJECT_FIELDS
 from soc_agent.utils.model_json import model_json
 
-NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v10"
+NORMALIZATION_PROMPT_VERSION = "soc-normalization-review-v11"
 # Retained for reading the original scalar draft and v1 output compatibility.
 NORMALIZATION_TARGETS = (
     "entities.host.host_name",
@@ -84,6 +84,10 @@ source_identifiers：接入方按 L* 日志声明的检测标识及原始字段�
   仅在报文内容中出现的地址放 additional_facts，不冒充连接目的地址、HTTP Host 或实际请求 URL；
   不因出现业务域名就判定安全，也不删除或改写上游的攻击、失陷等检测结果。
 - 运行进程、被检测文件、父进程分别整理；不要把同屏出现当成执行关系。主机 IP 不自动等于攻击者。
+- 已有进程节点的明确字段按同一 PID 核对，未变化的值不必重复输出。主进程摘要是已绑定节点的视图，
+  需要补充时引用该节点，不要另造一套摘要；发现原文或绑定冲突时明确记录 unresolved。
+  source_semantics 声明 process_command_only_network_context 时，网络地址只有命令目标含义；
+  保留在进程命令或 additional_facts，不创建实际网络连接对象，不推断流量方向、连接成功或反弹成立。
 - 哈希只绑定到原文能确定的文件或进程镜像；virus_id 等检测标识不因十六进制外观就变成文件哈希。
 - 检测标识必须区分 rule（规则）、signature（检测签名）、malware（病毒标识）、detector（其他明确的检测器编号）。
   source_field 保留原始层级，如 rule_id 与 _origin.sig_id，value 使用字符串。类型不能确定时放补充事实。

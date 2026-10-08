@@ -27,6 +27,7 @@ from soc_agent.contracts.normalization import (
     SupplementaryFactRef,
 )
 from soc_agent.normalizers.detection_identity import resolve_detection_identity
+from soc_agent.normalizers.process_facts import PROCESS_NODE_REF, bound_primary_process, has_process_binding, project_primary_process
 from soc_agent.utils.hashing import stable_hash
 
 OBJECT_FIELDS = {
@@ -317,6 +318,67 @@ def _object_record(proposal, source):
     return ContextObservationRef(**base, event_scope_id=source.source_path, kind=kind, attributes=attrs), attrs
 
 
+def _bound_process_candidate(working, attrs, source):
+    """Resolve direct process identities even when a bounded catalog omitted them."""
+    candidates = []
+    for i, observation in enumerate(working["entities"]["process"]["observations"]):
+        if not observation.get("field_sources") or not _scope_matches(observation["evidence_path"], source.source_path):
+            continue
+        for j, node in enumerate(observation["nodes"]):
+            candidates.append({"kind": "process", "source_id": source.source_id, "path": f"entities.process.observations[{i}].nodes[{j}]", "attributes": node})
+    if attrs.get("process_id") is not None:
+        matches = [item for item in candidates if item["attributes"].get("process_id") == attrs["process_id"]]
+    elif attrs.get("command_line"):
+        matches = [item for item in candidates if item["attributes"].get("command_line") == attrs["command_line"]]
+    elif attrs.get("process_name"):
+        matches = [item for item in candidates if item["attributes"].get("process_name") == attrs["process_name"] and (not attrs.get("process_path") or item["attributes"].get("process_path") == attrs["process_path"])]
+    else:
+        matches = []
+    if len(matches) > 1:
+        raise ValueError("ambiguous_existing_object")
+    return matches[0] if matches else None
+
+
+def _process_attributes(working, path, attrs, source, report, index):
+    match = PROCESS_NODE_REF.fullmatch(path)
+    if not match:
+        return attrs
+    observation_index, node_index = map(int, match.groups())
+    observation = working["entities"]["process"]["observations"][observation_index]
+    if not _scope_matches(observation["evidence_path"], source.source_path):
+        raise ValueError("unknown_or_cross_event_subject")
+    before = observation["nodes"][node_index]
+    binding = observation.get("subject_binding") or {}
+    parent_index = binding.get("parent_node_index") if binding.get("node_index") == node_index and binding.get("status") == "resolved" else None
+    parent = observation["nodes"][parent_index] if parent_index is not None and 0 <= parent_index < len(observation["nodes"]) else {}
+    if not parent and binding.get("node_index") == node_index and binding.get("status") == "resolved" and observation.get("parent_process_id") is not None:
+        parent = {"process_id": observation["parent_process_id"]}
+    accepted = {}
+    for key, value in attrs.items():
+        if key.startswith("parent_"):
+            if parent.get(key.removeprefix("parent_")) != value:
+                report.issues.append(f"对象 {index + 1} 的 {key} 未采纳：bound_process_parent_conflict。")
+            continue
+        direct_source = observation.get("field_sources", {}).get(f"nodes[{node_index}].{key}")
+        if direct_source and value != before.get(key):
+            report.issues.append(f"对象 {index + 1} 的 {key} 未采纳：direct_process_fact_conflict；保留直接字段 {direct_source}。")
+            rejected = report.metadata.setdefault("rejected_process_fact_changes", [])
+            if len(rejected) < 80:
+                rejected.append({"target": path + "." + key, "before": before.get(key), "proposed": value, "selected_from": direct_source, "source_id": source.source_id, "reason": "direct_process_fact_conflict"})
+            continue
+        accepted[key] = value
+    return accepted
+
+
+def _command_only_network_source(alert, request, source):
+    declared = any(
+        item.get("semantic_type") == "process_command_only_network_context" and _scope_matches(item.get("field_path", ""), source.source_path)
+        for item in [*alert.extensions.get("source_field_semantics", []), *request.source_semantics]
+        if isinstance(item, dict)
+    )
+    return declared and not any(_scope_matches(item.evidence_path, source.source_path) for item in alert.entities.network.observations)
+
+
 def collect_observation_changes(alert: AlertInput, request: NormalizationAssistRequest, payload: dict[str, Any], report: NormalizationAssistResult) -> None:
     working = alert.model_dump(mode="json")
     refs = {}
@@ -357,12 +419,14 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
             if counts[proposal.id] != 1 or proposal.id in request.object_catalog:
                 raise ValueError("duplicate_object_id")
             source, start = _quote(proposal, request)
+            if proposal.kind == "network" and _command_only_network_source(alert, request, source):
+                raise ValueError("command_target_is_not_wire_observation")
             valid_attrs = {}
             for key, value in proposal.attributes.items():
                 try:
                     _check_values([value], proposal.source_quote, reference_validation_enabled=request.reference_validation_enabled)
                     _validate_attributes(proposal.kind, {key: value})
-                    valid_attrs[key] = value
+                    valid_attrs[key] = int(value) if key in {"process_id", "parent_process_id"} else value
                 except (ValueError, TypeError) as exc:
                     report.issues.append(f"对象 {index + 1} 的 {key} 未采纳：{_error_code(exc)}。")
             if not valid_attrs:
@@ -378,6 +442,11 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
             existing = request.object_catalog.get(proposal.existing_ref) if proposal.existing_ref else None
             if proposal.existing_ref and (existing is None or existing["kind"] != kind or existing["source_id"] != source.source_id):
                 raise ValueError("invalid_existing_reference")
+            if kind == "process" and existing and existing["path"] == "entities.process" and has_process_binding(working):
+                path, _, node, _ = bound_primary_process(working, source_path=source.source_path)
+                existing = {**existing, "path": path, "attributes": node}
+            if kind == "process" and existing is None:
+                existing = _bound_process_candidate(working, attrs, source)
             if existing is None and (identity := _identity(kind, attrs)):
                 matches = [c for c in candidates.values() if c["kind"] == kind and ".observations[" in c["path"] and _identity(kind, c["attributes"]) == identity]
                 if len(matches) > 1:
@@ -386,6 +455,8 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
             if existing:
                 path = existing["path"]
                 before = _get(working, path)
+                if kind == "process":
+                    attrs = _process_attributes(working, path, attrs, source, report, index)
                 identity_keys = ("file_path",) if kind == "file" else ("process_name", "process_path", "process_id") if kind == "process" else ()
                 if any(before.get(k) is not None and k in attrs and before[k] != attrs[k] for k in identity_keys):
                     raise ValueError("object_identity_change_requires_distinct_observation")
@@ -424,6 +495,8 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                 candidate = (existing["path"], existing["source_id"])
         if candidate is None or candidate[1] != source.source_id:
             raise ValueError("unknown_or_cross_event_subject")
+        if candidate[0] == "entities.process" and has_process_binding(working):
+            return bound_primary_process(working, source_path=source.source_path)[0]
         return candidate[0]
 
     for group, cls, target in (("events", NormalizationEventProposal, "detections"), ("additional_facts", NormalizationAdditionalFactProposal, "supplementary_facts")):
@@ -432,6 +505,10 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                 network_metadata_attempted = False
                 if group == "additional_facts" and isinstance(item, dict):
                     item = dict(item)
+                    if "process_behavior" in item or "process_behavior_verification" in item:
+                        item.pop("process_behavior", None)
+                        item.pop("process_behavior_verification", None)
+                        report.issues.append(f"补充事实 {index + 1} 的进程行为类型由 Adapter 验证，模型提供值未采纳；保留普通事实。")
                     network_metadata_attempted = item.get("network_behavior") is not None
                     if "network_behavior_verification" in item:
                         item.pop("network_behavior_verification")
@@ -522,8 +599,10 @@ def _error_code(exc):
 
 
 def apply_observation_changes(alert: AlertInput, request: NormalizationAssistRequest, report: NormalizationAssistResult) -> AlertInput:
-    if report.mode != "apply" or report.status == "failed" or not report.observation_changes:
+    if report.mode != "apply" or report.status == "failed":
         return alert
+    if not report.observation_changes:
+        return project_primary_process(alert)
     data = alert.model_dump(mode="json")
     provenance = data["extensions"].setdefault("canonical_field_provenance", [])
     for change in report.observation_changes:
@@ -554,7 +633,7 @@ def apply_observation_changes(alert: AlertInput, request: NormalizationAssistReq
                     selection_reason="llm_semantic_review: " + change.reason,
                 ).model_dump(mode="json")
             )
-    return AlertInput.model_validate(data)
+    return project_primary_process(AlertInput.model_validate(data))
 
 
 def _scalars(value, path=""):

@@ -125,6 +125,22 @@ generic `soc_agent` code.
 
 ## Source Families
 
+- HIDS indexed `detail.proctree.N` fields are mapped together, with exact per-node
+  `field_sources`. Bind the detected process by consistent explicit PID or unique full
+  command; repeated names, conflicting tree/detail identities and uncertain parents retain
+  gaps. New bound observations use the raw source path as `event_scope_id`; the primary
+  summary derives from its `primary_ref`. Unknown fields remain available to semantic review.
+  For command-only `web_command` records (including the `datatype` alias), declare the
+  source boundary even when the execution subject is ambiguous. Only a fully matched
+  literal Bash `exec N<>/dev/tcp/IP/port` command on the bound node yields a verified
+  `process_behavior`; variables, compound commands and mere mentions remain unproven.
+  Command target descriptors never populate network observations or direction.
+  Fresh requests with binding/target metadata use Profile 13 / feature schema v11 in
+  off/shadow/apply alike. It consumes bound subjects, parents, source detector identities
+  and command targets; process/target gaps remain visible to existing coverage gates.
+  Profile 7–12 readers remain frozen, and no new cross-profile reference translation is
+  granted for command-intent scopes. The current-identity display includes 13.
+
 - SIEM structured fallback is high trust only for the reviewed ZEUS SIEM topic/profile;
   the same field names in other sources remain low/unknown until reviewed.
 - EDR mapping owns nested `detailsN`, process trees, command lines, users, hashes, paths,

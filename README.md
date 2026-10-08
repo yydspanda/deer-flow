@@ -320,6 +320,11 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > PingAn endpoint mapping keeps the current process separate from its ancestors and from
 > detected files and their hashes. HIDS `detail.*` process/file fields retain their original
 > namespace and provenance instead of disappearing between parsing and canonical mapping.
+> HIDS process details now come directly from their source nodes. The detected process and
+> its parent share one explicit binding, so optional model supplements cannot mix an ancestor's
+> PID with a child's command. Literal shell connection targets remain command evidence, not
+> observed network traffic. New matching scopes record unresolved bindings and which facts
+> contributed to their conditions; saved results and reviewed experiences keep their original scope.
 > Result details separate a server-generated **系统匹配说明** from **模型研判依据**. The former
 > lists the saved Memory use mode and uncovered conditions; the latter explains business impact.
 > Normal experience views describe applicability in business terms; internal matching identifiers

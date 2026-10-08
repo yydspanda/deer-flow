@@ -494,6 +494,12 @@ Runtime rules:
 
 ### 5.4 Normalizer and Evidence Layer / 标准化与证据层
 
+HIDS 的明确逐节点字段由 Adapter 完整提取；执行主体和父节点通过来源绑定确定，
+主进程摘要由同一事实派生。LLM 继续核对每条启用输入，提出增量或纠错，但不能静默
+覆盖直接字段或把命令目标升级为实际网络流量。新行为条件消费绑定对象并显式传播缺口，
+实际消费记录与模型输入到达状态分开；历史 Run 与已审核经验不重算。
+具体边界见 [规范化协作设计](architecture/normalization-assistance-design.md)。
+
 The system must handle vendor differences without turning the core schema into a vendor schema.
 
 处理不同供应商日志的方式：

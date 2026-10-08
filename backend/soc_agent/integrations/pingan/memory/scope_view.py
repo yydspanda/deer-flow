@@ -25,6 +25,7 @@ def explain_scope_facets(spec: SocMemoryApplicabilitySpec, facets: dict[str, lis
         "pingan.soc.memory_features.v8": "v8",
         "pingan.soc.memory_features.v9": "v9",
         "pingan.soc.memory_features.v10": "v10",
+        "pingan.soc.memory_features.v11": "v11",
     }.get(spec.feature_schema_version)
     if version is None:
         return result

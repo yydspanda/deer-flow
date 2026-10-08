@@ -264,6 +264,18 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   and the persisted use record; prefer the projection that actually contributed to the
   decision and never increment Memory health twice.
 
+- PingAn Profile 13 / feature schema v11 consumes Adapter-bound process nodes and
+  verified command targets in fresh requests, including when semantic review is off.
+  Target IP/PID/source offsets stay occurrence context; the command's TCP target port
+  is a distinct condition from an observed network service. Preserve every source's
+  detector identity and independent new detections while coalescing exact duplicates.
+  Unresolved binding, source conflict, missing declared node fields or unproven command
+  targets produce projection gaps and cannot become full exact coverage. Historical
+  Profile 7–12 projections and reviewed scopes stay frozen; 13 has no implicit older-scope
+  reference translation. `projection_usage` reports actual canonical facts used, gaps
+  and context-only values; retrieval freezes this read-only accounting in the request's
+  optional `memory_projection_audit`, never in matching keys or model evidence.
+
 ## Lesson Draft Assistance
 
 - Saved run comparisons, not model wording, own machine matching facts. `matching_facts.py`

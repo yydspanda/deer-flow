@@ -70,17 +70,23 @@ class PingAnSocMemoryProfile:
         aggregation_window_seconds=30 * 24 * 60 * 60,
     )
 
-    def __init__(self, *, semantic_features: bool = False, stable_semantics: bool = True, directional_services: bool = True, http_behaviors: bool = False, application_services: bool = False) -> None:
+    def __init__(self, *, semantic_features: bool = False, stable_semantics: bool = True, directional_services: bool = True, http_behaviors: bool = False, application_services: bool = False, process_facts: bool = False) -> None:
+        self.process_facts = process_facts
+        semantic_features = semantic_features or process_facts
+        stable_semantics = stable_semantics or process_facts
+        directional_services = directional_services or process_facts
         self.semantic_features = semantic_features
         self.stable_semantics = stable_semantics
         self.directional_services = semantic_features and stable_semantics and directional_services
-        self.application_services = self.directional_services and application_services
-        self.http_behaviors = self.directional_services and (http_behaviors or application_services)
+        self.application_services = self.directional_services and (application_services or process_facts)
+        self.http_behaviors = self.directional_services and (http_behaviors or self.application_services)
         if semantic_features:
             self.identity = SocMemoryProfileIdentity(
                 profile_id="pingan.soc",
-                profile_version="12" if self.application_services else "11" if self.http_behaviors else "10" if self.directional_services else "9" if stable_semantics else "8",
-                feature_schema_version="pingan.soc.memory_features.v10"
+                profile_version="13" if self.process_facts else "12" if self.application_services else "11" if self.http_behaviors else "10" if self.directional_services else "9" if stable_semantics else "8",
+                feature_schema_version="pingan.soc.memory_features.v11"
+                if self.process_facts
+                else "pingan.soc.memory_features.v10"
                 if self.application_services
                 else "pingan.soc.memory_features.v9"
                 if self.http_behaviors
@@ -103,14 +109,15 @@ class PingAnSocMemoryProfile:
 
     def for_identity(self, identity: dict[str, str]):
         version = identity.get("profile_version")
-        if version not in {"7", "8", "9", "10", "11", "12"}:
+        if version not in {"7", "8", "9", "10", "11", "12", "13"}:
             raise ValueError("unsupported saved PingAn Memory profile")
         restored = type(self)(
             semantic_features=version != "7",
-            stable_semantics=version in {"9", "10", "11", "12"},
-            directional_services=version in {"10", "11", "12"},
-            http_behaviors=version in {"11", "12"},
-            application_services=version == "12",
+            stable_semantics=version in {"9", "10", "11", "12", "13"},
+            directional_services=version in {"10", "11", "12", "13"},
+            http_behaviors=version in {"11", "12", "13"},
+            application_services=version in {"12", "13"},
+            process_facts=version == "13",
         )
         if identity.get("profile_id") != restored.identity.profile_id or identity.get("feature_schema_version") != restored.identity.feature_schema_version:
             raise ValueError("saved PingAn Memory feature schema does not match its profile version")
@@ -124,6 +131,10 @@ class PingAnSocMemoryProfile:
         """Retain the exact old scope when the service fix changes no ingredients."""
         if request.memory_profile:
             return self.for_identity(request.memory_profile)
+        from soc_agent.integrations.pingan.memory.process_facts import has_process_facts
+
+        if has_process_facts(request):
+            return type(self)(process_facts=True)
         if not self.directional_services:
             return self
         from soc_agent.integrations.pingan.memory.service_identity import proven_application_services
@@ -165,7 +176,7 @@ class PingAnSocMemoryProfile:
             return False
         # Per-run options may differ from the process default. These identities
         # are all still produced by current off/shadow/apply execution paths.
-        return restored.identity.profile_version in {"7", "9", "10", "11", "12"}
+        return restored.identity.profile_version in {"7", "9", "10", "11", "12", "13"}
 
     def project_query_facets(
         self,
@@ -182,6 +193,7 @@ class PingAnSocMemoryProfile:
             directional_services=self.directional_services,
             http_behaviors=self.http_behaviors,
             application_services=self.application_services,
+            process_facts=self.process_facts,
         )
 
     def project_run_facets(
@@ -199,6 +211,7 @@ class PingAnSocMemoryProfile:
             directional_services=self.directional_services,
             http_behaviors=self.http_behaviors,
             application_services=self.application_services,
+            process_facts=self.process_facts,
         )
 
     def projection_gaps(self, request: LLMAnalysisRequest) -> list[str]:
@@ -207,7 +220,15 @@ class PingAnSocMemoryProfile:
         from soc_agent.integrations.pingan.memory.semantic_features import semantic_projection_gaps
         from soc_agent.integrations.pingan.memory.service_identity import proven_application_services
 
-        gaps = semantic_projection_gaps(request, directional_services=self.directional_services, proven_services=proven_application_services(request) if self.application_services else None)
+        semantic_request = request
+        process_gaps = []
+        if self.process_facts:
+            from soc_agent.integrations.pingan.memory.process_facts import process_behavior_components, process_semantic_request
+
+            semantic_request = process_semantic_request(request)
+            process_gaps = process_behavior_components(request)[2]
+        gaps = semantic_projection_gaps(semantic_request, directional_services=self.directional_services, proven_services=proven_application_services(request) if self.application_services else None)
+        gaps.extend(process_gaps)
         if self.http_behaviors:
             from soc_agent.memory.http_behaviors import http_behavior_components
 
@@ -215,6 +236,20 @@ class PingAnSocMemoryProfile:
         if len(self.project_query_facets(request).get("behavior_component_core", [])) > 100:
             gaps.append("core_behavior_exceeds_review_capacity")
         return gaps
+
+    def projection_usage(self, request: LLMAnalysisRequest) -> list[dict]:
+        """Read-only consumption audit, frozen by callers separately from facets."""
+        if not self.process_facts:
+            return []
+        from soc_agent.contracts import FileEntityRef, ProcessEntityRef
+        from soc_agent.integrations.pingan.memory.process_facts import bound_processes, process_projection_usage
+
+        node_components = {}
+        for ref, (_, node, parent) in bound_processes(request)[0].items():
+            bound = ProcessEntityRef(**node.model_dump(), parent_command_line=parent.command_line if parent is not None else None)
+            bound_request = request.model_copy(update={"canonical_entities": request.canonical_entities.model_copy(update={"process": bound, "file": FileEntityRef()})})
+            node_components[ref] = _pingan_canonical_behavior_components(bound_request)[1]
+        return process_projection_usage(request, node_components=node_components, core_components=self.project_query_facets(request).get("behavior_component_core", []))
 
     def build_pattern_signature(
         self,
@@ -399,7 +434,7 @@ class PingAnSocMemoryProfile:
         context_only_required = sorted(set(required) - {"behavior_fingerprint"}) if decision_eligible and detection_key and optional.get("behavior_component_strong") else []
         context_only_missing = ["behavior_fingerprint"] if context_only_required else []
         context_only_similarity = ["behavior_component_strong"] if context_only_required else []
-        coverage = consensus_facets.get("behavior_component_core", []) if decision_eligible and self.identity.profile_version in {"9", "10", "11", "12"} else []
+        coverage = consensus_facets.get("behavior_component_core", []) if decision_eligible and self.identity.profile_version in {"9", "10", "11", "12", "13"} else []
         return SocMemoryApplicabilitySpec(
             profile_id=self.identity.profile_id,
             profile_version=self.identity.profile_version,
@@ -424,6 +459,10 @@ class PingAnSocMemoryProfile:
     def reference_applicability(self, record: SocMemoryRecord, query: SocMemoryQuery, report: SocMemoryApplicabilityReport, conflicts: list[str]) -> SocMemoryApplicabilityReport | None:
         from soc_agent.integrations.pingan.memory.reference_retrieval import reference_applicability
 
+        # Command-intent scopes have no reviewed translation to older service
+        # scopes. Extending the known identity list must not grant one implicitly.
+        if query.metadata.get("memory_profile_version") == "13" or (record.applicability and record.applicability.profile_version == "13"):
+            return None
         return reference_applicability(record, query, report, conflicts)
 
     def retrieval_conflict_reasons(
@@ -632,6 +671,7 @@ def _project_pingan_facets(
     directional_services: bool = False,
     http_behaviors: bool = False,
     application_services: bool = False,
+    process_facts: bool = False,
 ) -> dict[str, list[str]]:
     projected = {key: list(values) for key, values in facets.items()}
     signature = _detection_signature(request)
@@ -648,14 +688,42 @@ def _project_pingan_facets(
             _add_facet(projected, "behavior_component", "network_service:" + service)
 
     base_components = list(projected.get("behavior_component", []))
-    tenant_components, tenant_core_components = _pingan_canonical_behavior_components(request)
+    semantic_request = request
+    tenant_request = request
+    if process_facts:
+        from soc_agent.contracts import FileEntityRef, ProcessEntityRef
+        from soc_agent.integrations.pingan.memory.process_facts import bound_processes, process_behavior_components, process_semantic_request
+
+        # Canonical nodes own process identity. The aggregate is only a display
+        # projection and must not create a second, potentially mixed subject.
+        base_components = [component for component in base_components if not component.startswith("process:")]
+        projected["behavior_component"] = list(base_components)
+        semantic_request = process_semantic_request(request)
+        tenant_request = request.model_copy(update={"canonical_entities": request.canonical_entities.model_copy(update={"process": ProcessEntityRef()})})
+    tenant_components, tenant_core_components = _pingan_canonical_behavior_components(tenant_request)
+    process_strong = []
+    if process_facts:
+        process_core, process_strong, _ = process_behavior_components(request)
+        tenant_components.extend(process_core)
+        tenant_core_components.extend(process_core)
+        # Preserve existing command module/switch features, but read each
+        # verified subject instead of the independently maintained summary.
+        for _, node, parent in bound_processes(request)[0].values():
+            bound = ProcessEntityRef(**node.model_dump(), parent_command_line=parent.command_line if parent is not None else None)
+            bound_request = request.model_copy(update={"canonical_entities": request.canonical_entities.model_copy(update={"process": bound, "file": FileEntityRef()})})
+            bound_components, bound_core = _pingan_canonical_behavior_components(bound_request)
+            tenant_components.extend(bound_components)
+            tenant_core_components.extend(bound_core)
     semantic_strong = []
     if semantic_features:
         from soc_agent.integrations.pingan.memory.semantic_features import SEMANTIC_PREFIXES, semantic_behavior_components, valid_component
 
         base_components = [c for c in base_components if valid_component(c)]
         projected["behavior_component"] = list(base_components)
-        semantic_core, semantic_strong = semantic_behavior_components(request, stable=stable_semantics, directional_services=directional_services, proven_services=proven_services)
+        semantic_core, semantic_strong = semantic_behavior_components(semantic_request, stable=stable_semantics, directional_services=directional_services, proven_services=proven_services)
+        if process_facts:
+            semantic_strong.extend(process_strong)
+            semantic_strong.extend(component for component in tenant_core_components if component.startswith(("observed_process:", "observed_process_edge:")))
         tenant_components.extend(semantic_core)
         tenant_core_components.extend(semantic_core)
     for family in _pingan_attack_behavior_families(request, projected):
@@ -677,11 +745,13 @@ def _project_pingan_facets(
     fingerprint_components = sorted(dict.fromkeys([*base_components, *tenant_core_components]))
     if fingerprint_components:
         projected["behavior_component_core"] = fingerprint_components
-    if len(fingerprint_components) >= 2 or http_strong:
+    if len(fingerprint_components) >= 2 or http_strong or process_strong:
         projected["behavior_fingerprint"] = [
             stable_hash(
                 {
-                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v10"
+                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v11"
+                    if process_facts
+                    else "pingan.soc.memory_behavior_fingerprint.v10"
                     if application_services
                     else "pingan.soc.memory_behavior_fingerprint.v9"
                     if http_behaviors

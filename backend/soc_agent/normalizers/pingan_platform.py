@@ -49,6 +49,7 @@ from soc_agent.normalizers.pingan_hids import (
     hids_primary_process,
     hids_primary_username,
 )
+from soc_agent.normalizers.pingan_hids_targets import complete_hids_process_facts
 from soc_agent.normalizers.pingan_identity import source_detection_identifiers
 from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
 from soc_agent.normalizers.pingan_ndr import (
@@ -266,6 +267,10 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
     )
     if provenance:
         normalized.extensions["canonical_field_provenance"] = provenance
+    if source_type is AlertSourceType.HIDS:
+        from soc_agent.normalizers.process_facts import project_primary_process
+
+        normalized = project_primary_process(complete_hids_process_facts(normalized, parsed_messages))
     normalized.detection.detection_key = normalized.detection.detection_key or _detection_key(normalized)
     return normalized
 
@@ -574,6 +579,11 @@ def _entities(
             build_edr_process_observations(parsed_messages) if source_type is AlertSourceType.EDR else (build_hids_process_observations(parsed_messages) if source_type is AlertSourceType.HIDS else _process_observations(parsed_messages))
         ),
     }
+
+    if source_type is AlertSourceType.HIDS and parsed_messages:
+        # An unresolved HIDS execution must not fall through to an unrelated
+        # process-chain or platform field and recreate a guessed subject.
+        process = {**hids_process, "observations": process["observations"]}
 
     action_file_name = _first_str(edr_action, ("file_name",))
     action_file_path = _first_str(edr_action, ("file_path",))

@@ -96,6 +96,32 @@ def test_handoff_requires_memory_reference_and_direction_regressions(
         _assert_required_handoff_sources(incomplete)
 
 
+@pytest.mark.parametrize(
+    "required_path",
+    [
+        "backend/soc_agent/normalizers/pingan_hids_targets.py",
+        "backend/soc_agent/normalizers/process_facts.py",
+        "backend/soc_agent/integrations/pingan/memory/process_facts.py",
+        "backend/soc_agent/memory/projection_audit.py",
+        "backend/tests/test_soc_hids_command_targets.py",
+        "backend/tests/test_soc_process_fact_contracts.py",
+        "backend/tests/test_soc_normalization_process_facts.py",
+        "backend/tests/test_soc_pingan_hids_deterministic_process.py",
+        "backend/tests/test_soc_pingan_memory_process_facts.py",
+        "backend/tests/test_soc_memory_projection_audit.py",
+    ],
+)
+def test_handoff_requires_process_facts_and_projection_audit_regressions(
+    required_path: str,
+) -> None:
+    assert required_path in REQUIRED_HANDOFF_SOURCE_PATHS
+    incomplete = [
+        Path(item) for item in REQUIRED_HANDOFF_SOURCE_PATHS if item != required_path
+    ]
+    with pytest.raises(ValueError, match=re.escape(required_path)):
+        _assert_required_handoff_sources(incomplete)
+
+
 def test_private_overlay_keeps_corpus_metadata_but_excludes_large_data() -> None:
     paths = set(PRIVATE_OVERLAY_PATHS)
 

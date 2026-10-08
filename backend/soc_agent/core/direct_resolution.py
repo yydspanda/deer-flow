@@ -19,6 +19,7 @@ from soc_agent.contracts.schemas import SocDirectResolution
 from soc_agent.core.service import SocMemoryService
 from soc_agent.core.tenant_policy import SocTenantPolicyEvaluationService
 from soc_agent.memory.profiles import SocMemoryProfileRegistry
+from soc_agent.memory.projection_audit import bind_memory_profile
 from soc_agent.memory.retrieval import memory_context_item, memory_query_from_analysis_request
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ class SocDirectResolutionService:
         if self._environment is not None:
             request = request.model_copy(update={"environment": self._environment})
         profile = self._profiles.resolve_request(request)
-        request = request.model_copy(update={"memory_profile": {"profile_id": profile.identity.profile_id, "profile_version": profile.identity.profile_version, "feature_schema_version": profile.identity.feature_schema_version}})
+        request = bind_memory_profile(request, profile)
         run.llm_analysis_request = request
         query = memory_query_from_analysis_request(request, profile=profile)
         try:

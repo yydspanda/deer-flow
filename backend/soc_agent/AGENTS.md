@@ -294,7 +294,7 @@ file for SOC code. The authoritative product and engineering documents are:
   Runs remain immutable; later execution rechecks rather than reusing old acceptance results.
   This is not a global single-flight cache: concurrent first runs may each call the provider.
   Rebuild current Memory/policy decisions on every run; never cache a verdict or authority.
-  Prompt v10 proposes objects, bound detector events and
+  Prompt v11 proposes objects, bound detector events and
   supplementary facts. Merge into existing canonical observations, not a parallel alert.
   Readable business clues in packet content use existing supplementary facts, not assumed
   connection destinations or benign verdicts. Prompt examples keep cross-log facts under
@@ -351,6 +351,17 @@ file for SOC code. The authoritative product and engineering documents are:
   fabricated successful review. Proposal before/after snapshots are deep copies: parent and
   nested updates must not mutate previous journal entries. Empty source strings remain in
   canonical/audit records but do not create nonempty-only scalar provenance entries.
+  Adapter-owned `ProcessObservationRef.subject_binding` and `field_sources` bind an
+  execution to one source tree and its explicit raw node fields. Protect those direct
+  fields per attribute; preserve rejected values in review metadata, while accepting
+  independent valid supplements. `ProcessEntityRef.primary_ref` makes the summary a
+  deterministic view of that node/parent; never reselect it by model output order.
+  Command-only source semantics forbid model-created wire observations. Adapter-verified
+  `process_behavior` describes literal command intent and is not a model-writable marker.
+  Memory's optional `projection_usage` hook freezes `memory_projection_audit` beside the
+  selected request profile in ordinary and direct retrieval. It is audit-only, excluded
+  from model evidence and signatures; missing old reports remain absent, not reconstructed.
+  Acceptance v2 and the full source-semantics hash invalidate earlier fact-review caches.
   DEV audit presentation separates review execution from notes: completed `partial` reports
   remain readable completed artifacts with the actual adopted count, not a failed phase.
   Keep all issues/coverage limits visible on expansion and raw report status unchanged;

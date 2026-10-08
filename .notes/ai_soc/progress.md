@@ -6,7 +6,7 @@
 - **Current Objective:** `PI-01H / D12-B` 真实内网集成验收继续保持未关闭。用户已确认内网第二批全量验证完成，当前在分组抽查经验使用和历史处置差异；第一批及已审核经验继续保留。本机2453332真实复验已生成来源验证的同事务HTTP核心条件；2456233服务证据读取及受治理参考召回已优化；保存事实只读重放恢复缺失的3项条件，最新事实完整匹配原范围；仍不以单条证明所有告警匹配质量。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
 - **Next Gate:** 用户已确认2456233新候选显示4项检测行为与对象，后续继续人工审核及跨告警经验匹配验证；历史保存条件保持不变，旧候选和已审核经验不自动迁移。内网更新仍需用户安排打包及保留数据升级，绑定最终提交重新执行交付门禁。`PI-01H / D12-B` 仍需 ZEUS 上游真实调用、callback/旧页面回读及资产/TI/标签的真实 Provider 证据，外网模拟不能替代。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-09-28`
+- **Last Updated:** `2026-10-08`
 ## Current Constraints / 当前约束
 | Boundary | Current fact |
 |---|---|
@@ -17,6 +17,13 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+### 2026-10-08 — Deterministic HIDS process facts and bounded semantic supplements
+- **Task:** `PI-03E`
+- **Status:** `Done`
+- **Outcome:** HIDS 按索引提取完整进程节点、精确来源和唯一主体/父节点；主摘要从绑定派生，LLM 逐属性冲突写入被拒绝并留痕，其他补充继续核对。命令 TCP 目标单独类型化，不升级为实测网络流量；歧义、错源、动态命令等保留缺口。新 Profile 13/v11 消费绑定节点、各来源独立检测及命令目标，普通/直接 Memory 两条路径保存实际消费审计；审计不进入匹配或模型证据。历史 7–12、旧 Run、候选及已审核经验保持冻结，不自动迁移或放宽范围。
+- **Verification:** 强制兼容门禁392项、归一化/直接路径/检索集成149项、消费审计最终10项及交付清单脚本198项通过；前后阻塞I/O各119项通过，组间有重叠。三条本地原始告警2601486/2601487/2601489只读回放，空/重复/冲突模拟补充共9种结果均稳定，真实端口差异保留；2601489主进程为2836964、父进程2836963（timeout），不再混用祖先PID。Ruff与进度治理通过。全仓前置测试遇既有文档预算/网络失败并中断；后置测试有配置等失败，900秒上限退出，未宣称全仓通过；相关Runtime配置失败经隔离复查通过。
+- **Boundary:** 本轮无真实模型调用、业务库写入、历史改写、打包或部署；本地工作树门禁不是绑定发布提交的交付回执。固定第二批报告保持不变，不能以三例证明全量经验收益。当前PI-01及真实内网验收门禁保持开放，方案见[归一化辅助设计](architecture/normalization-assistance-design.md)。
+
 ### 2026-09-28 — Source-verified HTTP behavior in expert Memory review
 - **Task:** `PI-03E`
 - **Status:** `Done`
@@ -215,15 +222,6 @@ Prompt v40、75 项聚焦测试和真实保存请求 `2448168` 的三组隔离�
   "artifacts": "backend/.deer-flow/soc-validation/memory-revision-restore-20260909"
 }
 ```
-
-### 2026-09-03 — Governed Agent Platform target mapping
-
-- **Task:** `PI-01`
-- **Status:** `Done`
-- **Outcome:** PingAn Integration 新增独立 Agent Platform target contract，环境切换现在原子应用 `DEV -> ZEUS PRD + Agent Platform PRD` / `STG -> ZEUS STG + Agent Platform STG`，Host status、preflight、资产降级链和 transfer profile 共同拒绝错配。旧 `agent_config.py` 只读 AST 迁移确认 PRD `YHSYS` 与三个归属 workflow、提取 STG endpoint，并明确拒绝用其他应用身份替代缺失的 STG `YHSYS` 配置；五项 STG 私有值不完整时在 env 写入前 fail closed。通用 Runtime 继续只认识 `asset.locate`，未引入 PingAn 环境或凭证概念。
-- **Verification:** DEV -> PRD 与完整 STG -> STG 配置回归、错配/缺确认/部分 STG profile 的 fail-closed 回归、Host/transfer 私有 overlay 检查通过；Runbook 增加只读 IP/Host/UM 发现 smoke。外网结果只证明配置和无网络边界，真实 Agent Platform/ZEUS `mocked=false` 调用仍属于 D12-B 内网 gate。
-  内网随后已证明真实待审告警 lifecycle `code=200/status=1/mocked=false`；完整任务因 Worker 缺少共享 Policy 配置停留 `PENDING`。修复新增 PID-bound Worker readiness，并通过 Host/compat/Processing Job/架构聚焦回归；需随下一交付在内网用 fresh Job 复验。
-  后续 fresh Job 已完成 Runtime 并写入结果，证明 Worker 修复有效；本机自提交 callback 因 ZEUS 未登记该 `taskId` 返回 `40020`，最终 callback 门禁必须由 ZEUS 上游真实发起关闭。PingAn chat 另发现 EAGW 不支持流式请求，现由专用 model profile 使用 LangChain buffered fallback，并把 gateway/Runtime 并发统一为 `3`。
 
 ## Update Contract / 更新约定
 

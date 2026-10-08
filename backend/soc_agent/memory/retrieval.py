@@ -87,7 +87,9 @@ class ConfirmedMemoryAnalysisRequestEnricher:
             # let an alert payload select a broader or different memory scope.
             request = request.model_copy(update={"environment": self._environment})
         profile = self._profile_registry.resolve_request(request)
-        request = request.model_copy(update={"memory_profile": {"profile_id": profile.identity.profile_id, "profile_version": profile.identity.profile_version, "feature_schema_version": profile.identity.feature_schema_version}})
+        from soc_agent.memory.projection_audit import bind_memory_profile
+
+        request = bind_memory_profile(request, profile)
         query = memory_query_from_analysis_request(request, profile=profile)
         try:
             result = self._retriever.find_relevant_records(query)

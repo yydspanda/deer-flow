@@ -16,7 +16,7 @@ from soc_agent.contracts.common import ActorContext, EntrySurface
 from soc_agent.contracts.enrichment import SocEnrichmentPlan
 from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
 from soc_agent.contracts.memory_learning import SocMemoryLearningView
-from soc_agent.contracts.normalization import ContextObservationRef, DetectionObservationRef, NormalizationObservationChange, NormalizationSource, SupplementaryFactRef
+from soc_agent.contracts.normalization import ContextObservationRef, DetectionObservationRef, MemoryProjectionAudit, NormalizationObservationChange, NormalizationSource, ProcessSubjectBinding, SupplementaryFactRef
 from soc_agent.contracts.role_verification import (
     RoleAdjudicationVerificationResult,
     RoleVerificationTriggerDecision,
@@ -2865,6 +2865,9 @@ class ProcessObservationRef(BaseModel):
     host_name: str | None = None
     parent_process_id: int | None = Field(default=None, ge=0)
     nodes: list[ProcessNodeRef] = Field(default_factory=list)
+    subject_binding: ProcessSubjectBinding | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Relative canonical node-field path -> exact Adapter-declared source field.
+    field_sources: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
 class ProcessEntityRef(BaseModel):
@@ -2878,6 +2881,7 @@ class ProcessEntityRef(BaseModel):
     md5: str | None = None
     sha256: str | None = None
     observations: list[ProcessObservationRef] = Field(default_factory=list)
+    primary_ref: str | None = Field(default=None, max_length=256, exclude_if=lambda value: value is None)
 
 
 class UserEntityRef(BaseModel):
@@ -4073,6 +4077,7 @@ class LLMAnalysisRequest(BaseModel):
     tenant_id: str | None = None
     environment: str | None = Field(default=None, max_length=128)
     memory_profile: dict[str, str] = Field(default_factory=dict, max_length=3)
+    memory_projection_audit: MemoryProjectionAudit | None = Field(default=None, exclude_if=lambda value: value is None)
     source: AlertSourceRef = Field(default_factory=AlertSourceRef)
     detection: DetectionRuleRef = Field(default_factory=DetectionRuleRef)
     classification: AlertClassification = Field(default_factory=AlertClassification)

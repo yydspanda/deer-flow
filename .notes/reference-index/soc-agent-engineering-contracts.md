@@ -1431,6 +1431,22 @@ normalizers/hids.py
 
 ### Normalization / extraction report 约束
 
+- 新 `ProcessObservationRef.subject_binding` 保存同一来源的执行节点、父节点及歧义/缺口；
+  `field_sources` 只声明直接字段出处，不能把启发式旧 provenance 一概升级为不可变事实。
+  `ProcessEntityRef.primary_ref` 驱动确定性摘要，合并器禁止独立摘要写入或同名进程重选。
+  直接字段冲突逐属性拒绝并记录原值/提议/来源，独立有效补充继续采纳。
+- Adapter-only `SupplementaryFactRef.process_behavior` 和验证标记描述命令目标，不接受
+  模型伪造；目标必须归属同源具体进程命令。来源的 command-only 声明不能因主体歧义而消失。
+  不从 `/dev/tcp` 命令补造 wire direction、实际连接或攻击成功。
+- 新 PingAn Profile 13 / feature schema v11 使用明确进程绑定、独立检测和命令目标；
+  原有 7–12 保存身份与投影冻结，无历史迁移或跨身份权限扩张。缺口复用既有 Pattern、
+  retrieval、coverage 和治理边界，不能以字段缺失形成完整精确覆盖。
+- 可选 `projection_usage` hook 由既有 Profile 提供；普通/直接 Memory 查询共同冻结
+  `LLMAnalysisRequest.memory_projection_audit`，区分 used/gap/context_only 和省略数量。
+  此字段是审计数据，不进入模型证据、匹配键、历史补写或处置授权；旧序列化缺省保持不变。
+- Prompt v11、acceptance v2 及完整 Adapter 来源语义参与事实复用身份。受限模型输入的
+  语义说明可能被省略，接受门必须读取完整 Adapter 声明，不能靠模型看见了什么决定约束。
+
 - `AnalysisRun.normalization_report` 记录 deterministic normalizer 的质量信号，不参与 verdict 决策。
 - `AnalysisRun.extraction_report` 记录 deterministic entity extraction 的质量信号，不替代 `ExtractedEntities.mentions`。
 - `SocNormalizationService.inspect()` 是 CLI/API/TUI 做样本归一化检查的统一 service 入口；入口层不能直接 import runtime 或 normalizer 拼结果。

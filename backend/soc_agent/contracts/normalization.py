@@ -1,5 +1,6 @@
 """Source-bound semantic observations, shared by adapters and review merging."""
 
+from ipaddress import ip_address
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -18,6 +19,64 @@ NetworkBehaviorKind = Literal[
     "http_response_server_banner",
 ]
 HttpServerProduct = Literal["simplehttp", "apache", "nginx", "iis", "tomcat", "jetty", "envoy", "gunicorn", "uvicorn"]
+
+
+class ProcessSubjectBinding(BaseModel):
+    """Adapter-selected execution subject in one source-owned process tree."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["resolved", "ambiguous", "conflict", "unresolved"]
+    node_index: int | None = Field(default=None, ge=0)
+    parent_node_index: int | None = Field(default=None, ge=0)
+    reason: str = Field(min_length=1, max_length=500)
+    evidence_paths: list[str] = Field(default_factory=list, max_length=32)
+    gaps: list[str] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def require_resolved_subject(self):
+        if self.status == "resolved":
+            if self.node_index is None or self.node_index == self.parent_node_index:
+                raise ValueError("resolved process binding requires a distinct subject")
+        elif self.node_index is not None or self.parent_node_index is not None:
+            raise ValueError("unresolved process binding cannot select a node")
+        return self
+
+
+class ProcessBehaviorDescriptor(BaseModel):
+    """A command's literal target, never observed wire traffic or attack success."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["shell_tcp_connection_target"]
+    protocol: Literal["tcp"]
+    destination_ip: str
+    dst_port: int = Field(ge=1, le=65535, strict=True)
+
+    @field_validator("destination_ip")
+    @classmethod
+    def validate_literal_address(cls, value):
+        return str(ip_address(value))
+
+
+class FactConsumerUsage(BaseModel):
+    """Read-only accounting of one canonical fact's feature consumption."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    canonical_path: str = Field(min_length=1, max_length=512)
+    status: Literal["used", "gap", "context_only"]
+    components: list[str] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+
+
+class MemoryProjectionAudit(BaseModel):
+    """Feature inspection, never current evidence or matching authority."""
+
+    profile: dict[str, str] = Field(max_length=3)
+    usages: list[FactConsumerUsage] = Field(default_factory=list, max_length=2000)
+    projection_gaps: list[str] = Field(default_factory=list)
+    omitted_usage_count: int = Field(default=0, ge=0)
 
 
 class NetworkBehaviorDescriptor(BaseModel):
@@ -131,6 +190,9 @@ class SupplementaryFactRef(CanonicalObservation):
     network_behavior: NetworkBehaviorDescriptor | None = Field(default=None, exclude_if=lambda value: value is None)
     # Populated by the merger only, never accepted from an LLM proposal.
     network_behavior_verification: Literal["source_bound_v1"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Deterministic Adapter output only; these fields are not model proposal targets.
+    process_behavior: ProcessBehaviorDescriptor | None = Field(default=None, exclude_if=lambda value: value is None)
+    process_behavior_verification: Literal["source_bound_v1"] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class NormalizationSource(BaseModel):

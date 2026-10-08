@@ -65,8 +65,62 @@ _REFERENCE_DIRECTION_BEHAVIORS = {
 }
 
 
+_PROCESS_FACT_BEHAVIORS = {
+    "backend/tests/test_soc_process_fact_contracts.py": (
+        "test_process_fact_metadata_is_absent_from_legacy_serialization",
+        "test_process_binding_cannot_claim_an_unresolved_subject",
+        "test_command_descriptor_does_not_admit_wire_direction_or_success",
+    ),
+    "backend/tests/test_soc_pingan_hids_deterministic_process.py": (
+        "test_indexed_nodes_supply_complete_facts_without_semantic_review",
+        "test_indexed_facts_have_exact_field_provenance",
+        "test_conflicting_or_ambiguous_subject_does_not_guess_a_pid",
+        "test_subject_and_field_sources_are_explicit_and_source_scoped",
+        "test_repeated_name_only_chain_keeps_ambiguity",
+        "test_conflicting_duplicate_pid_keeps_both_observed_commands",
+    ),
+    "backend/tests/test_soc_hids_command_targets.py": (
+        "test_two_command_targets_preserve_subjects_without_wire_observations",
+        "test_unproven_command_target_is_not_promoted_to_a_connection",
+        "test_ambiguous_command_subject_still_cannot_be_promoted_to_wire_traffic",
+    ),
+    "backend/tests/test_soc_normalization_process_facts.py": (
+        "test_bound_facts_reject_conflicts_per_attribute_but_keep_supplements",
+        "test_source_grounded_unprotected_command_correction_reprojects_summary",
+        "test_legacy_scalar_cannot_write_bound_summary",
+        "test_shadow_never_applies_node_supplement",
+        "test_same_source_pid_cannot_bypass_direct_facts_by_changing_process_name",
+        "test_unresolved_subject_cannot_be_replaced_by_summary_proposal",
+        "test_command_target_context_cannot_be_upgraded_to_wire_network_even_if_marker_was_omitted",
+        "test_process_behavior_verification_is_not_model_writable",
+    ),
+    "backend/tests/test_soc_pingan_memory_process_facts.py": (
+        "test_deterministic_binding_selects_new_profile_independently_of_model_mode",
+        "test_secondary_source_detector_is_not_lost_when_process_and_target_match",
+        "test_independent_file_detection_survives_process_source_deduplication",
+        "test_process_deduplication_does_not_hide_detector_identity_conflict",
+        "test_incomplete_or_conflicting_binding_cannot_silently_become_an_exact_scope",
+        "test_targets_are_not_joined_across_sources_or_processes",
+        "test_frozen_profiles_ignore_new_binding_and_typed_target_metadata",
+        "test_saved_new_profile_restores_scope_and_exposes_verified_review_conditions",
+        "test_new_command_scope_does_not_implicitly_translate_reviewed_legacy_scope",
+    ),
+    "backend/tests/test_soc_memory_projection_audit.py": (
+        "test_consumption_is_persistable_but_not_an_extra_model_fact_or_matching_input",
+        "test_profiles_without_usage_keep_legacy_request_serialization",
+        "test_bounded_consumption_report_explicitly_records_omissions",
+    ),
+}
+
+
 def test_gate_requires_reference_authority_and_historical_direction_checks():
     for relative, names in _REFERENCE_DIRECTION_BEHAVIORS.items():
+        assert relative in gate.REQUIRED_TEST_FILES
+        assert set(names) <= set(gate.REQUIRED_TEST_NAMES.get(relative, ()))
+
+
+def test_gate_requires_deterministic_process_and_frozen_memory_boundaries():
+    for relative, names in _PROCESS_FACT_BEHAVIORS.items():
         assert relative in gate.REQUIRED_TEST_FILES
         assert set(names) <= set(gate.REQUIRED_TEST_NAMES.get(relative, ()))
 
@@ -306,6 +360,7 @@ def test_gate_rejects_malformed_junit(checkout, monkeypatch):
     [
         "test_frozen_reviewed_memory_still_reuses_in_validation",
         *(name for names in _REFERENCE_DIRECTION_BEHAVIORS.values() for name in names),
+        *(name for names in _PROCESS_FACT_BEHAVIORS.values() for name in names),
     ],
 )
 def test_gate_rejects_missing_behavior_even_when_its_file_has_other_passing_tests(

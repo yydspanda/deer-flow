@@ -38,6 +38,13 @@ _PARENT_USER_ALIASES = ("puname", "detail.puname")
 _TREE_ALIASES = ("process_tree", "detail.process_tree", "event_content")
 _PROCESS_CHAIN_ALIASES = ("process_chain", "detail.process_chain")
 _RULE_NAME_ALIASES = ("hit_rule_name", "hit_rule_names", "rule", "detail.hit_rule_name", "detail.hit_rule_names", "detail.rule")
+_INDEXED_PROCESS_FIELDS = {
+    "process_name": "proc_name",
+    "process_id": "proc_pid",
+    "process_path": "proc_path",
+    "command_line": "proc_cmd",
+    "username": "proc_euidUsername",
+}
 _FILE_EVENT_TYPES = frozenset(
     {
         "backdoor_diagnose",
@@ -82,19 +89,21 @@ def hids_primary_process(
     fields = parsed.fields
     observations = build_hids_process_observations([parsed])
     nodes = observations[0].get("nodes", []) if observations else []
+    binding = observations[0]["subject_binding"] if observations else {"status": "unresolved"}
+    if observations and binding["status"] != "resolved":
+        return {}
+    selected_index = binding.get("node_index")
+    parent_index = binding.get("parent_node_index")
+    selected = nodes[selected_index] if selected_index is not None else None
+    parent = nodes[parent_index] if parent_index is not None else None
     explicit_pid = _intish(_first_str(fields, _PROCESS_ID_ALIASES))
     explicit_name = _first_str(fields, _PROCESS_NAME_ALIASES)
-    selected = _matching_node(nodes, process_id=explicit_pid, process_name=explicit_name)
-    if selected is None and nodes:
-        selected = nodes[-1]
-    explicit_parent = _explicit_parent_node(fields)
-    parent = explicit_parent or _parent_for_node(nodes, selected)
     return _drop_none(
         {
             "process_name": selected.get("process_name") if selected else explicit_name,
             "process_id": selected.get("process_id") if selected else explicit_pid,
             "process_path": selected.get("process_path") if selected else _first_str(fields, _PROCESS_PATH_ALIASES),
-            "command_line": selected.get("command_line") if selected else _first_str(fields, _PROCESS_COMMAND_ALIASES),
+            "command_line": selected.get("command_line") if selected else _process_command_line(fields),
             "parent_process_name": parent.get("process_name") if parent else _first_str(fields, _PARENT_NAME_ALIASES),
             "parent_process_id": parent.get("process_id") if parent else _intish(_first_str(fields, _PARENT_ID_ALIASES)),
             "parent_command_line": parent.get("command_line") if parent else _first_str(fields, _PARENT_COMMAND_ALIASES),
@@ -142,26 +151,77 @@ def build_hids_process_observations(
         explicit = _explicit_process_node(fields)
         parent = _explicit_parent_node(fields)
         if nodes:
-            nodes = _enrich_nodes(nodes, explicit=explicit, parent=parent)
+            nodes = _enrich_nodes(nodes, explicit=explicit, parent=parent, allow_name_only=not _indexed_process_nodes(fields))
         else:
             nodes = [item for item in (parent, explicit) if item]
         nodes = _dedupe_nodes(nodes)
         if not nodes:
             continue
-        observations.append(
-            _drop_none(
-                {
-                    "observation_id": f"process:{parsed.message_hash[:16]}",
-                    "event_scope_id": f"process:{parsed.message_hash[:16]}",
-                    "evidence_path": f"{parsed.source_path}#parsed",
-                    "event_time": _first_str(fields, ("datatime", "time", "atime")) or _first_str(parsed.header, ("timestamp", "event_time")),
-                    "host_name": _first_str(fields, ("host_name",)),
-                    "parent_process_id": _intish(_first_str(fields, _PARENT_ID_ALIASES)),
-                    "nodes": nodes,
-                }
-            )
+        observation = _drop_none(
+            {
+                "observation_id": f"process:{parsed.message_hash[:16]}",
+                "event_scope_id": parsed.source_path,
+                "evidence_path": f"{parsed.source_path}#parsed",
+                "event_time": _first_str(fields, ("datatime", "time", "atime")) or _first_str(parsed.header, ("timestamp", "event_time")),
+                "host_name": _first_str(fields, ("host_name",)),
+                "parent_process_id": _intish(_first_str(fields, _PARENT_ID_ALIASES)),
+                "nodes": nodes,
+            }
         )
+        observation["subject_binding"] = hids_process_subject_binding(parsed, observation)
+        observation["field_sources"] = {
+            f"nodes[{index}].{field}": f"{parsed.source_path}#parsed.{source}" for index, node in enumerate(nodes) for field in node if (source := _indexed_node_source_path(fields, node, field_name=field)) is not None
+        }
+        observations.append(observation)
     return observations
+
+
+def hids_process_subject_binding(
+    parsed: ParsedRawMessageEvidence,
+    observation: Any,
+) -> dict[str, Any]:
+    """Bind an event to one same-source process, retaining unresolved identity."""
+
+    fields = parsed.fields
+    value = observation if isinstance(observation, Mapping) else observation.model_dump(mode="python")
+    nodes = value.get("nodes", [])
+    nodes = [node if isinstance(node, Mapping) else node.model_dump(mode="python") for node in nodes]
+    result: dict[str, Any] = {
+        "status": "unresolved",
+        "node_index": None,
+        "parent_node_index": None,
+        "reason": "process_subject_not_identified",
+        "evidence_paths": [],
+        "gaps": [],
+    }
+    if _indexed_tree_conflict(fields):
+        return {**result, "status": "conflict", "reason": "indexed_process_tree_identity_conflict", "gaps": ["process_subject_identity_conflict"]}
+    candidate = _explicit_process_node(fields) or {}
+    if not candidate:
+        if not nodes:
+            return result
+        if _indexed_process_nodes(fields):
+            return {**result, "gaps": ["process_subject_unresolved"]}
+        index = len(nodes) - 1
+        reason = "legacy_process_tree_terminal"
+    else:
+        index, status, reason = _select_node_index(nodes, candidate, allow_name_only=not _indexed_process_nodes(fields))
+        if index is None:
+            return {**result, "status": status, "reason": reason, "gaps": [f"process_subject_{status}"]}
+    parent_index = _bound_parent_index(fields, nodes, index)
+    explicit_parent = _explicit_parent_node(fields)
+    explicit_parent_pid = _intish(_first_str(fields, _PARENT_ID_ALIASES))
+    if parent_index is not None and ((explicit_parent and _node_conflicts(nodes[parent_index], explicit_parent)) or (explicit_parent_pid is not None and nodes[parent_index].get("process_id") != explicit_parent_pid)):
+        return {**result, "status": "conflict", "reason": "process_parent_identity_conflict", "gaps": ["process_parent_identity_conflict"]}
+    result.update(status="resolved", node_index=index, parent_node_index=parent_index, reason=reason)
+    for alias in (*_PROCESS_ID_ALIASES, *_PROCESS_NAME_ALIASES, *_PROCESS_COMMAND_ALIASES, "event_content"):
+        if _has_value(fields.get(alias)):
+            result["evidence_paths"].append(f"{parsed.source_path}#parsed.{alias}")
+    for field in ("process_id", "command_line"):
+        source = _indexed_node_source_path(fields, nodes[index], field_name=field)
+        if source:
+            result["evidence_paths"].append(f"{parsed.source_path}#parsed.{source}")
+    return result
 
 
 def build_hids_file_observations(
@@ -664,6 +724,18 @@ def build_hids_canonical_field_provenance(
             "entities.file.sha1": _first_present_path(fields, ("sha1", "detail.sha1")),
             "entities.file.sha256": _first_present_path(fields, ("sha256", "detail.sha256")),
         }
+        if alert.entities.process.observations:
+            observation = alert.entities.process.observations[0]
+            binding = hids_process_subject_binding(primary_parsed, observation)
+            if binding["status"] == "resolved":
+                selected = observation.nodes[binding["node_index"]]
+                for field_name in ("process_name", "process_id", "process_path", "command_line", "md5", "sha256"):
+                    direct[f"entities.process.{field_name}"] = _process_node_source_path(fields, selected, field_name=field_name)
+                parent_index = binding["parent_node_index"]
+                if parent_index is not None:
+                    parent = observation.nodes[parent_index]
+                    for field_name, parent_field in (("process_name", "parent_process_name"), ("process_id", "parent_process_id"), ("command_line", "parent_command_line")):
+                        direct[f"entities.process.{parent_field}"] = _process_node_source_path(fields, parent, field_name=field_name)
         for canonical_path, source_path in direct.items():
             _append_provenance(
                 provenance,
@@ -843,7 +915,7 @@ def _network_source_paths(event_type: str, fields: Mapping[str, Any]) -> dict[st
     return {}
 
 
-def _tree_nodes(fields: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _short_tree_nodes(fields: Mapping[str, Any]) -> list[dict[str, Any]]:
     tree = _first_str(fields, _TREE_ALIASES) or ""
     nodes = [{"process_name": name, "process_id": int(process_id)} for name, process_id in re.findall(r"([A-Za-z0-9_.-]+)\((\d+)\)", tree)]
     if nodes:
@@ -857,14 +929,144 @@ def _tree_nodes(fields: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [{"process_name": item} for item in parts[:32]]
 
 
+def _indexed_process_nodes(fields: Mapping[str, Any]) -> list[tuple[int, dict[str, Any]]]:
+    indexes = sorted({int(match.group(1)) for key in fields if (match := re.fullmatch(r"detail\.proctree\.(\d+)\.proc_(?:name|pid|path|cmd|euidUsername)", key))})
+    result: list[tuple[int, dict[str, Any]]] = []
+    short_nodes = _short_tree_nodes(fields)
+    for index in indexes:
+        prefix = f"detail.proctree.{index}."
+        node = {field: _first_str(fields, (prefix + source,)) for field, source in _INDEXED_PROCESS_FIELDS.items()}
+        node["process_id"] = _intish(node["process_id"])
+        if node["process_id"] is not None and node["process_id"] < 0:
+            node["process_id"] = None
+        if not node["process_name"]:
+            if index < len(short_nodes) and node["process_id"] == short_nodes[index].get("process_id"):
+                node["process_name"] = short_nodes[index]["process_name"]
+            elif node["process_path"]:
+                node["process_name"] = _basename(node["process_path"])
+        if node["process_name"]:
+            result.append((index, _drop_none(node)))
+    return result
+
+
+def _indexed_tree_conflict(fields: Mapping[str, Any]) -> bool:
+    short_nodes = _short_tree_nodes(fields)
+    indexed = _indexed_process_nodes(fields)
+    pids: set[int] = set()
+    for index, node in indexed:
+        pid = node.get("process_id")
+        if pid is not None:
+            if pid in pids:
+                return True
+            pids.add(pid)
+        if index < len(short_nodes) and _node_conflicts(short_nodes[index], node):
+            return True
+    return False
+
+
+def _tree_nodes(fields: Mapping[str, Any]) -> list[dict[str, Any]]:
+    nodes = _short_tree_nodes(fields)
+    indexed = _indexed_process_nodes(fields)
+    if not nodes:
+        return [node for _, node in indexed]
+    for index, node in indexed:
+        if index < len(nodes) and not _node_conflicts(nodes[index], node):
+            nodes[index] = {**nodes[index], **node}
+        else:
+            # Preserve a disagreeing explicit record without merging identities.
+            nodes.append(node)
+    return nodes
+
+
+def _indexed_node_source_path(fields: Mapping[str, Any], node: Mapping[str, Any], *, field_name: str) -> str | None:
+    source_field = _INDEXED_PROCESS_FIELDS.get(field_name)
+    if source_field is None or node.get(field_name) is None:
+        return None
+    matches = []
+    for index, candidate in _indexed_process_nodes(fields):
+        if _node_conflicts(node, candidate) or candidate.get("process_id") != node.get("process_id"):
+            continue
+        if candidate.get(field_name) != node.get(field_name):
+            continue
+        path = f"detail.proctree.{index}.{source_field}"
+        if _has_value(fields.get(path)):
+            matches.append(path)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _node_conflicts(node: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+    return any(node.get(field) is not None and other.get(field) is not None and node[field] != other[field] for field in ("process_id", "process_name", "process_path", "command_line", "username", "md5", "sha256"))
+
+
+def _select_node_index(nodes: Sequence[Mapping[str, Any]], candidate: Mapping[str, Any], *, allow_name_only: bool) -> tuple[int | None, str, str]:
+    pid = candidate.get("process_id")
+    name = candidate.get("process_name")
+    command = candidate.get("command_line")
+    if pid is not None:
+        matches = [i for i, node in enumerate(nodes) if node.get("process_id") == pid]
+        if len(matches) != 1:
+            return None, "ambiguous" if matches else "unresolved", "explicit_process_pid_not_unique"
+        index = matches[0]
+        if _node_conflicts(nodes[index], candidate):
+            return None, "conflict", "explicit_process_fields_conflict"
+        return index, "resolved", "explicit_process_pid"
+    if command:
+        matches = [i for i, node in enumerate(nodes) if node.get("command_line") == command and (not name or node.get("process_name") == name)]
+        if len(matches) == 1:
+            if _node_conflicts(nodes[matches[0]], candidate):
+                return None, "conflict", "explicit_process_fields_conflict"
+            return matches[0], "resolved", "unique_process_command"
+        if len(matches) > 1:
+            return None, "ambiguous", "process_command_not_unique"
+    matches = [i for i, node in enumerate(nodes) if name and str(node.get("process_name") or "").lower() == str(name).lower()]
+    if len(matches) > 1:
+        return None, "ambiguous", "process_name_not_unique"
+    if len(matches) == 1 and allow_name_only:
+        if _node_conflicts(nodes[matches[0]], candidate):
+            return None, "conflict", "explicit_process_fields_conflict"
+        return matches[0], "resolved", "legacy_unique_process_name"
+    return None, "unresolved", "process_subject_not_identified"
+
+
+def _bound_parent_index(fields: Mapping[str, Any], nodes: Sequence[Mapping[str, Any]], selected_index: int) -> int | None:
+    selected = nodes[selected_index]
+    ancestry = _tree_nodes(fields)
+    for index, node in enumerate(ancestry):
+        if index and _same_node_identity(node, selected):
+            if not _short_tree_nodes(fields):
+                indexed = _indexed_process_nodes(fields)
+                if indexed[index][0] != indexed[index - 1][0] + 1:
+                    return None
+            parent_node = ancestry[index - 1]
+            matches = [i for i, candidate in enumerate(nodes) if _same_node_identity(candidate, parent_node)]
+            return matches[0] if len(matches) == 1 else None
+    parent = _explicit_parent_node(fields)
+    if parent:
+        index, status, _ = _select_node_index(nodes, parent, allow_name_only=True)
+        if status == "resolved" and index != selected_index:
+            return index
+    return None
+
+
+def _same_node_identity(node: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+    return node.get("process_name") == other.get("process_name") and node.get("process_id") == other.get("process_id") and not _node_conflicts(node, other)
+
+
 def _explicit_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
     name = _first_str(fields, _PROCESS_NAME_ALIASES)
+    pid = _intish(_first_str(fields, _PROCESS_ID_ALIASES))
+    if not name and pid is not None:
+        names = {node["process_name"] for node in _tree_nodes(fields) if node.get("process_id") == pid}
+        if len(names) == 1:
+            name = names.pop()
+    if not name:
+        name = _basename(_first_str(fields, _PROCESS_PATH_ALIASES))
     if not name:
         return None
     return _drop_none(
         {
             "process_name": name,
-            "process_id": _intish(_first_str(fields, _PROCESS_ID_ALIASES)),
+            "process_id": pid,
             "process_path": _first_str(fields, _PROCESS_PATH_ALIASES),
             "command_line": _process_command_line(fields),
             "username": _first_str(fields, _PROCESS_USER_ALIASES),
@@ -894,64 +1096,34 @@ def _enrich_nodes(
     *,
     explicit: dict[str, Any] | None,
     parent: dict[str, Any] | None,
+    allow_name_only: bool,
 ) -> list[dict[str, Any]]:
     result = [dict(node) for node in nodes]
     for extra in (parent, explicit):
         if not extra:
             continue
-        index = _matching_node_index(result, extra)
+        index, _, _ = _select_node_index(result, extra, allow_name_only=allow_name_only or extra is parent)
         if index is None:
-            result.append(extra)
+            # A repeated name cannot justify attaching an event command to an
+            # ancestor, or creating a synthetic terminal process to hide the gap.
+            same_name = [node for node in result if node.get("process_name") == extra.get("process_name")]
+            if not same_name and not any(node.get("process_id") == extra.get("process_id") for node in result if extra.get("process_id") is not None):
+                result.append(extra)
         else:
-            result[index] = {**result[index], **extra}
+            if not _node_conflicts(result[index], extra):
+                result[index] = {**result[index], **extra}
     return result
-
-
-def _matching_node_index(nodes: Sequence[Mapping[str, Any]], candidate: Mapping[str, Any]) -> int | None:
-    candidate_pid = candidate.get("process_id")
-    candidate_name = str(candidate.get("process_name") or "").lower()
-    for index, node in enumerate(nodes):
-        if candidate_pid is not None and node.get("process_id") == candidate_pid:
-            return index
-        if candidate_pid is None and candidate_name and str(node.get("process_name") or "").lower() == candidate_name:
-            return index
-    return None
-
-
-def _matching_node(
-    nodes: Sequence[Mapping[str, Any]],
-    *,
-    process_id: int | None,
-    process_name: str | None,
-) -> Mapping[str, Any] | None:
-    index = _matching_node_index(
-        nodes,
-        _drop_none({"process_name": process_name, "process_id": process_id}),
-    )
-    return nodes[index] if index is not None else None
-
-
-def _parent_for_node(
-    nodes: Sequence[Mapping[str, Any]],
-    selected: Mapping[str, Any] | None,
-) -> Mapping[str, Any] | None:
-    if selected is None:
-        return None
-    for index, node in enumerate(nodes):
-        if node is selected or node == selected:
-            return nodes[index - 1] if index > 0 else None
-    return None
 
 
 def _dedupe_nodes(nodes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    seen: set[tuple[str, Any]] = set()
+    seen: set[tuple[tuple[str, Any], ...]] = set()
     for node in nodes:
         name = str(node.get("process_name") or "").strip()
         if not name:
             continue
-        key = (name.lower(), node.get("process_id"))
-        if key in seen:
+        key = tuple(sorted(node.items()))
+        if node.get("process_id") is not None and key in seen:
             continue
         seen.add(key)
         result.append(dict(node))
@@ -976,6 +1148,10 @@ def _process_node_source_path(
     *,
     field_name: str,
 ) -> str | None:
+    node_value = node.model_dump(mode="python") if hasattr(node, "model_dump") else node
+    indexed_source = _indexed_node_source_path(fields, node_value, field_name=field_name)
+    if indexed_source:
+        return indexed_source
     process_aliases = {
         "process_name": _PROCESS_NAME_ALIASES,
         "process_id": _PROCESS_ID_ALIASES,
@@ -1241,4 +1417,5 @@ __all__ = [
     "hids_primary_file",
     "hids_primary_process",
     "hids_primary_username",
+    "hids_process_subject_binding",
 ]
