@@ -379,6 +379,43 @@ def _command_only_network_source(alert, request, source):
     return declared and not any(_scope_matches(item.evidence_path, source.source_path) for item in alert.entities.network.observations)
 
 
+def requires_direct_process_identity(alert, request, source_path):
+    """Consume adapter-owned semantics without interpreting vendor field names."""
+    return any(
+        item.get("semantic_type") == "file_detection_process_context" and _scope_matches(item.get("field_path", ""), source_path)
+        for item in [*alert.extensions.get("source_field_semantics", []), *request.source_semantics]
+        if isinstance(item, dict)
+    )
+
+
+def _file_detection_process_attributes(alert, existing, attrs, source, report, index):
+    """A file finding may supplement a direct process, never create execution identity."""
+    match = PROCESS_NODE_REF.fullmatch(existing["path"]) if existing else None
+    if not match:
+        raise ValueError("file_detection_process_identity_unverified")
+    observation_index, node_index = map(int, match.groups())
+    try:
+        observation = alert.entities.process.observations[observation_index]
+        node = observation.nodes[node_index]
+    except IndexError:
+        raise ValueError("file_detection_process_identity_unverified") from None
+    # Check the immutable adapter snapshot, not process objects accepted earlier
+    # in this model response. A different source cannot supply this identity.
+    direct_fields = {key for key in OBJECT_FIELDS["process"] if _scope_matches(observation.field_sources.get(f"nodes[{node_index}].{key}", ""), source.source_path)}
+    if not _scope_matches(observation.evidence_path, source.source_path) or not direct_fields.intersection({"process_id", "process_name", "process_path", "command_line"}):
+        raise ValueError("file_detection_process_identity_unverified")
+    artifacts = [item for item in alert.entities.file.observations if _scope_matches(item.evidence_path, source.source_path)]
+    accepted = {}
+    for key, value in attrs.items():
+        file_key = {"process_name": "file_name", "process_path": "file_path", "md5": "md5", "sha256": "sha256"}.get(key)
+        is_file_value = file_key and any(str(getattr(item, file_key) or "").casefold() == str(value).casefold() for item in artifacts)
+        if is_file_value and (key not in direct_fields or getattr(node, key) != value):
+            report.issues.append(f"对象 {index + 1} 的 {key} 未采纳：file_artifact_is_not_process_identity；文件属性不能补作进程镜像属性。")
+            continue
+        accepted[key] = value
+    return accepted
+
+
 def collect_observation_changes(alert: AlertInput, request: NormalizationAssistRequest, payload: dict[str, Any], report: NormalizationAssistResult) -> None:
     working = alert.model_dump(mode="json")
     refs = {}
@@ -452,6 +489,8 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                 if len(matches) > 1:
                     raise ValueError("ambiguous_existing_object")
                 existing = matches[0] if matches else None
+            if kind == "process" and requires_direct_process_identity(alert, request, source.source_path):
+                attrs = _file_detection_process_attributes(alert, existing, attrs, source, report, index)
             if existing:
                 path = existing["path"]
                 before = _get(working, path)

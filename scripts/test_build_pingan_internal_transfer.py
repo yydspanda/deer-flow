@@ -109,6 +109,11 @@ def test_handoff_requires_memory_reference_and_direction_regressions(
         "backend/tests/test_soc_pingan_hids_deterministic_process.py",
         "backend/tests/test_soc_pingan_memory_process_facts.py",
         "backend/tests/test_soc_memory_projection_audit.py",
+        "backend/tests/test_soc_pingan_hids_webshell.py",
+        "backend/tests/test_soc_pingan_webshell_memory_regression.py",
+        "backend/tests/test_soc_normalization_file_process_boundary.py",
+        "backend/tests/test_soc_file_detection_extraction.py",
+        "backend/tests/test_soc_hids_file_fallback_scope.py",
     ],
 )
 def test_handoff_requires_process_facts_and_projection_audit_regressions(
@@ -178,6 +183,8 @@ def test_handoff_uses_project_model_gateway_and_legacy_execution_plane() -> None
     assert "scripts/soc_pingan_validation_database.py" in required
     assert "scripts/test_soc_pingan_validation_database.py" in required
     assert "scripts/soc_pingan_validation_report.py" in required
+    assert "scripts/soc_memory_snapshot_audit.py" in required
+    assert "scripts/test_soc_memory_snapshot_audit.py" in required
     assert "scripts/soc_validation_report_data.py" in required
     assert "scripts/soc_validation_report_render.py" in required
     assert "scripts/test_soc_pingan_validation_report.py" in required

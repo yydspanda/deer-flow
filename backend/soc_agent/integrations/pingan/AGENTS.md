@@ -125,11 +125,25 @@ generic `soc_agent` code.
 
 ## Source Families
 
+- HIDS `webshell` maps `detail.path` and file hashes to file observations and a same-source
+  file detection. File owner/metadata stay bound to that artifact; an explicit process uses
+  its own path, account and hashes. The source declares `file_detection_process_context`:
+  semantic process additions must match an original same-source Adapter node and cannot
+  borrow artifact identity. File-only findings do not require a process entity. Importance
+  rules use actual process fields/recognized trees, never arbitrary `event_content` prose.
+  New Adapter facts and acceptance identity invalidate stale review reuse; saved Memory
+  profiles and historical groups remain unchanged.
+
 - HIDS indexed `detail.proctree.N` fields are mapped together, with exact per-node
   `field_sources`. Bind the detected process by consistent explicit PID or unique full
   command; repeated names, conflicting tree/detail identities and uncertain parents retain
   gaps. New bound observations use the raw source path as `event_scope_id`; the primary
   summary derives from its `primary_ref`. Unknown fields remain available to semantic review.
+  A complete `web_command` summary `NAME进程发现异常执行行为，其进程树为：NAME(PID)->...`
+  may identify the declared subject only when every short-chain member uniquely matches
+  same-source indexed ancestry in order. Keep the indexed subject's command and full-tree
+  parent; descendants are context. Explicit identity conflicts stay unresolved. This changes
+  fresh Adapter facts (and their review-cache hash), not saved Profile 13 projections.
   For command-only `web_command` records (including the `datatype` alias), declare the
   source boundary even when the execution subject is ambiguous. Only a fully matched
   literal Bash `exec N<>/dev/tcp/IP/port` command on the bound node yields a verified

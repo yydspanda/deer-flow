@@ -354,3 +354,65 @@ def test_new_command_scope_does_not_implicitly_translate_reviewed_legacy_scope()
     assert service.find_relevant_records(query).matches == []
     assert service.find_directive_records(query).matches == []
     assert repository.get_memory_record(record.memory_id).model_dump(mode="json") == frozen
+
+
+def test_event_tree_subject_and_each_source_detector_reach_profile13_without_child_rebinding():
+    from test_soc_pingan_hids_deterministic_process import event_tree_fields, event_tree_payload
+
+    from soc_agent.core.runtime import build_analysis_request_for_payload
+
+    first = event_tree_fields()
+    second = {**event_tree_fields(), "detail.hit_rule_name": "Independent Java detector"}
+    request = build_analysis_request_for_payload(event_tree_payload(first, second))
+    profile = _selected(request)
+    components = profile.project_query_facets(request)["behavior_component_core"]
+
+    assert profile.identity.profile_version == "13"
+    assert profile.identity.feature_schema_version == "pingan.soc.memory_features.v11"
+    assert not profile.projection_gaps(request)
+    assert "observed_process:java" in components
+    assert "process_path:opt/jdk/bin/java" in components
+    assert "observed_process_edge:sidecar>java" in components
+    assert "observed_process_edge:java>telnet" not in components
+    assert not profile.project_query_facets(request).get("network_service")
+    detectors = [value for value in components if value.startswith("detected_behavior:")]
+    assert len(detectors) == 2
+    assert all(value.endswith("@process:java") for value in detectors)
+    assert any("independent_java_detector" in value for value in detectors)
+    usage = profile.projection_usage(request)
+    for index in range(2):
+        assert any(item["canonical_path"] == f"entities.detections[{index}]" and item["status"] == "used" for item in usage)
+    assert request.canonical_entities.process.observations[0].nodes[-1].command_line == "telnet 192.0.2.10 443"
+
+
+def test_saved_profile13_event_tree_gap_is_not_repaired_during_projection(monkeypatch):
+    from test_soc_pingan_hids_deterministic_process import event_tree_fields, event_tree_payload
+
+    from soc_agent.contracts.normalization import ProcessSubjectBinding
+    from soc_agent.core.runtime import build_analysis_request_for_payload
+
+    request = build_analysis_request_for_payload(event_tree_payload(event_tree_fields()))
+    request.memory_profile = {"profile_id": "pingan.soc", "profile_version": "13", "feature_schema_version": "pingan.soc.memory_features.v11"}
+    process = request.canonical_entities.process
+    for key in ("primary_ref", "process_name", "process_id", "process_path", "command_line", "parent_process_name", "parent_process_id", "parent_command_line"):
+        setattr(process, key, None)
+    process.observations[0].subject_binding = ProcessSubjectBinding(status="unresolved", reason="process_subject_not_identified", gaps=["process_subject_unresolved"])
+    request.canonical_entities.detections = []
+    profile = _selected(request)
+    original_facets = profile.project_query_facets(request)
+    original_gaps = profile.projection_gaps(request)
+    run = AnalysisRun(alert_id=request.alert_id, status="success", llm_analysis_request=request)
+    frozen = run.model_dump_json()
+
+    def forbid_rebinding(*args, **kwargs):
+        raise AssertionError("Saved canonical input must not be reparsed or rebound")
+
+    monkeypatch.setattr("soc_agent.normalizers.pingan_hids.hids_process_subject_binding", forbid_rebinding)
+    restored = AnalysisRun.model_validate_json(frozen)
+    restored_profile = PingAnSocMemoryProfile.for_run(restored)
+    assert restored_profile.identity == profile.identity
+    assert restored_profile.project_query_facets(restored.llm_analysis_request) == original_facets
+    assert restored_profile.projection_gaps(restored.llm_analysis_request) == original_gaps
+    assert original_gaps
+    assert "process_path:opt/jdk/bin/java" not in original_facets.get("behavior_component_core", [])
+    assert restored.model_dump_json() == frozen

@@ -1431,10 +1431,19 @@ normalizers/hids.py
 
 ### Normalization / extraction report 约束
 
+- HIDS `webshell` 的 `detail.path`/文件哈希/属主归属于被检测文件，直接生成同源
+  `file_detection`；显式执行节点独立保留，不能从文件 basename 补造进程或共用文件哈希。
+  Adapter 的 `file_detection_process_context` 限定语义进程提议必须匹配原始同源节点，
+  通用合并器不读取厂商字段。有效纯文件检测免除 process 缺口；混合/未解析执行证据不豁免。
+  field-importance 的进程期望来自明确进程字段或可解析树，不能来自任意事件叙述。
+  Prompt v12 / acceptance v3 更新新结果复用身份；已保存 Profile/Run/分组不迁移。
 - 新 `ProcessObservationRef.subject_binding` 保存同一来源的执行节点、父节点及歧义/缺口；
   `field_sources` 只声明直接字段出处，不能把启发式旧 provenance 一概升级为不可变事实。
   `ProcessEntityRef.primary_ref` 驱动确定性摘要，合并器禁止独立摘要写入或同名进程重选。
   直接字段冲突逐属性拒绝并记录原值/提议/来源，独立有效补充继续采纳。
+  HIDS 的完整“其进程树为”摘要仅在短链名称/PID 与同源索引树逐项唯一、顺序一致时绑定
+  声明主体；父进程从完整树派生，子进程不替代主体。仅更新新归一化结果及其缓存身份，
+  不在保存的 Profile 13 投影中重解析旧原文或修复历史缺口。
 - Adapter-only `SupplementaryFactRef.process_behavior` 和验证标记描述命令目标，不接受
   模型伪造；目标必须归属同源具体进程命令。来源的 command-only 声明不能因主体歧义而消失。
   不从 `/dev/tcp` 命令补造 wire direction、实际连接或攻击成功。

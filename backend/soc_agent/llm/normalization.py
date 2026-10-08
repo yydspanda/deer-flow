@@ -27,7 +27,7 @@ from soc_agent.contracts.normalization import NormalizationSource
 from soc_agent.llm.analyzer import LLMChatClient, coerce_chat_response
 from soc_agent.llm.json_parser import _extract_text, _strip_markdown_code_fence, _strip_think_blocks
 from soc_agent.normalizers.process_facts import has_process_binding, project_primary_process
-from soc_agent.normalizers.semantic_observations import apply_observation_changes, build_object_catalog, collect_observation_changes
+from soc_agent.normalizers.semantic_observations import apply_observation_changes, build_object_catalog, collect_observation_changes, requires_direct_process_identity
 from soc_agent.pipeline.analysis_context import _resolve_path, _safe_string_fallback, _sanitize_value
 from soc_agent.pipeline.encoded_context import compact_encoded_spans
 from soc_agent.prompts.normalization import NORMALIZATION_PROMPT_VERSION, NORMALIZATION_TARGETS, build_normalization_prompt
@@ -50,7 +50,7 @@ class JsonLLMNormalizationReviewer:
     prompt_version = NORMALIZATION_PROMPT_VERSION
     # Reusing accepted facts also depends on deterministic merger semantics,
     # even when the model prompt and raw input have not changed.
-    acceptance_version = "soc-normalization-acceptance-v2"
+    acceptance_version = "soc-normalization-acceptance-v3"
 
     def __init__(
         self,
@@ -307,6 +307,9 @@ def _collect_changes(alert: AlertInput, request: NormalizationAssistRequest, ite
         values = list(dict.fromkeys(fact.value for fact, _ in facts))
         _, section, key = target.split(".")
         previous = getattr(getattr(alert.entities, section), key)
+        if section == "process" and requires_direct_process_identity(alert, request, request.source_path or ""):
+            report.issues.append(f"{target} 未采纳：file_detection_process_identity_unverified；文件检测的进程补充必须引用同源明确进程节点。")
+            continue
         if section == "process" and has_process_binding(alert.model_dump(mode="json")):
             report.issues.append(f"{target} 未采纳：bound_process_summary；主摘要由明确进程节点派生。")
             continue

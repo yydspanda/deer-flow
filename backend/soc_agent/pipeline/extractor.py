@@ -327,7 +327,7 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         warnings.append("missing optional field: rule_code")
     if not ips:
         warnings.append("no valid IP entity extracted")
-    if not processes:
+    if not processes and process_entity_expected(alert):
         warnings.append("no process entity extracted")
 
     return ExtractedEntities(
@@ -345,6 +345,34 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         rules=rules,
         warnings=warnings,
     )
+
+
+def process_entity_expected(alert: AlertInput) -> bool:
+    """A bound file-only finding does not require an execution identity."""
+
+    if any(value not in (None, "", [], {}) for value in alert.entities.process.model_dump().values()):
+        return True
+    detections = alert.entities.detections
+    if not detections:
+        return True
+    for detection in detections:
+        if detection.kind != "file_detection" or not detection.subject_refs:
+            return True
+        for ref in detection.subject_refs:
+            if ref == "entities.file":
+                file = alert.entities.file
+                if not any(value and value.strip() for value in (file.file_name, file.file_path, file.md5, file.sha1, file.sha256)):
+                    return True
+                continue
+            match = re.fullmatch(r"entities\.file\.observations\[(\d+)\]", ref)
+            if match is None or int(match[1]) >= len(alert.entities.file.observations):
+                return True
+            observation = alert.entities.file.observations[int(match[1])]
+            if not any(value and value.strip() for value in (observation.file_name, observation.file_path, observation.md5, observation.sha1, observation.sha256)):
+                return True
+            if observation.evidence_path.split("#", 1)[0] != detection.event_scope_id:
+                return True
+    return False
 
 
 def _add_ip_mention(

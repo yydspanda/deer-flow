@@ -32,9 +32,37 @@ REQUIRED_TEST_FILES = (
     "backend/tests/test_soc_normalization_process_facts.py",
     "backend/tests/test_soc_pingan_memory_process_facts.py",
     "backend/tests/test_soc_memory_projection_audit.py",
+    "backend/tests/test_soc_pingan_hids_webshell.py",
+    "backend/tests/test_soc_pingan_webshell_memory_regression.py",
+    "backend/tests/test_soc_normalization_file_process_boundary.py",
+    "backend/tests/test_soc_file_detection_extraction.py",
+    "backend/tests/test_soc_hids_file_fallback_scope.py",
 )
 # Keep these behavioral checks mandatory even if a file still contains other tests.
 REQUIRED_TEST_NAMES: dict[str, tuple[str, ...]] = {
+    "backend/tests/test_soc_hids_file_fallback_scope.py": (
+        "test_non_webshell_login_retains_session_user_and_legacy_file_projection",
+    ),
+    "backend/tests/test_soc_pingan_hids_webshell.py": (
+        "test_webshell_artifact_does_not_invent_an_executing_process",
+        "test_webshell_file_fields_cannot_contaminate_a_real_php_process",
+        "test_mixed_messages_keep_files_and_detection_refs_in_their_own_source",
+    ),
+    "backend/tests/test_soc_pingan_webshell_memory_regression.py": (
+        "test_webshell_scan_monitor_and_host_changes_do_not_split_file_signature",
+        "test_explicit_webshell_process_is_retained_and_distinguishes_file_behavior",
+        "test_saved_webshell_process_name_difference_remains_frozen",
+    ),
+    "backend/tests/test_soc_normalization_file_process_boundary.py": (
+        "test_file_only_source_rejects_process_objects_and_keeps_file_supplements",
+        "test_file_only_source_rejects_legacy_scalar_process_backfill",
+        "test_explicit_process_evidence_can_identify_the_same_detected_file",
+        "test_process_identity_from_another_source_cannot_authorize_backfill",
+    ),
+    "backend/tests/test_soc_file_detection_extraction.py": (
+        "test_file_only_detection_does_not_report_missing_process",
+        "test_file_context_does_not_hide_an_expected_process_gap",
+    ),
     "backend/tests/test_soc_process_fact_contracts.py": (
         "test_process_fact_metadata_is_absent_from_legacy_serialization",
         "test_process_binding_cannot_claim_an_unresolved_subject",
@@ -47,6 +75,10 @@ REQUIRED_TEST_NAMES: dict[str, tuple[str, ...]] = {
         "test_subject_and_field_sources_are_explicit_and_source_scoped",
         "test_repeated_name_only_chain_keeps_ambiguity",
         "test_conflicting_duplicate_pid_keeps_both_observed_commands",
+        "test_event_tree_binds_declared_java_with_its_real_command_and_parent",
+        "test_event_tree_conflicts_never_select_a_convenient_subject",
+        "test_event_tree_cannot_borrow_a_full_tree_from_another_source",
+        "test_event_tree_new_binding_invalidates_old_review_snapshot_without_a_model_call",
     ),
     "backend/tests/test_soc_hids_command_targets.py": (
         "test_two_command_targets_preserve_subjects_without_wire_observations",
@@ -73,6 +105,8 @@ REQUIRED_TEST_NAMES: dict[str, tuple[str, ...]] = {
         "test_frozen_profiles_ignore_new_binding_and_typed_target_metadata",
         "test_saved_new_profile_restores_scope_and_exposes_verified_review_conditions",
         "test_new_command_scope_does_not_implicitly_translate_reviewed_legacy_scope",
+        "test_event_tree_subject_and_each_source_detector_reach_profile13_without_child_rebinding",
+        "test_saved_profile13_event_tree_gap_is_not_repaired_during_projection",
     ),
     "backend/tests/test_soc_memory_projection_audit.py": (
         "test_consumption_is_persistable_but_not_an_extra_model_fact_or_matching_input",

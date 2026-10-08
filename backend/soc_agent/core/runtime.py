@@ -54,7 +54,7 @@ from soc_agent.pipeline.analysis_context import (
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
 from soc_agent.pipeline.evidence_coverage import observe_message_schemas
 from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
-from soc_agent.pipeline.extractor import extract_entities
+from soc_agent.pipeline.extractor import extract_entities, process_entity_expected
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
 from soc_agent.pipeline.materiality import assess_analysis_materiality
 from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
@@ -95,7 +95,7 @@ def inspect_alert_normalization(
         alert=alert,
         entities=entities,
         normalization_report=_normalization_report(alert),
-        extraction_report=_extraction_report(entities),
+        extraction_report=_extraction_report(entities, alert),
     )
 
 
@@ -171,7 +171,7 @@ def analyze_alert(
             # Canonical policy inputs need no semantic-review or analysis model.
             def prepare_policy_input(_):
                 run.entities = extract_entities(alert)
-                run.extraction_report = _extraction_report(run.entities)
+                run.extraction_report = _extraction_report(run.entities, alert)
                 run.fact_reconstruction = reconstruct_facts(alert)
                 return build_llm_analysis_request(alert, run.entities, run.fact_reconstruction, sensitive_evidence_mode=sensitive_evidence_mode)
 
@@ -185,7 +185,7 @@ def analyze_alert(
             run.normalization_report = _normalization_report(alert)
         entities = _run_step(run, "entity_extract", alert, extract_entities)
         run.entities = entities
-        run.extraction_report = _extraction_report(entities)
+        run.extraction_report = _extraction_report(entities, alert)
         fact_reconstruction = _run_step(run, "fact_reconstruct", alert, reconstruct_facts)
         run.fact_reconstruction = fact_reconstruction
         analysis_request = _run_step(
@@ -677,12 +677,14 @@ def _present_canonical_fields(alert: AlertInput) -> list[str]:
     return fields
 
 
-def _extraction_report(entities: ExtractedEntities) -> ExtractionReport:
+def _extraction_report(entities: ExtractedEntities, alert: AlertInput | None = None) -> ExtractionReport:
     entity_counts = {kind.value: 0 for kind in EntityKind}
     for mention in entities.mentions:
         entity_counts[mention.kind.value] = entity_counts.get(mention.kind.value, 0) + 1
     entity_counts = {key: value for key, value in entity_counts.items() if value}
     missing_entity_kinds = [kind.value for kind in [EntityKind.IP, EntityKind.PROCESS, EntityKind.USER, EntityKind.HOST] if entity_counts.get(kind.value, 0) == 0]
+    if alert is not None and not process_entity_expected(alert):
+        missing_entity_kinds = [kind for kind in missing_entity_kinds if kind != EntityKind.PROCESS.value]
     return ExtractionReport(
         mention_count=len(entities.mentions),
         entity_counts=entity_counts,

@@ -39,7 +39,9 @@ from soc_agent.normalizers.pingan_edr import (
 from soc_agent.normalizers.pingan_evidence import build_pingan_fact_inputs
 from soc_agent.normalizers.pingan_hids import (
     build_hids_canonical_field_provenance,
+    build_hids_file_detections,
     build_hids_file_observations,
+    build_hids_file_supplementary_facts,
     build_hids_network_observations,
     build_hids_process_observations,
     build_hids_source_field_semantics,
@@ -231,7 +233,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             "source_detection_identifiers": source_detection_identifiers(parsed_messages),
             "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in role_claims],
             "scenario_signals": [item.model_dump(mode="json", exclude_none=True) for item in scenario_signals],
-            "field_importance_rules": _field_importance_rules(source_type),
+            "field_importance_rules": _field_importance_rules(source_type, parsed_messages),
             "source_field_semantics": _source_field_semantics(
                 source_type,
                 parsed_messages,
@@ -488,6 +490,7 @@ def _entities(
     hids_process = hids_primary_process(parsed_messages) if source_type is AlertSourceType.HIDS else {}
     hids_file = hids_primary_file(parsed_messages) if source_type is AlertSourceType.HIDS else {}
     hids_username = hids_primary_username(parsed_messages) if source_type is AlertSourceType.HIDS else None
+    primary_hids_webshell = source_type is AlertSourceType.HIDS and parsed_message is not None and (_first_str(parsed_message.fields, ("event_type", "datatype")) or "").casefold() == "webshell"
     ndr_file = ndr_primary_file(parsed_messages) if source_type is AlertSourceType.NDR else {}
     ndr_http = ndr_primary_http(parsed_messages) if source_type is AlertSourceType.NDR else {}
 
@@ -600,6 +603,8 @@ def _entities(
             else (build_hids_file_observations(parsed_messages) if source_type is AlertSourceType.HIDS else (build_ndr_file_observations(parsed_messages) if source_type is AlertSourceType.NDR else []))
         ),
     }
+    if primary_hids_webshell:
+        file_entity = {**hids_file, "observations": file_entity["observations"]}
 
     return {
         "network": network,
@@ -607,6 +612,8 @@ def _entities(
         "user": {
             # CMDB/SOAR owners describe asset ownership, not the event actor.
             "username": hids_username
+            if primary_hids_webshell
+            else hids_username
             or source_value(
                 (
                     "str_user_agent",
@@ -639,6 +646,8 @@ def _entities(
             ),
         },
         "file": file_entity,
+        "detections": build_hids_file_detections(parsed_messages, file_entity["observations"]) if source_type is AlertSourceType.HIDS else [],
+        "supplementary_facts": build_hids_file_supplementary_facts(parsed_messages, file_entity["observations"]) if source_type is AlertSourceType.HIDS else [],
         "http": http,
         "threat": {"iocs": (edr_iocs if source_type is AlertSourceType.EDR else ([] if source_type is AlertSourceType.NDR else _dedupe([value for value in [_first_str(raw_event, ("ioc",))] if value])))},
     }
@@ -1091,11 +1100,12 @@ def _first_present_path(
 
 def _field_importance_rules(
     source_type: AlertSourceType,
+    parsed_messages: list[ParsedRawMessageEvidence],
 ) -> list[dict[str, Any]]:
     if source_type is AlertSourceType.NDR:
         return ndr_field_importance_rules()
     if source_type is AlertSourceType.HIDS:
-        return hids_field_importance_rules()
+        return hids_field_importance_rules(parsed_messages)
     if source_type is AlertSourceType.EDR:
         return edr_field_importance_rules()
     if source_type is AlertSourceType.THREAT_INTEL:

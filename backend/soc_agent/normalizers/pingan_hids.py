@@ -45,13 +45,52 @@ _INDEXED_PROCESS_FIELDS = {
     "command_line": "proc_cmd",
     "username": "proc_euidUsername",
 }
+_EVENT_TREE_SUMMARY = re.compile(r"([A-Za-z0-9_.-]+)进程发现异常执行行为，其进程树为[：:]\s*(.+)")
+_EVENT_TREE_NODE = re.compile(r"([A-Za-z0-9_.-]+)\(([0-9]{1,20})\)")
 _FILE_EVENT_TYPES = frozenset(
     {
         "backdoor_diagnose",
         "backdoor_diagnose_win",
         "honey_file",
+        "webshell",
     }
 )
+_WEBSHELL_FILE_FACTS = (
+    ("file_owner", "detail.uname", "被检测文件的属主，不代表执行进程用户或攻击者身份。"),
+    ("gname", "detail.gname", "被检测文件的属组。"),
+    ("website", "detail.website", "检测记录中的关联网站或服务名。"),
+    ("file_type", "detail.file_type", "被检测文件的类型。"),
+    ("file_size", "detail.size", "被检测文件的大小。"),
+    ("access_permission", "detail.access_permission", "被检测文件的访问权限。"),
+    ("webshell_type", "detail.webshell_type", "传感器报告的 Webshell 类型编号，不代表已确认的恶意性。"),
+    ("ctime", "detail.ctime", "传感器报告的文件 ctime 元数据。"),
+    ("mtime", "detail.mtime", "传感器报告的文件 mtime 元数据。"),
+    ("atime", "detail.atime", "传感器报告的文件 atime 元数据。"),
+)
+
+
+def _process_path_aliases(fields: Mapping[str, Any]) -> tuple[str, ...]:
+    # In this event contract detail.path is the detected artifact. Explicit
+    # execution fields may still describe a separate, real process.
+    return tuple(alias for alias in _PROCESS_PATH_ALIASES if alias != "detail.path") if _event_type(fields) == "webshell" else _PROCESS_PATH_ALIASES
+
+
+def _process_hash_aliases(fields: Mapping[str, Any], algorithm: str) -> tuple[str, ...]:
+    if _event_type(fields) == "webshell":
+        return (f"process__file__hashes__{algorithm}",)
+    return (algorithm, f"detail.{algorithm}")
+
+
+def _process_user_aliases(fields: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(alias for alias in _PROCESS_USER_ALIASES if alias != "detail.uname") if _event_type(fields) == "webshell" else _PROCESS_USER_ALIASES
+
+
+def _file_path_aliases(fields: Mapping[str, Any]) -> tuple[str, ...]:
+    return ("file_path", "detail.file_path", "detail.path") if _event_type(fields) == "webshell" else ("file_path", "detail.file_path")
+
+
+def _process_tree_aliases(fields: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(alias for alias in _TREE_ALIASES if alias != "event_content") if _event_type(fields) == "webshell" else _TREE_ALIASES
 
 
 def hids_endpoint_sources(fields: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -102,13 +141,13 @@ def hids_primary_process(
         {
             "process_name": selected.get("process_name") if selected else explicit_name,
             "process_id": selected.get("process_id") if selected else explicit_pid,
-            "process_path": selected.get("process_path") if selected else _first_str(fields, _PROCESS_PATH_ALIASES),
+            "process_path": selected.get("process_path") if selected else _first_str(fields, _process_path_aliases(fields)),
             "command_line": selected.get("command_line") if selected else _process_command_line(fields),
             "parent_process_name": parent.get("process_name") if parent else _first_str(fields, _PARENT_NAME_ALIASES),
             "parent_process_id": parent.get("process_id") if parent else _intish(_first_str(fields, _PARENT_ID_ALIASES)),
             "parent_command_line": parent.get("command_line") if parent else _first_str(fields, _PARENT_COMMAND_ALIASES),
-            "md5": selected.get("md5") if selected else _validated_digest(_first_str(fields, ("md5", "detail.md5")), expected_length=32),
-            "sha256": selected.get("sha256") if selected else _validated_digest(_first_str(fields, ("sha256", "detail.sha256")), expected_length=64),
+            "md5": selected.get("md5") if selected else _validated_digest(_first_str(fields, _process_hash_aliases(fields, "md5")), expected_length=32),
+            "sha256": selected.get("sha256") if selected else _validated_digest(_first_str(fields, _process_hash_aliases(fields, "sha256")), expected_length=64),
         }
     )
 
@@ -135,7 +174,7 @@ def hids_primary_username(
     parsed_messages: Sequence[ParsedRawMessageEvidence],
 ) -> str | None:
     for parsed in parsed_messages:
-        username = _first_str(parsed.fields, _PROCESS_USER_ALIASES)
+        username = _first_str(parsed.fields, _process_user_aliases(parsed.fields))
         if username:
             return username
     return None
@@ -172,6 +211,10 @@ def build_hids_process_observations(
         observation["field_sources"] = {
             f"nodes[{index}].{field}": f"{parsed.source_path}#parsed.{source}" for index, node in enumerate(nodes) for field in node if (source := _indexed_node_source_path(fields, node, field_name=field)) is not None
         }
+        if _event_type(fields) == "webshell":
+            observation["field_sources"].update(
+                {f"nodes[{index}].{field}": f"{parsed.source_path}#parsed.{source}" for index, node in enumerate(nodes) for field in node if (source := _process_node_source_path(fields, node, field_name=field)) is not None}
+            )
         observations.append(observation)
     return observations
 
@@ -197,7 +240,12 @@ def hids_process_subject_binding(
     if _indexed_tree_conflict(fields):
         return {**result, "status": "conflict", "reason": "indexed_process_tree_identity_conflict", "gaps": ["process_subject_identity_conflict"]}
     candidate = _explicit_process_node(fields) or {}
-    if not candidate:
+    event_subject = _event_tree_subject_index(fields, nodes, candidate)
+    if event_subject is not None:
+        index, status, reason = event_subject
+        if index is None:
+            return {**result, "status": status, "reason": reason, "gaps": [f"process_subject_{status}"]}
+    elif not candidate:
         if not nodes:
             return result
         if _indexed_process_nodes(fields):
@@ -221,6 +269,12 @@ def hids_process_subject_binding(
         source = _indexed_node_source_path(fields, nodes[index], field_name=field)
         if source:
             result["evidence_paths"].append(f"{parsed.source_path}#parsed.{source}")
+    if event_subject is not None:
+        tree_source = _first_present_path(fields, _TREE_ALIASES)
+        if tree_source:
+            path = f"{parsed.source_path}#parsed.{tree_source}"
+            if path not in result["evidence_paths"]:
+                result["evidence_paths"].append(path)
     return result
 
 
@@ -233,7 +287,7 @@ def build_hids_file_observations(
         event_type = _event_type(fields)
         if event_type not in _FILE_EVENT_TYPES:
             continue
-        file_path = _first_str(fields, ("file_path", "detail.file_path"))
+        file_path = _first_str(fields, _file_path_aliases(fields))
         md5 = _validated_digest(_first_str(fields, ("md5", "detail.md5")), expected_length=32)
         sha1 = _validated_digest(_first_str(fields, ("sha1", "detail.sha1")), expected_length=40)
         sha256 = _validated_digest(_first_str(fields, ("sha256", "detail.sha256")), expected_length=64)
@@ -246,7 +300,7 @@ def build_hids_file_observations(
                     "evidence_path": f"{parsed.source_path}#parsed",
                     "relation": "observed_artifact",
                     "event_time": _first_str(fields, ("datatime", "discovery_time", "first_discovery_time")),
-                    "process_id": _intish(_first_str(fields, _PROCESS_ID_ALIASES)),
+                    "process_id": None if event_type == "webshell" else _intish(_first_str(fields, _PROCESS_ID_ALIASES)),
                     "file_name": _basename(file_path),
                     "file_path": file_path,
                     "md5": md5,
@@ -256,6 +310,53 @@ def build_hids_file_observations(
             )
         )
     return observations
+
+
+def _webshell_file_sources(parsed_messages: Sequence[ParsedRawMessageEvidence], file_observations: Sequence[Any]):
+    parsed_by_path = {f"{item.source_path}#parsed": item for item in parsed_messages if _event_type(item.fields) == "webshell"}
+    for index, observation in enumerate(file_observations):
+        evidence_path = observation.get("evidence_path") if isinstance(observation, Mapping) else observation.evidence_path
+        if parsed := parsed_by_path.get(evidence_path):
+            yield index, parsed
+
+
+def build_hids_file_detections(parsed_messages: Sequence[ParsedRawMessageEvidence], file_observations: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        _drop_none(
+            {
+                "observation_id": f"file-detection:{parsed.message_hash[:16]}",
+                "evidence_path": f"{parsed.source_path}#parsed",
+                "event_scope_id": parsed.source_path,
+                "kind": "file_detection",
+                "subject_refs": [f"entities.file.observations[{index}]"],
+                "name": _first_str(parsed.fields, ("event_name",)) or "webshell",
+                "category": "webshell",
+                "identity_basis": "adapter_declared",
+                # Severity is not the detector's finding. Keep the exact bounded
+                # vendor statement without promoting it to an analyst verdict.
+                "reported_result": (_first_str(parsed.fields, ("event_content",)) or "")[:500] or None,
+            }
+        )
+        for index, parsed in _webshell_file_sources(parsed_messages, file_observations)
+    ]
+
+
+def build_hids_file_supplementary_facts(parsed_messages: Sequence[ParsedRawMessageEvidence], file_observations: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "observation_id": f"file-fact:{parsed.message_hash[:16]}:{name}",
+            "evidence_path": f"{parsed.source_path}#parsed.{alias}",
+            "event_scope_id": parsed.source_path,
+            "name": name,
+            "value": value,
+            "meaning": meaning,
+            "subject_ref": f"entities.file.observations[{index}]",
+            "clue_type": "application" if name == "website" else None,
+        }
+        for index, parsed in _webshell_file_sources(parsed_messages, file_observations)
+        for name, alias, meaning in _WEBSHELL_FILE_FACTS
+        if (value := _first_str(parsed.fields, (alias,))) is not None
+    ]
 
 
 def build_hids_network_observations(
@@ -307,31 +408,42 @@ def build_hids_network_observations(
     return observations
 
 
-def hids_field_importance_rules() -> list[dict[str, Any]]:
+def hids_field_importance_rules(parsed_messages: Sequence[ParsedRawMessageEvidence] = ()) -> list[dict[str, Any]]:
+    process_patterns = [
+        f"parsed.{alias}"
+        for alias in (
+            *_PROCESS_NAME_ALIASES,
+            *_PROCESS_ID_ALIASES,
+            *_PROCESS_COMMAND_ALIASES,
+            *_PARENT_NAME_ALIASES,
+            *_PARENT_ID_ALIASES,
+            *_PARENT_COMMAND_ALIASES,
+            *_PROCESS_CHAIN_ALIASES,
+            "process_tree",
+            "detail.process_tree",
+            "detail.proctree.*",
+        )
+    ]
+    if any(_short_tree_nodes(parsed.fields) for parsed in parsed_messages):
+        process_patterns.append("parsed.event_content")
+    file_patterns = ["parsed.file_path", "parsed.md5", "parsed.sha1", "parsed.sha256"]
+    if any(_event_type(parsed.fields) in _FILE_EVENT_TYPES for parsed in parsed_messages):
+        file_patterns.extend(["parsed.detail.file_path", "parsed.detail.md5", "parsed.detail.sha1", "parsed.detail.sha256"])
+    if any(_event_type(parsed.fields) == "webshell" for parsed in parsed_messages):
+        file_patterns.append("parsed.detail.path")
     definitions = (
         ("pingan.hids.host_ip", ["parsed.internal_ip", "parsed.agent_ip", "parsed.external_ip"], "entities.host.ip_addresses", "critical"),
         ("pingan.hids.host_name", ["parsed.host_name"], "entities.host.host_name", "high"),
         ("pingan.hids.host_id", ["parsed.agent_id"], "entities.host.host_id", "high"),
         (
             "pingan.hids.process_observation",
-            [
-                "parsed.process_tree",
-                "parsed.process_chain",
-                "parsed.process_name",
-                "parsed.pname",
-                "parsed.pid",
-                "parsed.cmd",
-                "parsed.event_content",
-                "parsed.ppname",
-                "parsed.ppid",
-                "parsed.pcmd",
-            ],
+            process_patterns,
             "entities.process.observations",
             "critical",
         ),
         (
             "pingan.hids.file_observation",
-            ["parsed.file_path", "parsed.md5", "parsed.sha1", "parsed.sha256"],
+            file_patterns,
             "entities.file.observations",
             "high",
         ),
@@ -388,7 +500,7 @@ def build_hids_source_field_semantics(
                     "vendor_event_type_routes_typed_host_evidence_but_does_not_prove_maliciousness",
                 )
             )
-        if any(_first_str(fields, (name,)) for name in (*_PROCESS_NAME_ALIASES, *_TREE_ALIASES, "process_chain")):
+        if build_hids_process_observations([parsed]):
             result.append(
                 _semantic(
                     base_path,
@@ -397,7 +509,7 @@ def build_hids_source_field_semantics(
                     entities=True,
                 )
             )
-        if any(_first_str(fields, (name,)) for name in ("file_path", "md5", "sha1", "sha256")):
+        if build_hids_file_observations([parsed]):
             result.append(
                 _semantic(
                     base_path,
@@ -406,6 +518,24 @@ def build_hids_source_field_semantics(
                     entities=True,
                 )
             )
+        if _event_type(fields) == "webshell":
+            result.append(
+                _semantic(
+                    base_path,
+                    "file_detection_process_context",
+                    "file_detection_does_not_establish_execution_process_identity_requires_direct_same_source_evidence",
+                    entities=True,
+                )
+            )
+            for alias, semantic_type, meaning in (
+                ("detail.path", "detected_file_path", "detected_artifact_path_is_not_an_executing_process_image"),
+                ("detail.md5", "detected_file_hash", "detected_artifact_hash_is_not_an_executing_process_hash"),
+                ("detail.sha1", "detected_file_hash", "detected_artifact_hash_is_not_an_executing_process_hash"),
+                ("detail.sha256", "detected_file_hash", "detected_artifact_hash_is_not_an_executing_process_hash"),
+                ("detail.uname", "observed_file_owner", "file_owner_is_not_process_user_or_authenticated_human_actor"),
+            ):
+                if _has_value(fields.get(alias)):
+                    result.append(_semantic(f"{base_path}.{alias}", semantic_type, meaning, entities=True))
         if _first_str(fields, ("src_ip", "dst_ip")):
             result.append(
                 _semantic(
@@ -700,10 +830,10 @@ def build_hids_canonical_field_provenance(
             "entities.host.host_name": _first_present_path(fields, ("host_name",)),
             "entities.host.host_id": _first_present_path(fields, ("agent_id",)),
             "entities.host.asset_id": _first_present_path(fields, ("agent_id",)),
-            "entities.user.username": _first_present_path(fields, _PROCESS_USER_ALIASES),
+            "entities.user.username": _first_present_path(fields, _process_user_aliases(fields)),
             "entities.process.process_name": _process_source_path(fields, alert.entities.process.process_name),
             "entities.process.process_id": _first_present_path(fields, _PROCESS_ID_ALIASES),
-            "entities.process.process_path": _first_present_path(fields, _PROCESS_PATH_ALIASES),
+            "entities.process.process_path": _first_present_path(fields, _process_path_aliases(fields)),
             "entities.process.command_line": _process_command_source_path(
                 fields,
                 alert.entities.process.command_line,
@@ -717,12 +847,8 @@ def build_hids_canonical_field_provenance(
                 _PARENT_ID_ALIASES,
             ),
             "entities.process.parent_command_line": _first_present_path(fields, _PARENT_COMMAND_ALIASES),
-            "entities.process.md5": _first_present_path(fields, ("md5", "detail.md5")),
-            "entities.process.sha256": _first_present_path(fields, ("sha256", "detail.sha256")),
-            "entities.file.file_path": _first_present_path(fields, ("file_path", "detail.file_path")),
-            "entities.file.md5": _first_present_path(fields, ("md5", "detail.md5")),
-            "entities.file.sha1": _first_present_path(fields, ("sha1", "detail.sha1")),
-            "entities.file.sha256": _first_present_path(fields, ("sha256", "detail.sha256")),
+            "entities.process.md5": _first_present_path(fields, _process_hash_aliases(fields, "md5")),
+            "entities.process.sha256": _first_present_path(fields, _process_hash_aliases(fields, "sha256")),
         }
         if alert.entities.process.observations:
             observation = alert.entities.process.observations[0]
@@ -765,21 +891,26 @@ def build_hids_canonical_field_provenance(
         (
             "entities.file.file_name",
             alert.entities.file.file_name,
-            ("file_path",),
+            ("file_path", "detail.file_path", "detail.path"),
             True,
         ),
         (
             "entities.file.file_path",
             alert.entities.file.file_path,
-            ("file_path",),
+            ("file_path", "detail.file_path", "detail.path"),
             False,
         ),
-        ("entities.file.md5", alert.entities.file.md5, ("md5",), False),
-        ("entities.file.sha1", alert.entities.file.sha1, ("sha1",), False),
-        ("entities.file.sha256", alert.entities.file.sha256, ("sha256",), False),
+        ("entities.file.md5", alert.entities.file.md5, ("md5", "detail.md5"), False),
+        ("entities.file.sha1", alert.entities.file.sha1, ("sha1", "detail.sha1"), False),
+        ("entities.file.sha256", alert.entities.file.sha256, ("sha256", "detail.sha256"), False),
     ):
+        source_messages = parsed_messages
+        if canonical_path.startswith("entities.file."):
+            source_messages = [parsed for parsed in parsed_messages if _event_type(parsed.fields) in _FILE_EVENT_TYPES]
+        elif canonical_path == "entities.user.username":
+            source_messages = [parsed for parsed in parsed_messages if _first_str(parsed.fields, _process_user_aliases(parsed.fields)) == selected_value]
         source = _source_for_scalar_value(
-            parsed_messages,
+            source_messages,
             aliases,
             selected_value,
             compare_basename=compare_basename,
@@ -848,8 +979,8 @@ def _append_observation_provenance(
         for field_name, aliases in (
             ("event_time", ("datatime", "discovery_time", "first_discovery_time")),
             ("process_id", _PROCESS_ID_ALIASES),
-            ("file_name", ("file_path", "detail.file_path")),
-            ("file_path", ("file_path", "detail.file_path")),
+            ("file_name", _file_path_aliases(parsed.fields)),
+            ("file_path", _file_path_aliases(parsed.fields)),
             ("md5", ("md5", "detail.md5")),
             ("sha1", ("sha1", "detail.sha1")),
             ("sha256", ("sha256", "detail.sha256")),
@@ -861,6 +992,23 @@ def _append_observation_provenance(
                 parsed=parsed,
                 source_path=_first_present_path(parsed.fields, aliases),
             )
+    for index, detection in enumerate(alert.entities.detections):
+        parsed = parsed_by_evidence.get(detection.evidence_path)
+        if parsed is None or _event_type(parsed.fields) != "webshell":
+            continue
+        for field_name, source_path in (
+            ("name", _first_present_path(parsed.fields, ("event_name", "event_type", "datatype"))),
+            ("category", _first_present_path(parsed.fields, ("event_type", "datatype"))),
+            ("reported_result", _first_present_path(parsed.fields, ("event_content",))),
+        ):
+            _append_provenance(provenance, canonical_path=f"entities.detections[{index}].{field_name}", selected_value=getattr(detection, field_name), parsed=parsed, source_path=source_path)
+    parsed_by_scope = {parsed.source_path: parsed for parsed in parsed_messages}
+    fact_sources = {name: alias for name, alias, _ in _WEBSHELL_FILE_FACTS}
+    for index, fact in enumerate(alert.entities.supplementary_facts):
+        parsed = parsed_by_scope.get(fact.event_scope_id)
+        source_path = fact_sources.get(fact.name)
+        if parsed is not None and _event_type(parsed.fields) == "webshell" and source_path is not None:
+            _append_provenance(provenance, canonical_path=f"entities.supplementary_facts[{index}].value", selected_value=fact.value, parsed=parsed, source_path=source_path)
     for index, observation in enumerate(alert.entities.network.observations):
         parsed = parsed_by_evidence.get(observation.evidence_path)
         if parsed is None:
@@ -916,7 +1064,7 @@ def _network_source_paths(event_type: str, fields: Mapping[str, Any]) -> dict[st
 
 
 def _short_tree_nodes(fields: Mapping[str, Any]) -> list[dict[str, Any]]:
-    tree = _first_str(fields, _TREE_ALIASES) or ""
+    tree = _first_str(fields, _process_tree_aliases(fields)) or ""
     nodes = [{"process_name": name, "process_id": int(process_id)} for name, process_id in re.findall(r"([A-Za-z0-9_.-]+)\((\d+)\)", tree)]
     if nodes:
         return nodes
@@ -1028,6 +1176,59 @@ def _select_node_index(nodes: Sequence[Mapping[str, Any]], candidate: Mapping[st
     return None, "unresolved", "process_subject_not_identified"
 
 
+def _event_tree_subject_index(fields: Mapping[str, Any], nodes: Sequence[Mapping[str, Any]], candidate: Mapping[str, Any]) -> tuple[int | None, str, str] | None:
+    """Use a declared subject's PID only after verifying its abbreviated tree.
+
+    The event summary may omit ancestors between its members. It identifies the
+    named process, not the last descendant or a new immediate-parent relation.
+    Every member must independently exist in the same indexed ancestry.
+    """
+    indexed = _indexed_process_nodes(fields)
+    if not indexed or _event_type(fields) != "web_command":
+        return None
+    content = _first_str(fields, ("event_content",)) or ""
+    summary = _EVENT_TREE_SUMMARY.fullmatch(content.strip())
+    if summary is None:
+        return None
+    if len(content) > 8192:
+        return None, "unresolved", "event_process_tree_too_large"
+    name, tree = summary.groups()
+    if candidate.get("process_name") != name:
+        return None, "conflict", "event_process_tree_subject_name_conflict"
+    parts = re.split(r"\s*(?:-&gt;|->|→)\s*", tree.strip())
+    if not 2 <= len(parts) <= 32:
+        return None, "unresolved", "event_process_tree_invalid"
+    chain: list[tuple[str, int]] = []
+    for part in parts:
+        match = _EVENT_TREE_NODE.fullmatch(part)
+        if match is None:
+            return None, "unresolved", "event_process_tree_invalid"
+        chain.append((match[1], int(match[2])))
+    if len({pid for _, pid in chain}) != len(chain):
+        return None, "conflict", "event_process_tree_duplicate_pid"
+    positions = []
+    for member_name, pid in chain:
+        matches = [(position, node) for position, node in indexed if node.get("process_id") == pid]
+        if len(matches) != 1:
+            return None, "ambiguous" if matches else "unresolved", "event_process_tree_member_not_unique"
+        position, node = matches[0]
+        if node.get("process_name") != member_name:
+            return None, "conflict", "event_process_tree_member_name_conflict"
+        positions.append(position)
+    if any(left >= right for left, right in zip(positions, positions[1:])):
+        return None, "conflict", "event_process_tree_order_conflict"
+    subjects = [pid for member_name, pid in chain if member_name == name]
+    explicit_pid = candidate.get("process_id")
+    if explicit_pid is not None:
+        if explicit_pid not in subjects:
+            return None, "conflict", "event_process_tree_subject_pid_conflict"
+        subjects = [explicit_pid]
+    if len(subjects) != 1:
+        return None, "ambiguous" if subjects else "unresolved", "event_process_tree_subject_not_unique"
+    index, status, reason = _select_node_index(nodes, {**candidate, "process_id": subjects[0]}, allow_name_only=False)
+    return index, status, "event_process_tree_subject_pid" if index is not None else reason
+
+
 def _bound_parent_index(fields: Mapping[str, Any], nodes: Sequence[Mapping[str, Any]], selected_index: int) -> int | None:
     selected = nodes[selected_index]
     ancestry = _tree_nodes(fields)
@@ -1060,18 +1261,18 @@ def _explicit_process_node(fields: Mapping[str, Any]) -> dict[str, Any] | None:
         if len(names) == 1:
             name = names.pop()
     if not name:
-        name = _basename(_first_str(fields, _PROCESS_PATH_ALIASES))
+        name = _basename(_first_str(fields, _process_path_aliases(fields)))
     if not name:
         return None
     return _drop_none(
         {
             "process_name": name,
             "process_id": pid,
-            "process_path": _first_str(fields, _PROCESS_PATH_ALIASES),
+            "process_path": _first_str(fields, _process_path_aliases(fields)),
             "command_line": _process_command_line(fields),
-            "username": _first_str(fields, _PROCESS_USER_ALIASES),
-            "md5": _validated_digest(_first_str(fields, ("md5", "detail.md5")), expected_length=32),
-            "sha256": _validated_digest(_first_str(fields, ("sha256", "detail.sha256")), expected_length=64),
+            "username": _first_str(fields, _process_user_aliases(fields)),
+            "md5": _validated_digest(_first_str(fields, _process_hash_aliases(fields, "md5")), expected_length=32),
+            "sha256": _validated_digest(_first_str(fields, _process_hash_aliases(fields, "sha256")), expected_length=64),
         }
     )
 
@@ -1155,11 +1356,11 @@ def _process_node_source_path(
     process_aliases = {
         "process_name": _PROCESS_NAME_ALIASES,
         "process_id": _PROCESS_ID_ALIASES,
-        "process_path": _PROCESS_PATH_ALIASES,
+        "process_path": _process_path_aliases(fields),
         "command_line": _PROCESS_COMMAND_ALIASES,
-        "username": _PROCESS_USER_ALIASES,
-        "md5": ("md5", "detail.md5"),
-        "sha256": ("sha256", "detail.sha256"),
+        "username": _process_user_aliases(fields),
+        "md5": _process_hash_aliases(fields, "md5"),
+        "sha256": _process_hash_aliases(fields, "sha256"),
     }
     parent_aliases = {
         "process_name": _PARENT_NAME_ALIASES,
@@ -1168,13 +1369,15 @@ def _process_node_source_path(
         "command_line": _PARENT_COMMAND_ALIASES,
         "username": _PARENT_USER_ALIASES,
     }
-    if _node_matches_aliases(
+    explicit = _explicit_process_node(fields) if _event_type(fields) == "webshell" else None
+    matches_explicit_path = bool(_event_type(fields) == "webshell" and explicit and explicit.get("process_path") and node_value.get("process_path") == explicit["process_path"] and not _node_conflicts(node_value, explicit))
+    if matches_explicit_path or _node_matches_aliases(
         fields,
         node,
         name_aliases=_PROCESS_NAME_ALIASES,
         id_aliases=_PROCESS_ID_ALIASES,
     ):
-        source = _process_command_source_path(fields, node.command_line) if field_name == "command_line" else _first_present_path(fields, process_aliases.get(field_name, ()))
+        source = _process_command_source_path(fields, node_value.get("command_line")) if field_name == "command_line" else _first_present_path(fields, process_aliases.get(field_name, ()))
         if source:
             return source
     if _node_matches_aliases(
@@ -1187,9 +1390,9 @@ def _process_node_source_path(
         if source:
             return source
     if field_name in {"process_name", "process_id"}:
-        tree_source = _first_present_path(fields, (*_TREE_ALIASES, *_PROCESS_CHAIN_ALIASES))
-        tree_text = _first_str(fields, (*_TREE_ALIASES, *_PROCESS_CHAIN_ALIASES)) or ""
-        if node.process_name in tree_text:
+        tree_source = _first_present_path(fields, (*_process_tree_aliases(fields), *_PROCESS_CHAIN_ALIASES))
+        tree_text = _first_str(fields, (*_process_tree_aliases(fields), *_PROCESS_CHAIN_ALIASES)) or ""
+        if node_value.get("process_name") and node_value["process_name"] in tree_text:
             return tree_source
     return None
 
@@ -1229,11 +1432,12 @@ def _node_matches_aliases(
     name_aliases: Sequence[str],
     id_aliases: Sequence[str],
 ) -> bool:
+    node_value = node.model_dump(mode="python") if hasattr(node, "model_dump") else node
     expected_name = _first_str(fields, name_aliases)
     expected_id = _intish(_first_str(fields, id_aliases))
     if expected_id is not None:
-        return node.process_id == expected_id
-    return bool(expected_name and node.process_name == expected_name)
+        return node_value.get("process_id") == expected_id
+    return bool(expected_name and node_value.get("process_name") == expected_name)
 
 
 def _source_for_value(
@@ -1408,6 +1612,8 @@ def _drop_none(value: Mapping[str, Any]) -> dict[str, Any]:
 __all__ = [
     "build_hids_canonical_field_provenance",
     "build_hids_file_observations",
+    "build_hids_file_detections",
+    "build_hids_file_supplementary_facts",
     "build_hids_network_observations",
     "build_hids_process_observations",
     "build_hids_source_field_semantics",

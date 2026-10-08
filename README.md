@@ -138,6 +138,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Optional `--exclude-failed` / `--exclude-semantic-failed` produce a separate effect
 > report excluding failed jobs and/or failed semantic reviews, with a deduplicated
 > exclusion receipt and recomputed evaluation denominators. The original report is preserved.
+> `scripts/soc_memory_snapshot_audit.py` exports one Memory's fixed-snapshot membership,
+> review/activation evidence and source links without models or database writes; current
+> state and missing historical proof remain distinct.
 > See the [internal Mac statistics and review procedure](docs/soc-validation-effect-report.md).
 > The PingAn SIEM email detector `RPAADM_002192` on `T_GBD_zeus_data` is excluded
 > from both validation batches and manual execution; original corpus data is retained.
@@ -325,6 +328,11 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > PID with a child's command. Literal shell connection targets remain command evidence, not
 > observed network traffic. New matching scopes record unresolved bindings and which facts
 > contributed to their conditions; saved results and reviewed experiences keep their original scope.
+> Abbreviated HIDS event trees can identify the declared process when their names and PIDs
+> agree with the complete source tree; child commands stay attached to their own processes.
+> HIDS Webshell findings retain detected file paths, hashes and ownership as file evidence.
+> A file path alone cannot create a process, even during semantic review. File-only findings
+> do not report a missing process; explicit execution evidence remains independently available.
 > Result details separate a server-generated **系统匹配说明** from **模型研判依据**. The former
 > lists the saved Memory use mode and uncovered conditions; the latter explains business impact.
 > Normal experience views describe applicability in business terms; internal matching identifiers
