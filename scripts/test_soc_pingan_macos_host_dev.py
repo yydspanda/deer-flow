@@ -295,7 +295,7 @@ def test_start_plan_skips_install_and_enables_governed_policy_without_network_si
     assert "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true" in command[2]
     assert "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true" in command[2]
     assert (
-        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-8}"' in command[2]
+        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-16}"' in command[2]
     )
     assert (
         'export SOC_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"'
@@ -540,8 +540,8 @@ def test_prepare_soc_database_uses_absolute_path_and_disables_sidecar_migrations
     ]
 
 
-@pytest.mark.parametrize("configured", [None, "3", "12"])
-def test_host_concurrency_defaults_to_eight_and_preserves_operator_overrides(
+@pytest.mark.parametrize("configured", [None, "2", "8", "16"])
+def test_host_concurrency_defaults_to_sixteen_and_preserves_operator_overrides(
     tmp_path: Path, configured: str | None
 ) -> None:
     environment = {"SOC_PINGAN_ENV": "dev"}
@@ -554,10 +554,41 @@ def test_host_concurrency_defaults_to_eight_and_preserves_operator_overrides(
         run=lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
     )
 
-    assert resolved["SOC_LLM_MAX_CONCURRENCY"] == (configured or "8")
+    assert resolved["SOC_LLM_MAX_CONCURRENCY"] == (configured or "16")
     # The protected model profile owns the shared gateway capacity; Host must
     # neither invent nor overwrite it while preparing the database/worker env.
     assert resolved.get("SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY") == configured
+
+
+@pytest.mark.parametrize("configured", [None, "2", "8", "16"])
+def test_host_start_shell_preserves_explicit_concurrency_and_defaults_to_sixteen(
+    tmp_path: Path, configured: str | None
+) -> None:
+    profile = "export SOC_PINGAN_ENV=dev\nexport SOC_PINGAN_ZEUS_ENV=prd\n"
+    if configured is not None:
+        profile += f"export SOC_LLM_MAX_CONCURRENCY={configured}\n"
+    (tmp_path / ".env.soc-dev.local").write_text(profile, encoding="utf-8")
+    launcher = tmp_path / "scripts/serve.sh"
+    launcher.parent.mkdir()
+    launcher.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$SOC_LLM_MAX_CONCURRENCY"\n',
+        encoding="utf-8",
+    )
+    launcher.chmod(0o700)
+
+    completed = subprocess.run(
+        build_start_command(daemon=True, runtime_environment="dev"),
+        env={
+            "PATH": "/usr/bin:/bin",
+            "SOC_HOST_DEV_ROOT": str(tmp_path),
+            "SOC_HOST_DATABASE_URL": f"sqlite+pysqlite:///{tmp_path}/unused.db",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.strip() == (configured or "16")
 
 
 def test_prepare_soc_database_uses_isolated_stg_path(tmp_path: Path) -> None:

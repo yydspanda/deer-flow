@@ -123,10 +123,10 @@ corpus/index/payload store before starting; STG must not depend on those
 demonstration artifacts. The wrapper must not add Docker as a prerequisite,
 hard-code a developer home path, or create a second Gateway/frontend/nginx implementation.
 The PingAn profile and full-transfer validation keep `SOC_LLM_MAX_CONCURRENCY` and
-`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` aligned at `8`; Host's missing-value fallback
-is also `8` and preserves explicit settings. Changing that deployment model ceiling
+`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` aligned at `16`; Host's missing-value fallback
+is also `16` and preserves explicit settings. Changing that deployment model ceiling
 requires the matching private profile and a full Host restart. Within the existing
-ceiling, the deployment Mac can save a corpus admission limit of 1..8 from run settings
+ceiling, the deployment Mac can save a corpus admission limit of 1..16 from run settings
 without restart or env edits. Preserve the database-adjacent `*.corpus-capacity.json`
 through normal data-directory upgrades; include `demo/corpus_capacity.py` and its tests
 in the handoff inventory. LAN users only read the value. The SQLite legacy Worker
@@ -183,7 +183,7 @@ DEV may bind authenticated `8090` to the trusted LAN to preserve the old upstrea
 files are marker-checked before signaling, logs remain under the ignored Host DEV state
 directory, and `stop` includes disabled services so stale processes cannot survive a
 configuration change. Keep the model gateway single-process because its admission
-semaphore is process-local. The Host profile aligns the gateway and SOC Runtime at eight
+semaphore is process-local. The Host profile aligns the gateway and SOC Runtime at sixteen
 concurrent model calls; the SQLite compatibility Worker remains single-worker. The PingAn
 model profile must set `disable_streaming: true`: EAGW returns a complete response, while
 LangChain converts that response into one buffered chat chunk without disabling DeerFlow's
@@ -279,6 +279,8 @@ keep `runbook` as the selected-default compatibility field. Upgrade is the defau
 The builder's `--initialize-soc-dev` flag selects the reinitialization manual and
 records `reset_soc_dev_requested=true`; it never runs reset or changes installer
 behavior, and both manuals are generated regardless of this flag.
+Fresh DEV defaults to 16 without a saved capacity setting. Reinitialization preserves
+saved lower limits; its manual directs operators to save 16 before the new validation.
 Startup-failure recovery and the batch-runbook handoff must retain the selected
 manual's choice rather than suggesting a reset. Ordinary redeploy still preserves data;
 restarting/resuming a batch must never repeat the reset. Preserve authentication,

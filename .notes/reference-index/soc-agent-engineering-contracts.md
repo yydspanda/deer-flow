@@ -1859,7 +1859,7 @@ off/shadow 保持 Profile 7 / v5；不自动重建分组、改写旧经验或宣
   `disable_streaming: true`，由 LangChain 将完整响应作为一个 buffered message chunk 交给
   DeerFlow Run/SSE。禁止直接向 loopback model gateway 发送 `stream=true`，也禁止自行拼装会破坏
   tool-call/usage 语义的伪 SSE。Host 私有 profile 必须将 gateway 与 SOC Runtime 的并发上限同时设为
-  `3`；SQLite legacy Worker 保持单 Worker，三者不得混为同一个并发配置。
+  `16`；SQLite legacy Worker 保持单 Worker，三者不得混为同一个并发配置。
 - admission timeout 只限制等待本地并发名额；call timeout 独立限制一次 provider invocation。后者
   超时必须形成 retryable `analyzer_timeout`，Kafka 不得提交 offset；后台调用可能无法强制中断时，
   executor worker 数仍必须有界，防止超时请求无限创建线程。
@@ -3296,7 +3296,7 @@ tool permission denial rate
 
 ### DEV 工作台动态并发资源限制
 
-- 部署本机可在运行设置中保存 1..min(8, 部署上限) 的最大并发，局域网访问者只读；
+- 部署本机可在运行设置中保存 1..min(16, 部署上限) 的最大并发，局域网访问者只读；
   已有运行、暂停、单条重跑权限不变。后端仍以可信客户端地址判权，不能靠伪造请求头配置。
 - 该值由单 Gateway 的 CorpusCapacity 管理，在独立 SOC DB 同目录原子保存小型 JSON，
   含版本、操作人和时间；刷新、重启和保留数据升级继续采用。保存不写 SQLite、不启动任务。

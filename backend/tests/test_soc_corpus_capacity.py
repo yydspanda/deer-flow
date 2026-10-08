@@ -9,19 +9,20 @@ import pytest
 from soc_agent.demo.corpus_capacity import CorpusCapacity
 
 
-def test_limit_persists_across_restart_without_database_writes(tmp_path):
+@pytest.mark.parametrize("value", [*range(1, 9), 16])
+def test_limit_persists_across_restart_without_database_writes(tmp_path, value):
     path = tmp_path / "soc_agent_dev.capacity.json"
-    capacity = CorpusCapacity(8, path)
-    assert capacity.ceiling == capacity.max_concurrency == 8
+    capacity = CorpusCapacity(16, path)
+    assert capacity.ceiling == capacity.max_concurrency == 16
     assert not path.exists()
 
-    capacity.set_limit(3, actor_id="host-operator")
+    capacity.set_limit(value, actor_id="host-operator")
 
-    assert capacity.max_concurrency == 3
-    assert CorpusCapacity(8, path).max_concurrency == 3
+    assert capacity.max_concurrency == value
+    assert CorpusCapacity(16, path).max_concurrency == value
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "soc.corpus_capacity.v1"
-    assert payload["max_concurrency"] == 3
+    assert payload["max_concurrency"] == value
     assert payload["updated_by"] == "host-operator"
     assert datetime.fromisoformat(payload["updated_at"]).utcoffset().total_seconds() == 0
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -30,15 +31,19 @@ def test_limit_persists_across_restart_without_database_writes(tmp_path):
 
 def test_limit_is_bounded_by_deployment_and_global_ceiling(tmp_path):
     path = tmp_path / "capacity.json"
-    capacity = CorpusCapacity(12, path)
-    assert capacity.ceiling == capacity.max_concurrency == 8
-    capacity.set_limit(7, actor_id="operator")
+    capacity = CorpusCapacity(32, path)
+    assert capacity.ceiling == capacity.max_concurrency == 16
+    capacity.set_limit(16, actor_id="operator")
 
     lower_deployment = CorpusCapacity(4, path)
     assert lower_deployment.ceiling == lower_deployment.max_concurrency == 4
-    assert json.loads(path.read_text(encoding="utf-8"))["max_concurrency"] == 7
+    assert json.loads(path.read_text(encoding="utf-8"))["max_concurrency"] == 16
     with pytest.raises(ValueError, match="1.*4"):
         lower_deployment.set_limit(5, actor_id="operator")
+
+    with pytest.raises(ValueError, match="1.*16"):
+        capacity.set_limit(17, actor_id="operator")
+    assert CorpusCapacity(16, path).max_concurrency == 16
 
 
 @pytest.mark.parametrize("value", [True, False, 0, -1, 9, 3.0, "3", None])
@@ -116,7 +121,7 @@ def test_new_limit_is_published_only_after_atomic_replacement(tmp_path, monkeypa
     assert capacity.max_concurrency == CorpusCapacity(8, path).max_concurrency == 5
 
 
-@pytest.mark.parametrize("value", [True, 0, -1, 9, 2.0, "2", None])
+@pytest.mark.parametrize("value", [True, 0, -1, 17, 2.0, "2", None])
 def test_invalid_saved_limits_are_not_treated_as_defaults(tmp_path, value):
     path = tmp_path / "capacity.json"
     capacity = CorpusCapacity(8, path)

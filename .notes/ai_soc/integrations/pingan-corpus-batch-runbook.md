@@ -8,10 +8,12 @@
 
 ## 1. 前置检查
 
-本次使用随包 `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md`，完成备份、保留数据安装、语料落位、依赖安装、预检、启动和模型 Smoke。
-内网第一批已完成、正在审核经验，本次升级保留已有结果和审核进度；跳过本手册第1.1节。
-另一本 `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md` 只供明确从零验证时选择，不与升级手册依次执行。
-确认第一批完成数量、待审核经验和已审核记录仍在，再从第2节的“审核经验”继续；不重跑成功第一批。
+本轮按用户要求，从空 SOC DEV 数据库重新验证，不使用之前部署的经验。
+使用随包 `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`，完成停服备份、安装、语料落位、依赖安装、预检、
+显式归档重置 SOC DEV、启动和模型 Smoke。另一份保留数据升级手册不用于本轮，不能两份依次执行。
+若已在重新初始化手册完成重置，跳过本手册第1.1节，避免再次清空新结果。
+启动后核对告警结果、第一批/第二批任务、候选和已审核经验均从零开始，再从第2节“开始积累”执行。
+旧库备份只用于恢复和审计，不恢复进本轮活动数据库。原始语料和冻结索引可以复用，不携带旧 Run、候选或 Memory。
 本版原始语料仍为15,288条；两批验证排除7条 `RPAADM_002192` SIEM 邮件告警，数据保留。
 第一批2,997条，用于沉淀待审核经验。第二批分为：
 
@@ -27,9 +29,11 @@
 仍可开始、暂停和重跑；使用当前批次最后保存的配置，无运行记录时使用部署默认值。
 本机修改在提交运行时保存；已排队任务不被改写。无需增加启动参数，Host DEV 自动应用限制。
 
-新版 Host DEV 默认并发上限为8，运行配置和模型网关的并发值同步为8；上线需更新配套私有配置并完整重启Host。
-已有批次点击“继续”时采用当前服务端并发上限，保留原任务、运行开关和经验快照。
-同类组仍按顺序执行，聊天和经验起草也共享模型容量，因此实际运行数不保证一直达到8。
+本版 Host DEV 的 Runtime 与模型网关并发上限同步为16，需使用配套私有配置并完整重启Host。
+本机“运行设置”可保存1～16的最大并发；本轮先核对当前生效值为16。局域网同事只读该值，仍可开始、暂停和继续。
+继续本轮时采用服务端当前并发上限，保留原任务、运行开关和经验快照。
+同类组仍按顺序执行，聊天和经验起草也共享模型容量，因此16是上限，不保证16条告警一直同时运行。
+降低并发只等待在途任务完成，不中断它们；真实吞吐、超时和页面响应仍需本轮内网测量。
 
 告警演练顶部保留 **运行设置** 四个开关：语义核对、企业策略、安全软件路径策略、LLM策略建议。
 开关值随新任务保存，不修改服务器全局配置；已排队任务沿用原设置。配置失效时停止并说明原因，显式重新运行才采用新设置。
@@ -58,14 +62,15 @@ python3.12 scripts/soc_pingan_macos_host_dev.py status
 启动器会先执行数据库升级；完成后刷新页面。不要为此重置或删除已有经验库。
 接口只检查结构，不会自动迁移、创建实验或启动告警任务。
 
-本次继续使用内网已有 SOC DEV 数据库，不搬入外网经验库，也不为升级或重试删除库。
-第二批使用已经审核并开放的经验；新版过滤仅影响新学习时超过512字符的候选实体特征，
-已有审核条件及第二批查询匹配规则保持兼容，不需要重新审核原有经验。
+本次只在开始前重置一次 SOC DEV，不搬入外网或旧内网经验库。正常启动仅初始化结构，不自动导入演示经验；
+不要执行 `soc demo run` / `soc demo boss` 等演示数据填充命令。`--demo-no-auth` 只是认证选项。
+第一批重新积累候选，经人工审核并开放后，第二批冻结本实验新经验及版本。全程禁用经验的 `--memory none`
+属于另一个无经验对照实验，不能替代本轮“重新学习后验证复用”的流程。
 
-### 1.1 可选重置：仅在另行明确要求从零验证时使用
+### 1.1 本轮空库起步：尚未在部署手册重置时执行一次
 
-本次保留第一批及审核成果，必须跳过本节。以下仅供用户另外明确要求重新开始整套验证时使用。
-若未来已在完全初始化重新部署手册中完成重置，也跳过本节，避免清空刚产生的新结果。
+本轮已明确从零验证。若已在完全初始化重新部署手册中完成重置，跳过本节，避免清空刚产生的新结果。
+尚未重置时，先确认已经完成该部署手册的停服备份、安装、依赖和预检，再执行下列步骤。
 
 这不是每次部署、失败重试或第二批开始时都要执行的步骤。它会移走 SOC DEV 中的
 告警结果、任务、候选、草稿、经验、反馈与实验记录，保留带hash清单的本地备份。
@@ -133,20 +138,20 @@ python3.12 scripts/soc_pingan_macos_host_dev.py restore-dev-data \
 
 ## 2. 网页快速验证（推荐）
 
-第一批已完成的本次升级从第4步“审核经验”继续。第1–3步供尚未开始积累或需要处理失败项时使用。
+本轮从第1步开始，不继续旧实验或恢复旧候选。先确认本机运行设置中的最大并发为16。
 
 1. 打开“告警研判演练”，第一批点击 **开始积累**，覆盖整批；无需准备实验或轮次。
 2. 点击 **暂停** 后不再领取批量任务，在途任务继续保存结果；点击 **继续** 跳过已完成告警。
 3. 任意告警点击 **直接运行**，即使批量暂停也只运行该条。运行中看行内进度；完成后查看结果或重新运行，失败可重试。单条与批量共用任务和统计。
-4. 点击 **审核经验**，审核列表自动限定当前积累范围。继续使用原有人工审核规则，确认并开放经验。完成后点击返回告警演练回到原批次。
-5. 切到第二批，默认 **全部**，也可选择 **验证经验复用** 或 **其他测试告警**，再点击 **开始验证**。复用验证需要已审核开放的经验；其他测试告警允许无经验执行。
+4. 第一批完成后点击 **审核经验**，审核列表自动限定当前新积累范围。重新提炼、核对业务结论和适用条件，确认并开放本轮经验。完成后点击返回告警演练回到原批次。
+5. 切到第二批，默认 **全部**，也可选择 **验证经验复用** 或 **其他测试告警**，再点击 **开始验证**。创建时冻结本实验新审核经验及版本，第二批不自动学习。复用验证需要已审核开放的经验；其他测试告警允许无经验执行。
 
 搜索、同类组等列表筛选只改变浏览内容，不缩小批量执行范围。页面展示完成、运行中、剩余、失败和待审核经验数；同一告警重跑不会增加批次总数，旧结果保留在详情和固定运行记录中。刷新页面或重启 Gateway 后恢复持久任务，包括暂停批量中的手动任务。
 
-需要第二批从头验证时，在第二批点击 **重新配置并全部重跑**，确认完整设置后点击 **全部重新运行**。先暂停并等待运行中为0；以前成功、失败和排队告警全部重新执行，旧结果仍在历史中，第一批与审核经验保留。逐步操作见 [第二批全部重跑](../../../docs/soc-validation-restart.md)。
-
-普通源码更新保留运行数据，不执行 `reset-dev-data` 或第二批清理；需要从头验证使用上述网页按钮。
-新包须配套将 Runtime 与模型网关并发都设为8的私有配置，完整重启Host时重新构建前端。
+本轮完成新的第一批后，如后续仅需要重跑第二批，可用 **重新配置并全部重跑**，按
+[第二批全部重跑](../../../docs/soc-validation-restart.md) 操作；该按钮保留第一批及经验，不能替代本轮空库起步。
+后续重启、第一批续跑及第二批开始都不再次执行 `reset-dev-data`，也不执行第二批数据库清理。
+新包须配套将 Runtime 与模型网关并发都设为16的私有配置，完整重启Host时准备前端快照。
 本轮无新增数据库迁移，未变化的语料不用重新跨网传输。完整安装仍须源码包与匹配的私有配置包一起交付，
 内网实际安装、重置与验收按随包主 Runbook 执行。
 
@@ -160,7 +165,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py restore-dev-data \
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
-export SOC_EXPERIMENT_ID="EXP-CORPUS-MAC-01"
+export SOC_EXPERIMENT_ID="EXP-CORPUS-MAC-20261008"
 export SOC_EXPERIMENT_OUTPUT="$TARGET_REPO/backend/.deer-flow/soc-validation/memory-batch/$SOC_EXPERIMENT_ID"
 mkdir -p "$SOC_EXPERIMENT_OUTPUT"
 chmod 700 "$SOC_EXPERIMENT_OUTPUT"
@@ -201,7 +206,7 @@ soc learn --experiment "$SOC_EXPERIMENT_ID" --dry-run
 
 ```bash
 soc learn --experiment "$SOC_EXPERIMENT_ID" --purpose memory \
-  --limit 5 --concurrency 8 --request-key "$SOC_EXPERIMENT_ID-learning" \
+  --limit 5 --concurrency 16 --request-key "$SOC_EXPERIMENT_ID-learning" \
   > "$SOC_EXPERIMENT_OUTPUT/learning-receipt.json"
 soc status --round "$(round_id learning)" --watch
 ```
@@ -235,7 +240,7 @@ soc status --round "$(round_id learning)" --watch
 页面点击“审核本实验经验”，或直接打开：
 
 ```text
-http://localhost:2026/workspace/soc/review/memory-candidates?experiment=EXP-CORPUS-MAC-01
+http://localhost:2026/workspace/soc/review/memory-candidates?experiment=EXP-CORPUS-MAC-20261008
 ```
 
 CLI 可分页查看待审名单：
@@ -299,7 +304,7 @@ soc draft-export --experiment "$SOC_EXPERIMENT_ID" \
 
 ```bash
 soc validate --experiment "$SOC_EXPERIMENT_ID" --purpose memory --scope reuse \
-  --limit 5 --concurrency 8 --request-key "$SOC_EXPERIMENT_ID-validation" \
+  --limit 5 --concurrency 16 --request-key "$SOC_EXPERIMENT_ID-validation" \
   > "$SOC_EXPERIMENT_OUTPUT/validation-receipt.json"
 soc status --round "$(round_id validation)" --watch
 ```

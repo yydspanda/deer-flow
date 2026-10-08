@@ -162,11 +162,14 @@ file for SOC code. The authoritative product and engineering documents are:
   matching configuration GET and quick commands, rather than the caller-selected
   experiment's latest round. Read-only callers cannot create new rounds for historical
   plans; existing idempotent round replies and historical reads remain available.
-  DEV admission capacity is a separate Host-owned resource setting (1..min(8, deployment
+  DEV admission capacity is a separate Host-owned resource setting (1..min(16, deployment
   ceiling)), shared by both batches, manual claims, legacy interactive runs and background
   drafts. `demo/corpus_capacity.py` atomically persists the value beside the isolated DB
   as `*.corpus-capacity.json`; include it in ordinary data-directory preservation. Saving
   never writes SQLite or rewrites rounds, options, source hashes or Memory snapshots.
+  The API and saved-file validation accept 16 and reject 17; existing 1..8 limits
+  remain valid. A saved limit above a lower deployment ceiling is read with that
+  ceiling without rewriting the file. Generic deployment defaults stay unchanged.
   Acquire the DB governance lock before the short capacity guard, and hold the guard
   through claim commit; never hold it during model work or the initial governance-lock
   acquisition. DELETE-mode commit may still wait for existing readers.

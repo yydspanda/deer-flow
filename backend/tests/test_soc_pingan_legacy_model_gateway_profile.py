@@ -85,8 +85,9 @@ def test_prepare_legacy_model_gateway_env_writes_private_files_without_secret_re
     assert "SOC_LLM_THINKING_ENABLED=false" in rendered
     assert "SOC_PINGAN_MODEL_GATEWAY_PROVIDER=eagw" in rendered
     assert "SOC_PINGAN_MODEL_GATEWAY_SCENE_ID=1737" in rendered
-    assert "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY=8" in rendered
-    assert "SOC_LLM_MAX_CONCURRENCY=8" in rendered
+    assert "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY=16" in rendered
+    assert "SOC_LLM_MAX_CONCURRENCY=16" in rendered
+    assert "SOC_PINGAN_LEGACY_WORKER_CONCURRENCY=1" in rendered
     assert "SOC_PINGAN_LEGACY_LIFECYCLE_MODE=fake" in rendered
     assert "SOC_PINGAN_LEGACY_CALLBACK_MODE=fake" in rendered
     assert "SOC_PINGAN_ZEUS_ENV=prd" in rendered
@@ -185,6 +186,9 @@ def test_prepare_legacy_model_gateway_env_preserves_selected_stg_runtime(
     assert "export SOC_PINGAN_ZEUS_BASE_URL=https://isec-gw-stg.example.internal" in rendered
     assert "export SOC_PINGAN_ZEUS_APP_KEY=zeus-stg-secret" in rendered
     assert "export SOC_PINGAN_ZEUS_PRD_CONFIRMATION=''" in rendered
+    assert "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY=16" in rendered
+    assert "SOC_LLM_MAX_CONCURRENCY=16" in rendered
+    assert "SOC_PINGAN_LEGACY_WORKER_CONCURRENCY=1" in rendered
     assert report["runtime_environment"] == "stg"
     assert report["active_zeus_environment"] == "stg"
 

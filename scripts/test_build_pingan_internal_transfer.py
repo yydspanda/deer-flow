@@ -268,7 +268,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "不得再启动 `$HOME/sec_know_model`、LiteLLM、Celery 或 Redis" in runbook
     assert "soc_pingan_model_gateway_smoke.py" in runbook
     assert "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY|SOC_LLM_MAX_CONCURRENCY" in runbook
-    assert "两个并发值必须都是 `8`" in runbook
+    assert "两个并发值必须都是 `16`" in runbook
     assert "disable_streaming: true" in runbook
     assert "`thinking_requested=false`" in runbook
     assert "`max_tokens_requested=128`" in runbook
@@ -425,6 +425,9 @@ def test_transfer_runbook_resets_only_dev_after_preflight_before_first_start() -
     assert "backup_directory" in section
     assert "dev-reset-receipt.json" in section
     assert "直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节" in runbook
+    assert "未保存本机并发设置时，本次全新 SOC DEV 默认以 `16` 开始验证" in runbook
+    assert "保存为 `2`，再恢复运行" not in runbook
+    assert "已保存的较低并发设置仍保留" in runbook
     blocks = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)
     assert len(blocks) == 2
     assert "reset-dev-data\n" in blocks[0]
@@ -435,6 +438,41 @@ def test_transfer_runbook_resets_only_dev_after_preflight_before_first_start() -
         assert block.index("soc_pingan_macos_host_dev.py stop") < block.index(
             "soc_pingan_macos_host_dev.py reset-dev-data"
         )
+
+
+@pytest.mark.parametrize("initialize_soc_dev", [False, True])
+def test_transfer_runbook_learning_instructions_match_data_mode(
+    initialize_soc_dev: bool,
+) -> None:
+    runbook = _render_transfer_runbook(initialize_soc_dev=initialize_soc_dev)
+    verification = runbook.split("## 2. Verify", maxsplit=1)[1].split(
+        "## 3. Install", maxsplit=1
+    )[0]
+    evaluation = runbook.split("## 7.1 Two-Batch Memory Evaluation", maxsplit=1)[
+        1
+    ].split("## 8.", maxsplit=1)[0]
+
+    assert "内网无需重复运行测试" in verification
+    if initialize_soc_dev:
+        assert "不需要重跑第一批或重新审核已有经验" not in runbook
+        assert "已经完成第一批、正在审核经验的部署请使用" not in runbook
+        assert "仍需重新运行第一批并审核本轮新经验" in verification
+        assert "不恢复旧结果、候选或经验" in evaluation
+        assert "如果升级后旧任务提示" not in evaluation
+        assert "本轮第一批及经验审核完成后" in evaluation
+    else:
+        assert "不需要重跑第一批或重新审核已有经验" in verification
+        assert "如果升级后旧任务提示" in evaluation
+        assert "继续审核经验或第二批验证" in evaluation
+
+
+def test_source_bundle_readme_documents_sixteen_capacity_and_local_control() -> None:
+    readme = transfer_builder._source_readme("20261008T000000Z", worktree_dirty=False)
+
+    assert "默认支持最多 16 条不同告警并行" in readme
+    assert "运行设置" in readme
+    assert "`1～16`" in readme
+    assert "调整容量时必须同步修改" not in readme
 
 
 def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
@@ -524,6 +562,23 @@ def test_transfer_runbook_requires_explicit_fresh_validation_request(
         assert ("reset-dev-data --confirm RESET-SOC-DEV" in content) is (
             mode == "reinitialize"
         )
+        assert "两个并发值必须都是 `16`" in content
+        assert "Host DEV 默认允许最多 16 条不同告警并行研判" in content
+        assert "选择 `1～16`" in content
+        if mode == "reinitialize":
+            assert (
+                "未保存本机并发设置时，本次全新 SOC DEV 默认以 `16` 开始验证" in content
+            )
+            assert "保存为 `2`，再恢复运行" not in content
+            assert (
+                content.index("## 6. Execution Plane Preflight")
+                < content.index("reset-dev-data --confirm RESET-SOC-DEV")
+                < content.index("## 7. Start Host DEV")
+            )
+            assert "账号、STG、原始语料、配置和私钥保持不变" in content
+            assert "Verified stopped-checkout backup" in content
+        else:
+            assert "保存为 `2`，再恢复运行" in content
     runbook = Path(report["runbook"]["path"]).read_text(encoding="utf-8")
     if initialize_soc_dev:
         assert "仅在明确决定从零重新验证时" in runbook
@@ -951,7 +1006,9 @@ def test_transfer_installer_hash_failure_preserves_old_checkout(tmp_path: Path) 
     assert not (home / "old-host-stopped").exists()
 
 
-def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:
+def test_private_overlay_config_accepts_sixteen_concurrency_profile(
+    tmp_path: Path,
+) -> None:
     _write_private_profiles(tmp_path)
 
     _assert_private_overlay_config_ready(tmp_path)
@@ -965,6 +1022,12 @@ def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) 
         {
             "SOC_LLM_MAX_CONCURRENCY": "3",
             "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "3",
+        },
+        {"SOC_LLM_MAX_CONCURRENCY": "8"},
+        {"SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "8"},
+        {
+            "SOC_LLM_MAX_CONCURRENCY": "8",
+            "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "8",
         },
     ],
 )
@@ -1268,10 +1331,10 @@ database:
             "SOC_PINGAN_MODEL_GATEWAY_API_KEYS": "loopback-test-key",
             "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
             "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
-            "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "8",
+            "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "16",
             "SOC_ANALYZER_MODE": "llm",
             "SOC_LLM_MODEL": "deepseek-v4-flash",
-            "SOC_LLM_MAX_CONCURRENCY": "8",
+            "SOC_LLM_MAX_CONCURRENCY": "16",
             "SOC_PINGAN_COMPAT_ENABLED": "true",
             "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
             "SOC_PINGAN_COMPAT_PORT": "8090",

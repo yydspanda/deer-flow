@@ -630,7 +630,7 @@ def build_start_command(
         + f"export SOC_DEV_MEMORY_WORKBENCH_ENABLED={workbench_enabled}; "
         f"export SOC_DEV_CORPUS_WORKBENCH_ENABLED={workbench_enabled}; "
         f"export SOC_DEV_CORPUS_LOCAL_CONTROL_ONLY={workbench_enabled}; "
-        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-8}"; '
+        'export SOC_LLM_MAX_CONCURRENCY="${SOC_LLM_MAX_CONCURRENCY:-16}"; '
         'export SOC_LLM_ADMISSION_TIMEOUT_SECONDS="${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-180}"; '
         'export SOC_DEV_MEMORY_CORPUS_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"; '
         'export SOC_DEV_CORPUS_WORKBENCH_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"; '
@@ -730,7 +730,7 @@ def prepare_soc_database(
     database_path = (root / SOC_DATABASE_RELATIVE_PATHS[runtime_environment]).resolve()
     database_url = f"sqlite+pysqlite:///{database_path}"
     resolved = dict(environment)
-    resolved.setdefault("SOC_LLM_MAX_CONCURRENCY", "8")
+    resolved.setdefault("SOC_LLM_MAX_CONCURRENCY", "16")
     resolved.setdefault("SOC_LLM_ADMISSION_TIMEOUT_SECONDS", "180")
     resolved.update(
         {

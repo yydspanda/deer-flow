@@ -154,13 +154,18 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > binds Gateway/Next to loopback while nginx remains the shared LAN entry.
 > Explicit experiment APIs enforce the same current-plan settings; creating another
 > experiment or selecting a historical plan cannot bypass the host-only controls.
-> PingAn Host DEV defaults to eight concurrent alerts. On the deployment Mac, open
-> **运行设置 → 最大并发** to save a limit from 1 to 8 without restarting or resuming a
+> PingAn Host DEV defaults to sixteen concurrent alerts. On the deployment Mac, open
+> **运行设置 → 最大并发** to save a limit from 1 to 16 without restarting or resuming a
 > paused batch. A reduction lets active tasks finish before admitting more; an increase
 > takes effect on subsequent claims. Both batches, manual runs and background drafting
 > share this saved limit; LAN colleagues see it but cannot change it. It survives restart
 > and data-preserving upgrades without changing queued jobs or reviewed Memory. The
-> deployment model gateway stays capped at eight; chat also shares that model capacity.
+> deployment model gateway stays capped at sixteen; chat also shares that model capacity.
+> For an explicitly requested fresh validation, build with `--initialize-soc-dev` and
+> follow `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`: archive the old SOC DEV database,
+> start an empty database, rerun first-batch learning and review, then validate against
+> only that experiment's newly reviewed Memory. Existing lower capacity settings survive
+> the reset; save 16 on the deployment Mac before starting this validation.
 > Local SOC SQLite waits for competing writes and enables WAL only on a SQLite runtime
 > with the WAL-reset fix (3.51.3+, 3.44.6 or 3.50.7 maintenance branches). Older DELETE-mode
 > databases keep their journal mode; existing WAL on an affected version requires upgrading

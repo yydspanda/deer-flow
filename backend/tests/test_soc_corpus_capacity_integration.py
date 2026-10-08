@@ -45,6 +45,29 @@ def test_host_capacity_save_survives_restart_and_needs_no_database_writer(tmp_pa
     assert not calls and not app.dispatcher.is_running
 
 
+def test_host_accepts_sixteen_rejects_seventeen_and_exposes_saved_limit(tmp_path, monkeypatch):
+    remote, app, calls = client(tmp_path)
+    local = TestClient(remote.app, client=("127.0.0.1", 1234))
+    monkeypatch.setenv("SOC_DEV_CORPUS_LOCAL_CONTROL_ONLY", "true")
+    path = tmp_path / "capacity.json"
+    app.service.capacity = CorpusCapacity(ceiling=16, path=path)
+
+    response = local.post(ROOT + "/experiments/concurrency", json={"max_concurrency": 16})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"max_concurrency": 16, "concurrency_limit": 16}
+    saved = path.read_bytes()
+    rejected = local.post(ROOT + "/experiments/concurrency", json={"max_concurrency": 17})
+    assert rejected.status_code == 422
+    assert path.read_bytes() == saved
+
+    app.service.capacity = CorpusCapacity(ceiling=16, path=path)
+    for batch in ("learning", "validation"):
+        data = remote.get(ROOT + "/experiments/configuration?batch=" + batch).json()
+        assert (data["max_concurrency"], data["concurrency_limit"]) == (16, 16)
+        assert data["can_configure"] is False
+    assert not calls and not app.dispatcher.is_running
+
+
 @pytest.mark.parametrize("value", [0, 9, 2.5, "2", True])
 def test_invalid_capacity_never_changes_active_value(tmp_path, value):
     http, app, _ = client(tmp_path)
@@ -109,4 +132,36 @@ def test_lowering_running_eight_to_two_drains_then_raising_uses_existing_queue(t
         release_all.set()
         dispatcher.stop()
     assert len(started) == len(set(started))
+    assert svc.store.round_progress(round_.round_id).counts.get("failed", 0) == 0
+
+
+def test_dispatcher_admits_sixteen_calls_and_fences_the_seventeenth(tmp_path):
+    repo = repository(tmp_path)
+    repo.corpus_experiments().prepare(experiment(), [m.model_copy(update={"group_id": "group-" + m.alert_id}) for m in members(20)])
+    capacity = CorpusCapacity(ceiling=16)
+    release, lock = Event(), Lock()
+    started = []
+
+    def execute(round_, member, request):
+        with lock:
+            started.append(member.alert_id)
+        assert release.wait(15)
+        return CorpusExecutionOutcome(run_id="RUN-" + member.alert_id)
+
+    svc = SocCorpusExperimentService(repository=repo, execute=execute, configuration_provider=lambda _: {"model": "fake"}, max_concurrency=16, capacity=capacity)
+    round_ = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning"), concurrency=16, execution_limit=20), context=context())
+    svc.start(round_.round_id, context=context())
+    dispatcher = CorpusExperimentDispatcher(svc, max_concurrency=16, interval_seconds=0.02)
+    try:
+        dispatcher.start()
+        wait_for(lambda: len(started) == 16)
+        assert svc.store.active_job_count() == 16
+        assert not svc.execute_one(round_.round_id)
+        assert len(started) == 16
+        assert svc.store.round_progress(round_.round_id).counts.get("queued", 0) >= 1
+    finally:
+        svc.pause(round_.round_id, context=context())
+        release.set()
+        dispatcher.stop()
+    assert len(started) == len(set(started)) == 16
     assert svc.store.round_progress(round_.round_id).counts.get("failed", 0) == 0

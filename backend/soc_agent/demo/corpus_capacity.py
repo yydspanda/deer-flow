@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import RLock
 
 _SCHEMA_VERSION = "soc.corpus_capacity.v1"
-_MAX_CONCURRENCY = 8
+_MAX_CONCURRENCY = 16
 
 
 class CorpusCapacity:
@@ -68,7 +68,7 @@ class CorpusCapacity:
                 raise ValueError("unsupported schema_version")
             value = payload.get("max_concurrency")
             if type(value) is not int or not 1 <= value <= _MAX_CONCURRENCY:
-                raise ValueError("max_concurrency must be an integer between 1 and 8")
+                raise ValueError(f"max_concurrency must be an integer between 1 and {_MAX_CONCURRENCY}")
         except (ValueError, TypeError) as exc:
             raise ValueError(f"Invalid corpus capacity file {self._path}: {exc}") from exc
         return min(value, self._ceiling)

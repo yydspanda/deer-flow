@@ -336,8 +336,9 @@ generic `soc_agent` code.
   Lifecycle/callback provider modes must be switched together by the governed mode command.
 - The model gateway uses one process-local capacity semaphore; launch exactly one gateway
   process. The PingAn Host profile keeps the gateway and SOC Runtime limits aligned at
-  eight concurrent model calls. Refresh both values in the private profile for a new
-  handoff; an explicit existing value is not overridden by the Host's fallback.
+  sixteen concurrent model calls in both generated DEV and STG profiles. Refresh both
+  values in the private profile for a new handoff; an explicit existing value is not
+  overridden by the Host's fallback.
   The SQLite-backed legacy compatibility Worker remains
   single-worker and is a separate queue boundary.
 - The EAGW route returns complete, non-streaming completions. The PingAn DeerFlow model

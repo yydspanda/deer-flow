@@ -149,19 +149,24 @@ beforeEach(() => {
 });
 
 describe("SOC corpus process API", () => {
-  test("concurrency saves only the global limit through the typed command endpoint", async () => {
-    const saved = { max_concurrency: 4, concurrency_limit: 8 };
-    mockedFetch.mockResolvedValueOnce(jsonResponse(200, saved));
-    expect(await updateSocCorpusConcurrency(4)).toEqual(saved);
-    expect(mockedFetch.mock.calls[0]?.[0]).toBe(
-      "/api/soc/dev/corpus-workbench/experiments/concurrency",
-    );
-    expect(firstFetchInit().method).toBe("POST");
-    expect(firstFetchInit().body).toBe(JSON.stringify({ max_concurrency: 4 }));
-    expect(new Headers(firstFetchInit().headers).get("Content-Type")).toBe(
-      "application/json",
-    );
-  });
+  test.each([4, 16])(
+    "concurrency saves %i through the typed command endpoint",
+    async (capacity) => {
+      const saved = { max_concurrency: capacity, concurrency_limit: 16 };
+      mockedFetch.mockResolvedValueOnce(jsonResponse(200, saved));
+      expect(await updateSocCorpusConcurrency(capacity)).toEqual(saved);
+      expect(mockedFetch.mock.calls[0]?.[0]).toBe(
+        "/api/soc/dev/corpus-workbench/experiments/concurrency",
+      );
+      expect(firstFetchInit().method).toBe("POST");
+      expect(firstFetchInit().body).toBe(
+        JSON.stringify({ max_concurrency: capacity }),
+      );
+      expect(new Headers(firstFetchInit().headers).get("Content-Type")).toBe(
+        "application/json",
+      );
+    },
+  );
   test("configuration reads include the selected batch and retain the legacy URL", async () => {
     mockedFetch.mockImplementation(async () => jsonResponse(200, {}));
     await getSocCorpusExperimentConfiguration("validation");

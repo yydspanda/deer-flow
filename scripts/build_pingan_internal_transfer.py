@@ -1096,10 +1096,10 @@ def _assert_private_overlay_config_ready(root: Path) -> None:
         "SOC_PINGAN_MODEL_GATEWAY_PORT": "4001",
         "SOC_PINGAN_MODEL_GATEWAY_MODEL_ALIAS": "deepseek-v4-flash",
         "SOC_PINGAN_MODEL_GATEWAY_PROVIDER": "eagw",
-        "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "8",
+        "SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY": "16",
         "SOC_ANALYZER_MODE": "llm",
         "SOC_LLM_MODEL": "deepseek-v4-flash",
-        "SOC_LLM_MAX_CONCURRENCY": "8",
+        "SOC_LLM_MAX_CONCURRENCY": "16",
         "SOC_PINGAN_COMPAT_ENABLED": "true",
         "SOC_PINGAN_COMPAT_HOST": "0.0.0.0",
         "SOC_PINGAN_COMPAT_PORT": "8090",
@@ -1528,8 +1528,12 @@ def _transfer_runbook(
             "仅在明确决定从零重新验证时使用本手册。先停止并卸下旧项目服务，备份后由安装器替换旧项目代码，\n"
             "再显式归档重置 SOC DEV：告警结果、第一批/第二批任务、经验、草稿和审核记录从空库开始。\n"
             "账号库、STG 数据库和仓库外原始语料保留；Mac 的 Python、Node、nginx 等基础工具无需卸载。\n"
-            f"**已经完成第一批、正在审核经验的部署请使用[保留数据升级手册]({TRANSFER_RUNBOOK_NAME})。**\n"
-            "提供这份说明不代表当前部署已获准清空数据。"
+            "已明确要求从零验证时，即使旧部署已有第一批或审核成果，也按本手册重新积累。\n"
+            f"**如要保留这些成果，请改用[保留数据升级手册]({TRANSFER_RUNBOOK_NAME})。**"
+        )
+        compatibility_followup = (
+            "内网无需重复运行测试；本次从空库验证仍需重新运行第一批并审核本轮新经验，"
+            "再用这些新经验验证第二批。"
         )
         install_sequence = (
             "仅在明确决定从零重新验证时：先按本节停服、备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
@@ -1580,7 +1584,18 @@ BASH
         database_recovery = "服务尚未启动；保留已有数据库排查。查明原因后重试；需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置"
         batch_start_instruction = (
             "已完成本手册第 6.1 节重置时，直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节；\n"
-            "仅尚未重置且另外明确要求从零验证时才执行其第 1.1 节，常规部署和续跑不清库。"
+            "本轮从新的第一批开始，不恢复旧结果、候选或经验。仅尚未重置时才执行批次手册第 1.1 节，\n"
+            "后续重启、续跑和第二批开始都不再次重置。"
+        )
+        batch_restart_instruction = (
+            "本轮第一批及经验审核完成后，如以后只需重跑第二批，再使用“重新配置并全部重跑”。\n"
+            "先暂停并等待运行中为0，确认完整设置后点击“全部重新运行”；该操作保留本轮第一批及已审核经验，\n"
+            "旧的第二批结果保留在历史中，不能替代本次空库初始化。逐步操作见项目内 `docs/soc-validation-restart.md`。"
+        )
+        capacity_instruction = (
+            "未保存本机并发设置时，本次全新 SOC DEV 默认以 `16` 开始验证，无需先调低。\n"
+            "已保存的较低并发设置仍保留；若页面显示旧值，开始本次从零验证前，\n"
+            "在部署 Mac 本机的运行设置中将“最大并发”保存为 `16`，确认页面上限后再开始积累。"
         )
     else:
         title = "内网 Mac DEV：保留数据升级"
@@ -1590,6 +1605,9 @@ BASH
             "请先保存正在编辑的审核草稿，暂停同事操作，记下第一批完成数量、待审核及已审核经验，\n"
             "再按本篇停服备份、替换代码、恢复语料、安装依赖和启动。整个流程保留数据库，不重新积累第一批。\n"
             f"仅另外决定从零验证时才使用[完全初始化重新部署手册]({TRANSFER_REINITIALIZE_RUNBOOK_NAME})。"
+        )
+        compatibility_followup = (
+            "内网无需重复运行测试，也不需要重跑第一批或重新审核已有经验。"
         )
         install_sequence = (
             "本手册保留运行数据：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
@@ -1613,6 +1631,18 @@ BASH
         batch_start_instruction = (
             "已有第一批积累成果时，继续审核经验或第二批验证，跳过批次手册第 1.1 节重置。\n"
             "若仍有升级前排队任务，先按第 6.1 节处理配置版本提示；本次升级不重新初始化已有数据。"
+        )
+        batch_restart_instruction = (
+            "如果升级后旧任务提示 `configuration_changed`，继续仍使用旧任务的冻结配置，不会自动改成新配置。\n"
+            "要让第二批按新设置从头运行，先暂停并等待运行中为0，再点击“重新配置并全部重跑”，\n"
+            "确认完整设置后点击“全部重新运行”。成功、失败和未运行告警全部重新排队，浏览筛选不缩小范围。\n"
+            "第一批与审核经验保留，旧结果仍可在运行历史查看；当前批次按新任务重新计数。\n"
+            "逐步操作见项目内 `docs/soc-validation-restart.md`，不需要停服清理数据库。"
+        )
+        capacity_instruction = (
+            "保留数据升级继续使用已保存的本机并发设置。若旧库曾出现数据库锁等待，\n"
+            "升级后可先在本机把“最大并发”保存为 `2`，再恢复运行，\n"
+            "观察页面响应和任务结果正常后逐步调高；减少并发不能保证消除其他长事务造成的锁等待。"
         )
     return f"""# {title}
 
@@ -1683,7 +1713,7 @@ cat "{report_name}"
 `required_source_inventory_complete=true` 和 `compatibility_check.status=passed`。
 `compatibility_check` 记录旧记录展示、已审核经验复用与越界拒绝的离线检查结果，
 同时绑定本包源码 commit、文件指纹和源码归档 SHA-256。打包程序已自动完成这些检查，
-内网无需重复运行测试，也不需要重跑第一批或重新审核已有经验。
+{compatibility_followup}
 `default_runbook` 标明本次推荐入口；`reset_soc_dev_requested` 是交付选择，
 两份说明文件同时存在不代表应当重置。`runbooks` 分别记录两份文档的 SHA-256。
 
@@ -1766,7 +1796,7 @@ backend/.deer-flow/soc-internal-validation
 
 新 private overlay 中的配置、凭证与 `pingan-context` 仍以本次交付为准，**会覆盖内网旧配置**。
 如果上次部署后曾在内网调整端点、凭证或 Provider 配置，安装前先与本次私有包核对并保存差异；
-不要把旧 env 整体覆盖回来，以免恢复旧并发或过期配置。本次要求两个并发值都是 `8`。
+不要把旧 env 整体覆盖回来，以免恢复旧并发或过期配置。本次要求两个并发值都是 `16`。
 旧 PID、日志、技能投影、临时缓存和旧安装包不会迁入新 checkout。
 
 ```bash
@@ -1900,7 +1930,7 @@ grep -E '^export (SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY|SOC_LLM_MAX_CONCURREN
 grep -n 'disable_streaming: true' config.pingan-dev.local
 ```
 
-三个权限必须都是 `600`，两个 mode 必须都是 `fake`，两个并发值必须都是 `8`，并且模型配置必须
+三个权限必须都是 `600`，两个 mode 必须都是 `fake`，两个并发值必须都是 `16`，并且模型配置必须
 包含 `disable_streaming: true`。该设置让 EAGW 完整响应通过 LangChain 作为一个 buffered chat message
 返回，避免聊天向 loopback gateway 发送不支持的 `stream=true`。初始项目 DEV 已同时激活 ZEUS PRD 和
 Agent Platform PRD；私有 env 保存 ZEUS PRD/STG 两套受保护 profile，以及 Agent Platform PRD profile
@@ -2126,19 +2156,18 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon --demo-no-auth
 `--demo-no-auth` 仅用于可信内网演示：页面跳过注册/登录，所有访问者共享一个合成管理员身份，
 因此不能区分个人审计 actor。需要验收账号与权限时，先停止服务，再去掉该参数启动；无需改代码或数据库：
 
-Host DEV 默认允许最多 8 条不同告警并行研判；同一告警的重复点击不会再次进入 Runtime/LLM。
+Host DEV 默认允许最多 16 条不同告警并行研判；同一告警的重复点击不会再次进入 Runtime/LLM。
 部署 Mac 本机打开 `http://localhost:2026/workspace/soc/corpus-validation`，进入“运行设置”，
-在“最大并发”中选择 `1～8` 并点击“保存并发”。保存后直接生效，无需重启或重新准备批次；
+在“最大并发”中选择 `1～16` 并点击“保存并发”。保存后直接生效，无需重启或重新准备批次；
 第一批、第二批、单条运行和后台经验起草共用此上限。调低时让已开始的任务完成，再按新上限补位；
 调高后按新上限领取后续任务。暂停中的批次仍保持暂停，需要继续时点击“继续”。
 同事通过局域网可看到新上限并运行、暂停，但不能修改并发。设置随数据库同目录的小型配置文件保存，
 服务重启及保留数据升级后继续生效；不改变已完成结果、已审核经验、排队任务或匹配规则。
-部署配置中的 `SOC_LLM_MAX_CONCURRENCY` 和 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` 仍保持 `8`，
+部署配置中的 `SOC_LLM_MAX_CONCURRENCY` 和 `SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` 仍保持 `16`，
 无需为页面调节而修改 env；后者是聊天与研判共享的最终容量门。
 SQLite 下的 `SOC_PINGAN_LEGACY_WORKER_CONCURRENCY` 仍固定为 `1`，仅控制 ZEUS 持久任务取件速度。
 同类组顺序和共享模型容量可能使实际运行数小于设定上限；页面显示当前占用与上限。
-本次内网已出现数据库锁等待，升级后建议先在本机把“最大并发”保存为 `2`，再恢复运行，
-观察页面响应和任务结果正常后逐步调高；减少并发不能保证消除其他长事务造成的锁等待。
+{capacity_instruction}
 
 ```bash
 export TARGET_REPO="$HOME/deer-flow"
@@ -2180,12 +2209,8 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 同事通过局域网地址仍可启动、暂停或重跑，沿用该批次最后保存的配置；无运行记录时使用部署默认值。
 本机新选择随提交运行保存，已排队任务保留原配置。Host DEV 自动限制内部服务监听，正常启动命令不变。
 刷新页面会恢复当前批次服务器保存的设置；两批分别保存配置，第一批开启语义核对不代表第二批自动开启。
-如果升级后旧任务提示 `configuration_changed`，继续仍使用旧任务的冻结配置，不会自动改成新配置。
-要让第二批按新设置从头运行，先暂停并等待运行中为0，再点击“重新配置并全部重跑”，
-确认完整设置后点击“全部重新运行”。成功、失败和未运行告警全部重新排队，浏览筛选不缩小范围。
-第一批与审核经验保留，旧结果仍可在运行历史查看；当前批次按新任务重新计数。
-逐步操作见项目内 `docs/soc-validation-restart.md`，不需要停服清理数据库。
 {batch_start_instruction}
+{batch_restart_instruction}
 无需逐条填写 alert ID，也不要重新运行旧 ZEUS
 live acceptance 来启动演练。历史语料任务不查询/回写 ZEUS，不执行真实处置。
 第一批2,997条、第二批主要验证8,520条、补充3,764条；原始15,288条语料保留，
@@ -2346,9 +2371,10 @@ manifest/index before copying them into the checkout. Large PKL and Workbench
 payload SQLite files are not part of either transfer archive.
 
 `--demo-no-auth` 仅用于可信 DEV 演示；全部访问者共享一个合成管理员身份。正式身份与权限验收时去掉该参数。
-告警演练默认支持最多 8 条不同告警并行，同一告警由服务端防重；调整容量时必须同步修改
+告警演练默认支持最多 16 条不同告警并行，同一告警由服务端防重；部署 Mac 本机可在运行设置中
+选择 `1～16` 并保存，已有的较低设置保留，无需修改 env 或重启。
 `.env.soc-dev.local` 的 `SOC_LLM_MAX_CONCURRENCY` 与
-`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY`。PingAn model profile 使用
+`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` 保持 `16`。PingAn model profile 使用
 `disable_streaming: true` 适配 EAGW 的完整响应，聊天可用但不提供 token-by-token 输出。
 
 The separately transferred Apple Silicon offline toolchain remains a fallback

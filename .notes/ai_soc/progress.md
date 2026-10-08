@@ -3,10 +3,10 @@
 ## Current Pointer / 当前指针
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 真实内网集成验收继续保持未关闭。用户已确认内网第二批全量验证完成，当前在分组抽查经验使用和历史处置差异；第一批及已审核经验继续保留。本机2453332真实复验已生成来源验证的同事务HTTP核心条件；2456233服务证据读取及受治理参考召回已优化；保存事实只读重放恢复缺失的3项条件，最新事实完整匹配原范围；仍不以单条证明所有告警匹配质量。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
-- **Next Gate:** 用户已确认2456233新候选显示4项检测行为与对象，后续继续人工审核及跨告警经验匹配验证；历史保存条件保持不变，旧候选和已审核经验不自动迁移。内网更新仍需用户安排打包及保留数据升级，绑定最终提交重新执行交付门禁。`PI-01H / D12-B` 仍需 ZEUS 上游真实调用、callback/旧页面回读及资产/TI/标签的真实 Provider 证据，外网模拟不能替代。
+- **Current Objective:** `PI-01H / D12-B` 真实内网集成验收继续保持未关闭。用户已完成2026-09-24固定报告的共同解读，评价重点改为经验利用与建议分流。当前按明确授权准备新版完整交付及SOC DEV空库重新验证，Runtime、模型网关及工作台最大并发统一16；本轮不导入旧结果、候选或已审核经验，第一批重新积累和审核后再冻结本轮新经验验证第二批。受治理部署映射仍为项目 `DEV -> ZEUS PRD + Agent Platform PRD`、项目 `STG -> ZEUS STG + Agent Platform STG`。
+- **Next Gate:** 交付包须绑定干净提交并通过强制历史兼容门禁，配套选择重新初始化手册。内网按停服备份、安装、预检、归档重置DEV、首次启动和并发16核对执行，再跑两批；旧报告及备份仅用于对照和恢复，不回灌本轮活动库。实际16并发吞吐、模型质量及空库全量收益待内网复跑；`PI-01H / D12-B` 的ZEUS上游真实调用、callback/旧页面回读及真实Provider证据仍独立验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-10-08`
+- **Last Updated:** `2026-10-09`
 ## Current Constraints / 当前约束
 | Boundary | Current fact |
 |---|---|
@@ -17,6 +17,13 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+### 2026-10-09 — Sixteen-slot fresh PingAn validation handoff
+- **Task:** `PI-03E`
+- **Status:** `Done`
+- **Outcome:** 工作台容量和修改API允许1～16，17拒绝；PingAn私有配置生成和Host缺省同时设Runtime/模型网关16，普通通用默认及SQLite兼容Worker不扩大。旧1～8设置可读取，较低部署上限仍生效，已有独立容量文件不随DEV重置删除。重新初始化教程明确首次运行前保存16，重新积累第一批并人工审核，第二批仅用本轮新经验；修正共享模板内“无需重跑第一批”的升级文案泄漏。旧build-17c3a753目录按用户指令删除。
+- **Verification:** TDD先红后绿；后端容量/API/实际16路模拟调度/持久化/私有Profile等95项通过；Host和交付脚本143项、随后教程修订80项通过（重叠）；前端两文件76项及格式检查通过。阻塞I/O119项通过；全量后端fail-fast为302通过、6跳过后停在既有前端SOC指南46043字节超过40960预算，HEAD同样超限，未宣称全仓通过。完整前端ESLint/TypeScript检查通过；绑定提交兼容回执和归档检查随交付记录保存。
+- **Boundary:** 本机仅更新代码、受保护私有配置和交付材料，不调用真实模型或修改业务库。旧报告保持冻结。正式包身份及门禁以internal-transfer中的transfer-report为准；内网安装、归档重置和两批复跑由操作员按重新初始化教程执行，本地模拟不代表内网16并发容量已验收。
+
 ### 2026-10-08 — Deterministic HIDS process facts and bounded semantic supplements
 - **Task:** `PI-03E`
 - **Status:** `Done`
@@ -89,152 +96,5 @@
 09-15 `PI-03E` 企业规则前置、精确 Memory 直接复用：确定性 enforced 忽略/转交可跳过全部模型；否则保留语义核对并复查，精确审核 override 可跳过主研判/角色复核。待定模型依赖规则保留优先级，完整指令集合冲突贯穿后置治理；v3 行为勾选保持有效。直接结果不伪造 Base/置信度，共用存储、回传、反馈、动作出口，使用不算新独立 Pattern 样本。133 项后端回归、后续 77 项及最终 17 项专项（有重叠）、10 项前端组件、桌面/手机浏览器通过；既有192→191快照问题保留。后续2546323暴露直接策略分支遗漏请求环境：原运行676ms、零模型调用已完成，工作台却无法识别；现前置绑定环境，旧结果仅按冻结策略范围恢复只读展示，轨迹不再等待不需要的Pattern步骤。详见[完整方案](architecture/direct-resolution-design.md)、[流程图](governance/decision-to-policy-flow.md)与月度归档。无真实模型/内网调用、清库或经验迁移，PI-01 指针不变。
 09-15 `PI-03E` Memory 适用条件改造：固定范围只读、核心行为全展开默认全选；v3 按审核选择逐项匹配，不再强制来源完整 hash 相同，去重排序不受顺序影响。额外限制只收窄直接复用，源/目标 AND，参考经验仍可影响模型判断；旧 Memory/索引不迁移。167 项后端、7 项组件、3 项浏览器测试及两个真实候选四次只读检查通过；六个范围变体是模拟，无真实模型/业务写入，不代表准确率提升。见[方案与剩余工作](architecture/memory-applicability-design.md)及月度归档，内网指针不变。
 09-15 `PI-03E` 外网默认切 GlobalAI V4.1 Flash、关闭 thinking、24576输出预算，内网不改。先前六例121项离线投影通过；随后用户确认网页切 apply，修正按保存模式读取 Profile、按实际签名读取观察及重跑去重。2448412真实全流程16.073秒完成，17项补充进入模型输入和新经验条件；2651342两次24项合入成功，但主研判被中转空SSE响应阻断，两次检测对象绑定不同，指纹稳定性待审。122项后端、1项新组件、3项浏览器测试通过；未创建/审核新Memory或重建索引。1984510对象归属隔离、旧快照192→191、32组全面验收、maintenance降噪、邮件尾项保留。不宣称全面准确率提升。详见[月度归档](../archive/ai_soc/progress/2026-09.md)与[方案](architecture/normalization-assistance-design.md)，内网指针不变。
-### 2026-09-08 — Explain decision lineage and concrete handling progress
 
-- **Task:** `PI-04C`
-- **Status:** `Done`
-- **Outcome:** Effective policy v3 将 Tenant Policy 的 `unknown` 作为未选择处置，而非新处置；保留前一阶段 Base/Memory 的处理建议和完整原始策略审计。企业单独要求排查不再显示为关键事实失败，独立的 materiality/conflict 仍受限。Web、语料历史对比、ZEUS 回传共用处置分类；建议与实际执行进度分离。旧记录只读重投影，不重写数据库或重新调用模型。
-- **Verification:** 96 项后端结果、策略、Memory/自动化、语料与兼容回归、12 项架构检查，以及 5 项前端组件测试、lint/type-check 通过。只读核对现存 `2471269` 和 `2502512`，并在桌面/移动尺寸点击验证：前者保留可疑/75%及原始主机排查建议，后者保留误报/82%及企业强制转交要求；没有真实模型或外部处置调用。
-  后续同一项优化将 Prompt v39 / public triage Skill 中的已审核经验与普通历史标签分开，使用可选
-  `conclusion_support` 在同次研判中说明已解决问题、可选补充和未来重判条件。Parser v25 校验冻结
-  M-* 引用，无效说明独立丢弃；真实缺口/反证不清除。页面将非阻断补充与未用动作能力放入展开
-  记录，并区分本次实际读取/引用的 Memory 与同类组沉淀记录，修复版本化 source_id 被当作链接 ID。
-  当前接口只读核对 `2448168`：确实引用 `MEM-52B94F38659F@v4` 的 context-only 经验，保留误报
-  结论及企业转交要求，不再因未使用的目标能力显示结论受限。旧 Run 不伪造新说明；本轮不跑真实模型。
-  本次新增路径通过 140 项后端 Prompt/parser/analyzer/outcome/架构回归、8 项前端组件测试及前端
-  lint/type-check；只读浏览器在 1440/390 宽度核对真实保存结果、经验链接和折叠记录，无业务写请求。
-  09-08 继续细分处理进度：结构/引用、关键输入、事实/角色/决策分歧分别说明；后续处理区分
-  方案已确定、转交待确认、动作待执行/失败/跳过/成功待最终反馈。策略忽略或单个动作成功不再
-  直接显示告警结案；使用当前 Run/alert 已映射终态反馈。页面展示服务端进度依据，技术审计表
-  补齐处置方案、复核要求和建议。全部分支与 `1966558` 实例见 `governance/decision-to-policy-flow.md`。
-  90 项后端结果/策略/兼容/架构回归和 10 项前端组件测试通过；只读投影，不修改 verdict、策略、
-  数据库或增加模型调用。8 张 Mermaid 图可解析渲染；1440/390 页面核对进度依据与阶段字段，
-  未发起 SOC 业务写请求，前端 lint/type-check 通过。
-  根据运营反馈继续简化为一份主处理结论：忽略/转交、采用依据和必要下一步。技术风险判断、
-  置信度、普通进度与非阻断疑点默认折叠；实质分歧、运行/动作失败仍可见。告警列表和过滤
-  读取服务端有效处置分类，不再显示 Base verdict 为最终结果；与详情、历史对比共用投影。
-  本次结果/兼容核心 64 项回归通过，语料/策略/架构另 57 项通过；前端 10 项组件测试及
-  lint/type-check 通过。只读浏览器在 1440/390 核对 `2502512`、`1966558` 单一主结论、
-  折叠后可查原始风险与决策阶段，无页面溢出、无 SOC 写请求；9 张流程图可渲染。
-  未重跑模型、清空数据库或改变 Memory/策略/动作权限，内部详细状态只保留作复盘。
-  09-09 补齐标记到处置的实际对应：普通缺口与可选能力限制不单独触发转交；未解决的结论级
-  问题即使保留误报 verdict 也显示转交确认、具体原因和下一步。Effective policy v4 保留这些
-  独立阻断，不采用忽略方案、不生成处置应用记录或动作授权；通用复核的明确策略授权仍可用。
-  旧受阻计划只留阶段审计，已发生的外部反馈不删。列表、详情、历史对比与 ZEUS 共用分类。
-  流程图明确 context-only Memory 在主模型前进入上下文、Base 已可使用它，之后是指令复用。
-  聚焦后端结果/自动化/回传 92 项及策略/materiality/架构/语料 64 项通过；50 张 Mermaid 图可解析，
-  其中 9 张处置图实际渲染通过。无真实模型调用、内网请求、数据库迁移、清空或重打包。
-  09-09 补齐新旧经验治理：候选审核展示已有业务结论及范围差异；同范围挑战合并待审任务，
-  不让模型可疑/企业转交自动推翻旧经验。启用端拦截同范围重复答案和相反答案、重叠范围相反指令，
-  审核人可在原页面选择旧经验并以一次确认原子修订，保留新旧 lineage、版本与审核审计。
-  AI 起草 Prompt v6 接收有界的新旧对照，没有新增每告警模型调用或必填理由。94 项聚焦后端回归、
-  3 项组件测试及 1440/390 两项浏览器演练通过；前端类型/lint 与后端格式检查通过。
-  PostgreSQL advisory-lock 路径尚未真实并发验收；现有数据不清空、不迁移或自动废止，Profile 不变。
-
-新旧经验治理、统一经验中心、AI 草稿编辑和适用范围 `EXP-20260910-memory-optional-values` 已归档至 [2026-09](../archive/ai_soc/progress/2026-09.md)；范围明细由后端核验，可选条件逐值选择，未改已有经验、指纹或审核权限。
-
-09-09 同项补齐检索后、主模型前的精确经验优先边界。`soc.memory_context_precedence.v1`
-将同检测/场景内与明确精确经验相反的 partial 经验放入运行级差异审计，不进入可引用 M-*、
-MemoryUse 或模型使用统计；没有精确答案仍可泛化，相互矛盾的精确答案不按分数选优。
-Prompt v40、75 项聚焦测试和真实保存请求 `2448168` 的三组隔离筛选对比通过。
-没有修改现存 Memory、增加模型调用或重写历史 Run；B 的相反审核结论为仿真，不是人工真值。
-
-#### Experiment — Exact Memory context precedence
-
-```json soc-experiment
-{
-  "experiment_id": "EXP-20260909-memory-context-precedence",
-  "task_id": "PI-04C",
-  "upstream_commit": "9146bfa03da1d8b463a54494d8e050771640008c",
-  "model": "none (saved real request; simulated opposite reviewed Memory; no inference)",
-  "config_hash": "sha256:7cdf592955f75adf3f27af9a7b95c583156681ff4bc65618b8b44209266a6b2d",
-  "config_basis": "backend/soc_agent/memory/retrieval.py; prompt soc-analysis-v40",
-  "data_hash": "sha256:9afd1669967c83eef4326a5e016d1cc19c5616ccd769dd887aaf245934056913",
-  "data_basis": "exported saved audit 2448168; Memory inventory hash and three simulated variants retained in comparison.json",
-  "hardware": "local Linux x86_64 CPU; Python 3.12.7; no GPU/model calls",
-  "command": "backend/.venv/bin/python validation/compact_zeus/memory/validate_memory_context_precedence.py --audit-file /tmp/soc-2448168-audit-current.json --memory-records /tmp/soc-memory-records-current.json --memory-id MEM-52B94F38659F --output-dir backend/.deer-flow/soc-validation/memory-context-precedence-20260909/final",
-  "metrics": {
-    "focused_tests_passed": 75,
-    "replay_cases_passed": 3,
-    "excluded_opposite_lessons_visible_in_prompt": 0,
-    "real_model_calls": 0,
-    "production_database_mutations": 0
-  },
-  "artifacts": "backend/.deer-flow/soc-validation/memory-context-precedence-20260909/final/comparison.json"
-}
-```
-
-09-09 同项修复待审修订的导航断点：经验详情与修订页按持久化 predecessor lineage
-查询已有候选，提供“继续审核修订”，不再展示重复创建入口。候选查询在数据库分页前
-按 `revision_of_memory_id` 过滤；旧记录无需迁移。只读确认实际 `MEM-52B94F38659F`
-对应待审 `MC-17407CB73CB8`，未代用户审核、删除、恢复使用或调用模型。
-
-#### Experiment — Pending Memory revision navigation
-
-```json soc-experiment
-{
-  "experiment_id": "EXP-20260909-memory-revision-navigation",
-  "task_id": "PI-04C",
-  "upstream_commit": "9146bfa03da1d8b463a54494d8e050771640008c",
-  "model": "none (read-only navigation; synthetic browser fixtures)",
-  "config_hash": "sha256:233a022714cd9d7e3fe126ef2113c0a330c7b07c9d02074e61e00fa788025002",
-  "config_basis": "frontend/src/components/workspace/soc/soc-memory-pending-revision.tsx",
-  "data_hash": "sha256:c567fce44794c0baf31748fdb5a95e12b69d6341f3f12524bee0b69649db5588",
-  "data_basis": "frontend/tests/e2e/soc-memory-pending-revision.spec.ts synthetic pending revision fixture",
-  "hardware": "Linux x86_64; Python 3.12.7; Node 24.14.0; Chromium; 1440/390px viewports",
-  "command": "cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:2026 PLAYWRIGHT_SKIP_WEB_SERVER=1 python3 ../scripts/pnpm.py exec playwright test tests/e2e/soc-memory-pending-revision.spec.ts --workers=1 --reporter=line",
-  "metrics": {
-    "backend_tests_passed": 37,
-    "frontend_component_tests_passed": 3,
-    "browser_tests_passed": 2,
-    "real_model_calls": 0,
-    "user_database_mutations": 0
-  },
-  "artifacts": "backend/.deer-flow/soc-validation/memory-revision-navigation-20260909"
-}
-```
-
-09-09 同项补齐“取消修订并恢复旧经验”：支持待审及最新已放弃修订。复用 review/activation Service，一次事务检查版本/有效期/发布冲突并恢复原使用方式，保留两项审计。失败整体回滚，重试不能撤销后来暂停；普通放弃仍保持暂停。
-审核页提供旧经验直达与确认恢复弹窗，成功后进入旧记录；context-only 不变为 Directive。18 项恢复测试、37 项修订/API 回归、3 项浏览器测试及类型/lint/格式检查通过。
-真实 `MC-17407CB73CB8` 只读确认已 rejected，未替用户恢复；运行 Gateway 已加载新增契约。
-
-#### Experiment — Cancel revision and restore old Memory
-
-```json soc-experiment
-{
-  "experiment_id": "EXP-20260909-memory-revision-restore",
-  "task_id": "PI-04C",
-  "upstream_commit": "9146bfa03da1d8b463a54494d8e050771640008c",
-  "model": "none (transactional synthetic fixtures and intercepted browser APIs)",
-  "config_hash": "sha256:77f96c93c5e7e5114c94f8b4546c1a064122da4c94915bccd456357ece3d6e9c",
-  "config_basis": "backend/soc_agent/core/service.py; working tree after d1dccd6598728b81856f25805bd042f9feba0cc3",
-  "data_hash": "sha256:be2fe7d0274f9bc3c7aacd9cbc125b95e04399cb328e9a4078f000a268b7d20d",
-  "data_basis": "backend/tests/test_soc_memory_revision_restore.py synthetic SQLite revisions",
-  "hardware": "Linux x86_64; Python 3.12.7; Node 24; Chromium at 1440/390px; no GPU",
-  "command": "backend/.venv/bin/pytest backend/tests/test_soc_memory_revision_restore.py -q --tb=short; cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:2026 PLAYWRIGHT_SKIP_WEB_SERVER=1 python3 ../scripts/pnpm.py exec playwright test tests/e2e/soc-memory-revision-restore.spec.ts --workers=1 --reporter=line",
-  "metrics": {
-    "restore_tests_passed": 18,
-    "existing_revision_router_tests_passed": 37,
-    "browser_tests_passed": 3,
-    "restore_test_duration_seconds": 61.21,
-    "browser_test_duration_seconds": 14.5,
-    "real_model_calls": 0,
-    "user_database_mutations": 0
-  },
-  "artifacts": "backend/.deer-flow/soc-validation/memory-revision-restore-20260909"
-}
-```
-
-## Update Contract / 更新约定
-
-1. 只能有一个 `Current Stage` 和一个 `In Progress Task`；两者必须引用权威 Roadmap。
-2. 每个近期记录必须包含一个 Roadmap task ID 和终态，不在这里复制方案、能力矩阵或长测试日志。
-3. 近期记录最多保留 10 条；超出后按完成日期移动到[月度归档](../archive/ai_soc/progress/README.md)。
-4. 每次实验必须附 `soc-experiment` JSON manifest，记录 upstream commit、模型、config/data SHA-256、硬件、精确命令和指标；格式见归档 README。
-5. 修改本文件或 Roadmap 后运行：
-
-   ```bash
-   python scripts/check_soc_progress.py
-   ```
-
-6. upstream ahead/behind 由 `.github/workflows/soc-project-governance.yml` 每周检查；behind 超过阈值必须先同步或形成显式兼容决策。
+更早记录见[归档索引](../archive/ai_soc/progress/README.md)及[2026-09月度归档](../archive/ai_soc/progress/2026-09.md)。

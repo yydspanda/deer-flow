@@ -258,4 +258,4 @@ class CorpusConcurrencyCommand(BaseModel):
     """Resource admission limit; never part of frozen alert behavior."""
 
     model_config = ConfigDict(extra="forbid")
-    max_concurrency: int = Field(ge=1, le=8, strict=True)
+    max_concurrency: int = Field(ge=1, le=16, strict=True)

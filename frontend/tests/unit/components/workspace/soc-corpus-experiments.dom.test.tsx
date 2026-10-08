@@ -432,23 +432,52 @@ test("a failed concurrency save keeps the acknowledged value and the draft for r
   expect(api.run).not.toHaveBeenCalled();
 });
 
+test("host can select and save sixteen when the deployment advertises that ceiling", async () => {
+  let capacity = 8;
+  api.configuration.mockImplementation(async () => ({
+    defaults: options,
+    can_configure: true,
+    max_concurrency: capacity,
+    concurrency_limit: 16,
+  }));
+  api.concurrency.mockImplementation(async () => {
+    capacity = 16;
+    return { max_concurrency: capacity, concurrency_limit: 16 };
+  });
+  mount({ controls });
+  const selector = await screen.findByRole("combobox", { name: "最大并发" });
+  expect(
+    within(selector)
+      .getAllByRole("option")
+      .map((option) => (option as HTMLOptionElement).value),
+  ).toEqual(Array.from({ length: 16 }, (_, index) => String(index + 1)));
+  expect(within(selector).queryByRole("option", { name: "17" })).toBeNull();
+  fireEvent.change(selector, { target: { value: "16" } });
+  expect(api.concurrency).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "保存并发" }));
+  await waitFor(() => expect(api.concurrency).toHaveBeenCalledWith(16));
+  await screen.findByText("当前生效：16");
+  expect(api.run).not.toHaveBeenCalled();
+});
+
 test.each(["configuration", "controls"])(
-  "LAN concurrency is read-only under %s permission",
+  "LAN can continue while concurrency stays read-only under %s permission",
   async (permission) => {
     api.configuration.mockResolvedValue({
       defaults: options,
       can_configure: permission !== "configuration",
-      max_concurrency: 4,
-      concurrency_limit: 8,
+      max_concurrency: 16,
+      concurrency_limit: 16,
     });
+    api.state.mockResolvedValue(restartState());
     mount({
       controls: { ...controls, can_configure: permission !== "controls" },
     });
-    expect(await screen.findByText("当前生效：4")).toBeTruthy();
+    expect(await screen.findByText("当前生效：16")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "最大并发" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存并发" })).toBeNull();
     expect(api.concurrency).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "开始积累" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
     await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
   },
 );
