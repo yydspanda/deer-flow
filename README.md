@@ -138,6 +138,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Optional `--exclude-failed` / `--exclude-semantic-failed` produce a separate effect
 > report excluding failed jobs and/or failed semantic reviews, with a deduplicated
 > exclusion receipt and recomputed evaluation denominators. The original report is preserved.
+> Current deployment packages include these scripts; optional standalone delivery uses one
+> `VALIDATION-REPORT-TO-TRANSFER` folder for both full and filtered reports.
 > `scripts/soc_memory_snapshot_audit.py` exports one Memory's fixed-snapshot membership,
 > review/activation evidence and source links without models or database writes; current
 > state and missing historical proof remain distinct.

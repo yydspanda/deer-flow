@@ -4,16 +4,21 @@
 工具只读取本地数据库，生成报告和 Excel 可打开的 CSV；不调用模型、不重跑告警、
 不修改数据库或经验，不需要重新安装应用或修改服务配置。Python 3.12 即可运行，无需安装依赖。
 
-单条经验已确认却未进入固定快照时，使用独立的
+新版部署包已包含报告脚本，可以直接从项目运行，无需另外传输工具。
+独立工具只保留 `VALIDATION-REPORT-TO-TRANSFER` 一个目录：默认生成全量报告，
+加失败排除参数生成效果汇报版，两种模式使用同一套脚本。
+
+仅在需要核查单条经验已确认却未进入固定快照时，手动使用独立的
 `scripts/soc_memory_snapshot_audit.py` 一次提取轮次、候选、经验、启停审计和首批来源关联。
 工具仅用 Python 标准库，可单独复制到 Mac；`--root` 指向已安装项目，默认读取其 SOC DEV
 SQLite，也可用 `--database` 指定已有本地副本。不存在的库不会创建，指定轮次不存在时不会
-回退到别的轮次。以下为本次红队组核查命令（从项目根目录运行；工具另放时改脚本路径）：
+回退到别的轮次。以下是可选核查示例，不属于常规报告步骤，也不会自动执行。
+运行前将三个占位符替换为本次实际 ID；从项目根目录运行，工具另放时改脚本路径：
 
 ```bash
 python3.12 scripts/soc_memory_snapshot_audit.py --root "$HOME/deer-flow" \
-  --round ROUND-RESTART-F00B1FC608D8DFF1316D891D \
-  --memory MEM-0DF3954B1A08 --candidate MC-8DD24A34A107
+  --round '<待核查轮次ID>' \
+  --memory '<待核查经验ID>' --candidate '<待核查候选ID>'
 ```
 
 输出位于新的 `backend/.deer-flow/soc-internal-validation/memory-snapshot-audit-*` 目录。
@@ -25,9 +30,10 @@ python3.12 scripts/soc_memory_snapshot_audit.py --root "$HOME/deer-flow" \
 工具同时保存当前安装代码中实际快照选择函数及哈希，供核对来源关联和资格条件；它不复制
 资格策略、不自动判定历史根因，也不把当前代码版本当作当时版本。
 
-## 1. 将工具复制到 Mac
+## 1. 选择已安装脚本或独立工具
 
-将提供的整个 `VALIDATION-REPORT-TO-TRANSFER` 文件夹复制到 Mac 的 Downloads，最终位置是：
+已使用新版部署包的 Mac，直接使用项目中的 `scripts/soc_pingan_validation_report.py`，进入第 2 节。
+只有单独传输工具时，才将整个 `VALIDATION-REPORT-TO-TRANSFER` 文件夹复制到 Mac 的 Downloads，最终位置是：
 
 ```text
 $HOME/Downloads/VALIDATION-REPORT-TO-TRANSFER/
@@ -44,7 +50,17 @@ $HOME/Downloads/VALIDATION-REPORT-TO-TRANSFER/
 ## 2. 执行统计
 
 先确认第二批没有运行中的告警。统计期间请暂缓提交重跑和修改经验审核；服务可以保持运行。
-复制下面完整一块到 Mac 终端：
+已使用新版部署包时，复制下面完整一块到 Mac 终端，生成全量报告：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+cd "$HOME/deer-flow"
+python3.12 scripts/soc_pingan_validation_report.py --root "$HOME/deer-flow"
+BASH
+```
+
+如果使用独立工具，改为执行下面一块，两种入口选择其一：
 
 ```bash
 bash <<'BASH'
@@ -65,13 +81,6 @@ backend/.deer-flow/soc-internal-validation/second-batch-report-时间-唯一编�
 每次运行新建目录，不覆盖已有报告或填写过的抽查表。
 `manifest.json` 是完成收据，包含各文件的 SHA-256、工具文件哈希和本次轮次标识。
 若输出中没有该收据，则不是完整报告。
-
-如果工具已经随新版源码安装，也可从项目根目录执行：
-
-```bash
-cd "$HOME/deer-flow" || exit 1
-python3.12 scripts/soc_pingan_validation_report.py --root "$HOME/deer-flow"
-```
 
 ## 3. 查看结果和填写抽查
 
@@ -148,13 +157,23 @@ CSV 使用 UTF-8 BOM，Excel 可直接打开。请将填写后的抽查表另存
 
 ## 6. 排除整条运行失败与语义核对失败，生成效果汇报版
 
-将新的整个 `VALIDATION-EFFECT-TO-TRANSFER` 文件夹复制到内网 Mac 的 Downloads。
-保留原始报告，执行以下命令生成新的效果汇报版：
+使用同一套报告脚本，无需再复制另一份工具。保留原始报告，已使用新版部署包时执行：
 
 ```bash
 bash <<'BASH'
 set -euo pipefail
-cd "$HOME/Downloads/VALIDATION-EFFECT-TO-TRANSFER"
+cd "$HOME/deer-flow"
+python3.12 scripts/soc_pingan_validation_report.py --root "$HOME/deer-flow" \
+  --exclude-failed --exclude-semantic-failed
+BASH
+```
+
+如果使用第 1 节的独立工具，改为执行下面一块：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+cd "$HOME/Downloads/VALIDATION-REPORT-TO-TRANSFER"
 shasum -a 256 -c SHA256SUMS
 python3.12 soc_pingan_validation_report.py --root "$HOME/deer-flow" \
   --exclude-failed --exclude-semantic-failed

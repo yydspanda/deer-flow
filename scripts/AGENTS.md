@@ -27,6 +27,8 @@ with `excluded_alerts.csv` included in the receipt. Never present the filtered s
 as a full-batch success rate or overwrite an earlier report.
 An independently hashed tool directory is not an application release or updater;
 it never copies files into the installed checkout and requires no service deployment.
+Use one `VALIDATION-REPORT-TO-TRANSFER` directory for full and filtered report modes;
+current application releases already include the scripts, so standalone transfer is optional.
 
 `soc_memory_snapshot_audit.py` applies those same boundaries to one fixed round and
 Memory. Export governance fields and source links, never logs, prose or secrets;
