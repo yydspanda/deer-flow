@@ -4,6 +4,27 @@
 工具只读取本地数据库，生成报告和 Excel 可打开的 CSV；不调用模型、不重跑告警、
 不修改数据库或经验，不需要重新安装应用或修改服务配置。Python 3.12 即可运行，无需安装依赖。
 
+单条经验已确认却未进入固定快照时，使用独立的
+`scripts/soc_memory_snapshot_audit.py` 一次提取轮次、候选、经验、启停审计和首批来源关联。
+工具仅用 Python 标准库，可单独复制到 Mac；`--root` 指向已安装项目，默认读取其 SOC DEV
+SQLite，也可用 `--database` 指定已有本地副本。不存在的库不会创建，指定轮次不存在时不会
+回退到别的轮次。以下为本次红队组核查命令（从项目根目录运行；工具另放时改脚本路径）：
+
+```bash
+python3.12 scripts/soc_memory_snapshot_audit.py --root "$HOME/deer-flow" \
+  --round ROUND-RESTART-F00B1FC608D8DFF1316D891D \
+  --memory MEM-0DF3954B1A08 --candidate MC-8DD24A34A107
+```
+
+输出位于新的 `backend/.deer-flow/soc-internal-validation/memory-snapshot-audit-*` 目录。
+一次保留 `evidence.json` 与最后发布的 `manifest.json` 即可，不需要逐条导出历史 Run。
+文件权限为 `0600`、目录为 `0700`；不含完整告警日志、经验正文或配置凭据。
+`memory/candidate.current` 是读取时状态，`as_of` 比较创建、最后更新与轮次创建时间，
+只作为时间线证据，不能单凭时间戳证明快照选择时的状态。实际选择早于轮次创建时间，
+后者还可能因时钟回退保护而前移。审计按轮次创建时间前后展示，缺少审计不等于从未启用。
+工具同时保存当前安装代码中实际快照选择函数及哈希，供核对来源关联和资格条件；它不复制
+资格策略、不自动判定历史根因，也不把当前代码版本当作当时版本。
+
 ## 1. 将工具复制到 Mac
 
 将提供的整个 `VALIDATION-REPORT-TO-TRANSFER` 文件夹复制到 Mac 的 Downloads，最终位置是：

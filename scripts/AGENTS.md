@@ -28,6 +28,11 @@ as a full-batch success rate or overwrite an earlier report.
 An independently hashed tool directory is not an application release or updater;
 it never copies files into the installed checkout and requires no service deployment.
 
+`soc_memory_snapshot_audit.py` applies those same boundaries to one fixed round and
+Memory. Export governance fields and source links, never logs, prose or secrets;
+post-freeze updates leave history unknown. Hash actual selector definitions without
+executing/reimplementing policy. Commands and evidence limits live in the report guide.
+
 Host `reset-dev-data` is an explicit, DEV-only offline operation, never part of
 ordinary install/start/resume. Default is read-only preview; `--confirm RESET-SOC-DEV`
 archives only `soc_agent_dev.db` and its SQLite sidecars with a hash manifest before
