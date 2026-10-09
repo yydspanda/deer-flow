@@ -45,6 +45,14 @@ requires explicit confirmation, verifies the saved file set, and never overwrite
 a new database. Next ordinary Host start owns empty-schema initialization. Tests
 must use temporary checkouts/databases, not the running DEV database.
 
+`soc_pingan_reset_dev.sh` is a standalone convenience wrapper around that installed
+Host CLI, not an updater or a second database implementation. Default is preview;
+`--confirm RESET-SOC-DEV` validates DEV identity before stop, rechecks readiness,
+then delegates one reset. Validate JSON schema, target and status, retain a unique
+historical receipt, and atomically publish the latest successful receipt. Never
+auto-start or repeat reset after a startup failure. Keep the procedure in
+`docs/soc-dev-database-reset.md`; tests invoke only a fake installed Host checkout.
+
 `soc_pingan_validation_database.py --experiment EXP-...` previews an explicit
 validation-only cleanup on a stopped Host DEV checkout; `--apply` requires the
 operator's decision to discard all second-batch attempts. It shares the existing

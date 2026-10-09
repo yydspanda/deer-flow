@@ -226,6 +226,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > usage; it does not inflate alert-analysis totals. For a fresh internal DEV experiment,
 > the Host wrapper's explicit `reset-dev-data` previews and archives only the SOC DEV
 > database. Ordinary deployment never resets it; accounts, corpus and secrets remain intact.
+> The reusable [whole-DEV reset procedure](docs/soc-dev-database-reset.md) provides a
+> standalone preview-first wrapper with explicit confirmation, stop/readiness checks,
+> backup receipts and separate restart instructions.
 > To deliberately restart only the second batch after a settings mistake, use the
 > [validation-only recovery procedure](docs/soc-validation-reset.md). Its offline DEV
 > command previews one fixed experiment, verifies a full database backup, and clears
