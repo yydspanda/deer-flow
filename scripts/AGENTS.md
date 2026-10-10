@@ -82,8 +82,9 @@ experiment; inherited confirmed records are not approved again. Legacy plans wit
 the explicit-selection field retain their original quick-workbench behavior.
 The handoff inventory must include the rebalance contracts/services, facts-only and
 successor experiment regressions, explicit-experiment bulk review tool/tests, and
-`docs/soc-corpus-rebalance.md` plus the review guide. Source delivery preserves the
-existing DEV database; regrouping uses the new experiment CLI after code upgrade.
+`docs/soc-corpus-rebalance.md` plus the review guide. Default Web execution uses
+static groups without a facts prepass; the semantic successor CLI remains opt-in.
+Source delivery preserves the DEV database and old history, not new-plan progress.
 `soc_learning_candidate_audit.py` reads only persisted first-batch facts with SQLite
 read-only/query-only guards and drift detection; do not rebuild groups or compare
 operational labels. Keep both procedures in `docs/soc-learning-review-batch.md` and
@@ -621,8 +622,12 @@ Gateway boundary for backward compatibility. Unknown `frame_format` values
 receive a JSON error and close code 1008.
 
 Quick corpus validation adds `backend/soc_agent/demo/corpus_quick_validation.py` to
-the required handoff source inventory. Generated operator instructions use first-batch
-start/pause/continue/review and second-batch all/reuse/explore plus explicit all-alert
+the required handoff source inventory. Generated operator instructions retain Web
+start/pause/continue/review: 9,364 learning, 2,153 main validation, 3,764 supplementary.
+Only 6,367 old main-validation members move to learning; old learning stays and the
+supplementary set is unchanged. No facts prepass or automatic progress inheritance.
+Full fresh validation requires explicit operator reset, never installer-side clearing.
+Second-batch all/reuse/explore retains explicit all-alert
 restart with retained history (`docs/soc-validation-restart.md`). Include the restart
 regression in the required inventory. Do not direct routine reruns through offline
 deletion maintenance; legacy staged CLI commands

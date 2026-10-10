@@ -71,7 +71,8 @@ def test_preview_verifies_all_sources_without_mutation_or_label_export(source, t
     document = json.loads((output / "manifest.json").read_text())
     assert document["approval_status"] == "draft"
     assert document["execution_enabled"] is False
-    assert document["max_learning_per_group"] == 10
+    assert document["schema_version"] == "soc.corpus_group_time_split.v3"
+    assert document["max_learning_per_group"] is None
     assert document["learning_aggregation"] == "experiment_actual_pattern"
     assert document["learning_aggregation_status"] == "planned"
     assert document["source_identity"]["memory_profile"] == PROFILE
@@ -79,9 +80,10 @@ def test_preview_verifies_all_sources_without_mutation_or_label_export(source, t
     assert "must not appear" not in (output / "manifest.json").read_text()
     assert "private label" not in (output / "manifest.json").read_text()
     assert "本预览没有运行告警" in (output / "preview.md").read_text()
-    assert "每组最多10条" in (output / "preview.md").read_text()
+    assert "约80%" in (output / "preview.md").read_text()
+    assert "仅从原主要验证样本移入学习" in (output / "preview.md").read_text()
     assert "本轮第一批统一积累" in (output / "preview.md").read_text()
-    assert "批跑接入时实施" in (output / "preview.md").read_text()
+    assert "本预览不会启动" in (output / "preview.md").read_text()
     assert (output / "members.csv").is_file()
     assert (output / "groups.csv").is_file()
     assert output.stat().st_mode & 0o777 == 0o700

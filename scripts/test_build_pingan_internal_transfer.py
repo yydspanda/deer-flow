@@ -443,6 +443,27 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "--mode fake" in stg_section
 
 
+@pytest.mark.parametrize("initialize_soc_dev", [False, True])
+def test_transfer_runbook_uses_main_only_static_split_and_web_execution(
+    initialize_soc_dev: bool,
+) -> None:
+    runbook = _render_transfer_runbook(initialize_soc_dev=initialize_soc_dev)
+    evaluation = runbook.split("## 7.1 Two-Batch Memory Evaluation", maxsplit=1)[
+        1
+    ].split("## 8.", maxsplit=1)[0]
+    assert "第一批9,364条、第二批主要验证2,153条、补充3,764条" in evaluation
+    assert "仅从原主要验证8,520条中移入6,367条" in evaluation
+    assert "原第一批2,997条全部保留在学习侧" in evaluation
+    assert "补充3,764条成员不变" in evaluation
+    assert "合计15,281条" in evaluation
+    assert "不运行全量语义事实预处理" in evaluation
+    assert "网页第一批点击“开始积累”" in evaluation
+    assert "只有实际研判时才按运行设置执行语义核对" in evaluation
+    assert "旧实验的任务和历史结果不会自动算作新名单已完成" in evaluation
+    assert "rebalance prepare" not in evaluation
+    assert "soc facts" not in evaluation
+
+
 def test_transfer_runbook_resets_only_dev_after_preflight_before_first_start() -> None:
     runbook = _render_transfer_runbook(initialize_soc_dev=True)
     preflight = runbook.index("## 6. Execution Plane Preflight")
@@ -493,9 +514,10 @@ def test_transfer_runbook_learning_instructions_match_data_mode(
         assert "如果升级后旧任务提示" not in evaluation
         assert "本轮第一批及经验审核完成后" in evaluation
     else:
-        assert "不需要重跑第一批或重新审核已有经验" in verification
+        assert "旧实验结果与审核记录保留" in verification
+        assert "新名单需要独立运行" in verification
         assert "如果升级后旧任务提示" in evaluation
-        assert "继续审核经验或第二批验证" in evaluation
+        assert "新名单需从网页第一批“开始积累”启动" in evaluation
 
 
 def test_source_bundle_readme_documents_sixteen_capacity_and_local_control() -> None:
@@ -505,6 +527,18 @@ def test_source_bundle_readme_documents_sixteen_capacity_and_local_control() -> 
     assert "运行设置" in readme
     assert "`1～16`" in readme
     assert "调整容量时必须同步修改" not in readme
+
+
+def test_preserving_upgrade_persists_pause_before_service_stop_and_backup() -> None:
+    runbook = _render_transfer_runbook()
+    introduction = runbook.split("## 1.", maxsplit=1)[0]
+    assert "旧事实准备轮次及旧学习/验证轮次" in introduction
+    assert "持久化为 `paused`" in introduction
+    assert "`active_count=0`" in introduction
+    assert "只执行 Host `stop` 不会把轮次改为暂停" in introduction
+    assert introduction.index("持久化为 `paused`") < introduction.index(
+        "再按本篇停服备份"
+    )
 
 
 def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
@@ -520,12 +554,13 @@ def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
     assert "soc_pingan_macos_host_dev.py reset-dev-data" not in runbook
     assert "本次从零验证" not in runbook
     assert "需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置" not in runbook
-    assert "继续审核经验或第二批验证，跳过批次手册第 1.1 节重置" in runbook
+    assert "跳过批次手册第 1.1 节重置" in runbook
+    assert "旧实验的任务和历史结果不会自动算作新名单已完成" in runbook
     assert "configuration_changed" in section
-    assert "第一批个别未完成项" in section
+    assert "原实验记录不会改写成新名单" in section
     assert "重新配置并全部重跑" in section
     assert "旧结果仍保留在历史中" in section
-    assert "已经完成的告警和已审核经验无需重跑、重审" in section
+    assert "新名单需要独立运行" in section
     assert "仅在同一代码版本下修改“最大并发”不会触发" in section
 
 

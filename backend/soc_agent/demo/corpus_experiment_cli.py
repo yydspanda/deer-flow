@@ -166,7 +166,7 @@ def _export(client, round_id, output):
     stage_metadata = None
     while True:
         page = _request(client, "GET", f"/rounds/{round_id}/results", params={"offset": offset, "limit": 100})
-        current_metadata = {key: page[key] for key in ("experiment", "stage_scope") if key in page}
+        current_metadata = {key: page[key] for key in ("experiment", "stage_scope", "report_mode", "sampling_policy") if key in page}
         if stage_metadata is not None and current_metadata != stage_metadata:
             raise ValueError("导出期间实验或完整阶段范围发生变化，未写入不一致的报告")
         stage_metadata = current_metadata

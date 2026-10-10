@@ -422,11 +422,16 @@ def round_results(round_id: str, application: ApplicationDep, limit: Annotated[i
     round_ = _round(application, round_id)
     experiment = application.service.store.get_experiment(round_.experiment_id)
     rebalanced = experiment.rebalance is not None
+    batch_plan = getattr(application.workbench, "batch_plan", None)
     if rebalanced:
-        if application.workbench.batch_plan.source_identity != experiment.source_identity:
+        if batch_plan.source_identity != experiment.source_identity:
             raise HTTPException(status_code=409, detail="当前样本文件与重分配实验不一致；请恢复该实验的数据包")
     elif application.workbench.batch_plan_id != experiment.plan_id:
         raise HTTPException(status_code=409, detail="当前样本文件已更换，不能用新样本标签解释旧轮次；请恢复该实验的数据包")
+    # The current policy is authoritative only after its immutable plan hash
+    # matches this experiment. Historical v2 reports retain their original mode.
+    learning_first = not rebalanced and getattr(batch_plan, "schema_version", None) == "soc.corpus_group_time_split.v3"
+    applicability_report = rebalanced or learning_first
     page = application.service.store.list_round_items(round_id, limit=limit, offset=offset)
     selected = round_.selection.model_copy(update={"alert_ids": [item.alert_id for item in page.items]})
     member_page = application.service.store.list_members(round_.experiment_id, selection=selected, limit=100) if page.items else None
@@ -467,20 +472,22 @@ def round_results(round_id: str, application: ApplicationDep, limit: Annotated[i
                     idempotency_key_hash=hashlib.sha256(json.dumps(item.job.idempotency_key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest(),
                 ),
                 "snapshot_changed_during_run": outcome.get("snapshot_changed_during_run", False),
-                **({} if rebalanced else {"label": application.workbench.experiment_label(member, decision_available=summary.get("effective_verdict") is not None)}),
+                **({} if applicability_report else {"label": application.workbench.experiment_label(member, decision_available=summary.get("effective_verdict") is not None)}),
                 "error_code": item.job.error_code,
                 "error_message": item.job.error_message,
             }
         )
     result = {"total": page.total, "items": rows, "round_id": round_id, "source_identity": experiment.source_identity}
-    if rebalanced:
+    if applicability_report:
         learning_total = application.service.store.list_members(experiment.experiment_id, selection=CorpusRoundSelection(batch="learning"), limit=1).total
         validation_total = application.service.store.list_members(experiment.experiment_id, selection=CorpusRoundSelection(batch="validation", scope="all"), limit=1).total
         batch_total = learning_total if round_.selection.batch == "learning" else validation_total
         progress = application.service.store.round_progress(round_id)
         metadata = experiment.model_dump(mode="json", exclude={"rebalance": {"fact_hashes", "learning_run_hashes", "learning_run_imports", "inherited_memory_ids"}})
-        metadata["rebalance"].update(imported_learning_run_count=len(experiment.rebalance.learning_run_imports), inherited_memory_count=len(experiment.rebalance.inherited_memory_ids))
+        if rebalanced:
+            metadata["rebalance"].update(imported_learning_run_count=len(experiment.rebalance.learning_run_imports), inherited_memory_count=len(experiment.rebalance.inherited_memory_ids))
         result.update(
+            report_mode="memory_applicability",
             experiment=metadata,
             stage_scope={
                 "batch_total": batch_total,
@@ -496,6 +503,8 @@ def round_results(round_id: str, application: ApplicationDep, limit: Annotated[i
                 ),
             },
         )
+        if learning_first:
+            result["sampling_policy"] = {key: getattr(batch_plan, key) for key in ("schema_version", "grouping_basis", "split_method", "max_learning_per_group")}
     return result
 
 

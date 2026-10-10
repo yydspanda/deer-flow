@@ -36,7 +36,11 @@ dates; these defaults do not migrate previously confirmed experience.
   second purpose preset. Use separate batch/session preferences, default to the server's
   memory-evaluation settings, and display immutable `本轮已保存设置` for existing rounds.
   Sample scopes are `验证经验复用` (first-batch peers exist, not a guaranteed Memory hit)
-  and `其他告警测试` (1-5 peers or unusable time, separate metrics). Preserve API scope
+  and `其他告警测试` (1-5 peers or unusable time, separate metrics). The default static
+  plan expands learning to about 80% within existing learning/main-validation groups,
+  keeps at least one holdout, and preserves all supplementary membership. Counts and
+  exact membership remain server-owned; runtime core-behavior Memory grouping is separate.
+  Preserve API scope
   values; these are display terms, not a change to membership or evaluation denominators.
   Keep static sample browsing separate from the selected round's saved results.
   Round/audit queries include the fixed Run ID; do not silently select a later rerun.

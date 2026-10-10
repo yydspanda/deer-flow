@@ -1359,10 +1359,10 @@ for (const width of [1440, 390]) {
             batch,
             validation_tier: tier,
             counts: {
-              learning: 3002,
-              validation_main: 8522,
+              learning: 9500,
+              validation_main: 2017,
               validation_supplementary: 3764,
-              total: 15288,
+              total: 15281,
             },
             selected_count: 1,
             group_count: 1,
@@ -1374,6 +1374,16 @@ for (const width of [1440, 390]) {
       });
     });
     await page.goto("/workspace/soc/corpus-validation");
+    await expect(page.getByRole("tab", { name: /第一批/ })).toContainText(
+      "9,500",
+    );
+    await expect(page.getByRole("tab", { name: /第二批/ })).toContainText(
+      "5,781",
+    );
+    await expect(page.getByLabel("样本用途")).toContainText("约 80%");
+    await expect(page.getByLabel("样本用途")).toContainText(
+      "实际经验仍按核心行为",
+    );
     await expect(page.locator('[data-alert-id="1984426"]')).toBeVisible();
     await expect(page.getByText("样本目录", { exact: true })).toBeVisible();
     await expect(

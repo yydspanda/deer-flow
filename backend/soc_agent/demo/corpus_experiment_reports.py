@@ -225,7 +225,7 @@ def compare_reports(before: dict, after: dict) -> dict:
     after_batch = (after["round"].get("selection") or {}).get("batch")
     if before_batch not in {"learning", "validation"} or after_batch != before_batch:
         raise ValueError("只能比较同一批次的轮次报告；缺少批次信息时，请重新导出报告。")
-    summarize = summarize_rebalance_results if _is_rebalanced(before) or _is_rebalanced(after) else summarize_results
+    summarize = summarize_rebalance_results if _uses_applicability_metrics(before) or _uses_applicability_metrics(after) else summarize_results
     old_items = {row["alert_id"]: row for row in before["rows"]}
     new_items = {row["alert_id"]: row for row in after["rows"]}
     transitions = [
@@ -279,7 +279,11 @@ def _is_rebalanced(report: dict) -> bool:
     return bool(report.get("experiment", {}).get("rebalance"))
 
 
-def _complete_rebalanced_stage(report: dict) -> bool:
+def _uses_applicability_metrics(report: dict) -> bool:
+    return _is_rebalanced(report) or report.get("report_mode") == "memory_applicability"
+
+
+def _complete_validation_stage(report: dict) -> bool:
     rows, scope, round_ = report["rows"], report.get("stage_scope", {}), report["round"]
     selection = round_.get("selection") or {}
     return (
@@ -297,13 +301,13 @@ def export_report(report: dict, output_dir: Path) -> None:
     if output_dir.exists():
         raise FileExistsError(f"report already exists: {output_dir}")
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    rebalanced = _is_rebalanced(report)
-    if rebalanced:
+    applicability = _uses_applicability_metrics(report)
+    if applicability:
         report = {**report, "rows": [{key: value for key, value in row.items() if key != "label"} for row in report["rows"]]}
-        complete = _complete_rebalanced_stage(report)
+        complete = _complete_validation_stage(report)
         report.update(report_scope="stage" if complete else "round_diagnostic", stage_conclusion_allowed=complete)
-    summarize = summarize_rebalance_results if rebalanced else summarize_results
-    report = {**report, "metrics": summarize(report["rows"]), "breakdowns": result_breakdowns(report["rows"], rebalanced=rebalanced)}
+    summarize = summarize_rebalance_results if applicability else summarize_results
+    report = {**report, "metrics": summarize(report["rows"]), "breakdowns": result_breakdowns(report["rows"], rebalanced=applicability)}
     with tempfile.TemporaryDirectory(prefix=".corpus-report-", dir=output_dir.parent) as temporary:
         directory = Path(temporary)
         (directory / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
@@ -330,7 +334,7 @@ def export_report(report: dict, output_dir: Path) -> None:
             "timing_status",
             "error_code",
         )
-        if rebalanced:
+        if applicability:
             columns = tuple(column for column in columns if column not in {"expected_handling", "scorable"})
         with (directory / "alerts.csv").open("x", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
@@ -359,14 +363,20 @@ def export_report(report: dict, output_dir: Path) -> None:
         directory.rename(output_dir)
 
 
-def _render_rebalanced_report(report: dict) -> str:
+def _render_applicability_report(report: dict) -> str:
     complete = report.get("stage_conclusion_allowed") is True
+    rebalanced = _is_rebalanced(report)
     lines = [
-        "# 补充学习后的验证阶段结论" if complete else "# 补充学习验证：仅诊断",
+        "# 经验适用与分流：验证阶段结论" if complete else "# 经验适用与分流：仅诊断",
         "",
         f"实验：`{report['round']['experiment_id']}`；轮次：`{report['round']['round_id']}`。",
         "",
-        "按真实核心行为重新分配学习与验证样本，保留既有数据库和审核经验；本轮固定结果单独统计，不与旧批次拼接。",
+        (
+            "按真实核心行为重新分配学习与验证样本，保留既有数据库和审核经验；本轮固定结果单独统计，不与旧批次拼接。"
+            if rebalanced
+            else "在原主验证范围内，按既有静态分组和事件时间将较早的 80%（向上取整，至少保留一条验证）分配给第一批，补充验证保持不变。"
+            "静态分组只用于固定抽样；运行时仍按语义核对后的真实核心行为积累经验，不保证每种细行为都已有足够学习样本。本轮结果不与旧批次拼接。"
+        ),
         "",
     ]
     if not complete:
@@ -382,11 +392,15 @@ def _render_rebalanced_report(report: dict) -> str:
 
     lines += [
         f"第二批共 {report['stage_scope']['batch_total']} 条，已完整完成。主验证与补充验证分别统计。",
-        f"本阶段第一批 {report['stage_scope'].get('learning_total', '未记录')} 条，第二批 {report['stage_scope'].get('validation_total', report['stage_scope']['batch_total'])} 条；"
-        f"继承已审核经验 {report['experiment']['rebalance'].get('inherited_memory_count', '未记录')} 条，复用既有独立学习运行 {report['experiment']['rebalance'].get('imported_learning_run_count', '未记录')} 条。",
+        f"本阶段第一批 {report['stage_scope'].get('learning_total', '未记录')} 条，第二批 {report['stage_scope'].get('validation_total', report['stage_scope']['batch_total'])} 条。",
         "覆盖和忽略比例不是准确率；系统建议不代表已经执行处置，也不证明所有忽略判断均正确。",
         "",
     ]
+    if rebalanced:
+        lines += [
+            f"继承已审核经验 {report['experiment']['rebalance'].get('inherited_memory_count', '未记录')} 条，复用既有独立学习运行 {report['experiment']['rebalance'].get('imported_learning_run_count', '未记录')} 条。",
+            "",
+        ]
     for tier, label in (("main", "主验证"), ("supplementary", "补充验证")):
         metrics = report["metrics"][tier]
         lines += [f"## {label}", "", f"样本 {metrics['selected']} 条，完成 {metrics['completed']} 条，结论不可用或可用性未知 {metrics['decision_unusable']} 条。", "", "| 指标 | 分子 / 分母 | 比例 |", "|---|---:|---:|"]
@@ -412,7 +426,7 @@ def _render_rebalanced_report(report: dict) -> str:
     lines += [
         "适用经验以本轮保存的 applicability=applicable 或已直接复用记录为准；有同类学习样本不等于已命中适用经验。",
         "“无历史经验”在此表示本次未命中适用经验；可能仍有部分相似经验供参考。直接复用与参考记录可能同时出现，二者不能相加作为覆盖率。",
-        "主验证保留了同类学习样本；补充验证的来源、样本不足等原因见 membership_reason。两个范围独立统计，样本分配可按冻结计划追溯。",
+        "主验证保留了同一抽样组的学习样本；这不保证运行时细行为相同或命中经验。补充验证的来源、样本不足等原因见 membership_reason。两个范围独立统计，样本分配可按冻结计划追溯。",
         "逐条固定结果、经验使用关系和配置快照见 `alerts.csv`、`memory-usage.csv` 与 `report.json`。此报告不使用原始忽略/转交标签评分。",
         "",
     ]
@@ -420,8 +434,8 @@ def _render_rebalanced_report(report: dict) -> str:
 
 
 def render_report(report: dict) -> str:
-    if _is_rebalanced(report):
-        return _render_rebalanced_report(report)
+    if _uses_applicability_metrics(report):
+        return _render_applicability_report(report)
     lines = ["# 两批经验验证报告", "", f"轮次：`{report['round']['round_id']}`", "", "结果按本轮固定 Run 保存，不使用告警后来重跑的结果。历史忽略/转交标签用于处置对照，不等于安全真值。", ""]
     timing = report.get("progress", {}).get("timing") or {}
     if timing.get("running_ms") is not None:

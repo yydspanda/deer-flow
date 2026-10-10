@@ -200,17 +200,18 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > a Run was saved; a newer attempt supersedes that failure, and active work takes priority.
 > The HTTP CLI is
 > `backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py --help`.
-> For learning-first resampling after semantic groups become finer, use the
-> [successor experiment runbook](docs/soc-corpus-rebalance.md). It preserves the database,
-> references eligible reviewed Memory and compatible independent learning results,
-> freezes a new fact-based manifest, then runs a new complete validation batch.
-> `rebalance-facts` prepares only semantic facts; it does not run the main analysis model
-> or accumulate Memory. Existing quick-workbench buttons continue to target the original
-> experiment; the successor is controlled by its explicit experiment ID.
+> The [learning-first workbench runbook](docs/soc-corpus-rebalance.md) keeps the original
+> static groups and expands learning to about 80% of each existing main-validation group,
+> rounded up with at least one holdout and no ten-sample cap. Existing supplementary
+> samples stay unchanged. This creates a versioned plan used by the same Web lists,
+> counts and start/pause/continue controls, without a separate semantic preprocessing run.
+> Normal analysis still performs semantic review and accumulates actual fine-grained
+> Memory patterns. Prior plans and results remain historical; source upgrades never
+> reset the database. A clean rerun requires a separate operator-confirmed DEV reset.
 > It supports filters, limits, concurrency, pause/resume, explicit retries and fixed-run
 > exports. Learning uses no existing Memory and accumulates within the experiment;
 > validation freezes reviewed learning Memory and does not automatically create new
-> observations. Ordinary 30-day aggregation is unchanged.
+> observations. New ordinary observations use a 180-day window; historical windows stay frozen.
 > The Web scopes read `验证经验复用` (holdouts with first-batch peers) and
 > `其他测试告警` (sparse/time-unknown samples), with **全部** selected by default. Four visible
 > `运行设置` switches are saved with new tasks; existing queued tasks retain

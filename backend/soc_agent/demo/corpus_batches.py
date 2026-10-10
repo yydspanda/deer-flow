@@ -3,9 +3,9 @@
 from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from soc_agent.utils.hashing import stable_hash
 
@@ -76,12 +76,12 @@ class CorpusBatchGroup(BaseModel):
 
 
 class CorpusBatchPlan(BaseModel):
-    schema_version: Literal["soc.corpus_group_time_split.v2"] = "soc.corpus_group_time_split.v2"
+    schema_version: Literal["soc.corpus_group_time_split.v2", "soc.corpus_group_time_split.v3"] = "soc.corpus_group_time_split.v3"
     approval_status: Literal["draft"] = "draft"
     execution_enabled: Literal[False] = False
     grouping_basis: Literal["static_workbench_index"] = "static_workbench_index"
-    split_method: Literal["per_group_time_70_30_min_five_max_ten"] = "per_group_time_70_30_min_five_max_ten"
-    max_learning_per_group: Literal[10] = 10
+    split_method: Literal["per_group_time_70_30_min_five_max_ten", "per_group_time_80_20_main_learning_first"] = "per_group_time_80_20_main_learning_first"
+    max_learning_per_group: Literal[10] | None = None
     learning_aggregation: Literal["experiment_actual_pattern"] = "experiment_actual_pattern"
     learning_aggregation_status: Literal["planned"] = "planned"
     plan_id: str
@@ -89,6 +89,22 @@ class CorpusBatchPlan(BaseModel):
     counts: dict[str, int]
     members: list[CorpusBatchMember]
     groups: list[CorpusBatchGroup]
+
+    @model_validator(mode="before")
+    @classmethod
+    def historical_policy_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("schema_version") == "soc.corpus_group_time_split.v2":
+            data = dict(data)
+            data.setdefault("split_method", "per_group_time_70_30_min_five_max_ten")
+            data.setdefault("max_learning_per_group", 10)
+        return data
+
+    @model_validator(mode="after")
+    def consistent_split_policy(self) -> Self:
+        expected = ("per_group_time_70_30_min_five_max_ten", 10) if self.schema_version == "soc.corpus_group_time_split.v2" else ("per_group_time_80_20_main_learning_first", None)
+        if (self.split_method, self.max_learning_per_group) != expected:
+            raise ValueError("split policy metadata does not match schema version")
+        return self
 
 
 def _time(value: str | None) -> tuple[datetime | None, str | None]:
@@ -119,12 +135,16 @@ def build_corpus_batch_plan(cases: Iterable[CorpusBatchCase], *, source_identity
         times = {row.alert_id: _time(row.observed_at) for row in rows}
         rows.sort(key=lambda row: (times[row.alert_id][0] or datetime.max.replace(tzinfo=UTC), row.alert_id, row.payload_hash))
         valid_count = sum(times[row.alert_id][0] is not None for row in rows)
-        cut = min(10, valid_count - 1, max(5, valid_count * 7 // 10)) if valid_count >= 6 else 0
+        # Expand learning only inside the old main-validation scope: at least
+        # six usable times. Its earlier 80% (rounded up) contains every old
+        # learning member and leaves at least one holdout. Small groups and
+        # unusable times remain supplementary exactly as in the v2 plan.
+        cut = min(valid_count - 1, (valid_count * 4 + 4) // 5) if valid_count >= 6 else 0
         group_members: list[CorpusBatchMember] = []
         for position, row in enumerate(rows):
             event_time, time_problem = times[row.alert_id]
             learning = position < cut
-            main = bool(cut and event_time is not None and not learning)
+            main = bool(cut >= 5 and event_time is not None and not learning)
             reason = time_problem or ("group_early_samples" if learning else "group_later_samples" if main else "singleton" if valid_count == 1 else "small_group")
             group_members.append(
                 CorpusBatchMember(

@@ -89,7 +89,7 @@ def test_batch_group_directory_counts_and_alert_search_are_scoped(workbench):
     expected = {m.alert_id for m in workbench._batch_plan.members if m.batch == "learning"}
     page = workbench.get_groups(batch="learning", limit=100)
     assert sum(g.alert_count for g in page.groups) == len(expected)
-    assert all(5 <= g.alert_count <= 10 for g in page.groups)
+    assert {g.group_id: g.alert_count for g in page.groups} == {"large": 16}
     group = page.groups[0]
     state = workbench.get_state(batch="learning", group_id=group.group_id, include_group_catalog=False, unprocessed_only=False)
     assert state.groups[0].alert_count == state.alert_page.total == group.alert_count

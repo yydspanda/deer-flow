@@ -1961,7 +1961,7 @@ export function SocCorpusValidationWorkbench() {
               aria-label="样本用途"
             >
               {batch === "learning"
-                ? "每组取 5～10 条同类告警，用于提炼待审核经验。"
+                ? "原有学习与经验复用验证组按时间将约 80% 的告警用于积累，每组至少保留 1 条验证。实际经验仍按核心行为分别积累和审核。"
                 : validationTier === "main"
                   ? "第一批有同类样本，用于验证已审核经验在后续告警中的复用效果；是否命中以实际运行结果为准。"
                   : validationTier === "supplementary"

@@ -14,9 +14,16 @@ file for SOC code. The authoritative product and engineering documents are:
 - `demo/corpus_batches.py` owns the pure, label-blind per-group chronological split;
   `demo/corpus_batch_preview.py` verifies existing corpus artifacts and exports a private
   draft only. No model, Runtime, application DB or task calls belong in preparation.
-  Groups with at least six usable event times split about 70/30 with five learning
-  members and one holdout minimum, capped at ten learning members per group; all
-  remaining members are holdouts. Small groups and unknown times remain supplementary.
+  The v3 plan expands only former main-validation groups with at least six usable
+  event times: take chronological ceil(80%) for learning with one holdout minimum
+  and no ten-member cap. Keep all former learning members and the exact supplementary
+  membership; small groups and unknown times remain supplementary. This is static
+  sampling, not semantic Memory grouping. The v2 policy remains readable as history.
+  The Web uses the versioned current plan for counts and quick commands without a
+  full-corpus facts prepass. An optional facts-based successor remains separate.
+  Current v3 exports declare a separate Memory-applicability report mode only after
+  matching the immutable plan ID. Omit operational labels and require the complete
+  stage for conclusions; preserve historical v2 reporting and keep successor provenance distinct.
   Bind source/index/store hashes and static profile; preserve raw row identities, reject
   duplicates rather than silently dropping them, and never rebuild an index implicitly.
   Static navigation groups are not the semantic-reviewed Runtime Memory patterns.

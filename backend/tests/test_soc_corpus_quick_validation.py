@@ -174,6 +174,57 @@ def test_new_corpus_query_is_read_only_and_start_prepares_automatically(tmp_path
     assert quick.snapshot("learning")["completed"] == 10
 
 
+def test_expanded_static_plan_uses_fresh_browser_batches_without_resuming_old_rounds(tmp_path):
+    from test_soc_corpus_experiment_repository import members
+
+    from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.demo.corpus_batches import CorpusBatchCase, build_corpus_batch_plan
+
+    repo = repository(tmp_path)
+    old_members = [m.model_copy(update={"group_id": "one-original-group", "batch": "learning" if i < 10 else "validation", "validation_tier": None if i < 10 else "main"}) for i, m in enumerate(members(20))]
+    repo.corpus_experiments().prepare(experiment(), old_members)
+    calls = []
+    svc = service(repo, calls)
+    old_quick = CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id))
+    old_quick.command(CorpusQuickCommand(batch="learning"), context=context())
+    old_learning = svc.store.list_rounds()[0]
+    assert svc.execute_one(old_learning.round_id)
+    old_quick.command(CorpusQuickCommand(batch="learning", action="pause"), context=context())
+    old_validation = svc.create_round(CorpusRoundCreateCommand(experiment_id=experiment().experiment_id, selection=CorpusRoundSelection(batch="validation"), memory_mode="none"), context=context())
+    svc.pause(old_validation.round_id, context=context())
+    old_rounds = [r.model_dump(mode="json") for r in svc.store.list_rounds(experiment_id=experiment().experiment_id)]
+    old_jobs = {r.round_id: svc.store.list_round_items(r.round_id).model_dump(mode="json") for r in svc.store.list_rounds()}
+
+    plan = build_corpus_batch_plan(
+        [CorpusBatchCase(alert_id=m.alert_id, source_index=m.source_index, payload_hash=m.payload_hash, group_id=m.group_id, observed_at=m.event_time.isoformat()) for m in old_members],
+        source_identity=experiment().source_identity,
+    )
+    quick = CorpusQuickValidation(svc, plan)
+    new_experiment = quick.experiment()
+    assert new_experiment != experiment().experiment_id
+    initial = quick.snapshot("learning")
+    assert initial["total"] == initial["remaining"] == 16
+    assert initial["completed"] == initial["active"] == 0
+    assert initial["running"] is False
+    assert all(row["job_id"] is None for row in initial["items"])
+    assert quick.snapshot("validation")["total"] == 4
+    assert len(svc.store.list_experiments()) == 1  # Browsing alone creates no experiment.
+
+    quick.command(CorpusQuickCommand(batch="learning"), context=context())
+    new_round = svc.store.list_rounds(experiment_id=new_experiment)[0]
+    assert svc.store.round_progress(new_round.round_id).selected_count == 16
+    assert svc.execute_one(new_round.round_id)
+    quick.command(CorpusQuickCommand(batch="learning", action="pause"), context=context())
+    paused = quick.snapshot("learning")
+    assert paused["completed"] == 1 and paused["remaining"] == 15 and not paused["running"]
+    quick.command(CorpusQuickCommand(batch="learning"), context=context())
+    assert quick.snapshot("learning")["running"] is True
+    assert len(svc.store.list_rounds(experiment_id=new_experiment)) == 1
+    assert [r.model_dump(mode="json") for r in svc.store.list_rounds(experiment_id=experiment().experiment_id)] == old_rounds
+    assert {round_id: svc.store.list_round_items(round_id).model_dump(mode="json") for round_id in old_jobs} == old_jobs
+    assert calls[0][-1] != calls[1][-1]  # A previously processed learning alert receives a fresh Run.
+
+
 def test_quick_api_authority_and_scope(tmp_path):
     from contextlib import nullcontext
 

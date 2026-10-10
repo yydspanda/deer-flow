@@ -56,13 +56,13 @@ def test_exclusion_preserves_remaining_members_original_split_and_position(workb
     filtered = build_corpus_batch_plan(cases, source_identity=identity, excluded_alert_ids=excluded)
 
     assert filtered.members == [member for member in original.members if member.alert_id not in excluded]
-    assert filtered.counts == {"learning": 8, "validation_main": 9, "validation_supplementary": 3, "total": 20}
+    assert filtered.counts == {"learning": 13, "validation_main": 4, "validation_supplementary": 3, "total": 20}
     assert filtered.plan_id != original.plan_id
     assert filtered.source_identity == original.source_identity
     assert {group.group_id for group in filtered.groups} == {"large", "small"}
     assert sum(group.total for group in filtered.groups) == filtered.counts["total"]
     large = next(group for group in filtered.groups if group.group_id == "large")
-    assert (large.learning_count, large.validation_main_count, large.learning_last_id, large.validation_first_id) == (8, 9, "8", "10")
+    assert (large.learning_count, large.validation_main_count, large.learning_last_id, large.validation_first_id) == (13, 4, "15", "16")
     assert build_corpus_batch_plan(cases, source_identity=identity).plan_id == original.plan_id
 
 
@@ -96,7 +96,7 @@ def email_workbench(workbench, monkeypatch):
 def test_email_is_absent_from_batch_lists_groups_and_counts_but_raw_cases_remain(email_workbench):
     bench = email_workbench
     originals = {key: _case_index_record(value) for key, value in bench._cases.items()}
-    expected_counts = {("learning", None): 9, ("validation", "main"): 9, ("validation", "supplementary"): 3}
+    expected_counts = {("learning", None): 14, ("validation", "main"): 4, ("validation", "supplementary"): 3}
     for (batch, tier), count in expected_counts.items():
         view = bench.get_state(batch=batch, validation_tier=tier, unprocessed_only=False, include_rehearsal=False, limit=500)
         assert view.alert_page.total == view.readiness.total_alert_count == view.batch_selection.selected_count == count
@@ -151,9 +151,9 @@ def test_quick_validation_totals_and_durable_jobs_exclude_email(email_workbench)
     calls = []
     svc = service(email_workbench._repository, calls)
     quick = CorpusQuickValidation(svc, email_workbench.batch_plan)
-    assert quick.snapshot("learning")["total"] == 9
-    assert [quick.snapshot("validation", scope)["total"] for scope in ("all", "reuse", "explore")] == [12, 9, 3]
-    for batch, alert_id in (("learning", "0"), ("validation", "12"), ("validation", "23")):
+    assert quick.snapshot("learning")["total"] == 14
+    assert [quick.snapshot("validation", scope)["total"] for scope in ("all", "reuse", "explore")] == [7, 4, 3]
+    for batch, alert_id in (("learning", "0"), ("learning", "12"), ("validation", "23")):
         with pytest.raises(ValueError):
             quick.command(CorpusQuickCommand(batch=batch, action="run", alert_id=alert_id), context=context())
     quick.command(CorpusQuickCommand(batch="learning"), context=context())
@@ -217,7 +217,7 @@ def test_indexed_web_and_preview_have_the_same_filtered_plan_and_unchanged_sourc
     try:
         preview = prepare_batch_preview(source_path=source_path, index_path=index_path, output_dir=tmp_path / "preview", expected_profile=profile)
         assert preview == indexed.batch_plan
-        assert preview.counts == {"learning": 9, "validation_main": 9, "validation_supplementary": 3, "total": 21}
+        assert preview.counts == {"learning": 14, "validation_main": 4, "validation_supplementary": 3, "total": 21}
         assert set(indexed._cases) == set(bench._cases)
         assert preview.source_identity["source"]["alert_count"] == 24
         assert {path: path.read_bytes() for path in before} == before
