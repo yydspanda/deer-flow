@@ -274,7 +274,8 @@ def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
     assert third.candidate.metadata["candidate_snapshot_frozen"] is True
     assert third.candidate.metadata["support_count_at_creation"] == 3
     assert third.candidate.validity.valid_from == third.candidate.created_at
-    assert third.candidate.validity.valid_until == third.candidate.created_at + timedelta(days=90)
+    assert third.candidate.validity.valid_until == third.candidate.created_at + timedelta(days=365)
+    assert third.candidate.validity.review_after_days == 180
     assert (
         third.candidate.source.metadata["window_start"]
         == _START.replace(

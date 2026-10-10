@@ -4077,6 +4077,7 @@ class LLMAnalysisRequest(BaseModel):
     tenant_id: str | None = None
     environment: str | None = Field(default=None, max_length=128)
     memory_profile: dict[str, str] = Field(default_factory=dict, max_length=3)
+    memory_aggregation_window_seconds: int | None = Field(default=None, ge=300, le=15_552_000, exclude_if=lambda value: value is None)
     memory_projection_audit: MemoryProjectionAudit | None = Field(default=None, exclude_if=lambda value: value is None)
     source: AlertSourceRef = Field(default_factory=AlertSourceRef)
     detection: DetectionRuleRef = Field(default_factory=DetectionRuleRef)

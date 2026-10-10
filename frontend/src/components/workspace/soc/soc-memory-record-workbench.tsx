@@ -36,6 +36,11 @@ import {
   useUpdateSocMemoryRetrievalActivation,
 } from "@/core/soc";
 import type { SocMemoryBusinessLesson, SocMemoryUseEffect } from "@/core/soc";
+import {
+  MEMORY_REVIEW_AFTER_DAYS,
+  memoryActivationLocalDate,
+  memoryRecordActivationWindow,
+} from "@/core/soc/memory-review-validity";
 
 const USE_EFFECT_LABELS: Record<SocMemoryUseEffect, string> = {
   direct_reused: "直接复用结论（未调用主模型）",
@@ -80,12 +85,6 @@ function formatTime(value?: string | null) {
     second: "2-digit",
     hour12: false,
   }).format(new Date(value));
-}
-
-function futureLocalDate(days: number) {
-  const value = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-  const local = new Date(value.getTime() - value.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
 }
 
 function LessonSection({ lesson }: { lesson: SocMemoryBusinessLesson }) {
@@ -149,7 +148,9 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
   const matchMutation = useTestSocMemoryRecordMatch();
   const [governanceReason, setGovernanceReason] = useState("");
   const [validUntil, setValidUntil] = useState("");
-  const [reviewAfterDays, setReviewAfterDays] = useState("30");
+  const [reviewAfterDays, setReviewAfterDays] = useState(
+    String(MEMORY_REVIEW_AFTER_DAYS),
+  );
   const [locatorType, setLocatorType] = useState<"alert" | "run">("alert");
   const [locator, setLocator] = useState("");
   const record = lineage?.record ?? null;
@@ -173,8 +174,12 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
     : null;
 
   useEffect(() => {
-    if (!validUntil) setValidUntil(futureLocalDate(60));
-  }, [validUntil]);
+    if (!record || validUntil) return;
+    const window = memoryRecordActivationWindow(record);
+    if (!window) return;
+    setValidUntil(memoryActivationLocalDate(window.validUntil));
+    setReviewAfterDays(String(window.reviewDays));
+  }, [record, validUntil]);
 
   const handleRetrieval = async () => {
     if (!record || !governanceReason.trim()) return;
@@ -515,6 +520,7 @@ export function SocMemoryRecordWorkbench({ memoryId }: { memoryId: string }) {
                       disabled={
                         record.metadata.revision_pending === true ||
                         !governanceReason.trim() ||
+                        (!record.retrieval_enabled && !validUntil) ||
                         retrievalMutation.isPending
                       }
                       onClick={() => void handleRetrieval()}

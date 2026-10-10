@@ -24,9 +24,8 @@ import {
   useReviewSocMemoryCandidate,
   useSocMemoryRecord,
 } from "@/core/soc/hooks";
+import { memoryRecordActivationWindow } from "@/core/soc/memory-review-validity";
 import type { SocMemoryCandidate } from "@/core/soc/types";
-
-const DAY_MS = 86_400_000;
 
 export function SocMemoryRevisionRecovery({
   candidate,
@@ -70,15 +69,8 @@ export function SocMemoryRevisionRecovery({
 
   function openConfirmation() {
     if (!record) return;
-    const now = Date.now();
-    const validUntil = Math.min(
-      now + 60 * DAY_MS,
-      record.validity.valid_until
-        ? Date.parse(record.validity.valid_until)
-        : Infinity,
-    );
-    const reviewDays = Math.min(30, Math.floor((validUntil - now) / DAY_MS));
-    if (!Number.isFinite(validUntil) || reviewDays < 1) {
+    const activationWindow = memoryRecordActivationWindow(record);
+    if (!activationWindow) {
       toast.error(
         "旧经验的有效期不足一天，请先查看旧经验并确认是否需要重新审核。",
       );
@@ -86,8 +78,7 @@ export function SocMemoryRevisionRecovery({
     }
     setWindow({
       version: record.version,
-      validUntil: new Date(validUntil).toISOString(),
-      reviewDays,
+      ...activationWindow,
     });
   }
 

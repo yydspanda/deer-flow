@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import csv
 import io
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import stat
@@ -262,6 +262,11 @@ def test_plan_collects_all_117_candidates_without_posts(tmp_path):
     plan = json.loads(path.read_text(encoding="utf-8"))
     assert len(plan["items"]) == 117
     assert len({row["candidate_id"] for row in plan["items"]}) == 117
+    assert plan["schema_version"] == "soc.dev_learning_bulk_review_plan.v2"
+    assert plan["review_policy"] == {
+        "review_after_days": 180,
+        "validity_days": 365,
+    }
     assert any("offset=100" in call[1] for call in api.calls)
     assert not api.posts
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -371,9 +376,97 @@ def test_review_payload_uses_false_positive_exact_reuse_with_fixed_time():
     assert payload["apply_to_future_matches"] is True
     assert payload["clear_review_on_match"] is True
     assert payload["activate_retrieval"] is True
-    assert payload["activation_review_after_days"] == 30
+    assert payload["activation_review_after_days"] == 180
+    assert datetime.fromisoformat(payload["activation_valid_until"]) == now + timedelta(
+        days=365
+    )
     assert payload["metadata"]["individual_manual_review_claimed"] is False
     assert payload == bulk.review_payload(item, scope, generated, EXPERIMENT, now=now)
+
+
+def test_new_review_window_respects_shorter_source_validity():
+    item = candidate()
+    now = datetime(2026, 10, 10, 2, tzinfo=UTC)
+    item["validity"] = {"valid_until": (now + timedelta(days=90)).isoformat()}
+    with pytest.raises(bulk.BulkReviewError, match="default review window"):
+        bulk.review_payload(
+            item,
+            bulk.default_applicability(item),
+            draft(item["candidate_id"]),
+            EXPERIMENT,
+            now=now,
+        )
+
+
+def test_legacy_plan_resumes_frozen_30_day_review_without_reapproving_completed(
+    tmp_path,
+):
+    api = FakeAPI(2)
+    path = plan_for(api, tmp_path, 2)
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    plan["schema_version"] = "soc.dev_learning_bulk_review_plan.v1"
+    plan.pop("review_policy", None)
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    original_plan_bytes = path.read_bytes()
+    first, second = list(api.candidates)
+    endpoint = f"/api/soc/memory/candidates/{second}/review"
+    api.failures[endpoint] = bulk.ApiError(None, "response lost")
+    result = bulk.apply_plan(api, path, concurrency=1)
+    assert result["counts"] == {"completed": 1, "review_unknown": 1}
+    review_calls = [call for call in api.posts if call[1].endswith("/review")]
+    assert all(call[2]["activation_review_after_days"] == 30 for call in review_calls)
+    expiry = datetime.fromisoformat(review_calls[-1][2]["activation_valid_until"])
+    assert (
+        datetime.now(UTC) + timedelta(days=59)
+        < expiry
+        < datetime.now(UTC) + timedelta(days=61)
+    )
+    state_before = json.loads((path.parent / "state.json").read_text(encoding="utf-8"))
+    del api.failures[endpoint]
+    result = bulk.apply_plan(api, path, retry_failed=True, concurrency=1)
+    assert result["counts"] == {"completed": 2}
+    assert api.posts[-1] == review_calls[-1]
+    assert len(api.posts) == 5
+    assert path.read_bytes() == original_plan_bytes
+    state_after = json.loads((path.parent / "state.json").read_text(encoding="utf-8"))
+    assert state_after["items"][first] == state_before["items"][first]
+
+
+@pytest.mark.parametrize(
+    ("schema", "policy"),
+    [
+        (
+            "soc.dev_learning_bulk_review_plan.v1",
+            {"review_after_days": 180, "validity_days": 365},
+        ),
+        ("soc.dev_learning_bulk_review_plan.v2", None),
+        (
+            "soc.dev_learning_bulk_review_plan.v2",
+            {"review_after_days": 30, "validity_days": 60},
+        ),
+        (
+            "soc.dev_learning_bulk_review_plan.v2",
+            {"review_after_days": 180, "validity_days": 9999},
+        ),
+        (
+            "soc.dev_learning_bulk_review_plan.v2",
+            {"review_after_days": 180.0, "validity_days": 365},
+        ),
+    ],
+)
+def test_plan_rejects_changed_or_missing_review_policy(tmp_path, schema, policy):
+    api = FakeAPI()
+    path = plan_for(api, tmp_path)
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    plan["schema_version"] = schema
+    if policy is None:
+        plan.pop("review_policy", None)
+    else:
+        plan["review_policy"] = policy
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    with pytest.raises(bulk.BulkReviewError, match="review policy"):
+        bulk.apply_plan(api, path)
+    assert not api.posts
 
 
 def test_review_payload_matches_actual_backend_command_contract(monkeypatch):

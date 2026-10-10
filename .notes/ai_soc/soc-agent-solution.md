@@ -2216,7 +2216,8 @@ lineage 重新打开，必须重新发起受治理修订。同一 Memory 同时�
 六段 `Business Lesson`，被拒绝、替代、过期或停用的候选展示只读治理历史及合法后续动作。
 
 同类告警积累视图以稳定 `lineage_key` 作为一级对象，Profile 定义的 fixed-window `aggregation_key` 只是候选生成窗口；
-generic 默认 24h，PingAn Profile v7 默认 30d。一个模式
+generic 默认 24h，新的普通 PingAn Run 默认 180d，并在 Runtime 请求中冻结；旧 Run 未保存该字段时
+继续使用历史 Profile 的 30d。匹配 Profile 与静态语料索引身份不变，已冻结实验仍以实验范围积累。一个模式
 跨三个窗口出现 `6 + 1 + 1` 次时，页面展示一个 8 条 observation、3 个 window 的 Pattern；候选创建时
 冻结的 5 条与后续 3 条 reinforcement 分开显示，所有原始 observation 仍可审计和 replay。这样既不会
 让固定 Demo 冒充生产 Memory，也不会把长期重复模式按日期切碎。
@@ -2292,8 +2293,9 @@ Rules:
   a server-owned tenant profile may define stricter same-class and duplicate-occurrence semantics without
   changing Runtime. Cohorts isolate tenant/environment/`simulation|operational`, and place the
   canonical timezone-aware source event time in a fixed UTC window. The generic profile defaults to 24 hours,
-  while a versioned tenant profile may declare another bounded default; PingAn Profile v7 uses 30 days. An
-  explicitly supplied operator/evaluation policy remains an auditable override. Each effective window first requires
+  while fresh PingAn Runtime requests freeze a separate 180-day ordinary accumulation default. Historical Runs
+  without that field retain their Profile's 30-day policy, and experiment cohorts retain their frozen full event
+  range. An explicitly supplied operator/evaluation policy remains an auditable override. Each effective window first requires
   5 observations and 5 distinct alert sources, then separately requires 5 conclusive outcomes, at least 80%
   risk/benign consistency, and one consensus strong retrieval anchor before proposing exactly one frozen
   `pending_review` pattern lesson. Conflicted, unresolved, weak-anchor and low-support cohorts remain observations
@@ -2317,9 +2319,10 @@ Rules:
   a later alert with the same IP/rule but a different ZEUS alert ID is a new recurrence. PingAn legacy timestamps
   without an offset are localized by its Adapter as `Asia/Shanghai` with explicit assumption metadata; the generic
   recurrence kernel continues to require timezone-aware canonical time. Another tenant can register
-  another profile; generic contracts and persistence do not import PingAn fields. Its default candidate aggregation
-  window is a fixed 30-day UTC window because current PingAn detection rules are comparatively static; this is a
-  cohort boundary, not a 30-day Memory lifetime or a rolling lookback.
+  another profile; generic contracts and persistence do not import PingAn fields. Fresh PingAn requests freeze a
+  fixed 180-day UTC accumulation window independently of matching identity. The historical Profile/index remains
+  at 30 days, preserving existing Run idempotency, corpus groups and reviewed matching scopes. This is a cohort
+  boundary, not Memory lifetime or a rolling lookback; experiment learning keeps its frozen full event range.
 - Generic feature schema v2 deterministically projects canonical destination transport/port as `network_service`
   and public CVE identifiers as `vulnerability_id`. PingAn feature schema v5 adds a versioned
   `attack_behavior_family`; all three participate in the behavior fingerprint, while source IP, destination IP and
@@ -2714,7 +2717,8 @@ The system should be reviewable from a single alert before scaling to Kafka.
 最终独立代码/数据交付及真实 Mac 性能仍待验收，未清库、未关闭真实内网门禁。
 只读分批准备已实现：CLI 核验源 PKL/索引/载荷库，按静态组内事件时间生成受保护草案。
 已确认第一批每组最多10条：15,288条分为第一批3,002、第二批主要8,522、补充3,764。
-第一批已按本实验及冻结配置的同一实际模式统一积累，保留真实时间和普通30天窗口；
+第一批已按本实验及冻结配置的同一实际模式统一积累，保留真实时间和实验范围；普通积累的新 Run
+窗口为180天，历史30天窗口与静态索引分组保留原边界；
 页面与后台共享固定轮次。批量AI草稿、速率/预计时长分项和最终内网分包仍待收尾，规则确认不等于授权真实运行。
 外网仅开发与模拟，真实批跑、经验审核及效果对比全部留在内网 Mac DEV；静态组不冒充语义核对后的模式。
 

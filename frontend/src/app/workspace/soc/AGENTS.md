@@ -19,6 +19,13 @@ into independently matchable conditions. Translate labels only, preserve complet
 in drafting/preview/review commands, and leave evidence in the existing audit view. Never
 derive core behaviors from free text, IPs, timestamps, or identifiers in the browser.
 
+New explicit Memory confirmation/activation forms propose 180 days until review and
+365 days of activation through `core/soc/memory-review-validity.ts`. Reopening or
+restoring an existing record remains capped by its saved `valid_until`; shorten the
+proposed review interval when less than 180 days remain. Expired records never gain a
+fresh lifetime from form defaults. Preserve current user edits and saved governance
+dates; these defaults do not migrate previously confirmed experience.
+
 ## API And Navigation
 
 - Two-batch controls use the server experiment/round API; preparing membership or a

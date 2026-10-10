@@ -183,7 +183,7 @@ class MemoryPatternAggregationPolicy(BaseModel):
         "soc.memory_pattern_aggregation.v2",
         "soc.memory_pattern_aggregation.v3",
     ] = MEMORY_PATTERN_AGGREGATION_POLICY_VERSION
-    window_seconds: int = Field(default=86_400, ge=300, le=2_592_000)
+    window_seconds: int = Field(default=86_400, ge=300, le=15_552_000)
     minimum_support: int = Field(default=5, ge=2, le=100)
     minimum_distinct_sources: int = Field(default=5, ge=2, le=100)
     minimum_conclusive_support: int = Field(default=5, ge=2, le=100)

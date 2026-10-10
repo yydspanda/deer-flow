@@ -154,7 +154,7 @@ for (const scenario of [
       decision: "reject",
       restore_predecessor: true,
       expected_predecessor_version: expectedVersion,
-      activation_review_after_days: 30,
+      activation_review_after_days: 180,
     });
     expect(mutations[0]).not.toHaveProperty("decision_directive");
     expect(mutations[0]).not.toHaveProperty("record_lesson");

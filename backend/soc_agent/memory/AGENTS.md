@@ -16,6 +16,21 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   to 24 hours; a tenant profile may declare another bounded default. An explicitly
   supplied operator/evaluation policy overrides the profile default and is frozen on
   every observation.
+  Fresh PingAn Runtime requests freeze a 180-day ordinary accumulation window in
+  `memory_aggregation_window_seconds`, separately from the three matching-identity
+  fields. Keep the historical Profile identity/index window at 30 days: old Runs
+  without the optional field retain their original policy and idempotency. This
+  change does not bump the matching Profile, rewrite approved Memory, rebuild corpus
+  groups, or convert fixed UTC windows to rolling lookbacks. Experiment learning still
+  uses its frozen full event range and existing aggregation policy; the static corpus
+  navigation index remains a separate 30-day view. Explicit policies retain priority.
+  CLI ingestion without policy flags inherits the frozen Runtime/Profile default;
+  explicit flags select an operator policy, with omitted fields taking generic policy
+  defaults. Do not turn argparse defaults into an implicit window override.
+  New repeated-pattern candidates default to 365-day validity and review after 180
+  days. New confirmation starts 365-day validity at confirmation time and preserves
+  an explicitly specified candidate review interval, otherwise using 180 days. Existing
+  confirmed Memory dates remain unchanged until an explicit governed update.
 - `MemoryAdmissionService` is the gate for candidate value. Promotion from a note or
   correction is explicit. Pattern construction requires stable similarity anchors,
   bounded windows, distinct-source support, and an auditable quality gate.

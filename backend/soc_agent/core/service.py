@@ -4123,12 +4123,12 @@ def _confirmed_memory_validity(
         return candidate.validity, {}
     validity = SocMemoryCandidateValidity(
         valid_from=confirmed_at,
-        valid_until=confirmed_at + timedelta(days=90),
-        review_after_days=candidate.validity.review_after_days or 30,
+        valid_until=confirmed_at + timedelta(days=365),
+        review_after_days=candidate.validity.review_after_days or 180,
         notes=("Confirmed repeated-pattern knowledge is valid from analyst confirmation; the source evidence window remains in source metadata."),
     )
     return validity, {
-        "record_validity_policy": "soc.memory_pattern_record_validity.v1",
+        "record_validity_policy": "soc.memory_pattern_record_validity.v2",
         "candidate_validity_at_confirmation": candidate.validity.model_dump(mode="json"),
     }
 

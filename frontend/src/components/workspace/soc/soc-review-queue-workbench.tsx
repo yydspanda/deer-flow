@@ -115,6 +115,13 @@ import {
   type MemoryCandidateReviewDraft,
   useMemoryReviewDrafts,
 } from "@/core/soc/memory-review-draft";
+import {
+  defaultMemoryActivationWindow,
+  MEMORY_REVIEW_AFTER_DAYS,
+  memoryActivationLocalDate,
+  memoryConfirmationWindow,
+  memoryRecordActivationWindow,
+} from "@/core/soc/memory-review-validity";
 import { cn } from "@/lib/utils";
 
 import { SocMemoryGovernancePanel } from "./soc-memory-governance-panel";
@@ -400,42 +407,14 @@ function reviewedMemoryBusinessLesson(
 function defaultMemoryRetrievalDraft(
   record?: SocMemoryRecord,
 ): MemoryRetrievalDraft {
-  const validUntil = new Date();
-  validUntil.setDate(validUntil.getDate() + 90);
-  const recordValidUntil = record?.validity.valid_until
-    ? new Date(record.validity.valid_until)
-    : null;
-  if (
-    recordValidUntil &&
-    recordValidUntil.getTime() > Date.now() &&
-    recordValidUntil.getTime() < validUntil.getTime()
-  ) {
-    validUntil.setTime(recordValidUntil.getTime());
-  }
+  const window = record
+    ? memoryRecordActivationWindow(record)
+    : defaultMemoryActivationWindow();
   return {
     reason: "",
-    validUntil: validUntil.toISOString().slice(0, 16),
-    reviewAfterDays: "30",
+    validUntil: window ? memoryActivationLocalDate(window.validUntil) : "",
+    reviewAfterDays: String(window?.reviewDays ?? MEMORY_REVIEW_AFTER_DAYS),
   };
-}
-
-function memoryConfirmationValidUntil(candidate: SocMemoryCandidate) {
-  const preferred = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
-  if (candidate.source.source_type === "repeated_pattern") {
-    return preferred.toISOString();
-  }
-  const candidateLimit = candidate.validity.valid_until
-    ? new Date(candidate.validity.valid_until)
-    : null;
-  if (
-    candidateLimit &&
-    !Number.isNaN(candidateLimit.getTime()) &&
-    candidateLimit.getTime() > Date.now() + 60_000 &&
-    candidateLimit.getTime() < preferred.getTime()
-  ) {
-    return new Date(candidateLimit.getTime() - 30_000).toISOString();
-  }
-  return preferred.toISOString();
 }
 
 const OUTCOME_REVIEW_KIND_OPTIONS: {
@@ -3545,6 +3524,12 @@ export function SocReviewQueueWorkbench({
       toast.error("请先选择最终判断并生成完整的 Business Lesson");
       return;
     }
+    const activationWindow =
+      decision === "confirm" ? memoryConfirmationWindow(candidate) : null;
+    if (decision === "confirm" && !activationWindow) {
+      toast.error("候选有效期不足一天，请刷新候选并确认是否需要重新提炼。");
+      return;
+    }
     try {
       await reviewMemoryCandidateMutation.mutateAsync({
         candidateId: candidate.candidate_id,
@@ -3563,12 +3548,12 @@ export function SocReviewQueueWorkbench({
                 expected_replaced_version: draft.replacement.version,
               }
             : {}),
-          ...(decision === "confirm"
+          ...(decision === "confirm" && activationWindow
             ? {
                 confirmed_verdict: reviewerVerdict,
                 activate_retrieval: true,
-                activation_valid_until: memoryConfirmationValidUntil(candidate),
-                activation_review_after_days: 30,
+                activation_valid_until: activationWindow.validUntil,
+                activation_review_after_days: activationWindow.reviewDays,
               }
             : {}),
           ...(decision === "confirm" && draft.applyToFutureMatches

@@ -28,7 +28,9 @@ from pathlib import Path
 BASE = "/api/soc/dev/corpus-workbench"
 MEMORY = "/api/soc/memory/candidates"
 PENDING = {"pending_review", "confirmed_candidate"}
-PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v1"
+PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v2"
+LEGACY_PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v1"
+REVIEW_POLICY = {"review_after_days": 180, "validity_days": 365}
 # The synchronous endpoint may use a model call plus one output repair. Keep
 # the client above the dedicated nginx route's 1800s response wait budget.
 DRAFT_HTTP_TIMEOUT_SECONDS = 1810.0
@@ -367,6 +369,7 @@ def build_plan(client, output_dir, expected_count, experiment_id=None):
         "expected_count": expected_count,
         "operator_verdict": "false_positive",
         "future_use": "exact_reuse",
+        "review_policy": dict(REVIEW_POLICY),
         "items": items,
     }
     with _locked(directory):
@@ -427,10 +430,19 @@ def validate_draft(candidate_id, draft):
     return lesson
 
 
-def review_payload(candidate, applicability, draft, experiment_id, now=None):
+def review_payload(
+    candidate,
+    applicability,
+    draft,
+    experiment_id,
+    now=None,
+    *,
+    review_after_days=180,
+    validity_days=365,
+):
     lesson = validate_draft(candidate["candidate_id"], draft)
     now = now or datetime.now(UTC)
-    expires = now + timedelta(days=60)
+    expires = now + timedelta(days=validity_days)
     limit = (candidate.get("validity") or {}).get("valid_until")
     if candidate.get("source", {}).get("source_type") != "repeated_pattern" and limit:
         try:
@@ -441,7 +453,7 @@ def review_payload(candidate, applicability, draft, experiment_id, now=None):
             raise BulkReviewError("Candidate validity has no timezone")
         if now + timedelta(minutes=1) < limit < expires:
             expires = limit - timedelta(seconds=30)
-    if expires <= now + timedelta(days=30):
+    if expires <= now + timedelta(days=review_after_days):
         raise BulkReviewError(
             "Candidate validity cannot cover the default review window"
         )
@@ -455,7 +467,7 @@ def review_payload(candidate, applicability, draft, experiment_id, now=None):
         "clear_review_on_match": True,
         "activate_retrieval": True,
         "activation_valid_until": expires.isoformat(),
-        "activation_review_after_days": 30,
+        "activation_review_after_days": review_after_days,
         "metadata": {
             "source": "operator_bulk_review",
             "experiment_id": experiment_id,
@@ -542,6 +554,20 @@ def _same_candidate(client, item):
     return candidate
 
 
+def _plan_review_policy(plan):
+    """Schema changes never reinterpret a previously approved plan or request."""
+    if plan.get("schema_version") == LEGACY_PLAN_SCHEMA:
+        if "review_policy" not in plan:
+            return {"review_after_days": 30, "validity_days": 60}
+    elif plan.get("schema_version") == PLAN_SCHEMA:
+        policy = plan.get("review_policy")
+        if policy == REVIEW_POLICY and all(
+            type(value) is int for value in policy.values()
+        ):
+            return dict(REVIEW_POLICY)
+    raise BulkReviewError("Plan review policy is invalid for its schema")
+
+
 def _saved_review(plan, item, saved):
     """Retain the exact immutable command across uncertain HTTP outcomes."""
     payload = saved["review_payload"]
@@ -551,7 +577,7 @@ def _saved_review(plan, item, saved):
         "apply_to_future_matches": True,
         "clear_review_on_match": True,
         "activate_retrieval": True,
-        "activation_review_after_days": 30,
+        "activation_review_after_days": _plan_review_policy(plan)["review_after_days"],
     }
     if (
         any(payload.get(key) != value for key, value in fixed.items())
@@ -575,7 +601,7 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
     with _locked(directory):
         plan = _load(path)
         if (
-            plan.get("schema_version") != PLAN_SCHEMA
+            plan.get("schema_version") not in {LEGACY_PLAN_SCHEMA, PLAN_SCHEMA}
             or plan.get("url") != validate_url(client.url)
             or plan.get("operator_verdict") != "false_positive"
             or plan.get("future_use") != "exact_reuse"
@@ -583,6 +609,7 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
             raise BulkReviewError(
                 "Plan identity, origin or requested decision is invalid"
             )
+        review_policy = _plan_review_policy(plan)
         ids = [item.get("candidate_id") for item in plan.get("items", [])]
         if (
             len(ids) != plan.get("expected_count")
@@ -691,6 +718,7 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                         item["record_applicability"],
                         saved["draft"],
                         plan["experiment_id"],
+                        **review_policy,
                     )
                     saved.update(
                         review_payload=payload,

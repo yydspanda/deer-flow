@@ -56,6 +56,10 @@ _PINGAN_PATTERN_FACET_KEYS = (
 class PingAnSocMemoryProfile:
     """Conservative PingAn profile layered on the generic Memory Kernel."""
 
+    # Fresh Runtime requests freeze accumulation separately from matching identity.
+    # The identity's legacy window remains part of historical corpus/index hashes.
+    default_aggregation_window_seconds = 180 * 24 * 60 * 60
+
     exclusive_scope_facet_keys = frozenset({"environment", "detection_key", "detection_signature", "behavior_fingerprint", "behavior_strength"})
 
     def explain_scope_facets(self, spec: SocMemoryApplicabilitySpec, facets: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:

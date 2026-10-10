@@ -1831,17 +1831,20 @@ def _add_memory_pattern_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--memory-pattern-window-seconds",
         type=int,
-        default=86_400,
+        default=None,
+        help="Explicit operator policy window; omitted inherits the frozen Runtime/profile window unless another policy override is set, when generic policy defaults fill unset fields",
     )
     parser.add_argument(
         "--memory-pattern-minimum-support",
         type=int,
-        default=5,
+        default=None,
+        help="Explicit operator policy support threshold; generic policy defaults fill other unset policy fields",
     )
     parser.add_argument(
         "--memory-pattern-minimum-distinct-sources",
         type=int,
-        default=5,
+        default=None,
+        help="Explicit operator policy distinct-source threshold; generic policy defaults fill other unset policy fields",
     )
 
 
@@ -4248,15 +4251,8 @@ def _memory_pattern_service_from_args(
     environment = environment_value.strip()
     if not environment:
         raise ValueError("--memory-pattern-environment must not be blank")
-    policy = MemoryPatternAggregationPolicy(
-        window_seconds=getattr(args, "memory_pattern_window_seconds", 86_400),
-        minimum_support=getattr(args, "memory_pattern_minimum_support", 5),
-        minimum_distinct_sources=getattr(
-            args,
-            "memory_pattern_minimum_distinct_sources",
-            5,
-        ),
-    )
+    overrides = {key: value for key in ("window_seconds", "minimum_support", "minimum_distinct_sources") if (value := getattr(args, f"memory_pattern_{key}", None)) is not None}
+    policy = MemoryPatternAggregationPolicy(**overrides) if overrides else None
     data_class = MemoryPatternDataClass(data_class_value)
     return (
         SocMemoryPatternService(

@@ -65,6 +65,10 @@ with bounded rolling dispatch and each candidate's draft-before-review ordering.
 Serialize local state/receipt checkpoints and isolate HTTP handlers; authentication
 failure or interruption stops new requests while already submitted work is drained
 and recorded. Concurrency must not alter frozen plan identity or review idempotency.
+New v2 plans freeze a 180-day review interval and 365-day activation validity. Accept
+legacy v1 plans only with their implicit 30/60-day policy; validate the schema and
+policy together. Resume never rewrites the plan, its hash, cached review payloads,
+idempotency keys or completed records to adopt newer defaults.
 The synchronous lesson-draft POST has a 1810s client wait, exceeding its dedicated
 1800s nginx response budget (one model call plus one output repair and admission).
 Other request budgets stay unchanged. Non-JSON HTTP 504 is reported as a gateway

@@ -58,8 +58,8 @@ class SocMemoryProfileIdentity:
     aggregation_window_seconds: int | None = None
 
     def __post_init__(self) -> None:
-        if self.aggregation_window_seconds is not None and not (300 <= self.aggregation_window_seconds <= 2_592_000):
-            raise ValueError("SOC memory profile aggregation window must be between 5 minutes and 30 days")
+        if self.aggregation_window_seconds is not None and not (300 <= self.aggregation_window_seconds <= 15_552_000):
+            raise ValueError("SOC memory profile aggregation window must be between 5 minutes and 180 days")
 
 
 class SocMemoryProfile(Protocol):

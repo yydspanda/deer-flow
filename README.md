@@ -234,6 +234,11 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > verdict to a frozen pending list through the existing draft/review APIs. Default
 > matching conditions and governance checks remain in force, with per-item receipts
 > and up to eight concurrent candidate reviews (configurable from one to eight).
+> New reviews default to a 180-day review interval and 365-day activation validity,
+> bounded by any existing record expiry. Saved drafts, legacy bulk plans and completed
+> reviews retain their recorded deadlines. New ordinary PingAn runs accumulate within
+> 180-day fixed windows; historical runs, corpus index groups and frozen experiment
+> ranges retain their original boundaries. Evidence and candidate quality gates still apply.
 > The same guide covers draft timeouts and identifier-format errors. Application updates for
 > those errors preserve existing candidates and reviews; resume the original plan to skip
 > completed items. Context-only candidates remain ineligible for exact decision reuse.

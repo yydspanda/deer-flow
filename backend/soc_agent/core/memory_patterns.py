@@ -134,6 +134,31 @@ class SocMemoryPatternService:
 
         profile = self._profile_registry.resolve_run(run)
         effective_policy = self._policy_for_profile(profile)
+        if not self._policy_explicit and self._accumulation_scope is None and run.llm_analysis_request is not None:
+            frozen_window = run.llm_analysis_request.memory_aggregation_window_seconds
+            if frozen_window is not None:
+                effective_policy = MemoryPatternAggregationPolicy.model_validate({**effective_policy.model_dump(mode="json"), "window_seconds": frozen_window})
+        if effective_policy != self._policy:
+            return SocMemoryPatternService(
+                repository=self._repository,
+                candidate_repository=self._candidate_repository,
+                policy=effective_policy,
+                mutation_audit_repository=self._mutation_audit_repository,
+                mutation_uow=self._mutation_uow,
+                event_sink=self._event_sink,
+                now_provider=self._now_provider,
+                profile_registry=self._profile_registry,
+                accumulation_scope=self._accumulation_scope,
+                _transaction_active=self._transaction_active,
+            ).observe_run(
+                run,
+                source_type=source_type,
+                transport_ref=transport_ref,
+                environment=environment,
+                data_class=data_class,
+                context=context,
+                source_metadata=source_metadata,
+            )
         policy_fingerprint = stable_hash(effective_policy.model_dump(mode="json"))
         if self._accumulation_scope is not None:
             policy_fingerprint = stable_hash({"policy": policy_fingerprint, "accumulation_scope": self._accumulation_scope.model_dump(mode="json")})
@@ -1062,8 +1087,8 @@ def _candidate_command(
         evidence_refs=evidence_refs,
         validity=SocMemoryCandidateValidity(
             valid_from=proposed_at,
-            valid_until=proposed_at + timedelta(days=90),
-            review_after_days=30,
+            valid_until=proposed_at + timedelta(days=365),
+            review_after_days=180,
             notes=("Candidate governance validity starts when the repeated pattern is proposed; the historical evidence window remains in source metadata."),
         ),
         idempotency_key=_candidate_idempotency_key(lesson_fingerprint),
