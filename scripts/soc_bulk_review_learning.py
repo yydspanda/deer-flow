@@ -15,10 +15,12 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -79,9 +81,6 @@ class ApiClient:
     def __init__(self, url: str, timeout: float = 610.0):
         self.url = validate_url(url)
         self.timeout = max(610.0, timeout)
-        self._opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _NoRedirect()
-        )
 
     def get(self, path: str):
         return self._request("GET", path)
@@ -110,7 +109,11 @@ class ApiClient:
             headers["Content-Type"] = "application/json"
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         try:
-            with self._opener.open(
+            # urllib handlers can keep request state; never share them across workers.
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}), _NoRedirect()
+            )
+            with opener.open(
                 urllib.request.Request(
                     self.url + path, data=data, headers=headers, method=method
                 ),
@@ -489,6 +492,7 @@ def _receipts(directory, plan, state):
         "updated_at": datetime.now(UTC).isoformat(),
         "counts": dict(Counter(row["status"] for row in rows)),
         "items": rows,
+        "execution": copy.deepcopy(state.get("execution", {})),
     }
     _atomic(directory / "state.json", state)
     _atomic(directory / "receipts.json", result)
@@ -547,7 +551,9 @@ def _saved_review(plan, item, saved):
         raise BulkReviewError("Saved review payload or idempotency key changed")
 
 
-def apply_plan(client, plan_path, retry_failed=False):
+def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
+    if type(concurrency) is not int or not 1 <= concurrency <= 8:
+        raise BulkReviewError("Review concurrency must be an integer from 1 to 8")
     path = Path(plan_path).expanduser().absolute()
     directory = path.parent
     with _locked(directory):
@@ -590,20 +596,49 @@ def apply_plan(client, plan_path, retry_failed=False):
         )
         if state.get("plan_hash") != canonical_hash(plan):
             raise BulkReviewError("Resume state belongs to a different plan")
-        for index, item in enumerate(plan["items"], 1):
+        state["execution"] = {
+            "concurrency": concurrency,
+            "started_at": datetime.now(UTC).isoformat(),
+        }
+        state_lock = threading.RLock()
+        stop = threading.Event()
+        fatal = []
+
+        def checkpoint(cid, saved):
+            with state_lock:
+                state["items"][cid] = copy.deepcopy(saved)
+                return _receipts(directory, plan, state)
+
+        class AdmissionStopped(Exception):
+            pass
+
+        def post(cid, saved, phase, path, payload, idempotency_key=None):
+            # The gate defines admission. Requests admitted before a fatal event
+            # are in flight and must finish recording their actual outcome.
+            with state_lock:
+                if stop.is_set():
+                    raise AdmissionStopped
+                saved.update(status=phase, error=None)
+                checkpoint(cid, saved)
+            return client.post(path, payload, idempotency_key=idempotency_key)
+
+        def process_item(index, item):
+            if stop.is_set():
+                return
             cid = item["candidate_id"]
-            saved = state["items"].setdefault(cid, {"status": "pending"})
+            with state_lock:
+                saved = copy.deepcopy(state["items"].get(cid, {"status": "pending"}))
             if saved["status"] in {"completed", "confirmed_unverified"}:
-                continue
+                return
             if item["blocked_reason"]:
                 saved.update(status="blocked", error=item["blocked_reason"])
-                _receipts(directory, plan, state)
-                continue
+                checkpoint(cid, saved)
+                return
             if (
                 saved["status"] in {"blocked", "draft_failed", "drafting"}
                 and not retry_failed
             ):
-                continue
+                return
             stage = "precheck"
             try:
                 _idle_learning(client, plan["experiment_id"])
@@ -613,9 +648,10 @@ def apply_plan(client, plan_path, retry_failed=False):
                     candidate = _same_candidate(client, item)
                     if "draft" not in saved:
                         stage = "draft"
-                        saved.update(status="drafting", error=None)
-                        _receipts(directory, plan, state)
-                        draft = client.post(
+                        draft = post(
+                            cid,
+                            saved,
+                            "drafting",
                             _candidate_path(cid) + "/lesson-draft",
                             {
                                 "reviewer_verdict": "false_positive",
@@ -629,7 +665,9 @@ def apply_plan(client, plan_path, retry_failed=False):
                         )
                         validate_draft(cid, draft)
                         saved.update(draft=draft, status="draft_ready")
-                        _receipts(directory, plan, state)
+                        checkpoint(cid, saved)
+                    if stop.is_set():
+                        return
                     stage = "precheck"
                     _same_candidate(client, item)
                     payload = review_payload(
@@ -644,7 +682,7 @@ def apply_plan(client, plan_path, retry_failed=False):
                         + canonical_hash([canonical_hash(plan), cid, payload]),
                         status="review_ready",
                     )
-                    _receipts(directory, plan, state)
+                    checkpoint(cid, saved)
                 else:
                     _saved_review(plan, item, saved)
                     current = client.get(_candidate_path(cid))
@@ -658,20 +696,21 @@ def apply_plan(client, plan_path, retry_failed=False):
                             status="confirmed_unverified",
                             error="Candidate is confirmed but this request's commit cannot be proven; inspect its Memory record before any further action",
                         )
-                        _receipts(directory, plan, state)
+                        checkpoint(cid, saved)
                         print(
                             f"[{index}/{len(ids)}] {cid}: confirmed_unverified",
                             flush=True,
                         )
-                        continue
+                        return
                     else:
                         raise BulkReviewError(
                             "Candidate is no longer pending; not reviewed"
                         )
                 stage = "review"
-                saved.update(status="reviewing", error=None)
-                _receipts(directory, plan, state)
-                result = client.post(
+                result = post(
+                    cid,
+                    saved,
+                    "reviewing",
                     _candidate_path(cid) + "/review",
                     saved["review_payload"],
                     idempotency_key=saved["idempotency_key"],
@@ -679,6 +718,8 @@ def apply_plan(client, plan_path, retry_failed=False):
                 saved["review_result"] = result
                 memory_id = _verify_result(cid, result)
                 saved.update(status="completed", memory_id=memory_id, error=None)
+            except AdmissionStopped:
+                return
             except (ApiError, BulkReviewError) as exc:
                 unknown = isinstance(exc, ApiError) and (
                     exc.status is None or exc.status >= 500
@@ -695,17 +736,74 @@ def apply_plan(client, plan_path, retry_failed=False):
                     error=(exc.detail if isinstance(exc, ApiError) else str(exc)),
                     error_code=(exc.status if isinstance(exc, ApiError) else None),
                 )
-                _receipts(directory, plan, state)
                 if isinstance(exc, ApiError) and exc.status in {401, 403}:
-                    raise BulkReviewError(
-                        "Authentication/authorization failed; batch stopped, see private receipts"
-                    ) from None
+                    with state_lock:
+                        stop.set()
+                        if not fatal:
+                            fatal.append(
+                                BulkReviewError(
+                                    "Authentication/authorization failed; batch stopped, see private receipts"
+                                )
+                            )
+                            print(
+                                "Authorization failed; stopping new admissions and saving in-flight outcomes.",
+                                flush=True,
+                            )
+                        checkpoint(cid, saved)
+            except BaseException:
+                # Preserve drafting/reviewing for explicit safe recovery if a worker
+                # is interrupted after dispatch; never claim that it did not commit.
+                with state_lock:
+                    stop.set()
+                    checkpoint(cid, saved)
+                raise
+            checkpoint(cid, saved)
+            with state_lock:
+                print(f"[{index}/{len(ids)}] {cid}: {saved['status']}", flush=True)
+
+        with state_lock:
+            _receipts(directory, plan, state)
+        print(
+            f"Review concurrency: {concurrency} (maximum in-flight candidates)",
+            flush=True,
+        )
+        items = iter(enumerate(plan["items"], 1))
+        active = set()
+        executor = ThreadPoolExecutor(
+            max_workers=concurrency, thread_name_prefix="soc-review"
+        )
+        interrupted = None
+        try:
+            while True:
+                while not stop.is_set() and len(active) < concurrency:
+                    next_item = next(items, None)
+                    if next_item is None:
+                        break
+                    active.add(executor.submit(process_item, *next_item))
+                if not active:
+                    break
+                done, active = wait(active, return_when=FIRST_COMPLETED)
+                for future in done:
+                    future.result()
+        except BaseException as exc:
+            with state_lock:
+                stop.set()
+            interrupted = exc
+            print(
+                "Stopping new admissions; waiting for in-flight requests and preserving receipts.",
+                flush=True,
+            )
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+        with state_lock:
             result = _receipts(directory, plan, state)
-            print(f"[{index}/{len(ids)}] {cid}: {saved['status']}", flush=True)
-        result = _receipts(directory, plan, state)
         print(
             "Review counts: " + json.dumps(result["counts"], sort_keys=True), flush=True
         )
+        if interrupted is not None:
+            raise interrupted
+        if fatal:
+            raise fatal[0]
         return result
 
 
@@ -724,6 +822,13 @@ def main(argv=None):
     apply.add_argument("--plan", required=True)
     apply.add_argument("--confirm", required=True, choices=["APPROVE-FALSE-POSITIVE"])
     apply.add_argument(
+        "--concurrency",
+        type=int,
+        choices=range(1, 9),
+        default=8,
+        help="Maximum simultaneous candidate pipelines (default: 8; use 1 for serial)",
+    )
+    apply.add_argument(
         "--retry-failed",
         action="store_true",
         help="Explicitly retry blocked/failed drafts; may make another model call",
@@ -737,8 +842,14 @@ def main(argv=None):
         if args.command == "plan":
             build_plan(client, args.output_dir, args.expected_count, args.experiment)
         else:
-            result = apply_plan(client, args.plan, args.retry_failed)
+            result = apply_plan(client, args.plan, args.retry_failed, args.concurrency)
             return 0 if set(result["counts"]) <= {"completed"} else 2
+    except KeyboardInterrupt:
+        print(
+            "Interrupted; no new candidates started. Saved receipts retain completed and uncertain outcomes.",
+            file=sys.stderr,
+        )
+        return 130
     except (BulkReviewError, OSError, ValueError, KeyError, TypeError) as exc:
         print(
             f"Error: {exc if isinstance(exc, BulkReviewError) else type(exc).__name__}; no automatic retry",

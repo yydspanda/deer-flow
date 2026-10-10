@@ -1,10 +1,13 @@
 """Isolated bulk-review tests; never use a real Gateway, model or database."""
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import csv
 from datetime import UTC, datetime
 import json
 from pathlib import Path
 import stat
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -527,7 +530,7 @@ def test_auth_failure_stops_remaining_candidates(tmp_path):
         403, "reviewer authentication required"
     )
     with pytest.raises(bulk.BulkReviewError):
-        bulk.apply_plan(api, path)
+        bulk.apply_plan(api, path, concurrency=1)
     assert len(api.posts) == 1
 
 
@@ -605,8 +608,10 @@ def test_redirect_is_rejected_before_any_followup_request(monkeypatch):
                 request, None, 302, "Moved", {}, "http://192.0.2.99/collect"
             )
 
+    monkeypatch.setattr(
+        bulk.urllib.request, "build_opener", lambda *handlers: RedirectingOpener()
+    )
     client = bulk.ApiClient("http://127.0.0.1:2026")
-    monkeypatch.setattr(client, "_opener", RedirectingOpener())
     with pytest.raises(bulk.ApiError) as error:
         client.get("/api/soc/test")
     assert error.value.status == 302
@@ -710,7 +715,7 @@ def test_next_candidate_is_not_reviewed_if_batch_starts_again(tmp_path):
 
     api = ConcurrentBatchAPI(2)
     path = plan_for(api, tmp_path, 2)
-    receipt = bulk.apply_plan(api, path)
+    receipt = bulk.apply_plan(api, path, concurrency=1)
     assert receipt["counts"] == {"completed": 1, "blocked": 1}
     assert len(api.posts) == 2
     assert list(api.candidates.values())[1]["status"] == "pending_review"
@@ -724,3 +729,309 @@ def test_help_is_available_without_network_or_application_imports(monkeypatch):
     with pytest.raises(SystemExit) as result:
         bulk.main(["--help"])
     assert result.value.code == 0
+
+
+def test_parallel_apply_uses_eight_rolling_slots_and_durable_checkpoints(
+    tmp_path, monkeypatch
+):
+    class ParallelAPI(FakeAPI):
+        def __init__(self):
+            super().__init__(17)
+            self.guard = threading.Lock()
+            self.first_wave = threading.Barrier(8)
+            self.replacement_started = threading.Event()
+            self.active_candidates = set()
+            self.maximum_active = 0
+            self.completed = set()
+
+        def post(self, path, payload, idempotency_key=None):
+            cid = path.split("/candidates/", 1)[1].split("/", 1)[0]
+            number = int(cid.removeprefix("MC-"))
+            if path.endswith("/lesson-draft"):
+                with self.guard:
+                    self.active_candidates.add(cid)
+                    self.maximum_active = max(
+                        self.maximum_active, len(self.active_candidates)
+                    )
+                if number <= 8:
+                    self.first_wave.wait(timeout=10)
+                if number == 9:
+                    self.replacement_started.set()
+            elif number == 1:
+                assert self.replacement_started.wait(10), (
+                    "The ninth candidate must start while one initial slot is occupied"
+                )
+            result = super().post(path, payload, idempotency_key)
+            if path.endswith("/review"):
+                with self.guard:
+                    self.active_candidates.remove(cid)
+                    self.completed.add(cid)
+            return result
+
+    api = ParallelAPI()
+    path = plan_for(api, tmp_path, 17)
+    original_receipts = bulk._receipts
+    writers = 0
+    maximum_writers = 0
+    snapshots = []
+    writer_guard = threading.Lock()
+
+    def checked_receipts(directory, plan, state):
+        nonlocal writers, maximum_writers
+        with writer_guard:
+            writers += 1
+            maximum_writers = max(maximum_writers, writers)
+        try:
+            result = original_receipts(directory, plan, state)
+            saved_state = json.loads((directory / "state.json").read_text())
+            saved_receipts = json.loads((directory / "receipts.json").read_text())
+            with (directory / "receipts.csv").open(newline="") as stream:
+                csv_rows = list(csv.DictReader(stream))
+            states = {
+                item["candidate_id"]: saved_state["items"]
+                .get(item["candidate_id"], {})
+                .get("status", "pending")
+                for item in plan["items"]
+            }
+            assert {r["candidate_id"]: r["status"] for r in csv_rows} == states
+            assert {
+                r["candidate_id"]: r["status"] for r in saved_receipts["items"]
+            } == states
+            snapshots.append(saved_receipts)
+            return result
+        finally:
+            with writer_guard:
+                writers -= 1
+
+    monkeypatch.setattr(bulk, "_receipts", checked_receipts)
+    # Omitting concurrency verifies the public function's default, not just CLI parsing.
+    result = bulk.apply_plan(api, path)
+    assert result["counts"] == {"completed": 17}
+    assert api.maximum_active == 8
+    assert len(api.completed) == 17
+    assert not api.active_candidates
+    assert maximum_writers == 1
+    assert snapshots[-1]["counts"] == {"completed": 17}
+    assert len(api.posts) == 34
+    assert len({r[3] for r in api.posts if r[1].endswith("/review")}) == 17
+    before = deepcopy(api.posts)
+    resumed = bulk.apply_plan(api, path)
+    assert resumed["counts"] == {"completed": 17}
+    assert api.posts == before
+    for name in ("plan.json", "state.json", "receipts.json", "receipts.csv"):
+        assert stat.S_IMODE((path.parent / name).stat().st_mode) == 0o600
+
+
+def test_concurrency_one_preserves_serial_execution(tmp_path):
+    api = FakeAPI(3)
+    path = plan_for(api, tmp_path, 3)
+    receipt = bulk.apply_plan(api, path, concurrency=1)
+    assert receipt["counts"] == {"completed": 3}
+    assert [r[1] for r in api.posts] == [
+        f"/api/soc/memory/candidates/{cid}/{operation}"
+        for cid in api.candidates
+        for operation in ("lesson-draft", "review")
+    ]
+
+
+@pytest.mark.parametrize("concurrency", [0, 9])
+def test_apply_rejects_concurrency_outside_one_to_eight(tmp_path, concurrency):
+    api = FakeAPI()
+    path = plan_for(api, tmp_path)
+    with pytest.raises(bulk.BulkReviewError):
+        bulk.apply_plan(api, path, concurrency=concurrency)
+    assert not api.posts
+
+
+@pytest.mark.parametrize("arguments, expected", [([], 8), (["--concurrency", "1"], 1)])
+def test_cli_uses_default_eight_or_explicit_single_worker(
+    tmp_path, monkeypatch, arguments, expected
+):
+    api = FakeAPI()
+    applied = []
+    monkeypatch.setattr(bulk, "ApiClient", lambda url: api)
+
+    def apply(client, path, retry_failed=False, concurrency=None):
+        applied.append((client, path, retry_failed, concurrency))
+        return {"counts": {"completed": 117}}
+
+    monkeypatch.setattr(bulk, "apply_plan", apply)
+    path = str(tmp_path / "plan.json")
+    result = bulk.main(
+        ["apply", "--plan", path, "--confirm", "APPROVE-FALSE-POSITIVE", *arguments]
+    )
+    assert result == 0
+    assert applied == [(api, path, False, expected)]
+    assert not api.posts
+
+
+@pytest.mark.parametrize("concurrency", ["0", "9"])
+def test_cli_rejects_invalid_concurrency_without_api(
+    tmp_path, monkeypatch, concurrency
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Invalid concurrency must not construct a client")
+
+    monkeypatch.setattr(bulk, "ApiClient", forbidden)
+    with pytest.raises(SystemExit) as result:
+        bulk.main(
+            [
+                "apply",
+                "--plan",
+                str(tmp_path / "plan.json"),
+                "--confirm",
+                "APPROVE-FALSE-POSITIVE",
+                "--concurrency",
+                concurrency,
+            ]
+        )
+    assert result.value.code == 2
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_parallel_auth_failure_stops_new_posts_and_preserves_inflight_results(
+    tmp_path, monkeypatch, status
+):
+    fatal_observed = threading.Event()
+    review_inflight = threading.Event()
+
+    class AuthFailureAPI(FakeAPI):
+        def __init__(self):
+            super().__init__(12)
+            self.first_wave = threading.Barrier(8)
+            self.guard = threading.Lock()
+            self.entered_posts = []
+            self.posts_after_fatal = []
+            cid = next(iter(self.candidates))
+            self.failures[f"/api/soc/memory/candidates/{cid}/lesson-draft"] = (
+                bulk.ApiError(status, "authentication changed during the first wave")
+            )
+
+        def post(self, path, payload, idempotency_key=None):
+            with self.guard:
+                self.entered_posts.append(path)
+                if fatal_observed.is_set():
+                    self.posts_after_fatal.append(path)
+            cid = path.split("/candidates/", 1)[1].split("/", 1)[0]
+            number = int(cid.removeprefix("MC-"))
+            if path.endswith("/lesson-draft"):
+                assert number <= 8, "No new candidate may start after the auth failure"
+                self.first_wave.wait(timeout=10)
+                if number == 1:
+                    assert review_inflight.wait(10)
+                elif number != 2:
+                    assert fatal_observed.wait(10)
+            else:
+                assert number == 2, "Only the already-admitted review may finish"
+                review_inflight.set()
+                assert fatal_observed.wait(10)
+            return super().post(path, payload, idempotency_key)
+
+    api = AuthFailureAPI()
+    path = plan_for(api, tmp_path, 12)
+    original_receipts = bulk._receipts
+
+    def observe_auth_checkpoint(directory, plan, state):
+        result = original_receipts(directory, plan, state)
+        if any(saved.get("error_code") == status for saved in state["items"].values()):
+            fatal_observed.set()
+        return result
+
+    monkeypatch.setattr(bulk, "_receipts", observe_auth_checkpoint)
+    with pytest.raises(bulk.BulkReviewError, match="[Aa]uthentication"):
+        bulk.apply_plan(api, path, concurrency=8)
+    assert fatal_observed.is_set()
+    assert not api.posts_after_fatal
+    assert len(api.entered_posts) == 9
+    receipt = json.loads((path.parent / "receipts.json").read_text())
+    state = json.loads((path.parent / "state.json").read_text())
+    ids = list(api.candidates)
+    assert len(receipt["items"]) == 12
+    assert sum(receipt["counts"].values()) == 12
+    assert state["items"][ids[0]]["error_code"] == status
+    assert state["items"][ids[1]]["status"] == "completed"
+    assert state["items"][ids[1]]["memory_id"] == "MEM-" + ids[1]
+    for cid in ids[2:8]:
+        assert state["items"][cid]["draft"]["candidate_id"] == cid
+        assert api.candidates[cid]["status"] == "pending_review"
+    for cid in ids[8:]:
+        assert state["items"].get(cid, {}).get("status", "pending") == "pending"
+        assert api.candidates[cid]["status"] == "pending_review"
+
+
+def test_interrupt_stops_dispatch_drains_eight_drafts_and_resumes_cached_work(
+    tmp_path, monkeypatch
+):
+    first_wave_entered = threading.Event()
+    release_inflight = threading.Event()
+
+    class InterruptedAPI(FakeAPI):
+        def __init__(self):
+            super().__init__(12)
+            self.first_attempt = True
+            self.first_wave = threading.Barrier(8, action=first_wave_entered.set)
+            self.entered_posts = []
+
+        def post(self, path, payload, idempotency_key=None):
+            self.entered_posts.append(path)
+            if self.first_attempt:
+                assert path.endswith("/lesson-draft")
+                self.first_wave.wait(timeout=10)
+                assert release_inflight.wait(10)
+            return super().post(path, payload, idempotency_key)
+
+    class ObservedExecutor(ThreadPoolExecutor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            assert wait is True
+            assert cancel_futures is True
+            release_inflight.set()
+            return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def interrupt_wait(*args, **kwargs):
+        assert first_wave_entered.wait(10)
+        raise KeyboardInterrupt
+
+    api = InterruptedAPI()
+    path = plan_for(api, tmp_path, 12)
+    with monkeypatch.context() as patch:
+        patch.setattr(bulk, "wait", interrupt_wait)
+        patch.setattr(bulk, "ThreadPoolExecutor", ObservedExecutor)
+        with pytest.raises(KeyboardInterrupt):
+            bulk.apply_plan(api, path, concurrency=8)
+    assert len(api.entered_posts) == 8
+    assert len(api.posts) == 8
+    assert all(call[1].endswith("/lesson-draft") for call in api.posts)
+    receipt = json.loads((path.parent / "receipts.json").read_text())
+    state = json.loads((path.parent / "state.json").read_text())
+    assert receipt["counts"] == {"draft_ready": 8, "pending": 4}
+    for cid in list(api.candidates)[:8]:
+        assert state["items"][cid]["draft"]["candidate_id"] == cid
+    api.first_attempt = False
+    resumed = bulk.apply_plan(api, path)
+    assert resumed["counts"] == {"completed": 12}
+    assert len([r for r in api.posts if r[1].endswith("/lesson-draft")]) == 12
+    assert len([r for r in api.posts if r[1].endswith("/review")]) == 12
+
+
+def test_cli_reports_interrupt_as_130_without_retry(tmp_path, monkeypatch):
+    api = FakeAPI()
+    calls = []
+    monkeypatch.setattr(bulk, "ApiClient", lambda url: api)
+
+    def interrupted(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(bulk, "apply_plan", interrupted)
+    result = bulk.main(
+        [
+            "apply",
+            "--plan",
+            str(tmp_path / "plan.json"),
+            "--confirm",
+            "APPROVE-FALSE-POSITIVE",
+        ]
+    )
+    assert result == 130
+    assert len(calls) == 1
+    assert not api.posts

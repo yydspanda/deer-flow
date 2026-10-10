@@ -86,10 +86,15 @@ python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learni
 ```bash
 python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" apply \
   --plan "$HOME/soc-review-117/plan.json" \
+  --concurrency 8 \
   --confirm APPROVE-FALSE-POSITIVE
 ```
 
-工具逐条调用页面使用的经验起草与审核接口：
+工具默认最多同时处理 8 条候选，每条依次调用页面使用的经验起草与审核接口。
+一条完成后再补入下一条，不必等同组的其他候选全部结束。`--concurrency` 可设为 1～8，
+需要串行执行时使用 `--concurrency 1`。已用旧版脚本生成的计划和进度可直接继续使用。
+
+每条候选执行以下步骤：
 
 - 以运营指定的误报结论生成完整草稿，保留来源、待核实事项和生成记录；不虚构业务授权理由。
 - 保留默认核心行为与既有范围，提交精确复用、启用经验和匹配时清除复核标记。
@@ -97,12 +102,14 @@ python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learni
 - 服务端拒绝的冲突、过期、证据或范围问题会记录失败；不会为了通过而放宽条件或替换已有经验。
 
 起草会调用已配置的模型，所以整个过程需要时间，并非瞬时 SQL 修改。
-终端会逐条显示进度；请保留终端直到结束。
+终端按完成顺序显示每条进度；请保留终端直到结束。8 路并发是工具的上限，实际速度也取决于模型服务。
 结果保存在 `soc-review-117` 中，包括 `receipts.json`、`receipts.csv` 和可恢复的本地状态。
 不会改写历史告警的研判结论，也不会启动第二批或执行外部处置。
 
 ## 5. 中断恢复及结果检查
 
+按一次 Ctrl+C 会停止派发新候选，并等待已发出的请求结束、保存回执后退出；
+网络请求尚未返回时可能需要等待。认证失败也会停止新请求，保留在途结果。
 普通中断后，重新执行步骤 4 的同一条命令。已完成项会跳过，成功生成的草稿会复用；
 仍待审的项目使用同一幂等键和完整原请求恢复，不重新设置有效期。
 如果审核响应丢失，而候选已经变成已确认，工具会标记 `confirmed_unverified` 并停止重审该条，
@@ -114,6 +121,7 @@ python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learni
 ```bash
 python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" apply \
   --plan "$HOME/soc-review-117/plan.json" \
+  --concurrency 8 \
   --confirm APPROVE-FALSE-POSITIVE \
   --retry-failed
 ```

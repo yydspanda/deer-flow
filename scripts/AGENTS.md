@@ -60,6 +60,11 @@ never write SQL, invent business facts, relax applicability, replace conflicts o
 approve candidates added after the plan. Preserve default core selections and saved
 optional limits. Cache successful drafts; ambiguous model completion requires an
 explicit retry. Store private per-item receipts and leave second-batch start manual.
+Apply defaults to at most eight concurrent candidate pipelines (configurable 1..8),
+with bounded rolling dispatch and each candidate's draft-before-review ordering.
+Serialize local state/receipt checkpoints and isolate HTTP handlers; authentication
+failure or interruption stops new requests while already submitted work is drained
+and recorded. Concurrency must not alter frozen plan identity or review idempotency.
 `soc_learning_candidate_audit.py` reads only persisted first-batch facts with SQLite
 read-only/query-only guards and drift detection; do not rebuild groups or compare
 operational labels. Keep both procedures in `docs/soc-learning-review-batch.md` and

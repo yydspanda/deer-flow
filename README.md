@@ -232,7 +232,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > After learning completes, the [candidate audit and bulk-review tools](docs/soc-learning-review-batch.md)
 > can export saved first-batch diagnostics and apply an operator-selected false-positive
 > verdict to a frozen pending list through the existing draft/review APIs. Default
-> matching conditions and governance checks remain in force, with per-item receipts.
+> matching conditions and governance checks remain in force, with per-item receipts
+> and up to eight concurrent candidate reviews (configurable from one to eight).
 > To deliberately restart only the second batch after a settings mistake, use the
 > [validation-only recovery procedure](docs/soc-validation-reset.md). Its offline DEV
 > command previews one fixed experiment, verifies a full database backup, and clears
