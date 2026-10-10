@@ -53,6 +53,18 @@ historical receipt, and atomically publish the latest successful receipt. Never
 auto-start or repeat reset after a startup failure. Keep the procedure in
 `docs/soc-dev-database-reset.md`; tests invoke only a fake installed Host checkout.
 
+`soc_bulk_review_learning.py` is an explicit DEV operator HTTP client for a frozen
+first-batch candidate list. Plan reads are inert. Apply uses the existing lesson
+draft and review endpoints, authenticated identity and idempotent review payloads;
+never write SQL, invent business facts, relax applicability, replace conflicts or
+approve candidates added after the plan. Preserve default core selections and saved
+optional limits. Cache successful drafts; ambiguous model completion requires an
+explicit retry. Store private per-item receipts and leave second-batch start manual.
+`soc_learning_candidate_audit.py` reads only persisted first-batch facts with SQLite
+read-only/query-only guards and drift detection; do not rebuild groups or compare
+operational labels. Keep both procedures in `docs/soc-learning-review-batch.md` and
+test only with temporary databases and fake HTTP clients.
+
 `soc_pingan_validation_database.py --experiment EXP-...` previews an explicit
 validation-only cleanup on a stopped Host DEV checkout; `--apply` requires the
 operator's decision to discard all second-batch attempts. It shares the existing
