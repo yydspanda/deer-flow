@@ -29,6 +29,9 @@ BASE = "/api/soc/dev/corpus-workbench"
 MEMORY = "/api/soc/memory/candidates"
 PENDING = {"pending_review", "confirmed_candidate"}
 PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v1"
+# The synchronous endpoint may use a model call plus one output repair. Keep
+# the client above the dedicated nginx route's 1800s response wait budget.
+DRAFT_HTTP_TIMEOUT_SECONDS = 1810.0
 
 
 class BulkReviewError(RuntimeError):
@@ -117,7 +120,14 @@ class ApiClient:
                 urllib.request.Request(
                     self.url + path, data=data, headers=headers, method=method
                 ),
-                timeout=self.timeout,
+                timeout=(
+                    max(self.timeout, DRAFT_HTTP_TIMEOUT_SECONDS)
+                    if method == "POST"
+                    and re.fullmatch(
+                        r"/api/soc/memory/candidates/[^/]+/lesson-draft", path
+                    )
+                    else self.timeout
+                ),
             ) as response:
                 raw = response.read(16 * 1024 * 1024 + 1)
                 if len(raw) > 16 * 1024 * 1024:
@@ -126,10 +136,16 @@ class ApiClient:
         except urllib.error.HTTPError as exc:
             # Save bounded server detail privately; never print credentials or response bodies.
             raw = exc.read(32_768)
+            fallback = (
+                "Gateway timeout (HTTP 504); inspect proxy/upstream timeout logs; "
+                "request completion is unknown"
+                if exc.code == 504
+                else "Request rejected"
+            )
             try:
-                detail = str(json.loads(raw).get("detail", "Request rejected"))[:4000]
+                detail = str(json.loads(raw).get("detail", fallback))[:4000]
             except (ValueError, AttributeError):
-                detail = "Request rejected"
+                detail = fallback
             raise ApiError(exc.code, detail) from None
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             raise ApiError(None, type(exc).__name__) from None

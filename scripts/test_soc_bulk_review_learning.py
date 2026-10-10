@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import csv
+import io
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -615,6 +616,54 @@ def test_redirect_is_rejected_before_any_followup_request(monkeypatch):
     with pytest.raises(bulk.ApiError) as error:
         client.get("/api/soc/test")
     assert error.value.status == 302
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected_timeout"),
+    [
+        ("POST", "/api/soc/memory/candidates/MC-TEST/lesson-draft", 1810.0),
+        ("POST", "/api/soc/memory/candidates/MC-TEST/review", 610.0),
+        ("GET", "/api/soc/memory/candidates/MC-TEST", 610.0),
+    ],
+)
+def test_synchronous_draft_wait_covers_proxy_budget(
+    monkeypatch, method, path, expected_timeout
+):
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append((request.method, timeout))
+            return io.BytesIO(b"{}")
+
+    monkeypatch.setattr(bulk.urllib.request, "build_opener", lambda *args: Opener())
+    client = bulk.ApiClient("http://127.0.0.1:2026")
+    assert client._request(method, path) == {}
+    assert calls == [(method, expected_timeout)]
+
+
+def test_non_json_gateway_timeout_is_identified_without_body_or_retry(monkeypatch):
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append(request.full_url)
+            raise bulk.urllib.error.HTTPError(
+                request.full_url,
+                504,
+                "Gateway Timeout",
+                {},
+                io.BytesIO(b"private html"),
+            )
+
+    monkeypatch.setattr(bulk.urllib.request, "build_opener", lambda *args: Opener())
+    client = bulk.ApiClient("http://127.0.0.1:2026")
+    with pytest.raises(bulk.ApiError) as error:
+        client.post("/api/soc/memory/candidates/MC-TEST/lesson-draft", {})
+    assert error.value.status == 504
+    assert "Gateway timeout" in error.value.detail
+    assert "private html" not in error.value.detail
+    assert len(calls) == 1
 
 
 def test_plan_scope_cannot_be_edited_to_widen_reuse(tmp_path):

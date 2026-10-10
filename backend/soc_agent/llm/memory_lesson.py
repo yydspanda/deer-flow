@@ -331,9 +331,27 @@ def _validate_output_contract(
         ]
     )
     identifiers = {match.group(0) for pattern in (_URI_OR_DOMAIN_RE, _NAMESPACED_IDENTIFIER_RE) for match in pattern.finditer(output_text)}
-    unknown_identifiers = sorted(identifier for identifier in identifiers if identifier not in source_text)
+    labeled_literals = _source_labeled_literals(source_catalog)
+    unknown_identifiers = sorted(identifier for identifier in identifiers if identifier not in source_text and identifier not in labeled_literals)
     if unknown_identifiers:
         raise ValueError("memory lesson draft contains literal identifiers absent from source catalog: " + ", ".join(unknown_identifiers[:10]))
+
+
+def _source_labeled_literals(source_catalog: Sequence[SocMemoryLessonDraftSource]) -> set[str]:
+    """Recognize a catalog label attached to its own complete typed value only."""
+    literals = set()
+    for item in source_catalog:
+        if item.source_kind not in {"facet", "applicability"}:
+            continue
+        try:
+            values = json.loads(item.value)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(values, list):
+            # Do not strip arbitrary prefixes, join separate sources, or split
+            # identifiers: those would admit unknown rule keys and URL paths.
+            literals.update(f"{item.label}:{value}" for value in values if isinstance(value, str) and value)
+    return literals
 
 
 def _build_output_repair_messages(
@@ -358,6 +376,8 @@ def _build_output_repair_messages(
                 "Repair one invalid SOC Business Lesson JSON object. Return JSON only. "
                 "Use only the supplied bounded lesson_context and exact D-* aliases. "
                 "Do not add authority, applicability, alert facts, or identifiers. "
+                "Keep each identifier byte-for-byte from its source value; write labels using key=value or a Chinese colon (：), not an attached identifier prefix. "
+                "Separate process names with → or 、, never a slash; a slash-joined name or URL path requires the complete literal in one source. "
                 "The conclusion must contain facts and verdict only. Move close, suppress, block, isolate, "
                 "approval, execution-authorization, and other action instructions to handling_guidance. "
                 "A source-backed factual authorization status may remain factual, but must not grant an action. "

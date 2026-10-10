@@ -14,7 +14,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.utils.model_json import model_json
 
-MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v10"
+MEMORY_LESSON_DRAFT_PROMPT_VERSION = "soc-memory-business-lesson-draft-v11"
 MEMORY_LESSON_MODEL_OUTPUT_SCHEMA_VERSION = "soc.memory_business_lesson_model_output.v3"
 MAX_MEMORY_LESSON_CONTEXT_CHARS = 50_000
 MAX_REVIEWER_CONTEXT_CHARS = 4_000
@@ -258,6 +258,7 @@ Write concise analyst-facing Chinese. A Business Lesson explains what the repeat
 - Every facet shown as required:* is immutable for this lesson. Never describe a required value as optional, variable, equivalent to another value, or replaceable by a similar service.
 - Distinguish what may vary from what must stay fixed. Prefer stable behavior/service/process/URI characteristics over concrete alert IDs or incidental IP/account values unless those values are machine-required facets.
 - Copy every literal URI, domain, rule key, behavior fingerprint, process, path, account, and other identifier byte-for-byte from one cited D-* value. Never translate, split, autocorrect, approximate, or invent an identifier inside prose.
+- Write labels using key=value or a Chinese colon (：), not an attached identifier prefix. Separate process names with → or 、, never a slash; a slash-joined name or URL path requires the complete literal in one source.
 </source_and_trust_rules>
 
 <drafting_method>

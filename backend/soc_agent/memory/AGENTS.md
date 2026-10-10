@@ -299,7 +299,12 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   the typed applicability object remains authoritative. Legacy prose may be localized
   only at read time and must not be rewritten in storage.
 - Validate strict JSON/references and permit at most one bounded output-repair call. The
-  generated lesson opens with editable business fields and read-only applicability.
+  literal guard accepts a `label:literal` wrapper only for a facet/applicability catalog
+  entry whose exact label and complete typed string value form that wrapper. Never
+  strip arbitrary prefixes, match suffixes, combine source entries, or split URI paths.
+  Draft Prompt v11 and its repair prompt prefer `key=value` / Chinese colon and separate
+  process names with arrows rather than inventing slash-joined identifiers.
+  The generated lesson opens with editable business fields and read-only applicability.
   The drafter itself never persists; the reviewed batch workflow may save a separate
   `soc_memory_working_drafts` version, never a retrieval record. Only the existing review
   command publishes a confirmed Memory. Incomplete manual drafts are allowed, but

@@ -37,6 +37,9 @@ other `/api/*` go straight to the Gateway REST routers. See
 [backend/AGENTS.md](backend/AGENTS.md) for the runtime and router detail.
 It compresses HTML and configured textual assets, while deliberately leaving SSE,
 fonts, images, audio, and video uncompressed at the proxy layer.
+The synchronous SOC candidate lesson-draft route has a dedicated 1800-second proxy
+read timeout, covering model generation plus one bounded output repair; upstream
+retries are disabled for that POST. Ordinary API timeout behavior is unchanged.
 
 Both compose files publish that entry as `"${BIND_HOST:-127.0.0.1}:${PORT:-2026}:2026"`
 — **loopback by default**, matching the README's documented deployment model. A bare

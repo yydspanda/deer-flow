@@ -234,6 +234,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > verdict to a frozen pending list through the existing draft/review APIs. Default
 > matching conditions and governance checks remain in force, with per-item receipts
 > and up to eight concurrent candidate reviews (configurable from one to eight).
+> The same guide covers draft timeouts and identifier-format errors. Application updates for
+> those errors preserve existing candidates and reviews; resume the original plan to skip
+> completed items. Context-only candidates remain ineligible for exact decision reuse.
 > To deliberately restart only the second batch after a settings mistake, use the
 > [validation-only recovery procedure](docs/soc-validation-reset.md). Its offline DEV
 > command previews one fixed experiment, verifies a full database backup, and clears

@@ -1,9 +1,9 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-10-09
+> Reconciled: 2026-10-10
 > Status: `Active internal acceptance / model, lifecycle and Worker proven; ZEUS-originated callback pending`
-> Resume action: use the reinitialization Runbook to start with an empty SOC DEV database, rebuild and review first-batch experience, then freeze that new experience for second-batch validation; ZEUS-originated callback and old-page readback remain separate pending acceptance gates
+> Resume action: preserve the completed first batch and reviewed experience, apply the lesson-draft timeout/identifier recovery release with the upgrade Runbook, then resume the original bulk-review plan; ZEUS-originated callback and old-page readback remain separate pending acceptance gates
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -31,6 +31,11 @@
 进程树、父子进程、命令行、登录账号和主机事件继续从告警自身的 PingAn normalizer、canonical facts 和 bounded native evidence 获取，不依赖外部查询 Provider。
 
 ### 1.1 Transfer bundle / 内网迁移包
+
+**2026-10-10 当前恢复入口：** 用户回传本轮第一批2997条全部成功、语义核对开启，117条待审候选经批量审核后
+86条完成、16条不允许精确复用、15条草稿失败（11条504、4条标识校验502）。此时使用保留数据升级手册，
+不要再次初始化数据库。应用修复草稿专用代理超时和有来源的标签包装识别；工具保留原计划及完成回执，
+升级后显式重试15条草稿失败，16条仅作参考的候选保持待审。以下从零部署步骤属于此前已完成的建库阶段。
 
 上一轮内网已完成第一批和第二批验证，固定效果报告日期为2026-09-24；本轮按用户要求用优化后的代码从空经验库重新验证。
 此前内网已确认升级到 `0032_corpus_revision_index`，只读 schema 即时返回，第一批整页约1413ms；这些是历史验收记录，

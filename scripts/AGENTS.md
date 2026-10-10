@@ -65,6 +65,11 @@ with bounded rolling dispatch and each candidate's draft-before-review ordering.
 Serialize local state/receipt checkpoints and isolate HTTP handlers; authentication
 failure or interruption stops new requests while already submitted work is drained
 and recorded. Concurrency must not alter frozen plan identity or review idempotency.
+The synchronous lesson-draft POST has a 1810s client wait, exceeding its dedicated
+1800s nginx response budget (one model call plus one output repair and admission).
+Other request budgets stay unchanged. Non-JSON HTTP 504 is reported as a gateway
+timeout with unknown completion, never as a model refusal or permission to retry.
+Updating standalone tools does not patch the installed application or nginx.
 `soc_learning_candidate_audit.py` reads only persisted first-batch facts with SQLite
 read-only/query-only guards and drift detection; do not rebuild groups or compare
 operational labels. Keep both procedures in `docs/soc-learning-review-batch.md` and

@@ -586,6 +586,98 @@ def test_memory_lesson_drafter_rejects_ungrounded_identifier_or_action_conclusio
         ).draft(_candidate(), reviewer_verdict=Verdict.FALSE_POSITIVE)
 
 
+def _literal_draft_response(observed_event: str) -> str:
+    return json.dumps(
+        {
+            "schema_version": "soc.memory_business_lesson_model_output.v3",
+            "reviewer_verdict": "false_positive",
+            "detection_scenario": "合成检测规则报告了可疑行为。",
+            "observed_event": observed_event,
+            "conclusion": "审核人将本次合成候选的技术结论选为误报。",
+            "supporting_source_refs": ["D-001", "D-003"],
+            "business_rationale": [{"statement": "审核人选择误报，候选记录了合成事件事实。", "source_refs": ["D-001", "D-003"]}],
+            "generalization_boundaries": ["机器适用条件须保持一致。"],
+            "invalidation_conditions": [],
+            "handling_guidance": ["依据精确适用条件复用结论。"],
+            "uncertainties": [],
+        },
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.parametrize("label", ["detection_key", "required:detection_key"])
+def test_memory_lesson_drafter_accepts_exact_source_label_and_whole_literal(label):
+    candidate = _candidate()
+    original = candidate.applicability.required_facets["detection_key"][0]
+    observed_event = f"合成检测标识为 {label}:{original}。"
+    before = candidate.model_dump_json()
+    client = FakeChatClient(_literal_draft_response(observed_event))
+
+    draft = JsonLLMMemoryLessonDrafter(client=client, model_name="lesson-test-model", output_retry_attempts=0).draft(candidate, reviewer_verdict=Verdict.FALSE_POSITIVE)
+
+    assert draft.lesson.observed_event == observed_event
+    assert candidate.model_dump_json() == before
+    assert len(client.calls) == 1
+    assert draft.provenance.repair_applied is False
+    assert draft.persistence_performed is False
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        "unknown_label:pingan:ndr:reverse-shell",
+        "environment:pingan:ndr:reverse-shell",
+        "detection_key:ndr:reverse-shell",
+        "detection_key:pingan:ndr:reverse",
+        "detection_key:pingan:ndr:reverse-shell-extra",
+        "detection_key:pingan:ndr:reverse-shell:invented",
+        "detection_key:PINGAN:ndr:reverse-shell",
+        "required:detection_key:paic.com.cn/pws/askbob-gpt",
+        "paic.com.cn/pws/unknown-service",
+    ],
+)
+def test_memory_lesson_drafter_rejects_unknown_label_or_modified_literal(identifier):
+    client = FakeChatClient(_literal_draft_response(f"合成检测标识为 {identifier}。"))
+
+    with pytest.raises(ValueError, match="literal identifiers absent from source catalog"):
+        JsonLLMMemoryLessonDrafter(client=client, model_name="lesson-test-model", output_retry_attempts=0).draft(_candidate(), reviewer_verdict=Verdict.FALSE_POSITIVE)
+
+
+@pytest.mark.parametrize("literal_in_source", [False, True])
+def test_memory_lesson_drafter_does_not_split_slash_joined_process_names(literal_in_source):
+    candidate = _candidate()
+    candidate.content = "合成进程记录：Java → migratevm.sh → chattr。"
+    if literal_in_source:
+        candidate.content += "原文另有字面值 migratevm.sh/chattr。"
+    client = FakeChatClient(_literal_draft_response("合成事件出现 migratevm.sh/chattr。"))
+    drafter = JsonLLMMemoryLessonDrafter(client=client, model_name="lesson-test-model", output_retry_attempts=0)
+
+    if literal_in_source:
+        assert "migratevm.sh/chattr" in drafter.draft(candidate, reviewer_verdict=Verdict.FALSE_POSITIVE).lesson.observed_event
+    else:
+        with pytest.raises(ValueError, match="literal identifiers absent from source catalog"):
+            drafter.draft(candidate, reviewer_verdict=Verdict.FALSE_POSITIVE)
+
+
+def test_memory_lesson_identifier_repair_preserves_grounding_and_explains_separators():
+    candidate = _candidate()
+    candidate.content = "合成进程记录：Java → migratevm.sh → chattr。"
+    client = SequenceFakeChatClient([_literal_draft_response("合成事件出现 migratevm.sh/chattr。"), _literal_draft_response("合成事件出现 migratevm.sh → chattr。")])
+
+    draft = JsonLLMMemoryLessonDrafter(client=client, model_name="lesson-test-model").draft(candidate, reviewer_verdict=Verdict.FALSE_POSITIVE)
+
+    assert draft.lesson.observed_event == "合成事件出现 migratevm.sh → chattr。"
+    assert len(client.calls) == 2
+    assert draft.provenance.repair_actions == ["provider_output_repair"]
+    for call in client.calls:
+        system = call["messages"][0]["content"]
+        assert "key=value" in system
+        assert "Chinese colon" in system
+        assert "process names" in system
+        assert "→" in system
+        assert "slash" in system
+
+
 def test_memory_lesson_api_returns_review_only_draft() -> None:
     repository = InMemoryMemoryCandidateRepository()
     candidate = SocMemoryService(candidate_repository=repository).propose_candidate(_candidate_command())
