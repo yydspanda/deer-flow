@@ -127,6 +127,38 @@ def test_handoff_requires_process_facts_and_projection_audit_regressions(
         _assert_required_handoff_sources(incomplete)
 
 
+@pytest.mark.parametrize(
+    "required_path",
+    [
+        "backend/soc_agent/contracts/corpus_rebalance.py",
+        "backend/soc_agent/contracts/corpus_rebalance_commands.py",
+        "backend/soc_agent/demo/corpus_rebalance.py",
+        "backend/soc_agent/demo/corpus_rebalance_plan.py",
+        "backend/tests/test_soc_corpus_rebalance_api.py",
+        "backend/tests/test_soc_corpus_rebalance_cli.py",
+        "backend/tests/test_soc_corpus_rebalance_execution.py",
+        "backend/tests/test_soc_corpus_rebalance_plan.py",
+        "backend/tests/test_soc_corpus_rebalance_reports.py",
+        "backend/tests/test_soc_corpus_rebalance_repository.py",
+        "backend/tests/test_soc_corpus_rebalance_service.py",
+        "backend/tests/test_soc_fact_preparation.py",
+        "scripts/soc_bulk_review_learning.py",
+        "scripts/test_soc_bulk_review_learning.py",
+        "docs/soc-corpus-rebalance.md",
+        "docs/soc-learning-review-batch.md",
+    ],
+)
+def test_handoff_requires_rebalance_workflow_and_regressions(
+    required_path: str,
+) -> None:
+    assert required_path in REQUIRED_HANDOFF_SOURCE_PATHS
+    incomplete = [
+        Path(item) for item in REQUIRED_HANDOFF_SOURCE_PATHS if item != required_path
+    ]
+    with pytest.raises(ValueError, match=re.escape(required_path)):
+        _assert_required_handoff_sources(incomplete)
+
+
 def test_private_overlay_keeps_corpus_metadata_but_excludes_large_data() -> None:
     paths = set(PRIVATE_OVERLAY_PATHS)
 

@@ -114,6 +114,13 @@ class SocCorpusExperimentService:
             experiment = store.get_experiment(command.experiment_id)
             if experiment is None:
                 raise ValueError("experiment not found; prepare the fixed dataset first")
+            if (command.purpose == "facts") != bool(experiment.fact_source_experiment_id):
+                raise ValueError("事实预处理只能在专用事实实验运行，该实验不能执行学习或验证")
+            if experiment.rebalance:
+                if command.options.normalization_review_mode != "apply" or command.options.tenant_policy_enabled:
+                    raise ValueError("补充学习实验需要开启语义核对并关闭企业策略")
+                if command.selection.batch == "validation":
+                    self._require_rebalanced_learning_complete(store, experiment.experiment_id)
             if not allow_options_override:
                 if current_plan_id is not None and experiment.plan_id != current_plan_id:
                     raise PermissionError("仅能按当前语料的已保存配置运行；请刷新后重试。")
@@ -225,6 +232,10 @@ class SocCorpusExperimentService:
             raise CorpusExperimentConflict(f"{reason}; create a new round")
         with self.repository.mutation_transaction() as tx:
             tx.lock_memory_governance()
+            store = tx.corpus_experiments()
+            experiment = store.get_experiment(round_.experiment_id)
+            if experiment.rebalance and round_.selection.batch == "validation":
+                self._require_rebalanced_learning_complete(store, experiment.experiment_id)
             return tx.corpus_experiments().set_round_state(round_id, expected_version=round_.version, state="running", reason=None, execution_limit=execution_limit, concurrency=concurrency, actor_id=context.actor.actor_id)
 
     def pause(self, round_id: str, *, context: ServiceRequestContext) -> CorpusRound:
@@ -255,6 +266,27 @@ class SocCorpusExperimentService:
             if record is None or _snapshot(record) != entry or not _eligible(record, now):
                 return "memory_snapshot_changed_or_expired"
         return None
+
+    @staticmethod
+    def _require_rebalanced_learning_complete(store, experiment_id):
+        from soc_agent.contracts.corpus_experiments import CorpusRoundSelection
+
+        round_offset = 0
+        while True:
+            rounds = store.list_rounds(experiment_id=experiment_id, state="running", limit=500, offset=round_offset)
+            if any(round_.selection.batch == "learning" for round_ in rounds):
+                raise ValueError("请等待第一批学习任务结束")
+            round_offset += len(rounds)
+            if len(rounds) < 500:
+                break
+        offset = 0
+        while True:
+            rows = store.batch_jobs(experiment_id, CorpusRoundSelection(batch="learning"), limit=500, offset=offset)
+            if any(job is None or job.status != ProcessingJobStatus.COMPLETED for _, job in rows):
+                raise ValueError("请先完整完成新第一批学习，再启动新第二批验证")
+            offset += len(rows)
+            if len(rows) < 500:
+                break
 
     def request_manual(self, round_id: str, alert_id: str, *, context: ServiceRequestContext) -> None:
         _require_admin(context)

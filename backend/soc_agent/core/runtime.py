@@ -80,6 +80,7 @@ class SocRuntimeLifecycleError(RuntimeError):
 
 SOC_RUNTIME_PIPELINE_VERSION = "soc-runtime-v7"
 SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION = "soc-runtime-v8"
+SOC_RUNTIME_FACT_PREPARATION_PIPELINE_VERSION = "soc-runtime-v1-facts"
 
 
 def inspect_alert_normalization(
@@ -137,6 +138,7 @@ def analyze_alert(
     before_provider: AnalysisBeforeProviderHook | None = None,
     analysis_request_enricher: AnalysisRequestEnricher | None = None,
     sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
+    facts_only: bool = False,
 ) -> AnalysisRun:
     """Analyze one alert through the fixed pipeline and optional governed verifier."""
 
@@ -148,7 +150,9 @@ def analyze_alert(
         execution_options=execution_options,
         status=AnalysisRunStatus.RUNNING,
         pipeline_version=(
-            "soc-runtime-v10-direct"
+            SOC_RUNTIME_FACT_PREPARATION_PIPELINE_VERSION
+            if facts_only
+            else "soc-runtime-v10-direct"
             if direct_resolution is not None
             else "soc-runtime-v9-normalization"
             if normalization_reviewer is not None
@@ -156,8 +160,8 @@ def analyze_alert(
             if role_verifier is not None
             else SOC_RUNTIME_PIPELINE_VERSION
         ),
-        model_name=analysis_node.model_name,
-        prompt_version=analysis_node.prompt_version,
+        model_name="not_invoked" if facts_only else analysis_node.model_name,
+        prompt_version="not_invoked" if facts_only else analysis_node.prompt_version,
         input_payload=input_payload,
         input_hash=stable_hash(input_payload),
     )
@@ -167,7 +171,7 @@ def analyze_alert(
         run.alert_id = alert.alert_id
         run.normalized_alert = alert
         run.normalization_report = _normalization_report(alert)
-        if direct_resolution is not None:
+        if direct_resolution is not None and not facts_only:
             # Canonical policy inputs need no semantic-review or analysis model.
             def prepare_policy_input(_):
                 run.entities = extract_entities(alert)
@@ -200,7 +204,7 @@ def analyze_alert(
             ),
         )
         run.llm_analysis_request = analysis_request
-        if direct_resolution is not None:
+        if direct_resolution is not None and not facts_only:
             resolution = _run_step(run, "direct_policy_after_normalization", analysis_request, lambda _: direct_resolution.resolve_policy(run))
             if resolution is None:
                 resolution = _run_step(run, "direct_memory", analysis_request, lambda _: direct_resolution.resolve_memory(run))
@@ -237,6 +241,11 @@ def analyze_alert(
 
             for change in run.normalization_assistance.observation_changes:
                 change.model_input_status = "present" if observation_projection_present(projected, change) else "not_verified"
+        if facts_only:
+            # This server-owned preparation mode is not a security verdict. Its
+            # snapshots may feed a later ordinary run, with the usual reuse fence.
+            run.status = AnalysisRunStatus.FACTS_READY
+            return run
         if before_provider is not None:
             try:
                 before_provider(

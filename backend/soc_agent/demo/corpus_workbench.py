@@ -698,6 +698,8 @@ class SocCorpusWorkbenchStartResult(BaseModel):
 
 
 def _matches_corpus_run(run: AnalysisRun, case: _CorpusCase) -> bool:
+    if run.pipeline_version == "soc-runtime-v1-facts":
+        return False
     request = run.llm_analysis_request
     if request is None or run.input_hash != case.payload_hash:
         return False

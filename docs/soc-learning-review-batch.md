@@ -66,6 +66,9 @@ python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_learning_candidate
 
 工具只读 `soc_agent_dev.db`，不修改数据库、不调用模型、不重新分组。
 若存在多个实验，按提示添加 `--experiment 实验ID`，不要自动选最近一个猜测。
+补充学习后的新实验也使用这个参数：工具会核验指定实验的第一批完成状态和待审名单，
+不会把它与旧网页快捷批次混为一组；已经继承的已确认经验不会重复审核。
+新实验流程见[保留数据的补充学习手册](soc-corpus-rebalance.md)。
 将输出目录中的 `summary.json` 用于核对数量差异；其中没有原始告警正文或模型推理正文。
 
 ## 3. 冻结本次批量审核名单

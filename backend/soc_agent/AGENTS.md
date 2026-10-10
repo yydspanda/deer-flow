@@ -197,6 +197,35 @@ file for SOC code. The authoritative product and engineering documents are:
   future terminates; completion/cancellation and context exit release it exactly once.
   This does not prove that a disconnected remote server has stopped computing.
 
+- Learning-first successor experiments use `demo/corpus_rebalance.py` and the pure
+  `corpus_rebalance_plan.py` planner. Do not rewrite an existing manifest or reset its
+  database. A separate `fact_source_experiment_id` inventory uses the existing durable
+  rounds/jobs with purpose `facts`, semantic `apply`, no Memory and no tenant policy.
+  Server-owned `facts_only` Runtime stops before security analysis, returns `facts_ready`,
+  and atomically saves Run/audit without business summary, ReviewQueue, policy,
+  ordinary analysis events or Pattern observers. Exclude the entire facts pipeline
+  (including running/failed states) from ordinary latest-alert projections. This mode
+  is not a client analysis option; normal analysis can reuse compatible saved facts.
+  Plan with the actual versioned profile signature/occurrence projection, never labels,
+  verdicts, or the old static navigation group. Preserve original learning members and
+  keep duplicate occurrences on one side. Default holds out two later occurrences
+  when five learning occurrences remain; sparse groups keep a supplementary holdout.
+  Missing facts block by default or explicitly remain supplementary. Server apply
+  rebuilds the complete plan and checks source, quiescence, configuration and Memory
+  versions; a client hash is not authority. Inherited confirmed Memory keeps its
+  original record/governance. Require the source learning pending-review queue to be
+  empty before facts preparation/planning and recheck inside the apply transaction;
+  global candidate coordination must not leave reused old pending candidates hidden
+  from the successor review scope. Only compatible independent original learning runs can
+  supply new-scope Pattern observations; exclude stubs, Memory uses and old validation
+  conclusions. Freeze source hashes and reject semantic drift after splitting. Inherited
+  calls do not count as new model usage. Validation waits for complete successor
+  learning and freezes the reviewed snapshot; no automatic validation learning.
+  Successor reports omit operational-label agreement and require a complete fixed
+  validation batch for a stage conclusion. This adds record-payload metadata, not a DB
+  migration or a second queue. Explicit-ID CLI and bulk review support the new experiment;
+  the legacy quick-workbench remains bound to its original plan.
+
 - DEV Corpus group search is a static, paginated directory under the existing
   Workbench service. `include_group_catalog=false` keeps list payloads bounded by
   page/selected-guide data; default true preserves existing script clients. Group

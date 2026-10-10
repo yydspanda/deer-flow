@@ -74,6 +74,16 @@ The synchronous lesson-draft POST has a 1810s client wait, exceeding its dedicat
 Other request budgets stay unchanged. Non-JSON HTTP 504 is reported as a gateway
 timeout with unknown completion, never as a model refusal or permission to retry.
 Updating standalone tools does not patch the installed application or nginx.
+Explicit `--experiment` plans use that experiment's server status and freeze its
+plan ID; do not compare a successor against the canonical quick-workbench ID.
+Reject facts inventories, incomplete learning and an already-started validation
+batch. Pending candidates and resumed plan membership remain scoped to this explicit
+experiment; inherited confirmed records are not approved again. Legacy plans without
+the explicit-selection field retain their original quick-workbench behavior.
+The handoff inventory must include the rebalance contracts/services, facts-only and
+successor experiment regressions, explicit-experiment bulk review tool/tests, and
+`docs/soc-corpus-rebalance.md` plus the review guide. Source delivery preserves the
+existing DEV database; regrouping uses the new experiment CLI after code upgrade.
 `soc_learning_candidate_audit.py` reads only persisted first-batch facts with SQLite
 read-only/query-only guards and drift detection; do not rebuild groups or compare
 operational labels. Keep both procedures in `docs/soc-learning-review-batch.md` and

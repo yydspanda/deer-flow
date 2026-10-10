@@ -12,8 +12,10 @@ from uuid import uuid4
 
 import httpx
 
+from soc_agent.contracts.corpus_rebalance import CorpusRebalancePlan, CorpusRebalancePolicy
 from soc_agent.contracts.memory_drafts import MemoryDraftGenerateCommand
 from soc_agent.demo.corpus_experiment_reports import compare_reports, export_draft_report, export_report
+from soc_agent.demo.corpus_rebalance_plan import verify_corpus_rebalance_plan
 from soc_agent.demo.corpus_retest_selection import build_retest_plan, read_retest_plan
 from soc_agent.utils.hashing import stable_hash
 
@@ -75,6 +77,23 @@ def parser():
     retest.add_argument("--rule", action="append", default=[])
     retest.add_argument("--alert", action="append", default=[])
     retest.add_argument("--all", action="store_true", help="明确选择旧报告全部成员；否则不同筛选条件之间取交集")
+    facts = commands.add_parser("rebalance-facts", help="准备新版分组事实；只补语义事实，不生成判断或经验")
+    facts.add_argument("--experiment", required=True, help="保留数据的原实验 ID")
+    facts.add_argument("--start", action="store_true", help="同时启动事实补齐轮次；不指定则只准备")
+    facts.add_argument("--wait", action="store_true", help="配合 --start 观察至全部事实轮次结束")
+    facts.add_argument("--concurrency", type=int, choices=range(1, 17))
+    facts.add_argument("--request-key", help="事实准备的幂等键；响应丢失后沿用原值，主动重新预处理时改用新值")
+    rebalance_plan = commands.add_parser("rebalance-plan", help="按真实核心行为固定学习优先的新名单，不调用模型")
+    rebalance_plan.add_argument("--experiment", required=True, help="原实验 ID")
+    rebalance_plan.add_argument("--facts-experiment", required=True)
+    rebalance_plan.add_argument("--holdout", type=int, choices=(1, 2), default=2, help="样本足够的每种核心行为保留 1 或 2 个独立事件作验证")
+    rebalance_plan.add_argument("--missing-facts", choices=("block", "supplementary"), default="block", help="默认缺事实阻止应用；supplementary 明确保留为补充验证")
+    rebalance_plan.add_argument("--output", type=Path, required=True)
+    rebalance_apply = commands.add_parser("rebalance-apply", help="以固定名单建立继承来源的新实验，保留原库与原实验")
+    rebalance_apply.add_argument("--plan", type=Path, required=True)
+    rebalance_apply.add_argument("--experiment", required=True, help="新的实验 ID")
+    rebalance_apply.add_argument("--name", default="学习优先的阶段验证")
+    rebalance_apply.add_argument("--request-key", help="应用名单的幂等键；默认由新实验、名单和名称稳定生成")
     for name, description in (("learn", "第一批后台沉淀，经验仍需运营审核"), ("validate", "第二批只验证，固定已审核经验，不自动学习")):
         command = commands.add_parser(name, help=description)
         command.add_argument("--experiment", required=True)
@@ -144,8 +163,13 @@ def _export(client, round_id, output):
     if first["round"]["state"] == "running" or first["active_count"]:
         raise ValueError("请先 pause 并等待进行中的任务完成，或等本轮预算完成后导出固定报告")
     offset, rows, source = 0, [], None
+    stage_metadata = None
     while True:
         page = _request(client, "GET", f"/rounds/{round_id}/results", params={"offset": offset, "limit": 100})
+        current_metadata = {key: page[key] for key in ("experiment", "stage_scope") if key in page}
+        if stage_metadata is not None and current_metadata != stage_metadata:
+            raise ValueError("导出期间实验或完整阶段范围发生变化，未写入不一致的报告")
+        stage_metadata = current_metadata
         rows.extend(page["items"])
         source = page["source_identity"]
         offset += len(page["items"])
@@ -165,6 +189,7 @@ def _export(client, round_id, output):
         "source_identity": source,
         "created_at": datetime.now(UTC).isoformat(),
         "rows": rows,
+        **(stage_metadata or {}),
     }
     export_report(report, output.expanduser().resolve())
     _print({"round_id": round_id, "rows": len(rows), "output_dir": str(output.resolve())})
@@ -224,6 +249,100 @@ def _draft_plan(client, args):
     _print({"output": str(args.output), "selected_count": len(selected), "excluded": excluded, "model_calls": 0})
 
 
+def _rebalance_facts(client, args):
+    if args.wait and not args.start:
+        raise ValueError("--wait 需要同时指定 --start；已有轮次也可以用 status --round ID --watch 观察")
+    if args.concurrency is not None and not args.start:
+        raise ValueError("--concurrency 需要同时指定 --start")
+    key = args.request_key or "rebalance-facts-" + stable_hash(args.experiment)
+    print(f"request-key: {key}（响应丢失后沿用原值；重新预处理需显式指定新值）", file=sys.stderr, flush=True)
+    prepared = _request(client, "POST", f"/experiments/{args.experiment}/rebalance/facts", json={}, headers={"Idempotency-Key": key})
+    rounds = prepared.get("rounds")
+    if not isinstance(rounds, list) or not prepared.get("experiment_id") or prepared.get("parent_experiment_id") != args.experiment:
+        raise ValueError("事实准备响应缺少原实验、事实实验或轮次名单")
+    ids = [item.get("round_id") for item in rounds]
+    if any(not isinstance(round_id, str) or not round_id for round_id in ids) or len(set(ids)) != len(ids):
+        raise ValueError("事实准备响应包含无效或重复轮次")
+    _print(prepared)
+    if args.start:
+        for round_ in rounds:
+            if round_.get("state") not in {"running", "completed"}:
+                body = {"concurrency": args.concurrency} if args.concurrency is not None else {}
+                started = _request(client, "POST", f"/rounds/{round_['round_id']}/start", json=body)
+                _print({key: started.get(key) for key in ("round_id", "experiment_id", "state", "concurrency")})
+    if args.wait:
+        unfinished = []
+        for round_id in ids:
+            progress = _status(client, round_id, watch=True)
+            if progress["round"]["state"] != "completed" or progress.get("failed_count", 0):
+                unfinished.append(round_id)
+        if unfinished:
+            raise ValueError("事实轮次尚未全部成功，请处理暂停/失败后再生成名单：" + ", ".join(unfinished))
+
+
+def _rebalance_plan(client, args):
+    output = args.output.expanduser().absolute()
+    if output.exists() or output.is_symlink():
+        raise ValueError("名单文件已存在，请使用新文件名；不会覆盖已固定名单")
+    policy = CorpusRebalancePolicy(holdout_per_pattern=args.holdout, missing_facts=args.missing_facts)
+    value = _request(client, "POST", f"/experiments/{args.experiment}/rebalance/plan", json={"facts_experiment_id": args.facts_experiment, "policy": policy.model_dump(mode="json")})
+    plan = CorpusRebalancePlan.model_validate(value)
+    verify_corpus_rebalance_plan(plan)
+    if plan.parent_experiment_id != args.experiment or plan.policy != policy:
+        raise ValueError("服务器返回的原实验或划分策略与请求不一致，未保存名单")
+    wrapper = {"schema_version": "soc.corpus_rebalance_cli_plan.v1", "facts_experiment_id": args.facts_experiment, "plan": plan.model_dump(mode="json")}
+    wrapper["artifact_hash"] = stable_hash(wrapper)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with os.fdopen(os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as stream:
+        json.dump(wrapper, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+    _print(
+        {
+            "output": str(output),
+            "parent_experiment_id": plan.parent_experiment_id,
+            "facts_experiment_id": args.facts_experiment,
+            "plan_id": plan.plan_id,
+            "counts": plan.counts,
+            "moved_count": len(plan.moved_alert_ids),
+            "pattern_count": len(plan.groups),
+            "missing_fact_count": len(plan.missing_facts),
+            "inherited_memory_count": len(plan.inherited_memory_refs),
+            "blockers": plan.blockers,
+            "model_calls": 0,
+        }
+    )
+
+
+def _rebalance_apply(client, args):
+    wrapper = json.loads(args.plan.expanduser().read_text(encoding="utf-8"))
+    if not isinstance(wrapper, dict) or wrapper.get("schema_version") != "soc.corpus_rebalance_cli_plan.v1" or not wrapper.get("facts_experiment_id"):
+        raise ValueError("需要 rebalance-plan 生成的固定名单文件")
+    if stable_hash({key: value for key, value in wrapper.items() if key != "artifact_hash"}) != wrapper.get("artifact_hash"):
+        raise ValueError("名单文件 hash 校验失败，请重新生成，不要手工改动名单或事实实验来源")
+    plan = CorpusRebalancePlan.model_validate(wrapper.get("plan"))
+    verify_corpus_rebalance_plan(plan)
+    if plan.blockers:
+        raise ValueError("名单存在未解决问题，不能应用：" + ", ".join(plan.blockers))
+    if args.experiment == plan.parent_experiment_id:
+        raise ValueError("请指定新的实验 ID，原实验保留不变")
+    key = args.request_key or "rebalance-apply-" + stable_hash([args.experiment, plan.plan_id, args.name, wrapper["facts_experiment_id"]])
+    print(f"request-key: {key}（相同名单和新实验重复提交会沿用已有结果）", file=sys.stderr, flush=True)
+    result = _request(
+        client,
+        "POST",
+        f"/experiments/{plan.parent_experiment_id}/rebalance/apply",
+        json={
+            "facts_experiment_id": wrapper["facts_experiment_id"],
+            "experiment_id": args.experiment,
+            "name": args.name,
+            "plan_id": plan.plan_id,
+            "policy": plan.policy.model_dump(mode="json"),
+        },
+        headers={"Idempotency-Key": key},
+    )
+    _print(result)
+
+
 def _dispatch(args, client):
     def request(method, path, **kwargs):
         return _request(client, method, path, **kwargs)
@@ -253,6 +372,12 @@ def _dispatch(args, client):
         _print(request("POST", f"/experiments/{args.experiment}/draft-jobs/{args.job}/retry", params={"expected_version": args.version}))
     elif args.command == "draft-export":
         _draft_export(client, args)
+    elif args.command == "rebalance-facts":
+        _rebalance_facts(client, args)
+    elif args.command == "rebalance-plan":
+        _rebalance_plan(client, args)
+    elif args.command == "rebalance-apply":
+        _rebalance_apply(client, args)
     elif args.command in {"learn", "validate"}:
         batch = "learning" if args.command == "learn" else "validation"
         selection = {"batch": batch, "scope": args.scope or "reuse", "group_ids": args.group, "rule_codes": args.rule, "alert_ids": args.alert}

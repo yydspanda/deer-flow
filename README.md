@@ -200,6 +200,13 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > a Run was saved; a newer attempt supersedes that failure, and active work takes priority.
 > The HTTP CLI is
 > `backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py --help`.
+> For learning-first resampling after semantic groups become finer, use the
+> [successor experiment runbook](docs/soc-corpus-rebalance.md). It preserves the database,
+> references eligible reviewed Memory and compatible independent learning results,
+> freezes a new fact-based manifest, then runs a new complete validation batch.
+> `rebalance-facts` prepares only semantic facts; it does not run the main analysis model
+> or accumulate Memory. Existing quick-workbench buttons continue to target the original
+> experiment; the successor is controlled by its explicit experiment ID.
 > It supports filters, limits, concurrency, pause/resume, explicit retries and fixed-run
 > exports. Learning uses no existing Memory and accumulates within the experiment;
 > validation freezes reviewed learning Memory and does not automatically create new

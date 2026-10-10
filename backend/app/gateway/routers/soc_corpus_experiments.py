@@ -15,6 +15,7 @@ from app.gateway.soc_corpus_control import can_configure_corpus
 from app.gateway.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
 from app.gateway.soc_dev_workbench import resolve_soc_dev_workbench_runtime, strict_env_bool
 from soc_agent.application.corpus_experiments import CorpusExperimentApplication, build_corpus_experiment_application
+from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import ACTIVE_PROCESSING_JOB_STATUSES, ProcessingJobStatus, SocMemoryCandidateReviewStage
 from soc_agent.contracts.corpus_experiments import (
     Batch,
@@ -33,6 +34,8 @@ from soc_agent.contracts.corpus_experiments import (
     CorpusRoundStartCommand,
     RoundState,
 )
+from soc_agent.contracts.corpus_rebalance import CorpusRebalancePlan
+from soc_agent.contracts.corpus_rebalance_commands import CorpusRebalanceApplyCommand, CorpusRebalanceFactsCommand, CorpusRebalancePlanCommand
 from soc_agent.contracts.memory_drafts import MemoryDraftGenerateBatch
 from soc_agent.core.errors import SocServiceAuthorizationError, SocServiceConflictError
 from soc_agent.core.memory_draft_jobs import DRAFT_WORKLOAD
@@ -40,6 +43,7 @@ from soc_agent.core.memory_working_drafts import SocMemoryWorkingDraftService
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict, CorpusExperimentSchemaNotReady
 from soc_agent.db.jobs import ProcessingJobConflictError
 from soc_agent.demo.corpus_experiment_timing import item_timing, round_timing
+from soc_agent.demo.corpus_rebalance import CorpusRebalanceService
 from soc_agent.demo.corpus_round_comparison import compare_round_item
 
 logger = logging.getLogger(__name__)
@@ -183,6 +187,83 @@ def prepare_experiment(body: CorpusPrepareCommand, request: Request, application
     with _command_errors():
         with application.workbench.experiment_preparation_guard():
             return application.service.prepare(application.workbench.batch_plan, experiment_id=body.experiment_id, name=body.name, context=_admin(request))
+
+
+def _experiment(application, experiment_id):
+    experiment = application.service.store.get_experiment(experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="该实验不存在")
+    return experiment
+
+
+@router.get("/experiments/{experiment_id}", response_model=CorpusExperiment)
+def experiment_detail(experiment_id: str, application: ApplicationDep):
+    return _experiment(application, experiment_id)
+
+
+@router.get("/experiments/{experiment_id}/status")
+def experiment_status(experiment_id: str, application: ApplicationDep, batch: Batch = "learning"):
+    """Read one explicit experiment without selecting the Workbench default."""
+
+    experiment = _experiment(application, experiment_id)
+    store = application.service.store
+    counts = store.batch_counts(experiment_id, CorpusRoundSelection(batch=batch, scope="reuse" if batch == "learning" else "all"))
+    running, blocked_reason = store.batch_control_state(experiment_id, batch)
+    return {
+        "experiment_id": experiment_id,
+        "plan_id": experiment.plan_id,
+        "batch": batch,
+        "total": sum(counts.values()),
+        "completed": counts.get("completed", 0),
+        "failed": counts.get("failed", 0),
+        "active": sum(counts.get(status.value, 0) for status in ACTIVE_PROCESSING_JOB_STATUSES),
+        "remaining": counts.get("remaining", 0) + counts.get("queued", 0),
+        "running": running,
+        "manual_pending": store.has_manual_work(),
+        "blocked_reason": blocked_reason,
+        "pending_candidates": store.list_learning_candidates(experiment_id, limit=1).total,
+        "fact_source_experiment_id": experiment.fact_source_experiment_id,
+        "review_allowed": experiment.fact_source_experiment_id is None,
+        "rebalance": experiment.rebalance is not None,
+    }
+
+
+def _rebalance_context(request, *, mutation=False):
+    context = _admin(request)
+    if not can_configure_corpus(request):
+        raise HTTPException(status_code=403, detail="补充学习和批次调整仅限部署本机操作")
+    if mutation and not context.idempotency_key:
+        raise HTTPException(status_code=400, detail="补充学习需要 Idempotency-Key，重复提交沿用原任务")
+    return context
+
+
+def _rebalance_service(application):
+    return CorpusRebalanceService(application.service, build_soc_memory_profile_registry())
+
+
+@router.post("/experiments/{parent_id}/rebalance/facts", status_code=201)
+def prepare_rebalance_facts(parent_id: str, body: CorpusRebalanceFactsCommand, request: Request, application: ApplicationDep):
+    context = _rebalance_context(request, mutation=True)
+    with _command_errors():
+        return _rebalance_service(application).prepare_facts(parent_id, context=context, options=body.options)
+
+
+@router.post("/experiments/{parent_id}/rebalance/plan", response_model=CorpusRebalancePlan)
+def plan_rebalance(parent_id: str, body: CorpusRebalancePlanCommand, request: Request, application: ApplicationDep):
+    context = _rebalance_context(request)
+    with _command_errors():
+        return _rebalance_service(application).plan(parent_id, body.facts_experiment_id, context=context, policy=body.policy)
+
+
+@router.post("/experiments/{parent_id}/rebalance/apply", status_code=201)
+def apply_rebalance(parent_id: str, body: CorpusRebalanceApplyCommand, request: Request, application: ApplicationDep):
+    context = _rebalance_context(request, mutation=True)
+    with _command_errors():
+        service = _rebalance_service(application)
+        plan = service.plan(parent_id, body.facts_experiment_id, context=context, policy=body.policy)
+        if plan.parent_experiment_id != parent_id or plan.plan_id != body.plan_id:
+            raise ValueError("补充学习计划已变化或来源实验不一致，请重新生成并审阅计划")
+        return service.apply(plan, body.facts_experiment_id, experiment_id=body.experiment_id, name=body.name, context=context)
 
 
 @router.get("/experiments/{experiment_id}/members", response_model=CorpusMemberPage)
@@ -340,7 +421,11 @@ def round_items(round_id: str, application: ApplicationDep, limit: Annotated[int
 def round_results(round_id: str, application: ApplicationDep, limit: Annotated[int, Query(ge=1, le=100)] = 100, offset: Annotated[int, Query(ge=0)] = 0):
     round_ = _round(application, round_id)
     experiment = application.service.store.get_experiment(round_.experiment_id)
-    if application.workbench.batch_plan_id != experiment.plan_id:
+    rebalanced = experiment.rebalance is not None
+    if rebalanced:
+        if application.workbench.batch_plan.source_identity != experiment.source_identity:
+            raise HTTPException(status_code=409, detail="当前样本文件与重分配实验不一致；请恢复该实验的数据包")
+    elif application.workbench.batch_plan_id != experiment.plan_id:
         raise HTTPException(status_code=409, detail="当前样本文件已更换，不能用新样本标签解释旧轮次；请恢复该实验的数据包")
     page = application.service.store.list_round_items(round_id, limit=limit, offset=offset)
     selected = round_.selection.model_copy(update={"alert_ids": [item.alert_id for item in page.items]})
@@ -382,12 +467,36 @@ def round_results(round_id: str, application: ApplicationDep, limit: Annotated[i
                     idempotency_key_hash=hashlib.sha256(json.dumps(item.job.idempotency_key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest(),
                 ),
                 "snapshot_changed_during_run": outcome.get("snapshot_changed_during_run", False),
-                "label": application.workbench.experiment_label(member, decision_available=summary.get("effective_verdict") is not None),
+                **({} if rebalanced else {"label": application.workbench.experiment_label(member, decision_available=summary.get("effective_verdict") is not None)}),
                 "error_code": item.job.error_code,
                 "error_message": item.job.error_message,
             }
         )
-    return {"total": page.total, "items": rows, "round_id": round_id, "source_identity": experiment.source_identity}
+    result = {"total": page.total, "items": rows, "round_id": round_id, "source_identity": experiment.source_identity}
+    if rebalanced:
+        learning_total = application.service.store.list_members(experiment.experiment_id, selection=CorpusRoundSelection(batch="learning"), limit=1).total
+        validation_total = application.service.store.list_members(experiment.experiment_id, selection=CorpusRoundSelection(batch="validation", scope="all"), limit=1).total
+        batch_total = learning_total if round_.selection.batch == "learning" else validation_total
+        progress = application.service.store.round_progress(round_id)
+        metadata = experiment.model_dump(mode="json", exclude={"rebalance": {"fact_hashes", "learning_run_hashes", "learning_run_imports", "inherited_memory_ids"}})
+        metadata["rebalance"].update(imported_learning_run_count=len(experiment.rebalance.learning_run_imports), inherited_memory_count=len(experiment.rebalance.inherited_memory_ids))
+        result.update(
+            experiment=metadata,
+            stage_scope={
+                "batch_total": batch_total,
+                "learning_total": learning_total,
+                "validation_total": validation_total,
+                "stage_complete": (
+                    batch_total > 0
+                    and progress.selected_count == batch_total == progress.completed_count
+                    and progress.active_count == 0
+                    and progress.failed_count == 0
+                    and (round_.selection.batch == "learning" or round_.selection.scope == "all")
+                    and round_.purpose != "facts"
+                ),
+            },
+        )
+    return result
 
 
 @router.get("/rounds/{round_id}/comparison")

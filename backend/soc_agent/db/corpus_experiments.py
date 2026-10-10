@@ -7,7 +7,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, inspect, or_, select, update
+from sqlalchemy import and_, func, inspect, or_, select, update
 from sqlalchemy.orm import Session, aliased
 
 from soc_agent.contracts import SocMemoryCandidate, SocMemoryCandidateReviewStage, SocMemoryRecord
@@ -27,7 +27,7 @@ from soc_agent.contracts.corpus_experiments import (
 )
 from soc_agent.contracts.processing_jobs import ACTIVE_PROCESSING_JOB_STATUSES, ProcessingJobStatus
 from soc_agent.db.jobs import _job_from_row
-from soc_agent.db.models import SocCorpusExperimentMemberRow, SocCorpusExperimentRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocMemoryCandidateRow, SocMemoryRecordRow, SocMemoryWorkingDraftRow, SocProcessingJobRow
+from soc_agent.db.models import SocAnalysisRunRow, SocCorpusExperimentMemberRow, SocCorpusExperimentRow, SocCorpusRoundItemRow, SocCorpusRoundRow, SocMemoryCandidateRow, SocMemoryRecordRow, SocMemoryWorkingDraftRow, SocProcessingJobRow
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -86,7 +86,7 @@ class SqlAlchemyCorpusExperimentRepository:
         if not members or len({m.alert_id for m in members}) != len(members) or len({m.sequence_number for m in members}) != len(members):
             raise ValueError("experiment requires nonempty, unambiguous membership")
         ordered = sorted(members, key=lambda row: row.sequence_number)
-        identity = stable_hash({"experiment": experiment.model_dump(mode="json", exclude={"member_count", "created_at", "created_by"}), "members": [m.model_dump(mode="json") for m in ordered]})
+        identity = stable_hash({"experiment": experiment.model_dump(mode="json", exclude={"member_count", "created_at", "created_by"}, exclude_none=True), "members": [m.model_dump(mode="json") for m in ordered]})
         fixed = experiment.model_copy(update={"member_count": len(ordered)})
         with self._session_factory() as session:
             existing = session.get(SocCorpusExperimentRow, experiment.experiment_id)
@@ -94,6 +94,7 @@ class SqlAlchemyCorpusExperimentRepository:
                 if existing.manifest_hash != identity:
                     raise CorpusExperimentConflict("experiment already has a different fixed membership")
                 return False
+            self._validate_lineage(session, fixed, ordered)
             session.add(SocCorpusExperimentRow(experiment_id=fixed.experiment_id, plan_id=fixed.plan_id, manifest_hash=identity, created_at=fixed.created_at, record_payload=fixed.model_dump(mode="json")))
             session.add_all(
                 [
@@ -112,6 +113,122 @@ class SqlAlchemyCorpusExperimentRepository:
             )
             session.commit()
             return True
+
+    def require_quiescent(self, experiment_id: str) -> None:
+        """Reads only; mutation callers must hold the shared governance lock."""
+        with self._session_factory() as session:
+            self._require_quiescent(session, experiment_id)
+
+    @staticmethod
+    def _require_quiescent(session: Session, experiment_id: str) -> None:
+        if session.get(SocCorpusExperimentRow, experiment_id) is None:
+            raise ValueError("parent experiment not found")
+        round_, item, job = SocCorpusRoundRow, SocCorpusRoundItemRow, SocProcessingJobRow
+        running = session.scalar(select(round_.round_id).where(round_.experiment_id == experiment_id, round_.state == "running").limit(1))
+        active = session.scalar(
+            select(job.job_id)
+            .join(item, item.job_id == job.job_id)
+            .join(round_, round_.round_id == item.round_id)
+            .where(
+                round_.experiment_id == experiment_id,
+                or_(job.status.in_([status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]), and_(job.status == "queued", job.metadata_payload["manual_dispatch"].as_boolean().is_(True))),
+            )
+            .limit(1)
+        )
+        if running or active:
+            raise CorpusExperimentConflict("parent experiment must be quiescent: pause rounds and wait for active or manual work")
+
+    def _validate_lineage(self, session: Session, experiment: CorpusExperiment, members: Sequence[CorpusExperimentMember]) -> None:
+        lineage = experiment.rebalance
+        parent_id = lineage.parent_experiment_id if lineage else experiment.fact_source_experiment_id
+        if parent_id is None:
+            return
+        if lineage is not None and experiment.fact_source_experiment_id is not None:
+            raise ValueError("a fact preparation experiment cannot also inherit learning")
+        if parent_id == experiment.experiment_id:
+            raise CorpusExperimentConflict("experiment cannot inherit itself")
+        self._require_quiescent(session, parent_id)
+        parent = CorpusExperiment.model_validate(session.get(SocCorpusExperimentRow, parent_id).record_payload)
+        if (experiment.tenant_id, experiment.environment, experiment.source_identity) != (parent.tenant_id, parent.environment, parent.source_identity):
+            raise CorpusExperimentConflict("inherited experiment must keep parent tenant, environment and source identity")
+        parent_rows = list(session.scalars(select(SocCorpusExperimentMemberRow).where(SocCorpusExperimentMemberRow.experiment_id == parent_id).limit(20001)))
+        if len(parent_rows) > 20000:
+            raise CorpusExperimentConflict("rebalance membership exceeds 20000 members")
+        old = {row.alert_id: CorpusExperimentMember.model_validate(row.record_payload) for row in parent_rows}
+        new = {member.alert_id: member for member in members}
+        if set(old) != set(new):
+            raise CorpusExperimentConflict("inherited experiment must retain the complete parent membership")
+        # Rebalance uses server-verified semantic event time for chronology; the
+        # original index timestamp is not part of the immutable raw identity.
+        # Facts inventory still requires full equality below.
+        identity_fields = ("payload_hash", "source_index", "rule_code", "detection_key")
+        for alert_id, previous in old.items():
+            current = new[alert_id]
+            if any(getattr(previous, field) != getattr(current, field) for field in identity_fields):
+                raise CorpusExperimentConflict("inherited member source identity changed")
+            if previous.batch == "learning" and current.batch != "learning":
+                raise CorpusExperimentConflict("existing learning members cannot become validation members")
+            if lineage is None and previous != current:
+                raise CorpusExperimentConflict("fact preparation must retain identical source membership")
+        if lineage is None:
+            return
+        learning_ids = {key for key, value in new.items() if value.batch == "learning"}
+        old_learning_ids = {key for key, value in old.items() if value.batch == "learning"}
+        if not set(lineage.learning_run_imports).issubset(learning_ids):
+            raise CorpusExperimentConflict("imported learning runs must belong to child learning members")
+        if not set(lineage.learning_run_imports).issubset(old_learning_ids):
+            raise CorpusExperimentConflict("learning imports require original learning members")
+        imports = list(lineage.learning_run_imports.items())
+        for start in range(0, len(imports), 500):
+            batch = dict(imports[start : start + 500])
+            eligible = self._completed_run_refs(session, parent_id, list(batch))
+            if any(eligible.get(alert_id) != run_id for alert_id, run_id in batch.items()):
+                raise CorpusExperimentConflict("learning import requires the parent's completed non-facts analysis")
+            saved = dict(session.execute(select(SocAnalysisRunRow.run_id, SocAnalysisRunRow.alert_id).where(SocAnalysisRunRow.run_id.in_(batch.values()), SocAnalysisRunRow.status.in_(["success", "needs_review"]))).all())
+            if any(saved.get(run_id) != alert_id for alert_id, run_id in batch.items()):
+                raise CorpusExperimentConflict("learning import requires a saved successful matching analysis")
+        requested = set(lineage.inherited_memory_ids)
+        if requested:
+            rows = session.execute(
+                select(SocMemoryRecordRow, SocMemoryCandidateRow)
+                .join(SocMemoryCandidateRow, SocMemoryCandidateRow.candidate_id == SocMemoryRecordRow.source_candidate_id)
+                .where(self._candidate_scope(session, parent_id), SocMemoryRecordRow.memory_id.in_(requested))
+            ).all()
+            valid = {
+                record.memory_id
+                for record, candidate in rows
+                if record.status == "confirmed"
+                and candidate.status == "confirmed"
+                and record.tenant_id == parent.tenant_id
+                and candidate.tenant_id == parent.tenant_id
+                and (candidate.source_alert_id is None or candidate.source_alert_id in old_learning_ids)
+            }
+            if valid != requested:
+                raise CorpusExperimentConflict("inherited Memory must be confirmed same-tenant parent learning knowledge")
+
+    def completed_run_refs(self, experiment_id: str, alert_ids: Sequence[str]) -> dict[str, str]:
+        """Latest completed analysis per member; facts preparation is never analysis."""
+        if not 1 <= len(alert_ids) <= 500:
+            raise ValueError("completed run lookup requires 1..500 alert IDs")
+        with self._session_factory() as session:
+            return self._completed_run_refs(session, experiment_id, alert_ids)
+
+    @staticmethod
+    def _completed_run_refs(session: Session, experiment_id: str, alert_ids: Sequence[str]) -> dict[str, str]:
+        job, item, round_ = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow
+        ranked = (
+            select(item.alert_id, item.job_id, func.row_number().over(partition_by=item.alert_id, order_by=(round_.created_at.desc(), round_.round_id.desc())).label("rank"))
+            .join(round_, round_.round_id == item.round_id)
+            .where(round_.experiment_id == experiment_id, item.alert_id.in_(alert_ids), func.coalesce(round_.record_payload["purpose"].as_string(), "memory") != "facts")
+            .subquery()
+        )
+        tenant = select(SocCorpusExperimentRow.record_payload["tenant_id"].as_string()).where(SocCorpusExperimentRow.experiment_id == experiment_id).scalar_subquery()
+        query = (
+            select(ranked.c.alert_id, job.run_id)
+            .join(job, job.job_id == ranked.c.job_id)
+            .where(ranked.c.rank == 1, job.status == "completed", job.run_id.is_not(None), job.alert_id == ranked.c.alert_id, job.tenant_id == tenant, job.workload_kind == "corpus_experiment")
+        )
+        return dict(session.execute(query).all())
 
     def get_experiment(self, experiment_id: str) -> CorpusExperiment | None:
         with self._session_factory() as session:
@@ -137,26 +254,38 @@ class SqlAlchemyCorpusExperimentRepository:
             raise ValueError("learning experiment has no event times")
         return datetime.fromisoformat(first), datetime.fromisoformat(last)
 
-    def _learning_candidate_scope(self, experiment_id: str):
+    def _learning_candidate_scope(self, experiment_id: str, *, excluded_run_ids: Sequence[str] = ()):
         learning_runs = (
             select(SocProcessingJobRow.run_id)
             .join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.job_id == SocProcessingJobRow.job_id)
             .join(SocCorpusRoundRow, SocCorpusRoundRow.round_id == SocCorpusRoundItemRow.round_id)
             .where(SocCorpusRoundRow.experiment_id == experiment_id, SocCorpusRoundRow.batch == "learning", SocProcessingJobRow.run_id.is_not(None))
         )
+        if excluded_run_ids:
+            learning_runs = learning_runs.where(SocProcessingJobRow.run_id.not_in(excluded_run_ids))
         return or_(
             SocMemoryCandidateRow.source_run_id.in_(learning_runs),
             SocMemoryCandidateRow.candidate_payload["metadata"]["experiment_id"].as_string() == experiment_id,
             SocMemoryCandidateRow.candidate_payload["source"]["metadata"]["experiment_id"].as_string() == experiment_id,
         )
 
+    def _candidate_scope(self, session: Session, experiment_id: str):
+        row = session.get(SocCorpusExperimentRow, experiment_id)
+        experiment = CorpusExperiment.model_validate(row.record_payload) if row else None
+        excluded = list(experiment.rebalance.learning_run_imports.values()) if experiment and experiment.rebalance else []
+        own = self._learning_candidate_scope(experiment_id, excluded_run_ids=excluded)
+        if experiment is None or experiment.rebalance is None or not experiment.rebalance.inherited_memory_ids:
+            return own
+        inherited = select(SocMemoryRecordRow.source_candidate_id).where(SocMemoryRecordRow.memory_id.in_(experiment.rebalance.inherited_memory_ids), SocMemoryRecordRow.tenant_id == experiment.tenant_id)
+        return or_(own, and_(SocMemoryCandidateRow.candidate_id.in_(inherited), SocMemoryCandidateRow.status == "confirmed", SocMemoryCandidateRow.tenant_id == experiment.tenant_id))
+
     def list_learning_candidates(self, experiment_id: str, *, review_stage: SocMemoryCandidateReviewStage = SocMemoryCandidateReviewStage.PENDING, limit: int = 20, offset: int = 0) -> CorpusCandidatePage:
         _page(limit, offset)
-        query = select(SocMemoryCandidateRow).where(self._learning_candidate_scope(experiment_id))
         states = {"pending": ("pending_review", "confirmed_candidate"), "confirmed": ("confirmed",), "closed": ("rejected", "superseded", "expired", "deprecated")}
-        if review_stage != "all":
-            query = query.where(SocMemoryCandidateRow.status.in_(states[review_stage]))
         with self._session_factory() as session:
+            query = select(SocMemoryCandidateRow).where(self._candidate_scope(session, experiment_id))
+            if review_stage != "all":
+                query = query.where(SocMemoryCandidateRow.status.in_(states[review_stage]))
             count = session.scalar(select(func.count()).select_from(query.subquery()))
             rows = session.scalars(query.order_by(SocMemoryCandidateRow.created_at.desc(), SocMemoryCandidateRow.candidate_id).offset(offset).limit(limit))
             return CorpusCandidatePage(total=count or 0, items=[SocMemoryCandidate.model_validate(row.candidate_payload) for row in rows])
@@ -165,11 +294,11 @@ class SqlAlchemyCorpusExperimentRepository:
         if len(candidate_ids) > 50:
             raise ValueError("candidate scope check is limited to 50 IDs")
         with self._session_factory() as session:
-            return set(session.scalars(select(SocMemoryCandidateRow.candidate_id).where(self._learning_candidate_scope(experiment_id), SocMemoryCandidateRow.candidate_id.in_(candidate_ids))))
+            return set(session.scalars(select(SocMemoryCandidateRow.candidate_id).where(self._candidate_scope(session, experiment_id), SocMemoryCandidateRow.candidate_id.in_(candidate_ids))))
 
     def learning_memory_records(self, experiment_id: str) -> list[SocMemoryRecord]:
-        query = select(SocMemoryRecordRow).join(SocMemoryCandidateRow, SocMemoryCandidateRow.candidate_id == SocMemoryRecordRow.source_candidate_id).where(self._learning_candidate_scope(experiment_id))
         with self._session_factory() as session:
+            query = select(SocMemoryRecordRow).join(SocMemoryCandidateRow, SocMemoryCandidateRow.candidate_id == SocMemoryRecordRow.source_candidate_id).where(self._candidate_scope(session, experiment_id))
             return [SocMemoryRecord.model_validate(row.record_payload) for row in session.scalars(query.order_by(SocMemoryRecordRow.memory_id))]
 
     def governance_hash(self, tenant_id: str) -> str:

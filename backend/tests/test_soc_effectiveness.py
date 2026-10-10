@@ -149,6 +149,38 @@ def test_effectiveness_snapshot_does_not_invent_accuracy_without_truth_labels() 
     assert "不代表人工确认" in snapshot.coverage.conclusion_maintenance_rate.interpretation
 
 
+@pytest.mark.parametrize("facts_status", ["facts_ready", "running", "failed"])
+def test_fact_preparation_never_supersedes_analysis_in_effectiveness(facts_status: str) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    create_soc_tables(engine)
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    _seed_effectiveness_rows(sessions)
+
+    def service():
+        return SocEffectivenessService(repository=SqlAlchemySocEffectivenessRepository(sessions), clock=lambda: NOW)
+
+    before = service().get_snapshot(tenant_id="pingan")
+    before_detail = service().get_rule_detail(before.rules[0].group_key, tenant_id="pingan")
+    assert before_detail.memories
+    with sessions() as session:
+        for index, alert_id in enumerate(("ALT-A", "ALT-B", "ALT-FACTS-ONLY")):
+            facts = _run(f"RUN-FACTS-{index}", alert_id, NOW - timedelta(minutes=5))
+            facts.pipeline_version = "soc-runtime-v1-facts"
+            facts.status = facts_status
+            facts.analysis_verdict = None
+            facts.runtime_decision_verdict = None
+            session.add(facts)
+        session.commit()
+
+    after = service().get_snapshot(tenant_id="pingan")
+    after_detail = service().get_rule_detail(before.rules[0].group_key, tenant_id="pingan")
+    assert after.coverage == before.coverage
+    assert after.summary == before.summary
+    assert after.compute == before.compute
+    assert after.rules == before.rules
+    assert after_detail.memories == before_detail.memories
+
+
 def test_conclusion_maintenance_separates_silence_confirmation_and_correction() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     create_soc_tables(engine)

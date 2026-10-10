@@ -8,7 +8,7 @@ from dataclasses import asdict
 from deerflow.config import get_app_config
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.automation import load_soc_automation_policy
-from soc_agent.contracts import MemoryPatternDataClass
+from soc_agent.contracts import LLMAnalysisRequest, MemoryPatternDataClass
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.core import (
     DeterministicAnalysisRuntime,
@@ -36,7 +36,9 @@ from soc_agent.llm import (
 )
 from soc_agent.llm.normalization import JsonLLMNormalizationReviewer
 from soc_agent.memory import ConfirmedMemoryAnalysisRequestEnricher
+from soc_agent.memory.projection_audit import bind_memory_profile
 from soc_agent.protocols import (
+    AnalysisRequestEnricher,
     PostAnalysisObserver,
     SocActionAdapterRegistryPort,
     TenantPolicySignalProvider,
@@ -60,6 +62,7 @@ def build_soc_analysis_service(
     execute_authorized_actions: bool | None = None,
     execution_options: SocAnalysisExecutionOptions | None = None,
     memory_record_ids: frozenset[str] | None = None,
+    facts_only: bool = False,
 ) -> SocAnalysisService:
     """Build the one analysis service shared by CLI and offline batch entry points."""
 
@@ -76,31 +79,41 @@ def build_soc_analysis_service(
             baseline_repository=repository,
             issue_repository=repository,
         )
-        if repository is not None
+        if repository is not None and not facts_only
         else None
     )
-    post_analysis_observers = _build_post_analysis_observers(
-        repository,
-        settings=resolved_settings,
-        action_adapter_registry=action_adapter_registry,
-        runtime_environment=resolved_environment,
-        pattern_observation_enabled=pattern_observation_enabled,
-        execute_authorized_actions=execute_authorized_actions,
-        execution_options=execution_options,
+    post_analysis_observers = (
+        ()
+        if facts_only
+        else _build_post_analysis_observers(
+            repository,
+            settings=resolved_settings,
+            action_adapter_registry=action_adapter_registry,
+            runtime_environment=resolved_environment,
+            pattern_observation_enabled=pattern_observation_enabled,
+            execute_authorized_actions=execute_authorized_actions,
+            execution_options=execution_options,
+        )
     )
-    analysis_request_enricher = _build_analysis_request_enricher(
-        repository,
-        memory_environment=resolved_environment,
-        memory_record_ids=memory_record_ids,
-        normalization_review_mode=assist_mode,
+    analysis_request_enricher = (
+        _build_fact_request_enricher(environment=resolved_environment, normalization_review_mode=assist_mode)
+        if facts_only
+        else _build_analysis_request_enricher(
+            repository,
+            memory_environment=resolved_environment,
+            memory_record_ids=memory_record_ids,
+            normalization_review_mode=assist_mode,
+        )
     )
     reviewer = None
+    analyzer = role_verifier = None
     if assist_mode != "off":
         if resolved_settings.mode != "llm":
             raise ValueError("SOC_NORMALIZATION_ASSIST_MODE requires SOC_ANALYZER_MODE=llm")
         config = get_app_config()
         client, model_name = build_configured_chat_client(settings=resolved_settings, app_config=config)
-        analyzer, role_verifier = build_configured_analysis_nodes(settings=resolved_settings, app_config=config, client=client)
+        if not facts_only:
+            analyzer, role_verifier = build_configured_analysis_nodes(settings=resolved_settings, app_config=config, client=client)
         reviewer = JsonLLMNormalizationReviewer(
             client=client,
             model_name=model_name,
@@ -109,10 +122,10 @@ def build_soc_analysis_service(
             sensitive_evidence_mode=resolved_settings.sensitive_evidence_mode,
             reference_validation_enabled=_strict_env_bool("SOC_NORMALIZATION_REFERENCE_VALIDATION_ENABLED", default=False),
         )
-    else:
+    elif not facts_only:
         analyzer, role_verifier = build_configured_analysis_nodes(settings=resolved_settings)
     direct_resolution = None
-    if _strict_env_bool("SOC_DIRECT_RESOLUTION_ENABLED", default=True):
+    if not facts_only and _strict_env_bool("SOC_DIRECT_RESOLUTION_ENABLED", default=True):
         profiles = build_soc_memory_profile_registry(normalization_review_mode=assist_mode)
         direct_resolution = SocDirectResolutionService(
             tenant_policy_service=next((observer for observer in post_analysis_observers if isinstance(observer, SocTenantPolicyEvaluationService)), None),
@@ -129,6 +142,7 @@ def build_soc_analysis_service(
             execution_options=execution_options,
             analysis_request_enricher=analysis_request_enricher,
             sensitive_evidence_mode=resolved_settings.sensitive_evidence_mode,
+            facts_only=facts_only,
         ),
         repository=repository,
         summary_repository=repository,
@@ -138,6 +152,19 @@ def build_soc_analysis_service(
         normalization_maintenance_monitor=maintenance,
         post_analysis_observers=post_analysis_observers,
     )
+
+
+def _build_fact_request_enricher(*, environment: str | None, normalization_review_mode: str) -> AnalysisRequestEnricher:
+    """Bind deterministic matching features without retrieving approved answers."""
+
+    profiles = build_soc_memory_profile_registry(normalization_review_mode=normalization_review_mode)
+
+    def enrich(request: LLMAnalysisRequest) -> LLMAnalysisRequest:
+        if environment is not None:
+            request = request.model_copy(update={"environment": environment})
+        return bind_memory_profile(request, profiles.resolve_request(request))
+
+    return enrich
 
 
 def _build_analysis_request_enricher(

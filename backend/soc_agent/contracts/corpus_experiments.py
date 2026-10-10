@@ -1,7 +1,7 @@
 """DEV experiment contracts; round identity never becomes a Memory matching facet."""
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -11,6 +11,30 @@ from soc_agent.contracts.schemas import SocMemoryCandidate
 
 Batch = Literal["learning", "validation"]
 RoundState = Literal["prepared", "running", "paused", "blocked", "completed"]
+BoundedCorpusId = Annotated[str, Field(min_length=1, max_length=128)]
+
+
+class CorpusExperimentRebalance(BaseModel):
+    """Explicit references to preserved learning; never copies review authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["soc.corpus_experiment_rebalance.v1"] = "soc.corpus_experiment_rebalance.v1"
+    parent_experiment_id: str = Field(min_length=1, max_length=64)
+    plan_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    inherited_memory_ids: list[BoundedCorpusId] = Field(default_factory=list, max_length=5000)
+    learning_run_imports: dict[BoundedCorpusId, BoundedCorpusId] = Field(default_factory=dict, max_length=20000)
+    learning_run_hashes: dict[BoundedCorpusId, str] = Field(default_factory=dict, max_length=20000)
+    facts_experiment_id: str | None = Field(default=None, min_length=1, max_length=64)
+    fact_hashes: dict[BoundedCorpusId, str] = Field(default_factory=dict, max_length=20000)
+    creation_request_hash: str | None = None
+
+    @field_validator("inherited_memory_ids")
+    @classmethod
+    def _distinct_memories(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("inherited memory IDs must be distinct")
+        return value
 
 
 class CorpusExperiment(BaseModel):
@@ -26,6 +50,14 @@ class CorpusExperiment(BaseModel):
     member_count: int = Field(default=0, ge=0)
     created_by: str
     created_at: datetime
+    rebalance: CorpusExperimentRebalance | None = None
+    fact_source_experiment_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def _one_origin(self):
+        if self.rebalance is not None and self.fact_source_experiment_id is not None:
+            raise ValueError("a fact preparation experiment cannot also inherit learning")
+        return self
 
 
 class CorpusExperimentMember(BaseModel):
@@ -110,7 +142,7 @@ class CorpusRound(BaseModel):
     round_id: str = Field(min_length=1, max_length=64)
     experiment_id: str = Field(min_length=1, max_length=64)
     selection: CorpusRoundSelection
-    purpose: Literal["memory", "full_flow"] = "memory"
+    purpose: Literal["memory", "full_flow", "facts"] = "memory"
     options: SocAnalysisExecutionOptions = Field(default_factory=SocAnalysisExecutionOptions)
     config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     config_snapshot: dict[str, Any]
@@ -132,13 +164,19 @@ class CorpusRound(BaseModel):
     dispatch_alert_ids: list[str] | None = None
     superseded_by_round_id: str | None = Field(default=None, min_length=1, max_length=64)
 
+    @model_validator(mode="after")
+    def _facts_do_not_decide(self):
+        if self.purpose == "facts" and (self.memory_mode != "none" or self.memory_snapshot or self.options.normalization_review_mode != "apply" or self.options.tenant_policy_enabled):
+            raise ValueError("fact preparation cannot retrieve Memory or apply enterprise policy and requires semantic apply")
+        return self
+
 
 class CorpusRoundCreateCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experiment_id: str = Field(min_length=1, max_length=64)
     selection: CorpusRoundSelection
-    purpose: Literal["memory", "full_flow"] = "memory"
+    purpose: Literal["memory", "full_flow", "facts"] = "memory"
     options: SocAnalysisExecutionOptions = Field(default_factory=SocAnalysisExecutionOptions)
     memory_mode: Literal["snapshot", "none"] = "snapshot"
     parent_round_id: str | None = None
@@ -150,6 +188,10 @@ class CorpusRoundCreateCommand(BaseModel):
     def _consistent_purpose(self):
         if self.purpose == "memory" and self.options.tenant_policy_enabled:
             raise ValueError("Memory-only experiments cannot enable enterprise policy; choose full_flow")
+        if self.purpose == "facts" and (
+            self.memory_mode != "none" or self.options.normalization_review_mode != "apply" or self.options.tenant_policy_enabled or self.options.tenant_policy_advisor_enabled or self.options.tenant_policy_signal_providers_enabled
+        ):
+            raise ValueError("fact preparation requires semantic apply, no Memory and no enterprise policy")
         return self
 
 

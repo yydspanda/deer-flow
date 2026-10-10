@@ -272,6 +272,134 @@ def test_plan_collects_all_117_candidates_without_posts(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+class ExplicitExperimentAPI(FakeAPI):
+    """The old quick experiment may be running; only the chosen child is reviewed."""
+
+    def __init__(self, count=1):
+        super().__init__(count)
+        self.experiment_id = "EXP-REBALANCED"
+        self.plan_id = "d" * 64
+        self.review_allowed = True
+        self.detail_overrides = {}
+        self.validation_completed = 0
+        self.omit_candidate = False
+
+    def get(self, path):
+        parsed = urlsplit(path)
+        prefix = BASE + f"/experiments/{self.experiment_id}"
+        if parsed.path == BASE + "/quick-validation":
+            raise AssertionError(
+                "Explicit review must not inspect the old quick experiment"
+            )
+        if parsed.path == prefix:
+            self.calls.append(("GET", path))
+            return {
+                "experiment_id": self.experiment_id,
+                "tenant_id": "pingan",
+                "environment": "dev-corpus-eval",
+                "plan_id": self.plan_id,
+                "fact_source_experiment_id": None,
+                **self.detail_overrides,
+            }
+        if parsed.path == prefix + "/status":
+            self.calls.append(("GET", path))
+            batch = parse_qs(parsed.query)["batch"][0]
+            validation = batch == "validation"
+            return {
+                "experiment_id": self.experiment_id,
+                "plan_id": self.plan_id,
+                "batch": batch,
+                "total": 10,
+                "completed": self.validation_completed if validation else 10,
+                "failed": 0,
+                "active": 0,
+                "remaining": 10 - self.validation_completed if validation else 0,
+                "running": False,
+                "manual_pending": False,
+                "review_allowed": self.review_allowed,
+                "fact_source_experiment_id": None,
+                "pending_candidates": sum(
+                    c["status"] in bulk.PENDING for c in self.candidates.values()
+                ),
+                **self.quick_overrides,
+            }
+        if parsed.path == prefix + "/candidates" and parse_qs(parsed.query).get(
+            "review_stage"
+        ) == ["all"]:
+            self.calls.append(("GET", path))
+            rows = (
+                []
+                if self.omit_candidate
+                else [
+                    {k: deepcopy(v) for k, v in c.items() if k != "scope_view"}
+                    for c in self.candidates.values()
+                ]
+            )
+            return {"total": len(rows), "items": rows}
+        return super().get(path)
+
+
+def test_explicit_experiment_reviews_only_new_pending_candidates_and_resumes(tmp_path):
+    api = ExplicitExperimentAPI()
+    inherited = candidate(2)
+    inherited["status"] = "confirmed"
+    api.candidates[inherited["candidate_id"]] = inherited
+    output = tmp_path / "explicit-review"
+    bulk.build_plan(api, output, expected_count=1, experiment_id=api.experiment_id)
+    path = output / "plan.json"
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    assert plan["experiment_selection"] == "explicit"
+    assert plan["experiment_plan_id"] == api.plan_id
+    assert len(plan["items"]) == 1
+    assert bulk.apply_plan(api, path)["counts"] == {"completed": 1}
+    assert len(api.posts) == 2
+    assert all(inherited["candidate_id"] not in call[1] for call in api.posts)
+    assert bulk.apply_plan(api, path)["counts"] == {"completed": 1}
+    assert len(api.posts) == 2
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["facts", "tenant", "environment", "validation_started", "active", "invalid_id"],
+)
+def test_explicit_experiment_preflight_rejects_wrong_scope_without_mutations(
+    tmp_path, defect
+):
+    api = ExplicitExperimentAPI()
+    expected = api.experiment_id
+    if defect == "facts":
+        api.review_allowed = False
+    elif defect == "tenant":
+        api.detail_overrides["tenant_id"] = "other"
+    elif defect == "environment":
+        api.detail_overrides["environment"] = "prd"
+    elif defect == "validation_started":
+        api.validation_completed = 1
+    elif defect == "active":
+        api.quick_overrides["active"] = 1
+    else:
+        expected = "EXP-bad/../other"
+    with pytest.raises(bulk.BulkReviewError):
+        bulk.build_plan(
+            api, tmp_path / "invalid", expected_count=1, experiment_id=expected
+        )
+    assert not api.posts
+
+
+@pytest.mark.parametrize("defect", ["plan_changed", "out_of_scope"])
+def test_explicit_apply_rechecks_frozen_plan_and_scoped_inventory(tmp_path, defect):
+    api = ExplicitExperimentAPI()
+    output = tmp_path / "explicit-review"
+    bulk.build_plan(api, output, expected_count=1, experiment_id=api.experiment_id)
+    if defect == "plan_changed":
+        api.plan_id = "e" * 64
+    else:
+        api.omit_candidate = True
+    with pytest.raises(bulk.BulkReviewError):
+        bulk.apply_plan(api, output / "plan.json")
+    assert not api.posts
+
+
 def test_count_mismatch_cannot_mutate_or_publish_plan(tmp_path):
     api = FakeAPI(2)
     with pytest.raises(bulk.BulkReviewError):

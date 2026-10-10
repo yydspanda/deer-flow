@@ -120,6 +120,7 @@ class SqlAlchemySocEffectivenessRepository:
                 (func.count(SocAnalysisRunRow.run_id).over(partition_by=SocAnalysisRunRow.alert_id).label("alert_run_count")),
             )
             .where(
+                SocAnalysisRunRow.pipeline_version != "soc-runtime-v1-facts",
                 SocAnalysisRunRow.started_at >= scope.window_start,
                 SocAnalysisRunRow.started_at < scope.window_end,
             )
@@ -630,6 +631,7 @@ def _latest_runs_for_scope(scope: SocEffectivenessScope):
             .label("run_rank"),
         )
         .where(
+            SocAnalysisRunRow.pipeline_version != "soc-runtime-v1-facts",
             SocAnalysisRunRow.started_at >= scope.window_start,
             SocAnalysisRunRow.started_at < scope.window_end,
         )

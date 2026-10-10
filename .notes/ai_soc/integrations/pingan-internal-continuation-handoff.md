@@ -3,7 +3,7 @@
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-10-10
 > Status: `Active internal acceptance / model, lifecycle and Worker proven; ZEUS-originated callback pending`
-> Resume action: preserve the completed first batch and reviewed experience, apply the lesson-draft timeout/identifier recovery release with the upgrade Runbook, then resume the original bulk-review plan; ZEUS-originated callback and old-page readback remain separate pending acceptance gates
+> Resume action: preserve the database and reviewed experience; after a separately prepared code upgrade, use the rebalance CLI to freeze fine-behavior learning/validation membership in a new experiment and complete its full validation stage. No deployment bundle is generated in the current implementation task. ZEUS-originated callback and old-page readback remain separate pending acceptance gates.
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -32,38 +32,33 @@
 
 ### 1.1 Transfer bundle / 内网迁移包
 
-**2026-10-10 当前恢复入口：** 用户回传本轮第一批2997条全部成功、语义核对开启，117条待审候选经批量审核后
-86条完成、16条不允许精确复用、15条草稿失败（11条504、4条标识校验502）。此时使用保留数据升级手册，
-不要再次初始化数据库。应用修复草稿专用代理超时和有来源的标签包装识别；工具保留原计划及完成回执，
-升级后显式重试15条草稿失败，16条仅作参考的候选保持待审。以下从零部署步骤属于此前已完成的建库阶段。
+**2026-10-10 当前恢复入口：** 用户回传第一批2997条全部成功、语义核对开启，草稿恢复后101条经验已审核。
+只读诊断快照中共118条候选：117条重复模式候选与1条修订候选，当前101条confirmed、17条rejected。
+此前的15条草稿失败已恢复，不再按旧故障名单重审。旧第二批12284条已有部分执行结果，全部保留为历史。
 
-上一轮内网已完成第一批和第二批验证，固定效果报告日期为2026-09-24；本轮按用户要求用优化后的代码从空经验库重新验证。
-此前内网已确认升级到 `0032_corpus_revision_index`，只读 schema 即时返回，第一批整页约1413ms；这些是历史验收记录，
-不代表新版16并发的吞吐或页面性能已经验收。模型、生命周期与Worker已证明的集成事实保留，真实上游callback门禁仍待关闭。
-本次使用 `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`：先停旧 Host、检查端口并备份整个项目，
-再由安装器替换项目，完成语料落位、依赖和预检后显式归档重置 SOC DEV，最后启动和 Smoke。
-普通安装器仍先保留整个 `backend/.deer-flow/data/`；专用手册第6.1节再将旧 `soc_agent_dev.db` 及 sidecars
-移入带Hash清单的备份，确保告警结果、批次、候选、草稿、审核与经验从零开始。账号库、STG、原始语料和配置保留。
-旧备份只供恢复和审计，不恢复到本轮活动库。保留数据升级手册继续随包提供，但本轮不使用，也不与重新初始化手册依次执行。
-Host `start` 自动初始化空 Schema，不手工建表。原始payload和冻结索引只作为语料输入，不导入旧Run、候选或Memory。
-正常启动没有演示经验seed；不要执行 `soc demo run` / `soc demo boss` 等填充演示库命令。
-启动后先核对第一批/第二批已完成数、候选和已审核经验均为0，再重新执行第一批积累、提炼和人工审核；
-第二批冻结本实验新审核且已开放的经验及版本，不自动学习。全程 `--memory none` 是另一个无经验对照，不是本轮主流程。
-已装好的 Mac 基础工具可复用；完整安装器不保留 `.venv`、`node_modules` 或四个语料大文件，
-安装前必须确认 Downloads 中的语料副本。安装器的临时回滚目录在替换成功后即删除，因此必须先做仓库外独立备份。
-备份代码块显示停服、端口检查、压缩和校验阶段；`tar` 压缩和 `shasum` 校验可能较长时间没有更多输出，
-应等待 `Verified stopped-checkout backup` 成功标志后再安装。本次重新生成配套源码、私有配置包、安装器与两份手册，
-旧交付包保留至新版校验完成；当前包身份以本次 report 为准。
-新 private overlay 覆盖配置，不自动合并内网修改；先核对已调通的内网参数，并确保 Runtime 与模型网关并发值均为16。
-本机运行设置支持1～16，首次运行前核对当前生效值为16；若机器留有独立并发设置文件，则在网页明确保存16。
-局域网用户只读该配置，仍可开始、暂停和继续。保存无需重启，不写业务库；降低上限等待在途任务完成，不中断它们。
-仅调节并发不会改变排队任务的运行版本。本轮不继续旧实验，也不通过“重新配置并全部重跑”替代空库初始化。
-该按钮及 `docs/soc-validation-restart.md` 只用于新一轮完成第一批后，未来需要保留本轮新经验而重跑第二批的场景。
-此前内网 Python 的 SQLite 已确认是 `3.45.3`、数据库使用 `DELETE` 日志模式；本版在该版本继续使用此模式，
-不自动升级 SQLite、不要求手工切换 WAL。锁等待与结果保存重试不能保证消除其他长事务竞争。
-本机回归不替代真实内网升级、模型质量或容量验收。
+当前采用**保留数据库、建立后继实验、扩大学习批次**的方案，完整步骤见
+[`docs/soc-corpus-rebalance.md`](../../../docs/soc-corpus-rebalance.md)。先暂停旧轮次并等待在途任务结束、备份数据库，
+再通过独立事实准备任务取得真实核心行为，冻结新版第一批/第二批名单。原第一批成员始终留在学习侧；
+只承接兼容的独立学习Run及当前有效审核经验，移入学习侧的旧验证样本重新独立研判。
+新第二批不积累经验，完整结束后报告实际经验适用与忽略数量，不比较原始处置标签，也不以部分结果代替阶段结论。
+网页快捷两批按钮仍指向原实验；后继实验使用带明确实验ID的CLI与审核入口。
 
-外网仓库根目录执行：
+本轮代码实现和隔离回归不代表已经完成内网升级或新版效果验证，当前不生成部署包。
+需要交付时另行冻结干净提交、执行完整兼容门禁，并沿用 `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md` 保留数据升级。
+原先从空经验库运行的部署已经完成；`--initialize-soc-dev`、重新初始化手册及清理第二批命令属于旧方案，
+**当前不要执行**。正常Host启动负责已有库的结构升级，不重置Run、候选、草稿、审核或Memory。
+
+上一轮固定效果报告日期为2026-09-24；此前已确认 `0032_corpus_revision_index`、只读schema响应与第一批页面访问。
+这些历史记录不代表新版16并发吞吐或本次重新划分效果。模型、生命周期与Worker已证明的集成事实保留，
+ZEUS真实上游callback与旧页面回读门禁仍待关闭。内网已确认SQLite `3.45.3` / `DELETE` 日志模式，
+保持现有模式，不手工切换WAL。
+
+后续获准交付时，安装前按升级手册保存仓库外独立备份，核对Downloads的四个语料文件；
+完整安装器不保留`.venv`、`node_modules`或语料大文件，基础工具可以复用。旧包保留到新包验收完成。
+私有覆盖包不会自动合并内网配置，必须核对已调通参数；Runtime与模型网关上限保持16，
+部署Mac运行设置的独立并发值也需核对。调节容量不改变已有任务身份与业务开关。
+
+以下仅为**后续交付的构建入口**，当前任务不执行；在外网仓库根目录运行：
 
 ```bash
 backend/.venv/bin/python \
@@ -72,12 +67,11 @@ backend/.venv/bin/python \
   backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 git status --short
 backend/.venv/bin/python scripts/build_pingan_internal_transfer.py \
-  --include-private-overlay --initialize-soc-dev
+  --include-private-overlay
 ```
 
-本次带 `--initialize-soc-dev`，报告必须为 `reset_soc_dev_requested=true`、默认手册为 `reinitialize`。
-构建器仍生成两份完整手册；该参数只选择默认教程，不在外网或安装器中重置数据库。
-实际归档重置在内网完成依赖/预检后、第一次启动前执行一次；后续进入两批手册时跳过已经完成的重置步骤。
+后续交付报告必须为 `reset_soc_dev_requested=false`、默认手册为 `upgrade`。
+构建器仍生成两份完整手册；本轮只使用保留数据升级手册，不接着执行重新初始化手册。
 前两条命令都只静态解析旧源码，不 import/执行旧项目。模型 preparer 选择已审阅 STG
 `DeepSeek_V4_Flash`，迁移本地 loopback key，生成 `0600` 的
 `.secrets/eagw-private-key.der`，并把 lifecycle/callback 初始化为 `fake`；Workflow preparer 导入
@@ -102,8 +96,8 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 - `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
 - `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、`.secrets/eagw-private-key.der`、corpus manifest/index、历史 EDR XLSX 及其已编译路径目录；不再携带三个大 PKL 或 Workbench payload SQLite，只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；`runbooks` 映射记录两份手册及各自 SHA-256，`runbook` 保留选中默认手册的兼容字段；不含 secret 内容。
-- `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md`：备用的保留数据升级流程，本轮不使用。
-- `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`：本轮默认入口，完整的停旧服务、备份、安装、显式归档重置 SOC DEV 与重新启动流程。
+- `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md`：后续交付的默认入口，保留现有数据库和审核经验。
+- `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`：另有明确空库重建需求时才使用，本轮不执行。
 - `INSTALL-PINGAN-MAC.sh`：自包含安装器；从脚本自身位置解析两个 archive，先验 Hash/解压结果，再停止旧 Host DEV、检查五个端口并事务式替换 checkout。已有部署会把 `backend/.deer-flow/data`、JWT、用户/Agent/线程状态、受管集成及内网验收证据复制到新 checkout，保留两个 SQLite 及其 sidecar；新 private overlay 的配置与 `pingan-context` 不被旧目录覆盖。必须用 `bash` 执行，禁止 `source`；失败只退出子脚本，不关闭操作员终端。
 
 两份手册均由构建器固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令，替代原来的
@@ -159,7 +153,7 @@ python3 scripts/build_pingan_internal_transfer.py --inspect \
 ```
 
 内网 Mac 使用随包安装器叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`，
-无需修改用户名。已有部署先完成随包重新初始化手册的语料副本核验、停服和独立备份，
+无需修改用户名。已有部署先完成随包保留数据升级手册的语料副本核验、停服和独立备份，
 再执行安装；下面是命令入口摘录，不能替代该手册的完整操作顺序：
 
 ```bash
@@ -170,7 +164,7 @@ cd "$HOME/deer-flow"
 安装器会先验证两个 archive 的本次精确 SHA-256 和 staged checkout 完整性；随后从旧 checkout
 运行 Host DEV `stop`，只有 `3000/8001/2026/4001/8090` 都释放后才替换目录。校验、解压、停服或
 端口检查失败时旧目录不变；替换阶段或持久化状态恢复失败时会尽力恢复旧目录。安装器会先保留
-DeerFlow/SOC 数据库与工作区，本轮还需在首次启动前按重新初始化手册归档重置 SOC DEV；
+DeerFlow/SOC 数据库与工作区，本轮不再执行归档重置 SOC DEV；
 不会继承旧 PID、日志、技能投影或旧 `pingan-context`。
 不得把 Runbook 的代码块通过
 `source`/`.` 加载，也不再手工复制长篇解压和 `rm -rf` 命令。
@@ -204,9 +198,9 @@ python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
 ```
 
-接着完成重新初始化手册的预检和第6.1节显式重置，再按启动一节的
+接着完成保留数据升级手册的预检，再按启动一节的
 `start --daemon --demo-no-auth`、`status` 和模型/Web Smoke 启动验收。
-核对 SOC DEV 中结果、候选和经验从零开始后，按两批手册重新积累第一批、提炼审核，再冻结新经验验证第二批。
+核对SOC DEV中的原结果、候选和审核经验仍在，再按重新划分手册建立后继实验、完成学习及整个新第二批。
 
 `--demo-no-auth` 仅用于可信内网演示：页面不再进入注册/登录，所有访问者共享合成管理员身份，
 因此无法按同事区分审计 actor。真实外部动作仍保持关闭。需要验收真实账号和权限时，先停止服务，

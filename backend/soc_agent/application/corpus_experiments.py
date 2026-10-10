@@ -52,6 +52,7 @@ def build_corpus_experiment_application(*, repository: SqlAlchemyAlertRepository
             execute_authorized_actions=False,
             execution_options=round_.options,
             memory_record_ids=frozenset(entry.memory_id for entry in round_.memory_snapshot),
+            facts_only=round_.purpose == "facts",
         ),
         profile_registry=build_soc_memory_profile_registry(),
     )

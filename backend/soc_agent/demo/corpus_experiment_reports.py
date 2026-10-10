@@ -113,7 +113,33 @@ def summarize_results(rows: list[dict]) -> dict:
     return {key: _summarize([row for row in rows if ("explore" if row.get("validation_tier") == "supplementary" else "reuse") == key]) for key in ("reuse", "explore")}
 
 
-def result_breakdowns(rows: list[dict]) -> dict:
+def summarize_rebalance_results(rows: list[dict]) -> dict:
+    """Applicability is a saved Runtime fact; navigation groups are not coverage."""
+    result = {}
+    for tier in ("main", "supplementary"):
+        selected = [row for row in rows if (row.get("validation_tier") or "main") == tier]
+        eligible = [row for row in selected if row["status"] == "completed" and not row.get("snapshot_changed_during_run")]
+        known = [row for row in eligible if any(use.get("directive_applied") or use.get("applicability_report", {}).get("status") == "applicable" for use in row.get("summary", {}).get("memory_uses", []))]
+        known_ids = {id(row) for row in known}
+
+        def handling_counts(values):
+            counts = Counter(row.get("summary", {}).get("recommended_handling") for row in values)
+            return {"count": len(values), "ignore": counts["ignore"], "transfer": counts["transfer"], "undetermined": len(values) - counts["ignore"] - counts["transfer"]}
+
+        result[tier] = {
+            **_summarize(selected, include_history=False),
+            "completed_coverage": _ratio(len(eligible), len(selected)),
+            "applicable_memory_coverage": _ratio(len(known), len(eligible)),
+            "transfer_rate": _ratio(sum(row.get("summary", {}).get("recommended_handling") == "transfer" for row in eligible), len(eligible)),
+            "known_experience": handling_counts(known),
+            "no_history_experience": handling_counts([row for row in eligible if id(row) not in known_ids]),
+            "decision_unusable": sum(row.get("summary", {}).get("decision_usable") is not True for row in eligible),
+        }
+    return result
+
+
+def result_breakdowns(rows: list[dict], *, rebalanced: bool = False) -> dict:
+    summarize = summarize_rebalance_results if rebalanced else summarize_results
     rules, memories, phases = defaultdict(list), defaultdict(list), defaultdict(list)
     for row in rows:
         key = row.get("detection_key") or row.get("rule_code") or row.get("group_id") or "unclassified"
@@ -127,14 +153,14 @@ def result_breakdowns(rows: list[dict]) -> dict:
             phases[step["phase"]].append(step)
     return {
         "rules": [
-            {"detection_key": key, "rule_codes": sorted({row["rule_code"] for row in values if row.get("rule_code")}), "group_count": len({row.get("group_id") for row in values}), "metrics": summarize_results(values)}
+            {"detection_key": key, "rule_codes": sorted({row["rule_code"] for row in values if row.get("rule_code")}), "group_count": len({row.get("group_id") for row in values}), "metrics": summarize(values)}
             for key, values in sorted(rules.items())
         ],
         "memories": [
             {
                 "memory_id": key,
                 "actual_rule_codes": sorted({row["rule_code"] for row in values if row.get("rule_code")}),
-                "metrics": summarize_results(values),
+                "metrics": summarize(values),
                 "cost_attribution": "associated_runs_not_incremental",
                 "causal_attribution_allowed": False,
             }
@@ -152,10 +178,10 @@ def result_breakdowns(rows: list[dict]) -> dict:
     }
 
 
-def _summarize(rows):
+def _summarize(rows, *, include_history=True):
     completed = [row for row in rows if row["status"] == "completed"]
     eligible = [row for row in completed if not row.get("snapshot_changed_during_run")]
-    scorable = [row for row in eligible if row.get("label", {}).get("scorable") and row.get("summary", {}).get("recommended_handling") in {"ignore", "transfer"}]
+    scorable = [row for row in eligible if row.get("label", {}).get("scorable") and row.get("summary", {}).get("recommended_handling") in {"ignore", "transfer"}] if include_history else []
     label_transfers = [row for row in scorable if row["label"]["expected_handling"] == "transfer"]
     measured = [measurement for row in rows for measurement in (row.get("attempt_measurements") or ([row.get("summary", {}).get("measurements", {})] if row["status"] == "completed" or row.get("run_id") else []))]
     known_tokens = [item["total_tokens"] for item in measured if isinstance(item.get("total_tokens"), int)]
@@ -164,9 +190,15 @@ def _summarize(rows):
         "status_counts": dict(Counter(row["status"] for row in rows)),
         "completed": len(completed),
         "snapshot_affected": len(completed) - len(eligible),
-        "historical_handling_agreement": _ratio(sum(row["summary"]["recommended_handling"] == row["label"]["expected_handling"] for row in scorable), len(scorable)),
-        "wrong_ignore_against_history": _ratio(sum(row["summary"]["recommended_handling"] == "ignore" for row in label_transfers), len(label_transfers)),
-        "transfer_detection_against_history": _ratio(sum(row["summary"]["recommended_handling"] == "transfer" for row in label_transfers), len(label_transfers)),
+        **(
+            {
+                "historical_handling_agreement": _ratio(sum(row["summary"]["recommended_handling"] == row["label"]["expected_handling"] for row in scorable), len(scorable)),
+                "wrong_ignore_against_history": _ratio(sum(row["summary"]["recommended_handling"] == "ignore" for row in label_transfers), len(label_transfers)),
+                "transfer_detection_against_history": _ratio(sum(row["summary"]["recommended_handling"] == "transfer" for row in label_transfers), len(label_transfers)),
+            }
+            if include_history
+            else {}
+        ),
         "ignore_rate": _ratio(sum(row.get("summary", {}).get("recommended_handling") == "ignore" for row in eligible), len(eligible)),
         "memory_direct_reuse": _ratio(sum(any(use.get("directive_applied") for use in row.get("summary", {}).get("memory_uses", [])) for row in eligible), len(eligible)),
         "memory_reference": _ratio(sum(any(not use.get("directive_applied") for use in row.get("summary", {}).get("memory_uses", [])) for row in eligible), len(eligible)),
@@ -193,6 +225,7 @@ def compare_reports(before: dict, after: dict) -> dict:
     after_batch = (after["round"].get("selection") or {}).get("batch")
     if before_batch not in {"learning", "validation"} or after_batch != before_batch:
         raise ValueError("只能比较同一批次的轮次报告；缺少批次信息时，请重新导出报告。")
+    summarize = summarize_rebalance_results if _is_rebalanced(before) or _is_rebalanced(after) else summarize_results
     old_items = {row["alert_id"]: row for row in before["rows"]}
     new_items = {row["alert_id"]: row for row in after["rows"]}
     transitions = [
@@ -221,8 +254,8 @@ def compare_reports(before: dict, after: dict) -> dict:
         "before_only": len(left.keys() - right.keys()),
         "after_only": len(right.keys() - left.keys()),
         "changed_handling": sum(row["before"].get("recommended_handling") != row["after"].get("recommended_handling") for row in changes),
-        "before_metrics": summarize_results([left[key] for key in paired]),
-        "after_metrics": summarize_results([right[key] for key in paired]),
+        "before_metrics": summarize([left[key] for key in paired]),
+        "after_metrics": summarize([right[key] for key in paired]),
         "causal_attribution_allowed": False,
         "interpretation": "同一批告警的前后运行对照，不自动把模型波动或其他配置变化归因于经验。",
         "rows": changes,
@@ -242,11 +275,35 @@ def _write_csv(path, columns, rows):
             writer.writerow({key: _cell(row.get(key)) for key in columns})
 
 
+def _is_rebalanced(report: dict) -> bool:
+    return bool(report.get("experiment", {}).get("rebalance"))
+
+
+def _complete_rebalanced_stage(report: dict) -> bool:
+    rows, scope, round_ = report["rows"], report.get("stage_scope", {}), report["round"]
+    selection = round_.get("selection") or {}
+    return (
+        scope.get("stage_complete") is True
+        and scope.get("batch_total", 0) > 0
+        and len(rows) == len({row["alert_id"] for row in rows}) == scope["batch_total"]
+        and all(row["status"] == "completed" and not row.get("snapshot_changed_during_run") for row in rows)
+        and selection.get("batch") == "validation"
+        and selection.get("scope") == "all"
+        and round_.get("purpose") != "facts"
+    )
+
+
 def export_report(report: dict, output_dir: Path) -> None:
     if output_dir.exists():
         raise FileExistsError(f"report already exists: {output_dir}")
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    report = {**report, "metrics": summarize_results(report["rows"]), "breakdowns": result_breakdowns(report["rows"])}
+    rebalanced = _is_rebalanced(report)
+    if rebalanced:
+        report = {**report, "rows": [{key: value for key, value in row.items() if key != "label"} for row in report["rows"]]}
+        complete = _complete_rebalanced_stage(report)
+        report.update(report_scope="stage" if complete else "round_diagnostic", stage_conclusion_allowed=complete)
+    summarize = summarize_rebalance_results if rebalanced else summarize_results
+    report = {**report, "metrics": summarize(report["rows"]), "breakdowns": result_breakdowns(report["rows"], rebalanced=rebalanced)}
     with tempfile.TemporaryDirectory(prefix=".corpus-report-", dir=output_dir.parent) as temporary:
         directory = Path(temporary)
         (directory / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
@@ -273,6 +330,8 @@ def export_report(report: dict, output_dir: Path) -> None:
             "timing_status",
             "error_code",
         )
+        if rebalanced:
+            columns = tuple(column for column in columns if column not in {"expected_handling", "scorable"})
         with (directory / "alerts.csv").open("x", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
             writer.writeheader()
@@ -300,7 +359,69 @@ def export_report(report: dict, output_dir: Path) -> None:
         directory.rename(output_dir)
 
 
+def _render_rebalanced_report(report: dict) -> str:
+    complete = report.get("stage_conclusion_allowed") is True
+    lines = [
+        "# 补充学习后的验证阶段结论" if complete else "# 补充学习验证：仅诊断",
+        "",
+        f"实验：`{report['round']['experiment_id']}`；轮次：`{report['round']['round_id']}`。",
+        "",
+        "按真实核心行为重新分配学习与验证样本，保留既有数据库和审核经验；本轮固定结果单独统计，不与旧批次拼接。",
+        "",
+    ]
+    if not complete:
+        lines += [
+            "当前导出未满足完整验证阶段条件，仅用于诊断，不形成阶段结论。请等待覆盖全部第二批的轮次完成，且运行期间经验快照有效后再导出。",
+            "",
+        ]
+        for tier, label in (("main", "主验证"), ("supplementary", "补充验证")):
+            metrics = report["metrics"][tier]
+            lines.append(f"{label}：本轮选择 {metrics['selected']} 条，完成 {metrics['completed']} 条，快照受影响 {metrics['snapshot_affected']} 条。")
+        lines += ["", "状态、固定 Run、失败及计量详见 `report.json`、`alerts.csv`、`failures.csv`。", ""]
+        return "\n".join(lines)
+
+    lines += [
+        f"第二批共 {report['stage_scope']['batch_total']} 条，已完整完成。主验证与补充验证分别统计。",
+        f"本阶段第一批 {report['stage_scope'].get('learning_total', '未记录')} 条，第二批 {report['stage_scope'].get('validation_total', report['stage_scope']['batch_total'])} 条；"
+        f"继承已审核经验 {report['experiment']['rebalance'].get('inherited_memory_count', '未记录')} 条，复用既有独立学习运行 {report['experiment']['rebalance'].get('imported_learning_run_count', '未记录')} 条。",
+        "覆盖和忽略比例不是准确率；系统建议不代表已经执行处置，也不证明所有忽略判断均正确。",
+        "",
+    ]
+    for tier, label in (("main", "主验证"), ("supplementary", "补充验证")):
+        metrics = report["metrics"][tier]
+        lines += [f"## {label}", "", f"样本 {metrics['selected']} 条，完成 {metrics['completed']} 条，结论不可用或可用性未知 {metrics['decision_unusable']} 条。", "", "| 指标 | 分子 / 分母 | 比例 |", "|---|---:|---:|"]
+        for key, title in (
+            ("applicable_memory_coverage", "适用经验覆盖"),
+            ("memory_direct_reuse", "直接复用经验"),
+            ("memory_reference", "经验供模型参考"),
+            ("ignore_rate", "建议忽略"),
+            ("transfer_rate", "建议转交"),
+        ):
+            ratio = metrics[key]
+            rate = f"{ratio['rate']:.1%}" if ratio["rate"] is not None else "无样本"
+            lines.append(f"| {title} | {ratio['numerator']} / {ratio['denominator']} | {rate} |")
+        lines += ["", "| 经验范围 | 样本数 | 建议忽略 | 建议转交 | 未确定处置 |", "|---|---:|---:|---:|---:|"]
+        for key, title in (("known_experience", "有适用经验"), ("no_history_experience", "无历史经验")):
+            counts = metrics[key]
+            lines.append(f"| {title} | {counts['count']} | {counts['ignore']} | {counts['transfer']} | {counts['undetermined']} |")
+        lines += [
+            "",
+            f"已记录模型调用 {metrics['provider_calls']} 次，{metrics['provider_calls_unknown_runs']} 次运行调用数未知；已知 Token {metrics['tokens']['known_total']}，{metrics['tokens']['unavailable_runs']} 次运行用量缺失。",
+            "",
+        ]
+    lines += [
+        "适用经验以本轮保存的 applicability=applicable 或已直接复用记录为准；有同类学习样本不等于已命中适用经验。",
+        "“无历史经验”在此表示本次未命中适用经验；可能仍有部分相似经验供参考。直接复用与参考记录可能同时出现，二者不能相加作为覆盖率。",
+        "主验证保留了同类学习样本；补充验证的来源、样本不足等原因见 membership_reason。两个范围独立统计，样本分配可按冻结计划追溯。",
+        "逐条固定结果、经验使用关系和配置快照见 `alerts.csv`、`memory-usage.csv` 与 `report.json`。此报告不使用原始忽略/转交标签评分。",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render_report(report: dict) -> str:
+    if _is_rebalanced(report):
+        return _render_rebalanced_report(report)
     lines = ["# 两批经验验证报告", "", f"轮次：`{report['round']['round_id']}`", "", "结果按本轮固定 Run 保存，不使用告警后来重跑的结果。历史忽略/转交标签用于处置对照，不等于安全真值。", ""]
     timing = report.get("progress", {}).get("timing") or {}
     if timing.get("running_ms") is not None:

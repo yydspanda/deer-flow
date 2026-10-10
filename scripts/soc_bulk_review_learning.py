@@ -211,8 +211,48 @@ def _candidate_path(candidate_id: str) -> str:
     return f"{MEMORY}/{candidate_id}"
 
 
-def _idle_learning(client, expected_experiment=None):
-    learning = client.get(f"{BASE}/quick-validation?batch=learning&limit=1")
+def _idle_learning(
+    client, expected_experiment=None, *, explicit=False, expected_plan_id=None
+):
+    if explicit:
+        if not isinstance(expected_experiment, str) or not re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_-]{0,63}", expected_experiment
+        ):
+            raise BulkReviewError("Invalid explicit experiment identity")
+        prefix = f"{BASE}/experiments/{expected_experiment}"
+        details = client.get(prefix)
+        plan_id = details.get("plan_id")
+        if (
+            details.get("experiment_id") != expected_experiment
+            or details.get("tenant_id") != "pingan"
+            or details.get("environment") != "dev-corpus-eval"
+            or details.get("fact_source_experiment_id") is not None
+            or not isinstance(plan_id, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", plan_id)
+            or (expected_plan_id is not None and plan_id != expected_plan_id)
+        ):
+            raise BulkReviewError(
+                "Explicit experiment does not match the DEV review scope"
+            )
+        learning = client.get(f"{prefix}/status?batch=learning")
+        validation = client.get(f"{prefix}/status?batch=validation")
+        if any(
+            view.get("review_allowed") is not True
+            or view.get("fact_source_experiment_id") is not None
+            or view.get("plan_id") != plan_id
+            for view in (learning, validation)
+        ):
+            raise BulkReviewError(
+                "Fact preparation or changed experiments cannot be reviewed"
+            )
+        if (
+            learning.get("batch") != "learning"
+            or validation.get("batch") != "validation"
+        ):
+            raise BulkReviewError("Explicit experiment returned the wrong batch state")
+    else:
+        learning = client.get(f"{BASE}/quick-validation?batch=learning&limit=1")
+        validation = client.get(f"{BASE}/quick-validation?batch=validation&limit=1")
     total = learning.get("total")
     if not isinstance(total, int) or total <= 0 or learning.get("completed") != total:
         raise BulkReviewError("The first learning batch must be fully completed")
@@ -227,7 +267,6 @@ def _idle_learning(client, expected_experiment=None):
         or (expected_experiment and experiment != expected_experiment)
     ):
         raise BulkReviewError("Current experiment does not match the review plan")
-    validation = client.get(f"{BASE}/quick-validation?batch=validation&limit=1")
     if (
         validation.get("experiment_id") != experiment
         or any(validation.get(key) != 0 for key in ("completed", "failed", "active"))
@@ -241,11 +280,11 @@ def _idle_learning(client, expected_experiment=None):
     return learning
 
 
-def _inventory(client, experiment):
+def _inventory(client, experiment, *, review_stage="pending"):
     entries, total = [], None
     while total is None or len(entries) < total:
         page = client.get(
-            f"{BASE}/experiments/{experiment}/candidates?review_stage=pending&limit=100&offset={len(entries)}"
+            f"{BASE}/experiments/{experiment}/candidates?review_stage={review_stage}&limit=100&offset={len(entries)}"
         )
         if (
             not isinstance(page, dict)
@@ -322,7 +361,8 @@ def build_plan(client, output_dir, expected_count, experiment_id=None):
     if not isinstance(expected_count, int) or expected_count <= 0:
         raise BulkReviewError("Expected candidate count must be positive")
     url = validate_url(client.url)
-    learning = _idle_learning(client, experiment_id)
+    explicit = experiment_id is not None
+    learning = _idle_learning(client, experiment_id, explicit=explicit)
     experiment = learning["experiment_id"]
     inventory = _inventory(client, experiment)
     if (
@@ -358,7 +398,12 @@ def build_plan(client, output_dir, expected_count, experiment_id=None):
         )
     if canonical_hash(_inventory(client, experiment)) != canonical_hash(inventory):
         raise BulkReviewError("Candidate inventory changed before plan publication")
-    _idle_learning(client, experiment)
+    _idle_learning(
+        client,
+        experiment,
+        explicit=explicit,
+        expected_plan_id=learning.get("plan_id") if explicit else None,
+    )
     directory = Path(output_dir).expanduser().absolute()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     plan = {
@@ -371,6 +416,14 @@ def build_plan(client, output_dir, expected_count, experiment_id=None):
         "future_use": "exact_reuse",
         "review_policy": dict(REVIEW_POLICY),
         "items": items,
+        **(
+            {
+                "experiment_selection": "explicit",
+                "experiment_plan_id": learning["plan_id"],
+            }
+            if explicit
+            else {}
+        ),
     }
     with _locked(directory):
         _atomic(directory / "plan.json", plan)
@@ -610,6 +663,19 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                 "Plan identity, origin or requested decision is invalid"
             )
         review_policy = _plan_review_policy(plan)
+        selection = plan.get("experiment_selection", "quick")
+        if selection not in {"quick", "explicit"}:
+            raise BulkReviewError("Unknown experiment selection mode")
+        explicit = selection == "explicit"
+        if explicit and (
+            not isinstance(plan.get("experiment_plan_id"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", plan["experiment_plan_id"])
+        ):
+            raise BulkReviewError("Explicit experiment plan identity is invalid")
+        scope_options = {
+            "explicit": explicit,
+            "expected_plan_id": plan.get("experiment_plan_id") if explicit else None,
+        }
         ids = [item.get("candidate_id") for item in plan.get("items", [])]
         if (
             len(ids) != plan.get("expected_count")
@@ -630,7 +696,11 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                 != item["record_applicability"]
             ):
                 raise BulkReviewError("Plan changes the default review scope")
-        _idle_learning(client, plan["experiment_id"])
+        _idle_learning(client, plan["experiment_id"], **scope_options)
+        if explicit and not set(ids).issubset(
+            _inventory(client, plan["experiment_id"], review_stage="all")
+        ):
+            raise BulkReviewError("Plan candidates are outside the selected experiment")
         state_path = directory / "state.json"
         state = (
             _load(state_path)
@@ -684,7 +754,7 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                 return
             stage = "precheck"
             try:
-                _idle_learning(client, plan["experiment_id"])
+                _idle_learning(client, plan["experiment_id"], **scope_options)
                 # Resume only an unchanged pending candidate. A confirmed candidate
                 # could belong to another operator; no read API proves our audit key.
                 if "review_payload" not in saved:
@@ -859,7 +929,10 @@ def main(argv=None):
     )
     plan.add_argument("--output-dir", required=True)
     plan.add_argument("--expected-count", required=True, type=int)
-    plan.add_argument("--experiment")
+    plan.add_argument(
+        "--experiment",
+        help="Review this existing DEV experiment, including a rebalanced experiment; defaults to quick validation",
+    )
     apply = commands.add_parser(
         "apply", help="Generate lessons and submit the operator's batch review"
     )

@@ -195,6 +195,7 @@ class RuntimeFailureKind(StrEnum):
 class AnalysisRunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    FACTS_READY = "facts_ready"
     NEEDS_REVIEW = "needs_review"
     SUCCESS = "success"
     FAILED = "failed"
@@ -5386,6 +5387,8 @@ class AnalysisRun(BaseModel):
 
     @model_validator(mode="after")
     def validate_failure_state(self) -> AnalysisRun:
+        if self.status is AnalysisRunStatus.FACTS_READY and (self.pipeline_version != "soc-runtime-v1-facts" or self.analysis is not None or self.decision is not None or self.direct_resolution is not None):
+            raise ValueError("prepared facts require a fact-only pipeline and cannot carry a security decision")
         if self.status is AnalysisRunStatus.FAILED and self.failure is None:
             raise ValueError("failed analysis run requires RuntimeFailure")
         if self.status is not AnalysisRunStatus.FAILED and self.failure is not None:

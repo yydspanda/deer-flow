@@ -143,7 +143,7 @@ from soc_agent.core.alert_results import (
 )
 from soc_agent.core.case_outcomes import project_soc_case_outcome
 from soc_agent.core.normalization_snapshot import NormalizationHistory
-from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
+from soc_agent.core.runtime import SOC_RUNTIME_FACT_PREPARATION_PIPELINE_VERSION, analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
 from soc_agent.memory import (
     InMemoryMemoryCandidateRepository,
     MemoryAdmissionOutcome,
@@ -246,6 +246,7 @@ class DeterministicAnalysisRuntime:
         decision_policy: DecisionPolicy | None = None,
         analysis_request_enricher: AnalysisRequestEnricher | None = None,
         sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
+        facts_only: bool = False,
     ) -> None:
         self._analyzer = analyzer
         self._role_verifier = role_verifier
@@ -255,6 +256,13 @@ class DeterministicAnalysisRuntime:
         self._decision_policy = decision_policy
         self._analysis_request_enricher = analysis_request_enricher
         self._sensitive_evidence_mode = sensitive_evidence_mode
+        self._facts_only = facts_only
+
+    @property
+    def facts_only(self) -> bool:
+        """Server-owned preparation capability; never read from alert input."""
+
+        return self._facts_only
 
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun:
         return analyze_alert(
@@ -267,6 +275,7 @@ class DeterministicAnalysisRuntime:
             decision_policy=self._decision_policy,
             analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
+            facts_only=self._facts_only,
         )
 
     def analyze_journaled(
@@ -286,6 +295,7 @@ class DeterministicAnalysisRuntime:
             before_provider=before_provider,
             analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
+            facts_only=self._facts_only,
         )
 
     def analyze_journaled_with_reuse(self, payload: Mapping[str, Any], *, before_provider: AnalysisBeforeProviderHook, previous_run: AnalysisRun | None = None, normalization_history: NormalizationHistory | None = None) -> AnalysisRun:
@@ -302,6 +312,7 @@ class DeterministicAnalysisRuntime:
             before_provider=before_provider,
             analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
+            facts_only=self._facts_only,
         )
 
 
@@ -368,6 +379,7 @@ class SocAnalysisService:
         previous = self._repository.get_run(run_id)
         if previous is None:
             raise SocServiceNotFoundError(f"run {run_id} not found")
+        self._validate_run_purpose(previous)
         if previous.status is AnalysisRunStatus.RUNNING:
             raise SocServiceConflictError(f"run {run_id} is still running; use recover after its stale window")
         if previous.input_payload is None:
@@ -389,6 +401,7 @@ class SocAnalysisService:
         previous = self._repository.get_run(command.run_id)
         if previous is None:
             raise SocServiceNotFoundError(f"run {command.run_id} not found")
+        self._validate_run_purpose(previous)
         if previous.input_payload is None:
             raise SocServiceNotImplementedError(f"run {command.run_id} has no replayable input payload")
         journal = previous.request_journal
@@ -468,19 +481,23 @@ class SocAnalysisService:
         normalization_reuse: AnalysisRun | None = None,
     ) -> AnalysisRun:
         audit_action = AuditAction.REPLAY if replay_of_run_id else AuditAction.ANALYSIS
-        self._emit(
-            SocEvent(
-                event_type=SocEventType.ANALYSIS_REQUESTED,
-                request_id=context.request_id,
-                actor=context.actor,
-                payload={
-                    "surface": context.actor.surface.value,
-                    "replay_of_run_id": replay_of_run_id,
-                },
+        if not self._prepares_facts_only():
+            self._emit(
+                SocEvent(
+                    event_type=SocEventType.ANALYSIS_REQUESTED,
+                    request_id=context.request_id,
+                    actor=context.actor,
+                    payload={
+                        "surface": context.actor.surface.value,
+                        "replay_of_run_id": replay_of_run_id,
+                    },
+                )
             )
-        )
 
         if existing_run := self._find_existing_idempotent_run(context, action=audit_action):
+            self._validate_run_purpose(existing_run)
+            if existing_run.pipeline_version == SOC_RUNTIME_FACT_PREPARATION_PIPELINE_VERSION:
+                return existing_run
             self._observe_post_analysis(existing_run, context=context)
             self._emit_analysis_completion(existing_run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=True)
             return existing_run
@@ -494,6 +511,21 @@ class SocAnalysisService:
         )
         run.replay_of_run_id = replay_of_run_id
         _finalize_request_journal(run)
+        if run.pipeline_version == SOC_RUNTIME_FACT_PREPARATION_PIPELINE_VERSION:
+            # Prepared facts must not replace the alert's business result or
+            # trigger Memory, policy, review queues, or external automation.
+            audit_record = _analysis_audit_record(run, actor=context.actor, action=audit_action, idempotency_key=context.idempotency_key)
+            uow = mutation_uow_from(self._repository) if self._audit_repository is self._repository else None
+            if uow is not None:
+                with uow.mutation_transaction() as repository:
+                    repository.save_run(run)
+                    repository.save_audit_record(audit_record)
+            else:
+                if self._repository is not None:
+                    self._repository.save_run(run)
+                if self._audit_repository is not None:
+                    self._audit_repository.save_audit_record(audit_record)
+            return run
         summary = _alert_summary_from_run(run)
         audit_record = _analysis_audit_record(
             run,
@@ -538,6 +570,13 @@ class SocAnalysisService:
 
         self._emit_analysis_completion(run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=False)
         return run
+
+    def _prepares_facts_only(self) -> bool:
+        return isinstance(self._runtime, DeterministicAnalysisRuntime) and self._runtime.facts_only
+
+    def _validate_run_purpose(self, run: AnalysisRun) -> None:
+        if (run.pipeline_version == SOC_RUNTIME_FACT_PREPARATION_PIPELINE_VERSION) != self._prepares_facts_only():
+            raise SocServiceConflictError("fact preparation and security analysis require separate execution identities")
 
     def _observe_post_analysis(
         self,
