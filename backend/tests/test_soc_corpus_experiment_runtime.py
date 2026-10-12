@@ -72,6 +72,22 @@ def test_payload_mismatch_blocks_before_runtime(tmp_path):
         executor(None, members()[0], context())
 
 
+def test_runtime_accumulation_scope_keeps_restart_generation_for_every_alert(tmp_path):
+    repo = repository(tmp_path)
+    repo.corpus_experiments().prepare(experiment(), members())
+    service = SocCorpusExperimentService(repository=repo, execute=lambda *_: None, configuration_provider=lambda _: {})
+    round_ = service.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning")), context=context())
+    executor = CorpusRuntimeExecutor(repository=repo, load_payload=lambda _: {}, analysis_factory=lambda _: None, profile_registry=SocMemoryProfileRegistry())
+    original = executor._accumulation_scope(round_)
+    generation = "ROUND-RESTART-learning"
+    restarted = executor._accumulation_scope(round_.model_copy(update={"learning_generation": generation}))
+    assert original.learning_generation is None
+    assert restarted.learning_generation == generation
+    assert restarted.experiment_id == original.experiment_id
+    assert restarted.configuration_hash == original.configuration_hash
+    assert (restarted.event_start, restarted.event_end) == (original.event_start, original.event_end)
+
+
 def test_runtime_executor_recovers_durable_journal_without_repeating_saved_result(tmp_path):
     import pytest
     from test_soc_agent_repository import _sample

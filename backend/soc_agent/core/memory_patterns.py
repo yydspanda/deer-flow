@@ -41,6 +41,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
 from soc_agent.memory.learning import resolve_learning_candidate
+from soc_agent.memory.lineage import learning_generation_scope
 from soc_agent.memory.patterns import (
     MemoryPatternIneligibleError,
     memory_pattern_command_from_run,
@@ -599,6 +600,8 @@ class SocMemoryPatternService:
         for predecessor in predecessors:
             if predecessor.candidate_id == successor.candidate_id:
                 continue
+            if learning_generation_scope(predecessor) != learning_generation_scope(successor):
+                continue
             if predecessor.status not in {
                 SocMemoryCandidateStatus.PENDING_REVIEW,
                 SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
@@ -668,6 +671,11 @@ class SocMemoryPatternService:
                 "memory_profile_id": first.profile_id,
                 "memory_profile_version": first.profile_version,
                 "memory_feature_schema_version": first.feature_schema_version,
+                **(
+                    {"experiment_id": first.accumulation_scope.experiment_id, "learning_generation": first.accumulation_scope.learning_generation}
+                    if first.accumulation_scope is not None and first.accumulation_scope.learning_generation is not None
+                    else {}
+                ),
             },
         )
         candidate = resolve_learning_candidate(self._candidate_repository, incoming, now=self._now_provider())
@@ -1063,6 +1071,7 @@ def _candidate_command(
             alert_id=first.source.alert_id,
             metadata={
                 **({"experiment_id": first.accumulation_scope.experiment_id} if first.accumulation_scope else {}),
+                **({"learning_generation": first.accumulation_scope.learning_generation} if first.accumulation_scope is not None and first.accumulation_scope.learning_generation is not None else {}),
                 "aggregation_key": first.aggregation_key,
                 "lineage_key": first.lineage_key,
                 "policy_version": policy.policy_version,
@@ -1115,6 +1124,7 @@ def _candidate_command(
         ],
         metadata={
             **({"experiment_id": first.accumulation_scope.experiment_id, "accumulation_scope": first.accumulation_scope.model_dump(mode="json")} if first.accumulation_scope else {}),
+            **({"learning_generation": first.accumulation_scope.learning_generation} if first.accumulation_scope is not None and first.accumulation_scope.learning_generation is not None else {}),
             "runtime_decision_allowed": False,
             "direct_alert_memory_write": False,
             "aggregation_key": first.aggregation_key,

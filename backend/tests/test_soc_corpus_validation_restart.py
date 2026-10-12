@@ -231,7 +231,7 @@ def test_restart_retired_round_cannot_be_resumed_manually_or_retried(tmp_path):
         lambda: svc.request_manual(old.round_id, "5", context=context()),
         lambda: svc.retry_failed(old.round_id, context=context()),
     ):
-        with pytest.raises(CorpusExperimentConflict, match="已被第二批全部重跑替换"):
+        with pytest.raises(CorpusExperimentConflict, match="已被全部重跑替换"):
             operation()
     assert not svc.execute_one(old.round_id)
     assert not svc.store.eligible_job_ids(old.round_id)

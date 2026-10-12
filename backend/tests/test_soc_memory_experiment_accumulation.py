@@ -94,3 +94,38 @@ def test_changed_learning_configuration_uses_another_accumulation_scope():
     second = _observe(right, _run(2), transport_ref="right")
     assert first.observation.aggregation_key != second.observation.aggregation_key
     assert second.support_count == 1
+
+
+def test_learning_restart_starts_new_support_even_when_configuration_and_alerts_are_unchanged():
+    repository = InMemoryMemoryPatternRepository()
+    old_service = _experimental(repository)
+    for index in range(1, 6):
+        old = _observe(old_service, _run(index), transport_ref=f"old:{index}")
+    old_candidate = old.candidate
+    scope = MemoryPatternAccumulationScope(**_scope().model_dump(), learning_generation="ROUND-RESTART-new")
+    fresh = SocMemoryPatternService(repository=repository, candidate_repository=repository, accumulation_scope=scope)
+    for index in range(1, 6):
+        current = _observe(fresh, _run(index), transport_ref=f"new:{index}")
+        assert current.support_count == index
+        assert not current.duplicate_occurrence
+        assert current.observation.accumulation_scope.learning_generation == "ROUND-RESTART-new"
+    assert current.observation.aggregation_key != old.observation.aggregation_key
+    assert current.candidate.candidate_id != old_candidate.candidate_id
+    assert current.candidate.metadata["learning_generation"] == "ROUND-RESTART-new"
+    assert current.candidate.source.metadata["learning_generation"] == "ROUND-RESTART-new"
+    assert repository.get_memory_candidate(old_candidate.candidate_id) == old_candidate
+    duplicate = _observe(fresh, _run(5), transport_ref="new:retry")
+    assert duplicate.support_count == 5
+    assert duplicate.candidate.candidate_id == current.candidate.candidate_id
+    assert duplicate.duplicate_occurrence
+
+
+def test_optional_learning_generation_preserves_legacy_accumulation_identity():
+    payload = {
+        "experiment_id": "EXP-test",
+        "configuration_hash": None,
+        "event_start": "2026-01-01T00:00:00Z",
+        "event_end": "2027-01-01T00:00:00Z",
+        "review_mixed_conclusions": True,
+    }
+    assert MemoryPatternAccumulationScope.model_validate(payload).model_dump(mode="json") == payload

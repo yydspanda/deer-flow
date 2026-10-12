@@ -258,6 +258,7 @@ class MemoryPatternAccumulationScope(BaseModel):
 
     experiment_id: str = Field(min_length=1, max_length=128)
     configuration_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    learning_generation: str | None = Field(default=None, min_length=1, max_length=128, exclude_if=lambda value: value is None)
     event_start: datetime
     event_end: datetime
     review_mixed_conclusions: bool = True

@@ -187,6 +187,7 @@ def _rounds(reader, experiment_id):
           json_extract(record_payload,'$.memory_mode') AS memory_mode,
           json_extract(record_payload,'$.config_hash') AS config_hash,
           json_extract(record_payload,'$.memory_snapshot') AS memory_snapshot,
+          json_extract(record_payload,'$.learning_generation') AS learning_generation,
           json_extract(record_payload,'$.superseded_by_round_id') AS superseded_by_round_id
         FROM soc_corpus_rounds WHERE experiment_id=? ORDER BY created_at, round_id
     """,
@@ -214,7 +215,7 @@ def _choose_round(reader, rounds, validation_ids, requested):
         selection = row["selection"]
         if row["batch"] != "validation" or selection.get("scope") != "all":
             continue
-        if row["superseded_by_round_id"]:
+        if row["superseded_by_round_id"] and requested != row["round_id"]:
             continue
         if any(selection.get(key) for key in ("group_ids", "rule_codes", "alert_ids")):
             continue
@@ -267,6 +268,8 @@ def _job_rows(reader, members, rounds, selected):
     def source_rows():
         cutoff = _time(selected["created_at"])
         for round_ in rounds.values():
+            if round_["learning_generation"] != selected["learning_generation"]:
+                continue
             if (
                 round_["batch"] != "learning"
                 and round_["round_id"] != selected["round_id"]
@@ -434,7 +437,7 @@ def _enrich_runs(reader, rows, progress):
             )
 
 
-def _candidates(reader, experiment_id, all_learning, members, cutoff):
+def _candidates(reader, experiment_id, all_learning, members, cutoff, generation):
     run_members = {
         row["run_id"]: row["alert_id"] for row in all_learning if row["run_id"]
     }
@@ -451,11 +454,30 @@ def _candidates(reader, experiment_id, all_learning, members, cutoff):
             JOIN soc_corpus_round_items i ON i.job_id=j.job_id
             JOIN soc_corpus_rounds r ON r.round_id=i.round_id
             WHERE r.experiment_id=? AND r.batch='learning' AND j.run_id IS NOT NULL
-          ) OR json_extract(c.candidate_payload,'$.metadata.experiment_id')=?
-            OR json_extract(c.candidate_payload,'$.source.metadata.experiment_id')=?
+              AND json_extract(r.record_payload,'$.learning_generation') IS ?
+          ) OR (
+            json_extract(c.candidate_payload,'$.metadata.experiment_id')=?
+            AND COALESCE(json_extract(c.candidate_payload,'$.metadata.learning_generation'),
+              json_extract(c.candidate_payload,'$.metadata.accumulation_scope.learning_generation')) IS ?
+          ) OR (
+            json_extract(c.candidate_payload,'$.source.metadata.experiment_id')=?
+            AND json_extract(c.candidate_payload,'$.source.metadata.learning_generation') IS ?
+          )
         ORDER BY c.candidate_id
     """
-    values = list(reader.pages(query, (experiment_id, experiment_id, experiment_id)))
+    values = list(
+        reader.pages(
+            query,
+            (
+                experiment_id,
+                generation,
+                experiment_id,
+                generation,
+                experiment_id,
+                generation,
+            ),
+        )
+    )
     observation_ids = {
         value
         for row in values
@@ -730,7 +752,12 @@ def collect(
         _enrich_runs(reader, fixed_rows, progress)
         progress("关联第一批候选来源与冻结经验清单……")
         candidates = _candidates(
-            reader, experiment_id, learning_all, member_map, cutoff
+            reader,
+            experiment_id,
+            learning_all,
+            member_map,
+            cutoff,
+            selected["learning_generation"],
         )
         memories = _memories(
             reader, selected["memory_snapshot"], candidates, fixed_rows, cutoff
@@ -746,6 +773,11 @@ def collect(
             "round_id": selected["round_id"],
             "options": selected["options"],
             "memory_snapshot": selected["memory_snapshot"],
+            **(
+                {"learning_generation": selected["learning_generation"]}
+                if selected["learning_generation"]
+                else {}
+            ),
             "run_ids": sorted((row["alert_id"], row["run_id"]) for row in validation),
         }
         return {
@@ -755,6 +787,16 @@ def collect(
                 "round_id": selected["round_id"],
                 "round_created_at": selected["created_at"],
                 "round_state": selected["state"],
+                **(
+                    {"learning_generation": selected["learning_generation"]}
+                    if selected["learning_generation"]
+                    else {}
+                ),
+                **(
+                    {"historical_round": True}
+                    if selected["superseded_by_round_id"]
+                    else {}
+                ),
                 "options": selected["options"],
                 "memory_mode": selected["memory_mode"],
                 "memory_snapshot": selected["memory_snapshot"],
@@ -778,6 +820,13 @@ def collect(
             "candidates": candidates,
             "memories": memories,
             "warnings": [
+                *(
+                    [
+                        "本报告为显式选择的历史轮次，已被后续重跑替代，不代表当前阶段结论。"
+                    ]
+                    if selected["superseded_by_round_id"]
+                    else []
+                ),
                 "历史处置标签不在本次独立数据库提取范围内，不计算处置一致率。",
                 "候选审核为当前状态与有证据的运行时状态并列；无法还原时标为 unknown。",
                 "耗时与 Token 为选定任务当前固定 Run，不包含未能关联的历史失败尝试；不能视为完整账单。",

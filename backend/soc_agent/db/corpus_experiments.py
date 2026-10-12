@@ -61,6 +61,8 @@ class CorpusRunJob:
     status: ProcessingJobStatus
     batch: str
     pattern_reason: str | None
+    experiment_id: str | None = None
+    learning_generation: str | None = None
 
 
 class SqlAlchemyCorpusExperimentRepository:
@@ -259,14 +261,17 @@ class SqlAlchemyCorpusExperimentRepository:
             select(SocProcessingJobRow.run_id)
             .join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.job_id == SocProcessingJobRow.job_id)
             .join(SocCorpusRoundRow, SocCorpusRoundRow.round_id == SocCorpusRoundItemRow.round_id)
-            .where(SocCorpusRoundRow.experiment_id == experiment_id, SocCorpusRoundRow.batch == "learning", SocProcessingJobRow.run_id.is_not(None))
+            .where(SocCorpusRoundRow.experiment_id == experiment_id, SocCorpusRoundRow.batch == "learning", SocProcessingJobRow.run_id.is_not(None), _current_generation_round(SocCorpusRoundRow, experiment_id))
         )
         if excluded_run_ids:
             learning_runs = learning_runs.where(SocProcessingJobRow.run_id.not_in(excluded_run_ids))
+        generation = _learning_generation_query(experiment_id)
+        metadata = SocMemoryCandidateRow.candidate_payload["metadata"]
+        source_metadata = SocMemoryCandidateRow.candidate_payload["source"]["metadata"]
         return or_(
             SocMemoryCandidateRow.source_run_id.in_(learning_runs),
-            SocMemoryCandidateRow.candidate_payload["metadata"]["experiment_id"].as_string() == experiment_id,
-            SocMemoryCandidateRow.candidate_payload["source"]["metadata"]["experiment_id"].as_string() == experiment_id,
+            and_(metadata["experiment_id"].as_string() == experiment_id, func.coalesce(metadata["learning_generation"].as_string(), metadata["accumulation_scope"]["learning_generation"].as_string(), "") == func.coalesce(generation, "")),
+            and_(source_metadata["experiment_id"].as_string() == experiment_id, func.coalesce(source_metadata["learning_generation"].as_string(), "") == func.coalesce(generation, "")),
         )
 
     def _candidate_scope(self, session: Session, experiment_id: str):
@@ -413,6 +418,22 @@ class SqlAlchemyCorpusExperimentRepository:
                 return None
             return latest.round_id, latest.created_at.replace(tzinfo=UTC) if latest.created_at.tzinfo is None else latest.created_at
 
+    def current_learning_generation(self, experiment_id: str) -> str | None:
+        with self._session_factory() as session:
+            return session.scalar(select(_learning_generation_query(experiment_id)))
+
+    def batch_active_job_count(self, experiment_id: str, batch: str) -> int:
+        job, item, round_ = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow
+        query = (
+            select(func.count())
+            .select_from(job)
+            .join(item, item.job_id == job.job_id)
+            .join(round_, round_.round_id == item.round_id)
+            .where(round_.experiment_id == experiment_id, round_.batch == batch, job.status.in_([status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]))
+        )
+        with self._session_factory() as session:
+            return session.scalar(query) or 0
+
     def batch_has_active_jobs(self, experiment_id: str, batch: str) -> bool:
         """Include old attempts and paused/manual claims, not only the latest jobs."""
         job, item, round_ = SocProcessingJobRow, SocCorpusRoundItemRow, SocCorpusRoundRow
@@ -441,12 +462,15 @@ class SqlAlchemyCorpusExperimentRepository:
             session.commit()
 
     def supersede_validation_round(self, round_id: str, *, replacement_round_id: str, actor_id: str) -> None:
+        self.supersede_round(round_id, replacement_round_id=replacement_round_id, actor_id=actor_id, reason="validation_restarted", expected_batch="validation")
+
+    def supersede_round(self, round_id: str, *, replacement_round_id: str, actor_id: str, reason: str, expected_batch: str | None = None) -> None:
         """Retire dispatch authority without rewriting frozen snapshots or outcomes."""
         with self._session_factory() as session:
             row = session.get(SocCorpusRoundRow, round_id)
             previous = CorpusRound.model_validate(row.record_payload)
-            if previous.selection.batch != "validation":
-                raise ValueError("only validation rounds can be superseded by a validation restart")
+            if expected_batch and previous.selection.batch != expected_batch:
+                raise ValueError("restart batch does not match the round")
             if previous.superseded_by_round_id:
                 return
             now = datetime.now(UTC)
@@ -458,7 +482,7 @@ class SqlAlchemyCorpusExperimentRepository:
                     {
                         "from": "running",
                         "to": "paused",
-                        "reason": "validation_restarted",
+                        "reason": reason,
                         "actor_id": actor_id,
                         "at": now.isoformat(),
                         "execution_limit": previous.execution_limit,
@@ -470,7 +494,7 @@ class SqlAlchemyCorpusExperimentRepository:
                 update={
                     "superseded_by_round_id": replacement_round_id,
                     "state": state,
-                    "state_reason": "validation_restarted" if previous.state == "running" else previous.state_reason,
+                    "state_reason": reason if previous.state == "running" else previous.state_reason,
                     "version": previous.version + 1,
                     "updated_at": now,
                     "state_history": history,
@@ -521,6 +545,7 @@ class SqlAlchemyCorpusExperimentRepository:
                 experiment.plan_id == plan_id,
                 experiment.record_payload["tenant_id"].as_string() == tenant_id,
                 experiment.record_payload["environment"].as_string() == environment,
+                _current_generation_round(round_, experiment.experiment_id),
             )
         )
         if alert_id is not None:
@@ -541,7 +566,9 @@ class SqlAlchemyCorpusExperimentRepository:
             select(item.alert_id, item.job_id, func.row_number().over(partition_by=item.alert_id, order_by=(round_.created_at.desc(), round_.round_id.desc())).label("rank"))
             .join(round_, round_.round_id == item.round_id)
             .join(experiment, experiment.experiment_id == round_.experiment_id)
-            .where(experiment.plan_id == plan_id, experiment.record_payload["tenant_id"].as_string() == tenant_id, experiment.record_payload["environment"].as_string() == environment)
+            .where(
+                experiment.plan_id == plan_id, experiment.record_payload["tenant_id"].as_string() == tenant_id, experiment.record_payload["environment"].as_string() == environment, _current_generation_round(round_, experiment.experiment_id)
+            )
         )
         if alert_id is not None:
             ranked = ranked.where(item.alert_id == alert_id)
@@ -549,6 +576,28 @@ class SqlAlchemyCorpusExperimentRepository:
         query = select(ranked.c.alert_id).join(job, ranked.c.job_id == job.job_id).where(ranked.c.rank == 1, job.status == "queued", job.workload_kind == "corpus_experiment", job.tenant_id == tenant_id, job.alert_id == ranked.c.alert_id)
         with self._session_factory() as session:
             return set(session.scalars(query))
+
+    def pending_current_alert_ids(self, *, plan_id: str, tenant_id: str, environment: str, alert_id: str | None = None) -> set[str]:
+        """Mask prior results until a new-generation job has produced current work."""
+        pending = self.latest_queued_alert_ids(plan_id=plan_id, tenant_id=tenant_id, environment=environment, alert_id=alert_id)
+        experiment = self.find_plan_experiment(plan_id)
+        if not experiment or experiment.tenant_id != tenant_id or experiment.environment != environment:
+            return pending
+        generation = self.current_learning_generation(experiment.experiment_id)
+        if generation is None:
+            return pending
+        member, item, round_ = SocCorpusExperimentMemberRow, SocCorpusRoundItemRow, SocCorpusRoundRow
+        submitted = (
+            select(item.job_id)
+            .join(round_, round_.round_id == item.round_id)
+            .where(round_.experiment_id == experiment.experiment_id, item.alert_id == member.alert_id, round_.record_payload["learning_generation"].as_string() == generation)
+            .exists()
+        )
+        query = select(member.alert_id).where(member.experiment_id == experiment.experiment_id, ~submitted)
+        if alert_id is not None:
+            query = query.where(member.alert_id == alert_id)
+        with self._session_factory() as session:
+            return pending | set(session.scalars(query))
 
     def run_job(self, *, plan_id: str, tenant_id: str, environment: str, alert_id: str, run_id: str, idempotency_key_hash: str | None = None) -> CorpusRunJob | None:
         """Read only one Run's downstream state, including its not-yet-linked claim.
@@ -562,7 +611,7 @@ class SqlAlchemyCorpusExperimentRepository:
         if idempotency_key_hash:
             identity = or_(identity, job.run_id.is_(None) & job.status.in_([status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]))
         query = (
-            select(job.run_id, job.idempotency_key, job.status, round_.batch, job.result_payload["pattern_reason"].as_string())
+            select(job.run_id, job.idempotency_key, job.status, round_.batch, job.result_payload["pattern_reason"].as_string(), round_.experiment_id, round_.record_payload["learning_generation"].as_string())
             .join(item, item.job_id == job.job_id)
             .join(round_, round_.round_id == item.round_id)
             .join(experiment, experiment.experiment_id == round_.experiment_id)
@@ -579,10 +628,10 @@ class SqlAlchemyCorpusExperimentRepository:
             .order_by((job.run_id == run_id).desc(), round_.created_at.desc(), round_.round_id.desc())
         )
         with self._session_factory() as session:
-            for saved_run_id, key, status, batch, reason in session.execute(query):
+            for saved_run_id, key, status, batch, reason, experiment_id, generation in session.execute(query):
                 # Use the journal's compact UTF-8 hash encoding, not stable_hash.
                 if saved_run_id == run_id or hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest() == idempotency_key_hash:
-                    return CorpusRunJob(ProcessingJobStatus(status), batch, reason)
+                    return CorpusRunJob(ProcessingJobStatus(status), batch, reason, experiment_id, generation)
         return None
 
     def set_dispatch_scope(self, round_id: str, alert_ids: list[str]) -> None:
@@ -596,7 +645,7 @@ class SqlAlchemyCorpusExperimentRepository:
         with self._session_factory() as session:
             round_ = session.get(SocCorpusRoundRow, round_id)
             if round_ and round_.record_payload.get("superseded_by_round_id"):
-                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
+                raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
             job = session.scalar(
                 select(SocProcessingJobRow).join(SocCorpusRoundItemRow, SocCorpusRoundItemRow.job_id == SocProcessingJobRow.job_id).where(SocCorpusRoundItemRow.round_id == round_id, SocCorpusRoundItemRow.alert_id == alert_id)
             )
@@ -630,7 +679,7 @@ class SqlAlchemyCorpusExperimentRepository:
         ranked = (
             select(item.alert_id, item.job_id, func.row_number().over(partition_by=item.alert_id, order_by=(round_.created_at.desc(), round_.round_id.desc())).label("rank"))
             .join(round_, round_.round_id == item.round_id)
-            .where(round_.experiment_id == experiment_id, round_.batch == selection.batch)
+            .where(round_.experiment_id == experiment_id, round_.batch == selection.batch, _current_generation_round(round_, experiment_id))
             .subquery()
         )
         member = SocCorpusExperimentMemberRow
@@ -720,7 +769,7 @@ class SqlAlchemyCorpusExperimentRepository:
                 raise CorpusExperimentConflict("round changed; reload before updating")
             previous = CorpusRound.model_validate(row.record_payload)
             if state == "running" and previous.superseded_by_round_id:
-                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
+                raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
             allowed = {"prepared": {"running", "paused", "blocked"}, "running": {"paused", "blocked", "completed"}, "paused": {"running", "blocked"}, "blocked": set(), "completed": {"running", "paused", "blocked"}}
             if state != previous.state and state not in allowed[previous.state]:
                 raise CorpusExperimentConflict(f"cannot change round from {previous.state} to {state}; start a new round after snapshot changes")
@@ -845,6 +894,22 @@ class SqlAlchemyCorpusExperimentRepository:
                 )
                 or 0
             )
+
+
+def _learning_generation_query(experiment_id):
+    latest = aliased(SocCorpusRoundRow)
+    return (
+        select(latest.record_payload["learning_generation"].as_string())
+        .where(latest.experiment_id == experiment_id, latest.batch == "learning")
+        .order_by(latest.created_at.desc(), latest.round_id.desc())
+        .limit(1)
+        .correlate_except(latest)
+        .scalar_subquery()
+    )
+
+
+def _current_generation_round(round_, experiment_id):
+    return func.coalesce(round_.record_payload["learning_generation"].as_string(), "") == func.coalesce(_learning_generation_query(experiment_id), "")
 
 
 def _members_query(experiment_id: str, selection: CorpusRoundSelection):

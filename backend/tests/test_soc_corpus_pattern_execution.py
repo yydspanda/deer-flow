@@ -186,6 +186,59 @@ def test_finished_run_without_any_pattern_job_is_not_still_running(workbench):
     assert _memory(execution).status == "skipped"
 
 
+def test_new_learning_generation_never_displays_a_previous_pattern_observation(workbench):
+    from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
+
+    job = _job(workbench)
+    run = _pingan_run(1)
+    run.alert_id = job.alert_id
+    run.input_hash = workbench._cases[job.alert_id].payload_hash
+    run.llm_analysis_request.alert_id = job.alert_id
+    run.llm_analysis_request.environment = "dev-corpus-eval"
+    workbench._repository.save_run(run)
+    registry = build_soc_memory_profile_registry()
+    patterns = SocMemoryPatternService(repository=workbench._repository, candidate_repository=workbench._repository, profile_registry=registry)
+    workbench._pattern_service = patterns
+    observe = dict(source_type=MemoryPatternSourceType.BATCH_ALERT, environment="dev-corpus-eval", data_class=MemoryPatternDataClass.OPERATIONAL, context=context())
+    old = patterns.observe_run(run, transport_ref="before-learning-restart", **observe)
+    _update_job(workbench, job, status="completed", run_id=run.run_id, result_payload={"observation_id": old.observation.observation_id})
+    assert workbench.get_execution(run.alert_id).observation_id == old.observation.observation_id
+
+    batches = service(workbench._repository, [])
+    create = CorpusRoundCreateCommand(experiment_id="EXP-pattern", selection=CorpusRoundSelection(batch="learning", alert_ids=[run.alert_id]), memory_mode="none")
+    manual = run.model_copy(deep=True, update={"run_id": "RUN-manual-before-restart", "started_at": run.started_at + timedelta(milliseconds=500)})
+    workbench._repository.save_run(manual)
+    manual_round = batches.create_round(create, context=context())
+    manual_job = batches.store.list_round_items(manual_round.round_id).items[0].job
+    _update_job(workbench, manual_job, status="completed", run_id=manual.run_id, result_payload={"observation_id": old.observation.observation_id})
+
+    # A same-behavior run is no longer allowed to resolve the previous
+    # generation's observation/candidate merely because its signature matches.
+    current_round = batches.create_round(create, context=context(), learning_generation="generation-new")
+    current_job = batches.store.list_round_items(current_round.round_id).items[0].job
+    current = run.model_copy(deep=True, update={"run_id": "RUN-generation-new", "started_at": run.started_at + timedelta(seconds=1)})
+    workbench._repository.save_run(current)
+    _update_job(workbench, current_job, status="completed", run_id=current.run_id, result_payload={"pattern_reason": "ineligible"})
+    assert workbench.get_execution(current.alert_id).observation_id is None
+    assert workbench._get_alert_view(current.alert_id).observation_id is None
+    state = workbench.get_state(batch="learning", search=current.alert_id, unprocessed_only=False, include_group_catalog=False, include_rehearsal=False)
+    assert state.alerts[0].observation_id is None
+    audit = workbench.get_audit_bundle(run.alert_id, context=context(), run_id=run.run_id)
+    assert audit.execution.observation_id == old.observation.observation_id
+
+    scope = MemoryPatternAccumulationScope(experiment_id="EXP-pattern", learning_generation="generation-new", event_start=old.observation.window_start, event_end=old.observation.window_end)
+    restarted_patterns = SocMemoryPatternService(repository=workbench._repository, candidate_repository=workbench._repository, profile_registry=registry, accumulation_scope=scope)
+    fresh = restarted_patterns.observe_run(current, transport_ref="after-learning-restart", **observe)
+    assert fresh.observation.observation_id != old.observation.observation_id
+    assert workbench.get_execution(current.alert_id).observation_id == fresh.observation.observation_id
+    assert workbench._get_alert_view(current.alert_id).observation_id == fresh.observation.observation_id
+    assert workbench.get_audit_bundle(run.alert_id, context=context(), run_id=run.run_id).execution.observation_id == old.observation.observation_id
+    # The manual rerun reused the earlier observation, so source.run_id alone
+    # cannot distinguish it from the newer generation with the same signature.
+    assert workbench.get_audit_bundle(manual.alert_id, context=context(), run_id=manual.run_id).execution.observation_id == old.observation.observation_id
+    assert workbench.get_audit_bundle(current.alert_id, context=context(), run_id=current.run_id).execution.observation_id == fresh.observation.observation_id
+
+
 def test_active_local_claim_only_marks_its_new_run_as_writing_pattern(workbench):
     old = _saved_run(workbench, run_id="RUN-before-claim")
     claim = workbench._reserve_execution(old.alert_id, context=context())

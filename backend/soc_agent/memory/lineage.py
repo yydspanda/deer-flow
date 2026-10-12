@@ -8,8 +8,19 @@ from collections.abc import Iterable
 from soc_agent.contracts import (
     MemoryPatternObservation,
     SocMemoryCandidate,
+    SocMemoryCandidateCreateCommand,
     SocMemoryCandidateSourceType,
+    SocMemoryRecord,
 )
+
+
+def learning_generation_scope(item: SocMemoryCandidate | SocMemoryCandidateCreateCommand | SocMemoryRecord) -> tuple[str, str] | None:
+    """Read the server-owned accumulation identity, separately from applicability."""
+    generation = item.metadata.get("learning_generation") or item.source.metadata.get("learning_generation")
+    experiment = item.metadata.get("experiment_id") or item.source.metadata.get("experiment_id")
+    if not isinstance(generation, str) or not generation or not isinstance(experiment, str) or not experiment:
+        return None
+    return experiment, generation
 
 
 def memory_pattern_lineage_metadata(
@@ -26,6 +37,11 @@ def memory_pattern_lineage_metadata(
         "memory_profile_id": observation.profile_id,
         "memory_profile_version": observation.profile_version,
         "memory_feature_schema_version": observation.feature_schema_version,
+        **(
+            {"experiment_id": observation.accumulation_scope.experiment_id, "learning_generation": observation.accumulation_scope.learning_generation}
+            if observation.accumulation_scope is not None and observation.accumulation_scope.learning_generation is not None
+            else {}
+        ),
     }
 
 

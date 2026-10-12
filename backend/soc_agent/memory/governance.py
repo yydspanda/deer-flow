@@ -5,6 +5,7 @@ from datetime import datetime
 
 from soc_agent.contracts import SocMemoryApplicabilitySpec, SocMemoryCandidate, SocMemoryCandidateCreateCommand, SocMemoryRecord, SocMemoryRecordStatus, Verdict
 from soc_agent.contracts.memory_governance import MemoryGovernancePreview, MemoryScopeDifference, RelatedGovernedMemory
+from soc_agent.memory.lineage import learning_generation_scope
 from soc_agent.memory.profiles import SocMemoryProfileRegistry
 from soc_agent.protocols import MemoryRecordRepository
 from soc_agent.utils.hashing import stable_hash
@@ -12,6 +13,18 @@ from soc_agent.utils.hashing import stable_hash
 
 def normalized_facets(values: dict[str, list[str]]) -> dict[str, list[str]]:
     return {key.casefold(): sorted({v.strip().casefold() for v in items}) for key, items in sorted(values.items())}
+
+
+def same_learning_governance_scope(left: SocMemoryCandidate | SocMemoryCandidateCreateCommand | SocMemoryRecord, right: SocMemoryCandidate | SocMemoryCandidateCreateCommand | SocMemoryRecord) -> bool:
+    """Keep independent DEV reruns separate; production governance is unchanged."""
+
+    def dev_generation(item):
+        spec = item.applicability
+        if spec is None or set(spec.required_facets.get("environment", [])) != {"dev-corpus-eval"}:
+            return None
+        return learning_generation_scope(item)
+
+    return dev_generation(left) == dev_generation(right)
 
 
 def reuse_conditions(spec: SocMemoryApplicabilitySpec) -> dict[str, list[str]]:
@@ -111,10 +124,14 @@ def prefer_specific_matches(matches, registry: SocMemoryProfileRegistry, *, publ
     exact = [m for m in matches if m.applicability_report and m.applicability_report.status is SocMemoryApplicabilityStatus.APPLICABLE]
     result = []
     for match in matches:
-        preferred = [m.memory_id for m in exact if m.memory_id != match.memory_id and scope_relation(m.record.applicability, match.record.applicability, registry) == "strict_subset"]
+        preferred = [
+            m.memory_id for m in exact if m.memory_id != match.memory_id and same_learning_governance_scope(m.record, match.record) and scope_relation(m.record.applicability, match.record.applicability, registry) == "strict_subset"
+        ]
         if query is not None:
             for record in published_scopes:
                 if record.memory_id == match.memory_id or not record.retrieval_updated_at or not record.retrieval_policy_version:
+                    continue
+                if not same_learning_governance_scope(record, match.record):
                     continue
                 if boundary_released(match.record, record):
                     continue
@@ -176,6 +193,8 @@ def preview_governance(candidate: SocMemoryCandidate, records: list[SocMemoryRec
     used_ids = used_ids or set()
     for record in records:
         if record.source_candidate_id == candidate.candidate_id:
+            continue
+        if not same_learning_governance_scope(candidate, record):
             continue
         relation = scope_relation(candidate.applicability, record.applicability, registry)
         shared = any(set(candidate.facets.get(key, [])) & set(record.facets.get(key, [])) for key in ("behavior_fingerprint", "detection_key"))

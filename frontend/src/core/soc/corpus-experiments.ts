@@ -201,6 +201,7 @@ export function corpusRoundSelection(
 export interface SocCorpusQuickState {
   experiment_id: string;
   restart_token?: string | null;
+  restart_active?: number;
   total: number;
   completed: number;
   active: number;
@@ -225,8 +226,20 @@ export interface SocCorpusRestartValidationCommand {
   options: SocAnalysisExecutionOptions;
 }
 
-export type SocCorpusQuickCommand =
+export interface SocCorpusRestartLearningCommand {
+  batch: "learning";
+  scope: "all";
+  action: "restart_learning";
+  restart_token: string;
+  options: SocAnalysisExecutionOptions;
+}
+
+export type SocCorpusRestartCommand =
   | SocCorpusRestartValidationCommand
+  | SocCorpusRestartLearningCommand;
+
+export type SocCorpusQuickCommand =
+  | SocCorpusRestartCommand
   | {
       batch: SocCorpusBatch;
       scope: "all" | "reuse" | "explore";

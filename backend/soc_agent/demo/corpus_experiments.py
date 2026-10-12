@@ -96,6 +96,7 @@ class SocCorpusExperimentService:
         default_options: SocAnalysisExecutionOptions | None = None,
         current_plan_id: str | None = None,
         round_identity: str | None = None,
+        learning_generation: str | None = None,
     ) -> CorpusRound:
         _require_admin(context)
         if command.concurrency > self._max_concurrency:
@@ -114,6 +115,7 @@ class SocCorpusExperimentService:
             experiment = store.get_experiment(command.experiment_id)
             if experiment is None:
                 raise ValueError("experiment not found; prepare the fixed dataset first")
+            learning_generation = learning_generation or store.current_learning_generation(experiment.experiment_id)
             if (command.purpose == "facts") != bool(experiment.fact_source_experiment_id):
                 raise ValueError("事实预处理只能在专用事实实验运行，该实验不能执行学习或验证")
             if experiment.rebalance:
@@ -175,6 +177,7 @@ class SocCorpusExperimentService:
                 concurrency=command.concurrency,
                 created_by=context.actor.actor_id,
                 created_at=created_at,
+                learning_generation=learning_generation,
             )
             store.create_round(round_)
             offset = 0
@@ -223,7 +226,7 @@ class SocCorpusExperimentService:
             raise ValueError("concurrency exceeds the server limit")
         round_ = self._round(round_id)
         if round_.superseded_by_round_id:
-            raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
+            raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
         if round_.state == "blocked":
             raise CorpusExperimentConflict("snapshot changed; create a new round")
         reason = self.snapshot_problem(round_)
@@ -297,7 +300,7 @@ class SocCorpusExperimentService:
             if round_ is None:
                 raise ValueError("round not found")
             if round_.superseded_by_round_id:
-                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
+                raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
             if round_.state == "blocked" or self.snapshot_problem(round_):
                 raise CorpusExperimentConflict("运行设置或已审核经验发生变化，请显式重新运行")
             queued = store.request_manual(round_id, alert_id, actor_id=context.actor.actor_id)
@@ -384,7 +387,7 @@ class SocCorpusExperimentService:
         _require_admin(context)
         round_ = self._round(round_id)
         if round_.superseded_by_round_id:
-            raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
+            raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
         reason = self.snapshot_problem(round_)
         if reason or round_.state == "blocked":
             raise CorpusExperimentConflict("snapshot changed; create a new round")
@@ -394,7 +397,7 @@ class SocCorpusExperimentService:
             store = tx.corpus_experiments()
             round_ = store.get_round(round_id)
             if round_.superseded_by_round_id:
-                raise CorpusExperimentConflict("该轮任务已被第二批全部重跑替换，请使用当前第二批任务")
+                raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
             while True:
                 page = store.list_round_items(round_id, offset=offset, limit=500)
                 for item in page.items:

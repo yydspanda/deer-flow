@@ -7,6 +7,7 @@ import pytest
 from soc_agent.contracts import (
     ActorContext,
     SocMemoryApplicabilitySpec,
+    SocMemoryCandidate,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
@@ -86,6 +87,48 @@ def record(repository, candidate, *, enabled=True, **changes):
 def test_scope_identity_is_independent_of_manual_or_automatic_storage_layout():
     assert scope_identity(command()) == scope_identity(command(automatic=True))
     assert scope_identity(command()) != scope_identity(command(data_class="simulation"))
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+@pytest.mark.parametrize("old_generation", [None, "ROUND-older"])
+def test_restarted_learning_does_not_reuse_old_pending_or_confirmed_candidates(confirmed, old_generation):
+    repository = InMemoryMemoryCandidateRepository()
+    original = command()
+    original.metadata.update(experiment_id="EXP-test")
+    if old_generation:
+        original.metadata["learning_generation"] = old_generation
+    # This unit test isolates the pure resolver from candidate admission; the
+    # experiment accumulation tests cover persisted generation provenance.
+    first = SocMemoryCandidate(**original.model_dump())
+    repository.save_memory_candidate(first)
+    if confirmed:
+        record(repository, first)
+    historical = repository.get_memory_candidate(first.candidate_id)
+    incoming = command(2, automatic=True, window="b")
+    incoming.metadata.update(experiment_id="EXP-test", learning_generation="ROUND-new")
+    assert resolve_learning_candidate(repository, incoming, now=NOW) is None
+    fresh = SocMemoryCandidate(**incoming.model_dump())
+    repository.save_memory_candidate(fresh)
+    assert fresh.candidate_id != first.candidate_id
+    assert repository.get_memory_candidate(first.candidate_id) == historical
+    repeat = incoming.model_copy(update={"idempotency_key": "learning:retry"})
+    assert resolve_learning_candidate(repository, repeat, now=NOW).candidate_id == fresh.candidate_id
+    assert scope_identity(original) == scope_identity(incoming)
+
+
+def test_generation_does_not_change_applicability_but_isolates_other_experiments_and_ordinary_learning():
+    repository = InMemoryMemoryCandidateRepository()
+    generated = command()
+    generated.source.metadata.update(experiment_id="EXP-test", learning_generation="ROUND-new")
+    first = SocMemoryCandidate(**generated.model_dump())
+    repository.save_memory_candidate(first)
+    for index, metadata in enumerate([{}, {"experiment_id": "EXP-other", "learning_generation": "ROUND-new"}], start=2):
+        incoming = command(index)
+        incoming.metadata.update(metadata)
+        assert resolve_learning_candidate(repository, incoming, now=NOW) is None
+    same = command(4)
+    same.metadata.update(experiment_id="EXP-test", learning_generation="ROUND-new")
+    assert resolve_learning_candidate(repository, same, now=NOW).candidate_id == first.candidate_id
 
 
 @pytest.mark.parametrize("automatic_first", [False, True])

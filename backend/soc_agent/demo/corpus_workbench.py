@@ -711,9 +711,17 @@ def _matches_corpus_run(run: AnalysisRun, case: _CorpusCase) -> bool:
     return resolution is not None and resolution.source_kind == "tenant_policy" and (resolution.policy_snapshot or {}).get("environment") == CORPUS_WORKBENCH_ENVIRONMENT
 
 
-def _observation_matches_run(observation: Any, run: AnalysisRun | None) -> bool:
+def _observation_matches_run(observation: Any, run: AnalysisRun | None, *, learning_scope: tuple[str, str | None] | None = None) -> bool:
     if run is None or run.llm_analysis_request is None or (run.direct_resolution is not None and run.direct_resolution.source_kind != "memory"):
         return False
+    if learning_scope is not None:
+        scope = observation.accumulation_scope
+        # Early interactive observations had no experiment scope. They remain
+        # readable only for a historical, unversioned learning generation.
+        if scope is None and learning_scope[1] is not None:
+            return False
+        if scope is not None and (scope.experiment_id, scope.learning_generation) != learning_scope:
+            return False
     try:
         profile = PingAnSocMemoryProfile.for_run(run)
         identity = profile.identity
@@ -1100,6 +1108,7 @@ class SocCorpusWorkbenchService:
         # Only list predicates/statistics are cached. Candidate governance and
         # complete audit records are always read fresh for the requested page.
         with self._list_lock:
+            learning_scope = self._current_learning_scope()
             rows = self._list_queries.rows(self._list_catalog_id)
             missing = []
             for case in self._cases.values():
@@ -1141,7 +1150,7 @@ class SocCorpusWorkbenchService:
                     continue
                 case = self._cases[alert_id]
                 run = self._run_for_case(case)
-                observation = self._observations_by_alert({alert_id: run}, alert_id=alert_id).get(alert_id) if run is not None else None
+                observation = self._observations_by_alert({alert_id: run}, alert_id=alert_id, learning_scope=learning_scope).get(alert_id) if run is not None else None
                 summary = self._list_summary(case, run=run, observation=observation)
                 self._list_queries.save(self._list_catalog_id, alert_id, revision, summary)
                 rows[alert_id] = (revision, summary)
@@ -1215,7 +1224,7 @@ class SocCorpusWorkbenchService:
             run = self._run_for_case(self._cases[alert_id]) if failure is None else self._failed_job_run(self._cases[alert_id], failure)
         runs_by_alert = {alert_id: run} if run is not None else {}
         run_query = {"run_id": runs_by_alert[alert_id].run_id} if alert_id in runs_by_alert else {}
-        observations_by_alert = self._observations_by_alert(runs_by_alert, alert_id=alert_id) if runs_by_alert else {}
+        observations_by_alert = self._observations_by_alert(runs_by_alert, alert_id=alert_id, learning_scope=self._current_learning_scope()) if runs_by_alert else {}
         queues_by_run = {
             item.run_id: item
             for item in (
@@ -1346,7 +1355,21 @@ class SocCorpusWorkbenchService:
             self._experiment_store.require_schema()
         except CorpusExperimentSchemaNotReady:
             return set()
-        return self._experiment_store.latest_queued_alert_ids(plan_id=self._batch_plan.plan_id, tenant_id=CORPUS_WORKBENCH_TENANT, environment=CORPUS_WORKBENCH_ENVIRONMENT, alert_id=alert_id)
+        # A learning restart also invalidates the previous validation results,
+        # before a replacement validation queue exists. Both those unstarted
+        # members and current queued jobs must hide the historical result.
+        return self._experiment_store.pending_current_alert_ids(plan_id=self._batch_plan.plan_id, tenant_id=CORPUS_WORKBENCH_TENANT, environment=CORPUS_WORKBENCH_ENVIRONMENT, alert_id=alert_id)
+
+    def _current_learning_scope(self) -> tuple[str, str] | None:
+        try:
+            self._experiment_store.require_schema()
+        except CorpusExperimentSchemaNotReady:
+            return None
+        experiment = self._experiment_store.find_plan_experiment(self._batch_plan.plan_id)
+        if experiment is None:
+            return None
+        generation = self._experiment_store.current_learning_generation(experiment.experiment_id)
+        return (experiment.experiment_id, generation) if generation is not None else None
 
     def _failed_job_run(self, case: _CorpusCase, failure: CorpusFailedJob) -> AnalysisRun | None:
         # No Run ID means this attempt failed before Runtime persistence. A previous
@@ -1730,7 +1753,8 @@ class SocCorpusWorkbenchService:
             alert_id=alert_id,
             limit=100,
         )
-        matching_observations = [item for item in observations if _observation_matches_run(item, run)]
+        learning_scope = self._current_learning_scope()
+        matching_observations = [item for item in observations if _observation_matches_run(item, run, learning_scope=learning_scope)]
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         candidate = self._repository.get_memory_candidate(replay.candidate_id) if replay is not None and replay.candidate_id is not None else None
@@ -1763,6 +1787,7 @@ class SocCorpusWorkbenchService:
         run = self._audit_run_for_case(case, run_id)
         if run is None:
             raise SocCorpusWorkbenchError(f"alert {alert_id} has no persisted Runtime run to audit")
+        pattern_job, pattern_active = self._pattern_progress(run)
 
         observations = self._repository.list_memory_pattern_observations(
             tenant_id=CORPUS_WORKBENCH_TENANT,
@@ -1772,7 +1797,17 @@ class SocCorpusWorkbenchService:
             alert_id=alert_id,
             limit=100,
         )
-        matching_observations = [item for item in observations if _observation_matches_run(item, run)]
+        # Explicit historical Run IDs keep their original audit path. The live
+        # view must not recover candidates from an older learning generation.
+        learning_scope = self._current_learning_scope() if run_id is None else None
+        if run_id is not None and pattern_job is not None and pattern_job.experiment_id is not None:
+            learning_scope = (pattern_job.experiment_id, pattern_job.learning_generation)
+        matching_observations = [item for item in observations if _observation_matches_run(item, run, learning_scope=learning_scope)]
+        if run_id is not None:
+            # A later generation can have the same behavior signature. Preserve
+            # the explicit Run's own observation instead of preferring that newer
+            # cohort only because it was written more recently.
+            matching_observations = [item for item in matching_observations if item.source.run_id == run_id] or matching_observations
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
         replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
         pattern_source_id = f"memory_pattern:{observation.aggregation_key}" if observation is not None else None
@@ -1794,7 +1829,6 @@ class SocCorpusWorkbenchService:
             run_id=run.run_id,
             limit=500,
         )
-        pattern_job, pattern_active = self._pattern_progress(run)
         execution = _execution_view(
             alert_id=alert_id,
             run=run,
@@ -1819,6 +1853,8 @@ class SocCorpusWorkbenchService:
 
     def _audit_run_for_case(self, case: _CorpusCase, run_id: str | None) -> AnalysisRun | None:
         if run_id is None:
+            if case.alert_id in self._queued_alert_ids(alert_id=case.alert_id):
+                return None
             return self._run_for_case(case)
         run = self._repository.get_run(run_id)
         if run is None or run.alert_id != case.alert_id or not _matches_corpus_run(run, case):
@@ -1892,7 +1928,7 @@ class SocCorpusWorkbenchService:
         )[:24]
         return f"soc-corpus-dev-rerun:{alert_id}:{request_hash}"
 
-    def _observations_by_alert(self, runs_by_alert: Mapping[str, AnalysisRun], *, alert_id: str | None = None) -> dict[str, Any]:
+    def _observations_by_alert(self, runs_by_alert: Mapping[str, AnalysisRun], *, alert_id: str | None = None, learning_scope: tuple[str, str] | None = None) -> dict[str, Any]:
         selected: dict[str, Any] = {}
         offset = 0
         while True:
@@ -1907,7 +1943,7 @@ class SocCorpusWorkbenchService:
             )
             for item in observations:
                 item_alert_id = item.source.alert_id
-                if item_alert_id not in self._cases or not _observation_matches_run(item, runs_by_alert.get(item_alert_id)):
+                if item_alert_id not in self._cases or not _observation_matches_run(item, runs_by_alert.get(item_alert_id), learning_scope=learning_scope):
                     continue
                 previous = selected.get(item_alert_id)
                 if previous is None or item.created_at > previous.created_at:

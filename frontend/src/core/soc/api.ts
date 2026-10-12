@@ -1454,8 +1454,8 @@ export const runSocCorpusQuick = (body: SocCorpusQuickCommand, key?: string) =>
   corpusExperimentRequest<{ accepted: boolean }>(
     "quick-validation",
     body,
-    body.action === "restart_validation"
-      ? `restart-validation-${body.restart_token}`
+    body.action === "restart_validation" || body.action === "restart_learning"
+      ? `restart-${body.batch}-${body.restart_token}`
       : key,
   );
 

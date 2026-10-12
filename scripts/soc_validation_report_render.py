@@ -1021,6 +1021,11 @@ def _markdown(report):
         "",
         f"实验：{_md(metadata.get('experiment_id'))}；固定第二批轮次：{_md(metadata.get('round_id'))}。",
         "",
+        *(
+            ["**历史轮次报告：该轮次已被后续重跑替代，不代表当前阶段结论。**", ""]
+            if metadata.get("historical_round")
+            else []
+        ),
         "本报告仅汇总已保存事实，不重跑告警，不重算经验匹配，不判断人工审核尚未确认的正确性。后续单条运行另列 followups.csv，不混入主报告。",
         "",
         *scope_note,

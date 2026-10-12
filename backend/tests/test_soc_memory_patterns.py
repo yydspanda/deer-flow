@@ -300,7 +300,8 @@ def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
 
 
 @pytest.mark.parametrize("rejected", [False, True])
-def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate(rejected: bool) -> None:
+@pytest.mark.parametrize("learning_generation", [None, "ROUND-RESTART-learning"])
+def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate(rejected: bool, learning_generation: str | None) -> None:
     class _RunRepository:
         def __init__(self) -> None:
             self.runs: dict[str, AnalysisRun] = {}
@@ -314,6 +315,15 @@ def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate(rej
     repository = InMemoryMemoryPatternRepository()
     run_repository = _RunRepository()
     pattern_service = _service(repository, threshold=3)
+    if learning_generation is not None:
+        from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
+
+        pattern_service = SocMemoryPatternService(
+            repository=repository,
+            candidate_repository=repository,
+            policy=pattern_service.policy,
+            accumulation_scope=MemoryPatternAccumulationScope(experiment_id="EXP-test", learning_generation=learning_generation, event_start=_START, event_end=_START + timedelta(days=1)),
+        )
     runs = [
         run.model_copy(
             update={
@@ -356,6 +366,10 @@ def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate(rej
     )
     manual_candidate = promoted.memory_candidate
     assert manual_candidate is not None
+    if learning_generation is not None:
+        assert manual_candidate.metadata["learning_generation"] == learning_generation
+        assert manual_candidate.source.metadata["learning_generation"] == learning_generation
+        assert manual_candidate.metadata["experiment_id"] == "EXP-test"
     assert manual_candidate.metadata["lineage_key"] == second.observation.lineage_key
     assert manual_candidate.metadata["support_count_at_creation"] == 2
     assert manual_candidate.metadata["observation_ids"] == [
@@ -388,6 +402,10 @@ def test_manual_promotion_governs_lineage_and_suppresses_automatic_candidate(rej
     assert replay.candidate_coverage == "lineage_governance"
     assert replay.candidate_snapshot_observation_ids == manual_candidate.metadata["observation_ids"]
     assert replay.added_observation_ids == [third.observation.observation_id]
+
+    if learning_generation is not None:
+        # Experiment accumulation intentionally has one frozen event range.
+        return
 
     later = []
     for index in range(4, 7):

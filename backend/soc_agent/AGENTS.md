@@ -121,25 +121,25 @@ file for SOC code. The authoritative product and engineering documents are:
   attempts and retained terminal results cannot keep a recovered batch blocked; partial
   unfinished blocks and historical rounds remain visible. Browser filters never enter
   execution commands.
-  Explicit `restart_validation` replaces the entire second-batch queue using existing
-  rounds/jobs, retaining all old results and first-batch/Memory provenance. Require
-  `batch=validation`, `scope=all`, no alert ID, and a server `restart_token` bound to
-  the canonical experiment's latest validation round. Bind `Idempotency-Key` to that
-  token; concurrent actors/retries resolve to one round, and changed options conflict.
-  Check token, plan-scoped settings and all historical validation active claims inside
-  the governance transaction. Pause old bulk queues and clear queued manual admission
-  before creating/starting all members with fresh settings and reviewed Memory. Any
-  failure rolls back; never block newer work as a side effect of a rejected restart.
-  Persist `superseded_by_round_id` in the existing round JSON (default absent/None for
-  old history); explicit start/manual/retry and dispatcher claims must reject retired
-  queues too. Keep per-batch creation order monotonic for every new round so clock
-  rollback cannot hide a newer single-alert submission from the restart token.
-  Latest queued jobs project as unrun before list counting/pagination, hide the previous
-  current result and reset current statistics. Active claims take priority; fixed-run
-  history remains readable. Read compact job columns and bind the full pending set once
-  per SQL query, without rewriting projections or scanning historical Run JSON.
-  No new table or migration is needed. Queued jobs keep their original configuration;
-  drift blocks dispatch and only an explicit rerun may capture new settings.
+  Whole-batch `restart_learning` / `restart_validation` require matching batch, all
+  scope, no alert ID and a server token bound to monotonic latest round identities
+  (both batches for learning). Bind idempotency to the token; retries return the
+  accepted round without reactivation, changed options conflict. In one governance
+  transaction validate token/settings and zero historical active claims, retire bulk
+  queues and manual intents, then create/start all members with fresh settings.
+  Learning checks/retires both batches; validation preserves learning and snapshots
+  reviewed Memory. Rejected requests and queue-creation failures leave work unchanged.
+  Existing round JSON `superseded_by_round_id` blocks all start/manual/retry/dispatcher
+  paths. Server-owned `learning_generation` starts independent accumulation and DEV
+  publication, even for identical settings/behavior; subsequent single reruns and
+  validation inherit it. It is provenance, never a user option or behavior facet.
+  Current candidates, validation Memory snapshots and batch projections exclude old
+  generations; old results and Memory governance remain intact. Legacy absent fields
+  retain serialization/hashes; no migration. Queued jobs retain frozen configuration;
+  drift blocks dispatch until explicit rerun. Pending jobs and new-generation members
+  without jobs mask old outcomes as unrun before counting/pagination; active claims
+  take priority. Bind compact pending IDs once per query, never scan historical Run
+  JSON or rewrite list projections. Fixed-run history remains readable.
   An explicitly authorized second-batch discard is an offline DEV maintenance
   exception, owned by `scripts/soc_pingan_validation_database.py` and the pure SQL
   `backend/scripts/soc_validation_reset_store.py`. Stop all database owners and verify

@@ -86,6 +86,15 @@ def test_usage_is_exclusive_and_model_skip_is_a_separate_fact():
     )
 
 
+def test_explicit_retired_round_is_prominently_marked_as_historical(tmp_path):
+    source = data(row("a"))
+    source["metadata"]["historical_round"] = True
+    write_report(build_report(source), tmp_path)
+    text = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+    assert "历史轮次报告" in text.split("##", 1)[0]
+    assert "不代表当前阶段结论" in text
+
+
 def test_failure_and_snapshot_drift_remain_in_total_but_not_quality():
     stable = row("a", recommended_handling="ignore", effective_verdict="false_positive")
     stable["label"] = {"scorable": True, "expected_handling": "transfer"}

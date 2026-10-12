@@ -31,7 +31,7 @@ import {
 import type {
   SocCorpusExperimentConfiguration,
   SocCorpusQuickState,
-  SocCorpusRestartValidationCommand,
+  SocCorpusRestartCommand,
 } from "@/core/soc/corpus-experiments";
 import type {
   SocAnalysisExecutionOptions,
@@ -316,28 +316,27 @@ export function SocCorpusExperiments({
                   ? "开始积累"
                   : "开始验证"}
         </Button>
-        {batch === "validation" &&
-          data?.restart_token &&
-          controls &&
-          options &&
-          configuration.data && (
-            <SocCorpusValidationRestart
-              controls={{
-                ...controls,
-                defaults: configuration.data.defaults,
-                can_configure: canConfigure,
-              }}
-              options={options}
-              disabled={mutation.isPending || !!state.error}
-              onRestarted={() =>
-                setSettingsByBatch((previous) => {
-                  const remaining = { ...previous };
-                  delete remaining.validation;
-                  return remaining;
-                })
-              }
-            />
-          )}
+        {data?.restart_token && controls && options && configuration.data && (
+          <SocCorpusBatchRestart
+            key={batch}
+            batch={batch}
+            controls={{
+              ...controls,
+              defaults: configuration.data.defaults,
+              can_configure: canConfigure,
+            }}
+            options={options}
+            disabled={mutation.isPending || !!state.error}
+            onRestarted={() =>
+              setSettingsByBatch((previous) => {
+                if (batch === "learning") return {};
+                const remaining = { ...previous };
+                delete remaining.validation;
+                return remaining;
+              })
+            }
+          />
+        )}
         {data && (
           <Button asChild variant="outline">
             <Link
@@ -382,32 +381,38 @@ function completeRunOptions(
   };
 }
 
-function SocCorpusValidationRestart({
+function SocCorpusBatchRestart({
+  batch,
   controls,
   options,
   disabled,
   onRestarted,
 }: {
+  batch: SocCorpusBatch;
   controls: SocCorpusWorkbenchRunControls;
   options: SocAnalysisExecutionOptions;
   disabled: boolean;
   onRestarted: () => void;
 }) {
   const cache = useQueryClient();
+  const learning = batch === "learning";
+  const batchLabel = learning ? "第一批" : "第二批";
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => completeRunOptions(options));
-  const [attempt, setAttempt] =
-    useState<SocCorpusRestartValidationCommand | null>(null);
+  const [attempt, setAttempt] = useState<SocCorpusRestartCommand | null>(null);
   const fullState = useQuery({
-    queryKey: [...QUERY, "validation", "all", ""],
-    queryFn: () => getSocCorpusQuickState("validation", "all", 0, []),
+    queryKey: [...QUERY, batch, "all", ""],
+    queryFn: () => getSocCorpusQuickState(batch, "all", 0, []),
     enabled: open,
     refetchInterval: open ? 2000 : false,
     retry: false,
   });
   const restart = useMutation({
-    mutationFn: (command: SocCorpusRestartValidationCommand) =>
-      runSocCorpusQuick(command, `restart-validation-${command.restart_token}`),
+    mutationFn: (command: SocCorpusRestartCommand) =>
+      runSocCorpusQuick(
+        command,
+        `restart-${command.batch}-${command.restart_token}`,
+      ),
     onSuccess: async () => {
       await cache.cancelQueries({ queryKey: QUERY });
       await Promise.all([
@@ -418,7 +423,9 @@ function SocCorpusValidationRestart({
       onRestarted();
       setAttempt(null);
       setOpen(false);
-      toast.success("第二批已按确认设置全部重新运行，旧结果保留在历史中");
+      toast.success(
+        `${batchLabel}已按确认设置全部重新运行，旧结果保留在历史中`,
+      );
     },
   });
   const needsRefresh =
@@ -430,14 +437,14 @@ function SocCorpusValidationRestart({
     mutationFn: async () => {
       const [saved, current] = await Promise.all([
         cache.fetchQuery({
-          queryKey: [...CONFIGURATION_QUERY, "validation"],
-          queryFn: () => getSocCorpusExperimentConfiguration("validation"),
+          queryKey: [...CONFIGURATION_QUERY, batch],
+          queryFn: () => getSocCorpusExperimentConfiguration(batch),
           staleTime: 0,
         }),
         fullState.refetch({ throwOnError: true }),
       ]);
       if (!current.data?.restart_token)
-        throw new Error("第二批状态尚未就绪，请刷新页面后重试");
+        throw new Error(`${batchLabel}状态尚未就绪，请刷新页面后重试`);
       return saved.saved_options ?? saved.defaults;
     },
     onSuccess: (saved) => {
@@ -449,10 +456,14 @@ function SocCorpusValidationRestart({
   const value =
     attempt?.options ??
     (controls.can_configure === false ? completeRunOptions(options) : draft);
-  const active = (fullState.data?.active ?? 0) > 0;
+  const activeCount = learning
+    ? fullState.data?.restart_active
+    : fullState.data?.active;
+  const active = (activeCount ?? 0) > 0;
   const busy = restart.isPending || refresh.isPending;
   const ready =
     !!fullState.data?.restart_token &&
+    activeCount !== undefined &&
     !fullState.isPlaceholderData &&
     !fullState.isError;
   return (
@@ -475,10 +486,20 @@ function SocCorpusValidationRestart({
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>第二批：重新配置并全部重跑</DialogTitle>
+          <DialogTitle>{batchLabel}：重新配置并全部重跑</DialogTitle>
           <DialogDescription>
-            全量包含第二批成功、失败和未运行的告警，不受当前列表筛选影响。
-            旧结果保留在历史中；第一批结果和已审核经验全部保留。
+            {learning ? (
+              <>
+                全量包含第一批成功、失败和未运行的告警，不受当前列表筛选影响。
+                旧结果和旧经验保留在历史中，本次重新积累并审核经验，不沿用旧经验。
+                第二批当前进度同步重置，旧结果保留在历史中；完成本次经验审核后需重新验证。
+              </>
+            ) : (
+              <>
+                全量包含第二批成功、失败和未运行的告警，不受当前列表筛选影响。
+                旧结果保留在历史中；第一批结果和已审核经验全部保留。
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <SocCorpusRunSettings
@@ -495,7 +516,8 @@ function SocCorpusValidationRestart({
         />
         {!attempt && active && (
           <p role="alert" className="text-sm text-amber-800">
-            请先暂停第二批，并等待运行中的告警结束后再全部重跑。
+            请先暂停{learning ? "两批" : "第二批"}
+            ，并等待运行中的告警结束后再全部重跑。
           </p>
         )}
         {!attempt && fullState.error && (
@@ -540,10 +562,17 @@ function SocCorpusValidationRestart({
                 }
                 const token = fullState.data?.restart_token;
                 if (!token || !ready || active) return;
-                const command: SocCorpusRestartValidationCommand = {
-                  batch: "validation",
+                const command: SocCorpusRestartCommand = {
+                  ...(learning
+                    ? ({
+                        batch: "learning",
+                        action: "restart_learning",
+                      } as const)
+                    : ({
+                        batch: "validation",
+                        action: "restart_validation",
+                      } as const)),
                   scope: "all",
-                  action: "restart_validation",
                   restart_token: token,
                   options: completeRunOptions(value),
                 };

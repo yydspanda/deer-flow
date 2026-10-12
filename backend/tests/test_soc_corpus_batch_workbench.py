@@ -559,3 +559,59 @@ def test_queued_validation_restart_hides_old_result_but_keeps_fixed_history(work
     assert execution.status == "not_started" and execution.run_id is None
     assert workbench._audit_run_for_case(workbench._cases[alert_id], prior.run_id).run_id == prior.run_id
     assert workbench._repository.get_run(prior.run_id) is not None
+
+
+def test_learning_restart_hides_old_validation_results_before_a_new_validation_queue(workbench):
+    from test_soc_corpus_experiments import context
+
+    from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
+    from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome, CorpusQuickCommand, CorpusRoundCreateCommand, CorpusRoundSelection
+    from soc_agent.core import SocAnalysisService
+    from soc_agent.demo.corpus_experiments import SocCorpusExperimentService
+    from soc_agent.demo.corpus_quick_validation import CorpusQuickValidation
+
+    validation_ids = [m.alert_id for m in workbench.batch_plan.members if m.batch == "validation"][:2]
+    payload = json.loads((Path(__file__).resolve().parents[1] / "samples/alerts/approved_scanner.json").read_text(encoding="utf-8"))
+    prior = SocAnalysisService().analyze(payload)
+    prior.alert_id = validation_ids[0]
+    prior.input_hash = workbench._cases[prior.alert_id].payload_hash
+    prior.llm_analysis_request = prior.llm_analysis_request.model_copy(update={"environment": "dev-corpus-eval"})
+
+    def execute(round_, member, request):
+        if member.alert_id == validation_ids[1]:
+            raise ValueError("prior validation failed before Runtime")
+        workbench._repository.save_run(prior)
+        return CorpusExecutionOutcome(run_id=prior.run_id)
+
+    batches = SocCorpusExperimentService(repository=workbench._repository, execute=execute, configuration_provider=lambda options: {})
+    batches.prepare(workbench.batch_plan, experiment_id="EXP-current", name="Current corpus", context=context())
+    old = batches.create_round(CorpusRoundCreateCommand(experiment_id="EXP-current", selection=CorpusRoundSelection(batch="validation", scope="all", alert_ids=validation_ids), memory_mode="none"), context=context())
+    batches.start(old.round_id, context=context())
+    while batches.execute_one(old.round_id):
+        pass
+    query = dict(batch="validation", unprocessed_only=False, include_rehearsal=False, include_group_catalog=False)
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 1
+    assert workbench.get_state(run_status="failed", **query).alert_page.total == 1
+    history = {alert_id: batches.store.alert_history("EXP-current", alert_id) for alert_id in validation_ids}
+
+    quick = CorpusQuickValidation(batches, workbench.batch_plan)
+    token = quick.snapshot("learning")["restart_token"]
+    command = CorpusQuickCommand(batch="learning", scope="all", action="restart_learning", restart_token=token, options=SocAnalysisExecutionOptions(normalization_review_mode="apply"))
+    quick.command(command, context=context().model_copy(update={"idempotency_key": f"restart-learning-{token}"}))
+
+    # No replacement validation jobs exist yet. Neither its old successful run
+    # nor its pre-Runtime failure may be reported as the new generation's result.
+    assert len([r for r in batches.store.list_rounds() if r.selection.batch == "validation"]) == 1
+    assert workbench.get_state(run_status="success", **query).alert_page.total == 0
+    assert workbench.get_state(run_status="failed", **query).alert_page.total == 0
+    pending = workbench.get_state(run_status="not_run", **query)
+    assert pending.alert_page.total == workbench.batch_plan.counts["validation_main"] + workbench.batch_plan.counts["validation_supplementary"]
+    assert pending.readiness.processed_count == pending.readiness.failed_count == 0
+    for alert_id in validation_ids:
+        row = next(item for item in pending.alerts if item.alert_id == alert_id)
+        assert row.run_id is None and row.operator_outcome is None and row.workflow_state == "ready"
+        assert workbench._get_alert_view(alert_id).run_id is None
+        execution = workbench.get_execution(alert_id)
+        assert execution.status == "not_started" and execution.run_id is None
+        assert batches.store.alert_history("EXP-current", alert_id) == history[alert_id]
+    assert workbench._audit_run_for_case(workbench._cases[prior.alert_id], prior.run_id).run_id == prior.run_id

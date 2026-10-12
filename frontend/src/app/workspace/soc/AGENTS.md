@@ -402,13 +402,20 @@ dates; these defaults do not migrate previously confirmed experience.
   Keep explicitly focused results through processing-driven readiness/comparison changes;
   user filter changes clear that temporary focus.
 - Full-chain corpus auditing is a separate explicit request, never part of live polling.
-  The second-batch **重新配置并全部重跑** dialog edits the existing five run settings
+  Both batches expose **重新配置并全部重跑**, editing the existing five run settings
   only for Host-authorized users; LAN callers use saved settings. Read all-scope activity
   before confirmation even when the visible scope is restricted. Submit explicit all
   scope and the server restart token; preserve body/key across uncertain network retries
   and require a refreshed confirmation on conflict. All old outcomes rerun, latest queued
   tasks show unrun, and old fixed-run history remains accessible. Invalidate lightweight
   list/execution/configuration and quick queries on acceptance, never audit bundles.
+  First-batch restart uses `restart_learning` and requires server `restart_active=0`
+  across both batches before confirmation. Explain that it starts fresh accumulation,
+  leaves prior results and experience in history, requires new experience review, and
+  resets the second batch for validation using the new experience. Never clear the
+  database or infer generation membership in React. Clear both local settings drafts
+  after learning restart and key restart dialogs by batch so uncertain retries cannot
+  cross batches; second-batch restart continues preserving current learning experience.
   Batch progress and quick-command invalidation target only lightweight workbench
   state/activity/execution keys; pinned audit bundles remain cached even as unrelated jobs finish.
   The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,

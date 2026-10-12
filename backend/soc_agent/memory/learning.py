@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from soc_agent.contracts import SocMemoryApplicabilityStatus, SocMemoryCandidate, SocMemoryCandidateCreateCommand, SocMemoryCandidateStatus, SocMemoryQuery, SocMemoryRecord, SocMemoryRecordStatus
 from soc_agent.contracts.memory_learning import SocMemoryLearningView
 from soc_agent.memory.governance import scope_identity
-from soc_agent.memory.lineage import memory_candidate_lineage_key
+from soc_agent.memory.lineage import learning_generation_scope, memory_candidate_lineage_key
 from soc_agent.memory.scoring import evaluate_memory_scope
 from soc_agent.protocols import MemoryCandidateRepository, MemoryRecordRepository
 
@@ -34,6 +34,8 @@ def _expired(record: SocMemoryRecord, now: datetime) -> bool:
 
 def _covers(candidate: SocMemoryCandidate, incoming: LearningInput, record: SocMemoryRecord | None) -> bool:
     if candidate.tenant_id != incoming.tenant_id or candidate.tenant_scope != incoming.tenant_scope or data_scope(candidate) != data_scope(incoming):
+        return False
+    if learning_generation_scope(candidate) != learning_generation_scope(incoming):
         return False
     spec = record.applicability if record is not None else candidate.applicability
     if spec is None:

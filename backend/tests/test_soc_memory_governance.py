@@ -8,6 +8,7 @@ from threading import Barrier
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from test_soc_memory_patterns import _observe
 from test_soc_memory_revision_workflow import _reviewer_context
 from test_soc_pingan_memory_profile import _reviewed_business_lesson, _run
 
@@ -20,8 +21,10 @@ from soc_agent.contracts import (
     SocMemoryRunPromotionCommand,
     Verdict,
 )
-from soc_agent.core import SocMemoryService, SocServiceConflictError
+from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
+from soc_agent.core import SocMemoryPatternService, SocMemoryService, SocServiceConflictError
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
+from soc_agent.memory.lineage import memory_pattern_lineage_metadata
 from soc_agent.memory.sources import memory_candidate_command_from_run_promotion
 
 
@@ -117,6 +120,147 @@ def test_governance_preview_explains_same_scope_disagreement(services):
     assert preview.related_memories[0].scope_relation == "same"
     assert preview.related_memories[0].reviewed_verdict is Verdict.FALSE_POSITIVE
     assert preview.related_memories[0].conclusion
+
+
+def generation_candidate(service, index, generation, *, environment="dev-corpus-eval"):
+    run = _run(index)
+    metadata = {"environment": environment, "experiment_id": "EXP-test"}
+    if generation:
+        patterns = SocMemoryPatternService(
+            repository=service._candidate_repository,
+            candidate_repository=service._candidate_repository,
+            profile_registry=build_soc_memory_profile_registry(),
+            accumulation_scope=MemoryPatternAccumulationScope(experiment_id="EXP-test", learning_generation=generation, event_start=datetime(2026, 1, 1, tzinfo=UTC), event_end=datetime(2027, 1, 1, tzinfo=UTC)),
+        )
+        observation = _observe(patterns, run, transport_ref=f"generation:{index}", environment=environment).observation
+        metadata.update(memory_pattern_lineage_metadata(observation))
+    command = memory_candidate_command_from_run_promotion(run, SocMemoryRunPromotionCommand(run_id=run.run_id, metadata=metadata), profile_registry=build_soc_memory_profile_registry())
+    return service.propose_candidate(command, coordinate_learning=True)
+
+
+@pytest.mark.parametrize("location", ["metadata", "source_metadata"])
+def test_caller_metadata_cannot_forge_learning_generation(services, location):
+    service, repository = services
+    run = _run(741)
+    command = memory_candidate_command_from_run_promotion(run, SocMemoryRunPromotionCommand(run_id=run.run_id, metadata={"environment": "dev-corpus-eval"}), profile_registry=build_soc_memory_profile_registry())
+    (command.metadata if location == "metadata" else command.source.metadata).update(experiment_id="EXP-forged", learning_generation="ROUND-forged")
+    with pytest.raises(SocServiceConflictError, match="学习代次|learning generation"):
+        service.propose_candidate(command, coordinate_learning=True)
+    assert not repository.list_memory_candidates()
+
+
+@pytest.mark.parametrize("forgery", ["generation", "experiment", "run", "alert", "tenant"])
+def test_learning_generation_must_match_exact_persisted_source(services, forgery):
+    service, _ = services
+    original = generation_candidate(service, 742, "ROUND-real")
+    from soc_agent.contracts import SocMemoryCandidateCreateCommand
+
+    command = SocMemoryCandidateCreateCommand(**{key: getattr(original, key) for key in SocMemoryCandidateCreateCommand.model_fields})
+    if forgery in {"generation", "experiment"}:
+        field = "learning_generation" if forgery == "generation" else "experiment_id"
+        command.metadata[field] = "forged"
+        command.source.metadata[field] = "forged"
+    elif forgery == "tenant":
+        command.tenant_id = command.tenant_scope = "other-tenant"
+    else:
+        setattr(command.source, forgery + "_id", "forged")
+    with pytest.raises(SocServiceConflictError, match="学习代次|learning generation"):
+        service.propose_candidate(command, coordinate_learning=True)
+
+
+def test_publication_rechecks_generation_provenance(services):
+    service, repository = services
+    item = generation_candidate(service, 743, "ROUND-real")
+    item.metadata["learning_generation"] = item.source.metadata["learning_generation"] = "ROUND-forged"
+    repository.save_memory_candidate(item)
+    with pytest.raises(SocServiceConflictError, match="学习代次|learning generation"):
+        confirm(service, item, Verdict.FALSE_POSITIVE)
+    assert repository.get_memory_record_by_candidate_id(item.candidate_id) is None
+
+
+def test_explicit_revision_retains_its_validated_learning_generation(services):
+    from soc_agent.contracts import SocMemoryRevisionCandidateCreateCommand, SocMemoryRevisionIssueType
+
+    service, _ = services
+    first = confirm(service, generation_candidate(service, 744, "ROUND-real"), Verdict.FALSE_POSITIVE)
+    revision = service.propose_revision_candidate(
+        SocMemoryRevisionCandidateCreateCommand(memory_id=first.memory_id, expected_record_version=first.version, issue_type=SocMemoryRevisionIssueType.INCORRECT_CONCLUSION, reason="模拟审核：该学习轮次中的经验需要纠正业务结论。"),
+        context=_reviewer_context(key="generation-revision"),
+    )
+    assert revision.candidate.metadata["learning_generation"] == "ROUND-real"
+    replacement = confirm(service, revision.candidate, Verdict.TRUE_POSITIVE)
+    assert replacement.metadata["learning_generation"] == "ROUND-real"
+    assert replacement.retrieval_enabled
+
+
+@pytest.mark.parametrize("old_generation", [None, "ROUND-older"])
+def test_fresh_dev_learning_can_review_and_publish_without_replacing_historical_memory(services, old_generation):
+    service, repository = services
+    first = confirm(service, generation_candidate(service, 701, old_generation), Verdict.FALSE_POSITIVE)
+    second = generation_candidate(service, 702, "ROUND-new")
+    preview = service.preview_candidate_governance(second.candidate_id, reviewer_verdict=Verdict.TRUE_POSITIVE)
+    assert preview.recommendation == "new"
+    assert not preview.related_memories
+    new = confirm(service, second, Verdict.TRUE_POSITIVE)
+    assert new.retrieval_enabled
+    assert new.revision_lineage is None
+    assert repository.get_memory_record(first.memory_id) == first
+
+
+@pytest.mark.parametrize("environment,old_generation,new_generation", [("prd", "ROUND-old", "ROUND-new"), ("dev-corpus-eval", "ROUND-same", "ROUND-same")])
+def test_generation_metadata_does_not_weaken_production_or_same_generation_publication(services, environment, old_generation, new_generation):
+    service, _ = services
+    confirm(service, generation_candidate(service, 711, old_generation, environment=environment), Verdict.FALSE_POSITIVE)
+    second = generation_candidate(service, 712, new_generation, environment=environment)
+    # A new proposal may coordinate to the approved same-generation record; create
+    # a historical-style separate candidate to exercise the publication gate too.
+    if second.status is SocMemoryCandidateStatus.CONFIRMED:
+        second = second.model_copy(update={"candidate_id": "MC-explicit-second", "idempotency_key": "explicit-second", "status": SocMemoryCandidateStatus.PENDING_REVIEW})
+        service._candidate_repository.save_memory_candidate(second)
+    with pytest.raises(SocServiceConflictError, match="经验|Memory"):
+        confirm(service, second, Verdict.TRUE_POSITIVE)
+
+
+def test_generation_isolation_requires_an_experiment_and_exclusive_dev_environment(services):
+    from soc_agent.memory.governance import same_learning_governance_scope
+
+    service, _ = services
+    ordinary = candidate(service, 719)
+    scope = {**ordinary.applicability.required_facets, "environment": ["dev-corpus-eval", "prd"]}
+    mixed = ordinary.model_copy(update={"applicability": ordinary.applicability.model_copy(update={"required_facets": scope}), "metadata": {"experiment_id": "EXP-test", "learning_generation": "ROUND-new"}})
+    assert same_learning_governance_scope(ordinary, mixed)
+    missing_experiment = mixed.model_copy(update={"applicability": mixed.applicability.model_copy(update={"required_facets": {**scope, "environment": ["dev-corpus-eval"]}}), "metadata": {"learning_generation": "ROUND-new"}})
+    assert same_learning_governance_scope(ordinary, missing_experiment)
+
+
+@pytest.mark.parametrize("same_generation", [False, True])
+def test_dev_learning_retains_only_its_own_disabled_narrow_scope_boundaries(services, same_generation):
+    from soc_agent.contracts import SocMemoryApplicabilityReport, SocMemoryApplicabilityStatus, SocMemoryMatch, SocMemoryQuery
+    from soc_agent.memory.governance import prefer_specific_matches
+    from soc_agent.memory.lessons import promote_memory_applicability_facets
+
+    service, repository = services
+    broad = confirm(service, generation_candidate(service, 721, "ROUND-new"), Verdict.FALSE_POSITIVE)
+    narrow_spec = promote_memory_applicability_facets(broad.applicability, ["source_type"])
+    metadata = {**broad.metadata, "learning_generation": "ROUND-new" if same_generation else "ROUND-old"}
+    narrow = broad.model_copy(update={"memory_id": "MEM-disabled-narrow", "source_candidate_id": "MC-disabled-narrow", "applicability": narrow_spec, "retrieval_enabled": False, "metadata": metadata})
+    repository.save_memory_record(narrow)
+    match = SocMemoryMatch(
+        memory_id=broad.memory_id,
+        version=broad.version,
+        record=broad,
+        score=1,
+        token_estimate=1,
+        content_hash=broad.content_hash,
+        facets_hash=broad.facets_hash,
+        applicability_report=SocMemoryApplicabilityReport(status=SocMemoryApplicabilityStatus.APPLICABLE, policy_version="test"),
+    )
+    query = SocMemoryQuery(
+        facets=broad.facets, metadata={"memory_profile_id": broad.applicability.profile_id, "memory_profile_version": broad.applicability.profile_version, "memory_feature_schema_version": broad.applicability.feature_schema_version}
+    )
+    result = prefer_specific_matches([match], build_soc_memory_profile_registry(), published_scopes=[broad, narrow], query=query)[0]
+    assert (result.applicability_report.status is SocMemoryApplicabilityStatus.PARTIAL) is same_generation
+    assert bool(service.scope_boundaries(broad.memory_id).exceptions) is same_generation
 
 
 def test_stale_replacement_version_preserves_both_candidate_and_memory(services):

@@ -126,11 +126,14 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Successful extraction keeps its review link if the following list refresh fails.
 > Alerts sharing an existing candidate retain that link after refresh; completing review
 > refreshes the alert's learning state when returning to the workbench.
-> To restart the whole second batch with new settings, pause and wait for zero active
+> To restart either whole batch with new settings, pause and wait for zero active
 > alerts, then choose **重新配置并全部重跑 → 全部重新运行**. This reruns successful,
-> failed and unrun alerts across the entire second batch, regardless of browser filters.
-> New tasks reset current progress; old results remain in alert history, and first-batch
-> learning and reviewed Memory are preserved. See the [Mac operating steps](docs/soc-validation-restart.md).
+> failed and unrun alerts across that batch, regardless of browser filters.
+> Restarting the first batch begins fresh learning and requires new experience review;
+> prior experiences and both batches' results remain in history, outside the new evaluation.
+> Pause both batches before restarting learning. Restarting only the second batch preserves
+> current learning and reviewed Memory. Neither operation clears the database.
+> See the [Mac operating steps](docs/soc-validation-restart.md).
 > After the second batch finishes, the standalone read-only
 > `scripts/soc_pingan_validation_report.py` produces a fixed-round effects summary,
 > first/second-batch group comparisons and CSV review batches. It keeps later reruns

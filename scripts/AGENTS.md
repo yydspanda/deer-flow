@@ -9,7 +9,12 @@ page bounded SELECTs with closed cursors, cap each query, and reject an export w
 the same connection's `data_version` changes during collection. Do not use a long
 read transaction or `immutable=1` on a live database. Select a fixed full validation
 round by membership, not the last single-alert round or an old CLI receipt; reject
-unfinished work and preserve later runs separately. Candidate current/as-of states
+unfinished work and preserve later runs separately. A saved learning generation binds
+the selected validation round's learning rows, candidates and later runs; legacy
+rounds retain the unversioned generation. Never count retired-generation candidates
+as current learning. Default selection rejects superseded rounds; an explicit
+`--round` may export their fixed history with a prominent historical-report notice.
+Candidate current/as-of states
 and missing historical proof must remain distinct. Group lineage is many-to-many;
 never turn rejected candidates into inferred business reasons or missing Memory into
 matching failures. Reports retain both tiers, denominators, unmeasured usage and

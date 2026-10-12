@@ -159,9 +159,10 @@ from soc_agent.memory import (
 )
 from soc_agent.memory.behavior_scope import required_directive_keys, select_memory_behavior_components
 from soc_agent.memory.facets import filter_learning_entity_facets
-from soc_agent.memory.governance import assessed_verdict, governed_records, preview_governance, scope_identity, scope_relation, validity_overlaps
+from soc_agent.memory.governance import assessed_verdict, governed_records, preview_governance, same_learning_governance_scope, scope_identity, scope_relation, validity_overlaps
 from soc_agent.memory.learning import aggregation_key, learning_view, resolve_learning_candidate
 from soc_agent.memory.lessons import promote_memory_applicability_facets
+from soc_agent.memory.lineage import learning_generation_scope
 from soc_agent.memory.scoring import (
     evaluate_memory_anchor_gate,
     evaluate_memory_applicability,
@@ -2102,6 +2103,7 @@ class SocMemoryService:
             events.flush()
             return result
         self._lock_governance_transaction()
+        self._validate_learning_generation(command)
         if coordinate_learning:
             existing = resolve_learning_candidate(self._candidate_repository, command, record_repository=self._record_repository, now=self._now_provider())
             if existing is not None:
@@ -2329,8 +2331,9 @@ class SocMemoryService:
             summary=f"细分经验：{len(samples)} 条来源样本，待确认业务结论",
             content=scoped_parent.content,
         )
-        proposed.idempotency_key = "memory-scope-refinement:" + str(scope_identity(proposed))
-        return self.propose_candidate(proposed, context=context)
+        generation = learning_generation_scope(proposed)
+        proposed.idempotency_key = "memory-scope-refinement:" + (stable_hash({"scope": scope_identity(proposed), "generation": generation}) if generation else str(scope_identity(proposed)))
+        return self.propose_candidate(proposed, context=context, coordinate_learning=generation is not None)
 
     def scope_boundaries(self, memory_id: str):
         from soc_agent.contracts.memory_governance import MemoryScopeBoundaries, MemoryScopeException
@@ -2342,7 +2345,11 @@ class SocMemoryService:
         items = [
             MemoryScopeException(memory_id=other.memory_id, version=other.version, summary=other.summary, active=active_record(other, now), released=boundary_released(record, other))
             for other in self._scope_inventory(query)
-            if other.memory_id != memory_id and other.retrieval_updated_at and other.retrieval_policy_version and scope_relation(other.applicability, record.applicability, self._profile_registry) == "strict_subset"
+            if other.memory_id != memory_id
+            and other.retrieval_updated_at
+            and other.retrieval_policy_version
+            and same_learning_governance_scope(record, other)
+            and scope_relation(other.applicability, record.applicability, self._profile_registry) == "strict_subset"
         ]
         return MemoryScopeBoundaries(memory_id=memory_id, version=record.version, active=active_record(record, now), exceptions=items)
 
@@ -2399,7 +2406,62 @@ class SocMemoryService:
         )
         return updated
 
+    def _validate_learning_generation(self, item: SocMemoryCandidateCreateCommand | SocMemoryCandidate | SocMemoryRecord, *, _depth: int = 0) -> None:
+        """Generation isolation requires exact persisted source provenance, not client metadata."""
+        metadata = (item.metadata, item.source.metadata)
+        if not any(values.get("learning_generation") is not None for values in metadata):
+            return
+        identity = learning_generation_scope(item)
+        error = "学习代次必须来自与候选来源一致的已保存样本，不能通过附加元数据指定"
+        if identity is None or _depth >= 32:
+            raise SocServiceConflictError(error)
+        experiment, generation = identity
+        if any((values.get("learning_generation") is not None and values["learning_generation"] != generation) or (values.get("experiment_id") is not None and values["experiment_id"] != experiment) for values in metadata):
+            raise SocServiceConflictError(error)
+        # An explicit revision retains the predecessor's learning boundary even
+        # when the new contradictory use came from a later validation run.
+        if item.source.source_type is SocMemoryCandidateSourceType.MEMORY_REVISION and item.revision_lineage is not None and self._record_repository is not None:
+            predecessor = self._record_repository.get_memory_record(item.revision_lineage.predecessor_memory_id)
+            if predecessor is not None and predecessor.tenant_id == item.tenant_id and predecessor.tenant_scope == item.tenant_scope and learning_generation_scope(predecessor) == identity:
+                self._validate_learning_generation(predecessor, _depth=_depth + 1)
+                return
+        observation_ids = []
+        for values in metadata:
+            observation_ids.append(values.get("pattern_observation_id"))
+            ids = values.get("observation_ids")
+            if isinstance(ids, list):
+                observation_ids.extend(ids)
+        reader = next(
+            (
+                getattr(repository, "get_memory_pattern_observation", None)
+                for repository in (self._candidate_repository, self._record_repository, self._analysis_run_repository)
+                if callable(getattr(repository, "get_memory_pattern_observation", None))
+            ),
+            None,
+        )
+        if reader is not None:
+            for observation_id in dict.fromkeys(value for value in observation_ids if isinstance(value, str) and value):
+                observation = reader(observation_id)
+                if observation is None or observation.accumulation_scope is None:
+                    continue
+                scope = observation.accumulation_scope
+                if (scope.experiment_id, scope.learning_generation) != identity:
+                    continue
+                if item.tenant_id != observation.tenant_id or item.source.run_id != observation.source.run_id or item.source.alert_id != observation.source.alert_id:
+                    continue
+                if item.applicability is not None and (item.applicability.profile_id, item.applicability.profile_version, item.applicability.feature_schema_version) != (
+                    observation.profile_id,
+                    observation.profile_version,
+                    observation.feature_schema_version,
+                ):
+                    continue
+                if item.applicability is not None and item.applicability.required_facets.get("environment") and observation.environment not in item.applicability.required_facets["environment"]:
+                    continue
+                return
+        raise SocServiceConflictError(error)
+
     def _check_memory_publication(self, record: SocMemoryRecord, *, now: datetime, valid_until: datetime | None) -> None:
+        self._validate_learning_generation(record)
         if self._record_repository is None or record.applicability is None:
             return
         verdict = assessed_verdict(record)
@@ -2407,6 +2469,8 @@ class SocMemoryService:
             return
         for other in governed_records(self._record_repository, record.tenant_id, enabled_only=True):
             if other.memory_id == record.memory_id or not validity_overlaps(other, valid_from=now, valid_until=valid_until):
+                continue
+            if not same_learning_governance_scope(record, other):
                 continue
             other_verdict = assessed_verdict(other)
             if other_verdict is None:

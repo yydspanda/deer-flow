@@ -31,6 +31,22 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   days. New confirmation starts 365-day validity at confirmation time and preserves
   an explicitly specified candidate review interval, otherwise using 180 days. Existing
   confirmed Memory dates remain unchanged until an explicit governed update.
+- An explicit corpus first-batch restart carries a server-owned `learning_generation`
+  in its accumulation scope. It starts fresh support even for unchanged settings and
+  the same source alerts. Omit the optional field for legacy scopes so their serialized
+  identity and observation idempotency remain unchanged. Generated automatic and manual
+  candidates retain this identity in source metadata; learning coordination and automatic
+  same-alert Profile supersession must not cross generations. This is an accumulation
+  boundary, not a Memory applicability condition. Only records whose required environment
+  is exactly `dev-corpus-eval` may isolate governance comparisons, publication conflicts
+  and published-scope precedence by this experiment/generation pair. Same-generation
+  disabled narrow scopes remain boundaries; production and ordinary Memory governance
+  are unchanged. Historical candidates and approved records are not mutated by restart.
+  Candidate creation and publication must validate this identity against the exact
+  persisted source observation (tenant, run, alert, Profile and accumulation scope),
+  or the validated predecessor of an explicit revision. Client metadata alone cannot
+  grant a generation boundary. Scope refinements retain their generation and deduplicate
+  within it while legacy refinement keys remain unchanged.
 - `MemoryAdmissionService` is the gate for candidate value. Promotion from a note or
   correction is explicit. Pattern construction requires stable similarity anchors,
   bounded windows, distinct-source support, and an auditable quality gate.

@@ -139,4 +139,10 @@ class CorpusRuntimeExecutor:
 
     def _accumulation_scope(self, round_: CorpusRound) -> MemoryPatternAccumulationScope:
         first, last = self._repository.corpus_experiments().learning_event_range(round_.experiment_id)
-        return MemoryPatternAccumulationScope(experiment_id=round_.experiment_id, configuration_hash=round_.config_hash, event_start=first, event_end=last + timedelta(microseconds=1))
+        return MemoryPatternAccumulationScope(
+            experiment_id=round_.experiment_id,
+            configuration_hash=round_.config_hash,
+            learning_generation=round_.learning_generation,
+            event_start=first,
+            event_end=last + timedelta(microseconds=1),
+        )

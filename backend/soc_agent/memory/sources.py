@@ -468,6 +468,8 @@ def memory_candidate_command_from_run_promotion(
             "lineage_key",
             "aggregation_key",
             "pattern_observation_id",
+            "experiment_id",
+            "learning_generation",
             "environment",
             "data_class",
             "evidence_set_hash",

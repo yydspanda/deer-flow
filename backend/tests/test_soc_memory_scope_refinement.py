@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 from test_soc_direct_resolution import memory_case
-from test_soc_memory_governance import candidate
+from test_soc_memory_governance import candidate, generation_candidate
 from test_soc_memory_governance import services as _services
 from test_soc_memory_revision_workflow import _reviewer_context
 
@@ -32,6 +32,20 @@ def test_refinement_is_pending_idempotent_and_does_not_replace_parent(services):
     assert repository.get_memory_record_by_candidate_id(child.candidate_id) is None
     with pytest.raises(SocServiceConflictError):
         service.refine_candidate_scope(command.model_copy(update={"expected_updated_at": parent.updated_at - timedelta(seconds=1)}), context=_reviewer_context(key="stale"))
+
+
+def test_restarted_learning_refinement_cannot_reuse_previous_generation_candidate(services):
+    service, repository = services
+    children = []
+    for index, generation in enumerate(["ROUND-old", "ROUND-new"], start=601):
+        parent = generation_candidate(service, index, generation)
+        command = MemoryScopeRefinementCommand(candidate_id=parent.candidate_id, expected_updated_at=parent.updated_at, promoted_facet_values={"source_type": parent.applicability.optional_facets["source_type"]})
+        child = service.refine_candidate_scope(command, context=_reviewer_context(key=f"refine:{generation}"))
+        assert child.metadata["learning_generation"] == generation
+        assert service.refine_candidate_scope(command, context=_reviewer_context(key=f"refine-again:{generation}")).candidate_id == child.candidate_id
+        children.append(child)
+    assert children[0].candidate_id != children[1].candidate_id
+    assert repository.get_memory_candidate(children[0].candidate_id) == children[0]
 
 
 def test_release_requires_explicit_versioned_review_and_is_audited(services):

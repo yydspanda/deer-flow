@@ -84,6 +84,7 @@ class Fixture:
         selection=None,
         superseded=None,
         snapshot=None,
+        generation=None,
     ):
         payload = {
             "selection": selection
@@ -92,6 +93,7 @@ class Fixture:
             "memory_mode": "snapshot",
             "memory_snapshot": snapshot or [],
             "superseded_by_round_id": superseded,
+            "learning_generation": generation,
         }
         self.add(
             "soc_corpus_rounds",
@@ -198,6 +200,128 @@ class CollectionTests(unittest.TestCase):
         self.fx.round("NEW", AFTER, ["1", "2"], status="queued")
         with self.assertRaisesRegex(ReportDataError, "未结束"):
             collect(self.fx.path)
+
+    def test_learning_generation_scopes_learning_candidates_and_followups(self):
+        self.fx.round(
+            "LEARN-NEW",
+            "2026-09-02 12:00:00",
+            ["0"],
+            batch="learning",
+            generation="GEN-NEW",
+        )
+        self.fx.round(
+            "MAIN-NEW", "2026-09-03 12:00:00", ["1", "2"], generation="GEN-NEW"
+        )
+        self.fx.round(
+            "FOLLOW",
+            AFTER,
+            ["1"],
+            selection={"scope": "all", "alert_ids": ["1"]},
+            generation="GEN-NEW",
+        )
+        self.fx.round(
+            "OTHER-FOLLOW",
+            AFTER,
+            ["2"],
+            selection={"scope": "all", "alert_ids": ["2"]},
+            generation="GEN-OTHER",
+        )
+        for identity, source_run, payload in (
+            ("OLD-SOURCE", "RUN-LEARN-0", {}),
+            ("OLD-METADATA", None, {"metadata": {"experiment_id": "EXP"}}),
+            ("NEW-SOURCE", "RUN-LEARN-NEW-0", {}),
+            (
+                "NEW-METADATA",
+                None,
+                {
+                    "metadata": {
+                        "experiment_id": "EXP",
+                        "learning_generation": "GEN-NEW",
+                    }
+                },
+            ),
+            (
+                "NEW-NESTED",
+                None,
+                {
+                    "metadata": {
+                        "experiment_id": "EXP",
+                        "accumulation_scope": {"learning_generation": "GEN-NEW"},
+                    }
+                },
+            ),
+            (
+                "NEW-SOURCE-METADATA",
+                None,
+                {
+                    "source": {
+                        "metadata": {
+                            "experiment_id": "EXP",
+                            "learning_generation": "GEN-NEW",
+                        }
+                    }
+                },
+            ),
+            (
+                "FOREIGN",
+                None,
+                {
+                    "metadata": {
+                        "experiment_id": "OTHER",
+                        "learning_generation": "GEN-NEW",
+                    }
+                },
+            ),
+        ):
+            self.fx.add(
+                "soc_memory_candidates",
+                candidate_id=identity,
+                status="pending_review",
+                source_run_id=source_run,
+                source_alert_id="0",
+                created_at=LEARNING,
+                updated_at=LEARNING,
+                candidate_payload=payload,
+            )
+        before = hashlib.sha256(self.fx.path.read_bytes()).hexdigest()
+        result = collect(self.fx.path)
+        self.assertEqual(result["metadata"]["learning_generation"], "GEN-NEW")
+        self.assertEqual(
+            [row["run_id"] for row in result["learning_rows"]], ["RUN-LEARN-NEW-0"]
+        )
+        self.assertEqual(
+            [row["round_id"] for row in result["followup_rows"]], ["FOLLOW"]
+        )
+        self.assertEqual(
+            {row["candidate_id"] for row in result["candidates"]},
+            {"NEW-SOURCE", "NEW-METADATA", "NEW-NESTED", "NEW-SOURCE-METADATA"},
+        )
+        self.assertEqual(before, hashlib.sha256(self.fx.path.read_bytes()).hexdigest())
+
+        historical = collect(self.fx.path, round_id="MAIN")
+        self.assertEqual(
+            [row["run_id"] for row in historical["learning_rows"]], ["RUN-LEARN-0"]
+        )
+        self.assertEqual(
+            {row["candidate_id"] for row in historical["candidates"]},
+            {"OLD-SOURCE", "OLD-METADATA"},
+        )
+
+    def test_learning_restart_requires_new_validation_but_explicit_history_remains_exportable(
+        self,
+    ):
+        self.fx.execute(
+            "UPDATE soc_corpus_rounds SET record_payload=json_set(record_payload,'$.superseded_by_round_id','LEARN-NEW') WHERE round_id='MAIN'"
+        )
+        self.fx.round("LEARN-NEW", AFTER, ["0"], batch="learning", generation="GEN-NEW")
+        with self.assertRaisesRegex(ReportDataError, "未被替代"):
+            collect(self.fx.path)
+        historical = collect(self.fx.path, round_id="MAIN")
+        self.assertTrue(historical["metadata"]["historical_round"])
+        self.assertEqual(historical["metadata"]["round_id"], "MAIN")
+        self.assertEqual(
+            [row["run_id"] for row in historical["learning_rows"]], ["RUN-LEARN-0"]
+        )
 
     def test_newer_incomplete_all_round_does_not_fall_back(self):
         self.fx.round("NEW", AFTER, ["1"])

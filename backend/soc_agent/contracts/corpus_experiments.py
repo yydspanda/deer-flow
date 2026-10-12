@@ -163,6 +163,7 @@ class CorpusRound(BaseModel):
     state_history: list[dict[str, Any]] = Field(default_factory=list)
     dispatch_alert_ids: list[str] | None = None
     superseded_by_round_id: str | None = Field(default=None, min_length=1, max_length=64)
+    learning_generation: str | None = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def _facts_do_not_decide(self):
@@ -279,7 +280,7 @@ class CorpusQuickCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
     batch: Batch
     scope: Literal["all", "reuse", "explore"] = "all"
-    action: Literal["start", "pause", "run", "rerun", "restart_validation"] = "start"
+    action: Literal["start", "pause", "run", "rerun", "restart_validation", "restart_learning"] = "start"
     alert_id: str | None = Field(default=None, min_length=1, max_length=128)
     restart_token: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     options: SocAnalysisExecutionOptions = Field(default_factory=SocAnalysisExecutionOptions)
@@ -288,11 +289,12 @@ class CorpusQuickCommand(BaseModel):
     def _single(self):
         if (self.action in {"run", "rerun"}) != bool(self.alert_id):
             raise ValueError("single-alert commands require an alert ID")
-        if self.action == "restart_validation":
-            if self.batch != "validation" or self.scope != "all" or not self.restart_token:
-                raise ValueError("restart requires the whole validation batch and its current restart token")
+        if self.action in {"restart_validation", "restart_learning"}:
+            expected_batch = "learning" if self.action == "restart_learning" else "validation"
+            if self.batch != expected_batch or self.scope != "all" or not self.restart_token:
+                raise ValueError("restart requires the matching whole batch and its current restart token")
         elif self.restart_token is not None:
-            raise ValueError("restart token is only accepted for restarting validation")
+            raise ValueError("restart token is only accepted for restarting a batch")
         return self
 
 
