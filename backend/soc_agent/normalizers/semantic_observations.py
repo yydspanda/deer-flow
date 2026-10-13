@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from soc_agent.contracts import AlertInput, CanonicalFieldProvenance, FileObservationRef, HttpObservationRef, NetworkObservationRef, NormalizationAssistRequest, NormalizationAssistResult, ProcessNodeRef, ProcessObservationRef
 from soc_agent.contracts.normalization import (
+    MAX_CANONICAL_SUPPLEMENTARY_FACTS,
     ContextObservationRef,
     DetectionIdentifier,
     DetectionObservationRef,
@@ -625,7 +626,8 @@ def collect_observation_changes(alert: AlertInput, request: NormalizationAssistR
                 record = cls_out(observation_id="SEM-" + stable_hash([source.source_path, attrs])[:16], evidence_path=source.source_path + "#semantic", event_scope_id=source.source_path, **attrs)
                 records = working["entities"][target]
                 same = next((i for i, r in enumerate(records) if r["observation_id"] == record.observation_id), None)
-                if same is None and len(records) >= _MAX_OBSERVATIONS:
+                limit = MAX_CANONICAL_SUPPLEMENTARY_FACTS if target == "supplementary_facts" else _MAX_OBSERVATIONS
+                if same is None and len(records) >= limit:
                     raise ValueError("observation_budget")
                 write(f"entities.{target}[{same if same is not None else len(records)}]", record, proposal, source, start)
                 report.reviewed_fact_count += 1

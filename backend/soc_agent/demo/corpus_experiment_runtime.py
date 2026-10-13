@@ -52,7 +52,19 @@ class CorpusRuntimeExecutor:
             run = service.replay(prior.replay_of_run_id, context=context)
         else:
             run = service.analyze(payload, context=context)
-        if run.alert_id != member.alert_id:
+        # Runtime only assigns the canonical identity after normalization. A
+        # failure before that point belongs to this member only when both the
+        # saved input and its hash still match the frozen corpus payload.
+        failed_before_identity = (
+            run.status == AnalysisRunStatus.FAILED
+            and run.alert_id == "unknown"
+            and run.normalized_alert is None
+            and run.failure is not None
+            and run.failure.step_name == "normalize"
+            and run.input_hash == member.payload_hash
+            and stable_hash(run.input_payload) == member.payload_hash
+        )
+        if run.alert_id != member.alert_id and not failed_before_identity:
             raise CorpusExecutionError("Runtime returned a different alert identity", run_id=run.run_id, block_round=True)
         if run.status == AnalysisRunStatus.FAILED:
             failure = run.failure

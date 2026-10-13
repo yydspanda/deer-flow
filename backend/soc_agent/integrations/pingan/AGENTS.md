@@ -133,6 +133,11 @@ generic `soc_agent` code.
   rules use actual process fields/recognized trees, never arbitrary `event_content` prose.
   New Adapter facts and acceptance identity invalidate stale review reuse; saved Memory
   profiles and historical groups remain unchanged.
+  Multi-file messages retain each artifact's complete supplementary fields and exact
+  provenance. The canonical supplementary-fact budget is 400, separate from the 40
+  proposals allowed in one semantic review. The merger uses the canonical capacity
+  without dropping existing Adapter facts; overflow remains explicit. Detection and
+  context observation limits remain unchanged.
 
 - HIDS indexed `detail.proctree.N` fields are mapped together, with exact per-node
   `field_sources`. Bind the detected process by consistent explicit PID or unique full

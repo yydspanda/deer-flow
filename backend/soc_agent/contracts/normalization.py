@@ -5,6 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Canonical Adapter evidence can contain many fields for each source-owned
+# object. Its aggregate capacity is independent of one review's proposal budget.
+MAX_CANONICAL_SUPPLEMENTARY_FACTS = 400
+
 ObjectKind = Literal["host", "user", "container", "process", "file", "network", "http"]
 EventKind = Literal["file_detection", "process_execution", "network_access", "web_detection", "configuration_detection", "statistical_detection", "other_detection"]
 Scalar = str | int | float | bool

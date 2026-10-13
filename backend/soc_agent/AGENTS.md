@@ -43,6 +43,10 @@ file for SOC code. The authoritative product and engineering documents are:
   accumulation scope; ordinary windows and event times stay unchanged. Validation
   freezes eligible reviewed learning Memory, checks current governance, and disables
   automatic Pattern learning. Dataset/config/snapshot drift blocks further claims.
+  A pre-identity normalization failure remains a member failure only when its saved
+  payload/hash match the frozen member, identity is unknown and canonical output is
+  absent; preserve the original failure/Run ID. Other identity mismatches block the
+  round. Blocked start/retry errors retain their saved reason, not an assumed drift.
   `0029/0030` persist shared alert concurrency and rounds; do not create tables on reads.
   Batch APIs check required tables/columns before inventory or commands; missing schema
   returns an actionable 503 without hiding configuration switches or starting dispatch.

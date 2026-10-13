@@ -134,6 +134,11 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Pause both batches before restarting learning. Restarting only the second batch preserves
 > current learning and reviewed Memory. Neither operation clears the database.
 > See the [Mac operating steps](docs/soc-validation-restart.md).
+> Multi-file normalization preserves up to 400 supplementary facts independently of
+> the per-review model limit. A normalization failure keeps its original error and
+> Run ID as a failed member; verified input failures no longer appear as a different
+> alert identity or stop unrelated batch members. Actual identity mismatches still stop
+> the round, and blocked resume errors retain the recorded stopping reason.
 > After the second batch finishes, the standalone read-only
 > `scripts/soc_pingan_validation_report.py` produces a fixed-round effects summary,
 > first/second-batch group comparisons and CSV review batches. It keeps later reruns

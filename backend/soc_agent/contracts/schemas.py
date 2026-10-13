@@ -16,7 +16,16 @@ from soc_agent.contracts.common import ActorContext, EntrySurface
 from soc_agent.contracts.enrichment import SocEnrichmentPlan
 from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
 from soc_agent.contracts.memory_learning import SocMemoryLearningView
-from soc_agent.contracts.normalization import ContextObservationRef, DetectionObservationRef, MemoryProjectionAudit, NormalizationObservationChange, NormalizationSource, ProcessSubjectBinding, SupplementaryFactRef
+from soc_agent.contracts.normalization import (
+    MAX_CANONICAL_SUPPLEMENTARY_FACTS,
+    ContextObservationRef,
+    DetectionObservationRef,
+    MemoryProjectionAudit,
+    NormalizationObservationChange,
+    NormalizationSource,
+    ProcessSubjectBinding,
+    SupplementaryFactRef,
+)
 from soc_agent.contracts.role_verification import (
     RoleAdjudicationVerificationResult,
     RoleVerificationTriggerDecision,
@@ -3023,7 +3032,7 @@ class AlertEntitySet(BaseModel):
     threat: ThreatEntityRef = Field(default_factory=ThreatEntityRef)
     detections: list[DetectionObservationRef] = Field(default_factory=list, max_length=40)
     context_observations: list[ContextObservationRef] = Field(default_factory=list, max_length=40)
-    supplementary_facts: list[SupplementaryFactRef] = Field(default_factory=list, max_length=40)
+    supplementary_facts: list[SupplementaryFactRef] = Field(default_factory=list, max_length=MAX_CANONICAL_SUPPLEMENTARY_FACTS)
 
 
 class EvidenceItem(BaseModel):

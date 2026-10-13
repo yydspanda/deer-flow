@@ -228,7 +228,7 @@ class SocCorpusExperimentService:
         if round_.superseded_by_round_id:
             raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
         if round_.state == "blocked":
-            raise CorpusExperimentConflict("snapshot changed; create a new round")
+            raise CorpusExperimentConflict(f"{round_.state_reason or 'round is blocked'}; create a new round")
         reason = self.snapshot_problem(round_)
         if reason:
             self._block(round_id, reason)
@@ -390,7 +390,7 @@ class SocCorpusExperimentService:
             raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
         reason = self.snapshot_problem(round_)
         if reason or round_.state == "blocked":
-            raise CorpusExperimentConflict("snapshot changed; create a new round")
+            raise CorpusExperimentConflict(f"{reason or round_.state_reason or 'round is blocked'}; create a new round")
         retried = skipped = offset = 0
         with self.repository.mutation_transaction() as tx:
             tx.lock_memory_governance()

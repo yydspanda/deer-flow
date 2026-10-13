@@ -55,6 +55,8 @@ dates; these defaults do not migrate previously confirmed experience.
   Show server-owned round timing and current-budget ETA only when available. Runtime
   wall time, operator pause, queue wait and model duration are different measures;
   never infer an ETA or convert unknown measurements into zero on the client.
+  Blocked notices retain the server reason; do not assume every stop means changed
+  settings or Memory. Continue cannot clear a blocked round.
 
 - Corpus list requests set `include_group_catalog=false&include_rehearsal=false`. Keep
   the selected group in that lightweight response; open the group picker to fetch

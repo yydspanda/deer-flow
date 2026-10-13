@@ -107,8 +107,41 @@ def test_config_drift_blocks_new_claims_and_cannot_resume_old_snapshot(tmp_path)
     assert svc.execute_one(round_.round_id) is False
     assert not calls
     assert repo.corpus_experiments().get_round(round_.round_id).state == "blocked"
-    with pytest.raises(ValueError, match="new round"):
+    with pytest.raises(ValueError, match="configuration_changed; create a new round"):
         svc.start(round_.round_id, context=context())
+    with pytest.raises(ValueError, match="configuration_changed; create a new round"):
+        svc.retry_failed(round_.round_id, context=context())
+
+
+def test_runtime_block_keeps_its_reason_on_resume_and_retry_without_changing_jobs(tmp_path):
+    from soc_agent.demo.corpus_experiments import CorpusExecutionError
+
+    repo = repository(tmp_path)
+    prepare(repo)
+    calls = []
+    reason = "Runtime returned a different alert identity"
+
+    def execute(round_, member, request_context):
+        calls.append(member.alert_id)
+        raise CorpusExecutionError(reason, block_round=True)
+
+    svc = SocCorpusExperimentService(repository=repo, execute=execute, configuration_provider=lambda _: {"mock": True})
+    round_ = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="validation", scope="all"), memory_mode="none"), context=context())
+    svc.start(round_.round_id, context=context())
+    assert svc.execute_one(round_.round_id)
+    blocked = svc.store.get_round(round_.round_id)
+    jobs = svc.store.list_round_items(round_.round_id)
+    assert blocked.state == "blocked"
+    assert blocked.state_reason == reason
+    assert svc.snapshot_problem(blocked) is None
+
+    for command in (svc.start, svc.retry_failed):
+        with pytest.raises(ValueError, match=reason + "; create a new round"):
+            command(round_.round_id, context=context())
+
+    assert svc.store.get_round(round_.round_id) == blocked
+    assert svc.store.list_round_items(round_.round_id) == jobs
+    assert len(calls) == 1
 
 
 def test_validation_requires_reviewed_first_batch_memory_or_explicit_baseline(tmp_path):

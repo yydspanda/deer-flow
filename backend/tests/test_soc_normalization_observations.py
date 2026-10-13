@@ -3,8 +3,10 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from soc_agent.contracts import AlertInput, AnalysisRun
+from soc_agent.contracts.normalization import NormalizationReviewOutput
 from soc_agent.core.runtime import analyze_alert
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm.analyzer import LLMChatResponse
@@ -58,6 +60,36 @@ def test_typed_business_clue_merges_and_old_untyped_facts_remain_compatible():
     assert updated.entities.supplementary_facts[0].clue_type == "url"
     assert updated.entities.supplementary_facts[1].clue_type is None
     assert updated.entities.http.url is None
+
+
+@pytest.mark.parametrize("existing_count,accepted", [(100, True), (400, False)])
+def test_semantic_fact_budget_preserves_adapter_facts(existing_count, accepted):
+    alert_data = source("additional-value").model_dump()
+    alert_data["entities"]["supplementary_facts"] = [
+        {"observation_id": f"adapter-{index}", "evidence_path": "message", "event_scope_id": "message", "name": f"field-{index}", "value": str(index), "meaning": "Adapter evidence"} for index in range(existing_count)
+    ]
+    alert = AlertInput.model_validate(alert_data)
+    updated, report, _ = review(alert, {"additional_facts": [{"name": "new-field", "value": "additional-value", "meaning": "Additional evidence", "source_quote": "additional-value"}]})
+
+    assert updated.entities.supplementary_facts[:existing_count] == alert.entities.supplementary_facts
+    assert len(updated.entities.supplementary_facts) == existing_count + int(accepted)
+    if accepted:
+        assert report.status == "applied"
+        assert updated.entities.supplementary_facts[-1].value == "additional-value"
+    else:
+        assert not report.observation_changes
+        assert any("observation_budget" in issue for issue in report.issues)
+        oversized = updated.model_dump()
+        oversized["entities"]["supplementary_facts"].append(oversized["entities"]["supplementary_facts"][0])
+        with pytest.raises(ValidationError, match="at most 400"):
+            AlertInput.model_validate(oversized)
+
+
+def test_canonical_fact_capacity_does_not_expand_model_proposal_budget():
+    item = {"name": "field", "value": "value", "meaning": "Evidence", "source_quote": "value"}
+    assert len(NormalizationReviewOutput(additional_facts=[item] * 40).additional_facts) == 40
+    with pytest.raises(ValidationError, match="at most 40"):
+        NormalizationReviewOutput(additional_facts=[item] * 41)
 
 
 @pytest.mark.parametrize("quote", ["explorer.exe", 'cmdline="explorer.exe"'])

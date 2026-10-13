@@ -362,7 +362,7 @@ export function SocCorpusExperiments({
       {data?.blocked_reason && (
         <p role="alert" className="mt-2 text-sm text-amber-800">
           已停止：{data.blocked_reason}
-          。请检查运行设置或审核经验；显式重新运行才会使用新设置。
+          。请根据停止原因处理；修复后需显式重新运行，“继续”不会解除本轮停止状态。
         </p>
       )}
       {(state.error ?? configuration.error) && (

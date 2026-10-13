@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from soc_agent.contracts import ParsedRawMessageEvidence
+from soc_agent.contracts import AlertInput, ParsedRawMessageEvidence
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.pipeline.field_importance import EvidenceFieldImportanceRegistry
 
@@ -99,6 +99,40 @@ def test_webshell_file_fields_have_exact_provenance_and_owner_binding() -> None:
     semantics = alert.extensions["source_field_semantics"]
     assert not any(item["semantic_type"] == "endpoint_process_observation" for item in semantics)
     assert any(item["semantic_type"] == "file_detection_process_context" for item in semantics)
+
+
+@pytest.mark.parametrize("file_count", [10, 40])
+def test_multiple_webshell_files_preserve_every_bound_fact(file_count: int) -> None:
+    messages = [
+        _fields(
+            **{
+                "detail.path": f"/srv/example/file-{index}.php",
+                "detail.uname": f"owner-{index}",
+                "detail.webshell_type": "1",
+                "detail.ctime": "2026-01-01T00:00:00Z",
+                "detail.mtime": "2026-01-02T00:00:00Z",
+                "detail.atime": "2026-01-03T00:00:00Z",
+            }
+        )
+        for index in range(file_count)
+    ]
+    alert = _alert(*messages)
+
+    assert alert.alert_id == "synthetic-webshell"
+    assert len(alert.entities.file.observations) == file_count
+    assert len(alert.entities.detections) == file_count
+    assert len(alert.entities.supplementary_facts) == file_count * 10
+    provenance = {item["canonical_path"]: item["selected_from"] for item in alert.extensions["canonical_field_provenance"]}
+    for index, fact in enumerate(alert.entities.supplementary_facts):
+        file_index = index // 10
+        expected_source = f"alert.hitLog[0].zeusRawLogs[{file_index}].message"
+        assert fact.subject_ref == f"entities.file.observations[{file_index}]"
+        assert fact.event_scope_id == expected_source
+        assert fact.evidence_path.startswith(expected_source + "#parsed.")
+        assert provenance[f"entities.supplementary_facts[{index}].value"] == fact.evidence_path
+        if fact.name == "file_owner":
+            assert fact.value == f"owner-{file_index}"
+    assert AlertInput.model_validate(alert.model_dump()).model_dump() == alert.model_dump()
 
 
 def test_mixed_messages_keep_files_and_detection_refs_in_their_own_source() -> None:

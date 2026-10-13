@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from test_soc_corpus_experiment_repository import experiment, members, repository
 from test_soc_corpus_experiments import context
 from test_soc_memory_patterns import _run
@@ -70,6 +71,86 @@ def test_payload_mismatch_blocks_before_runtime(tmp_path):
     executor = CorpusRuntimeExecutor(repository=repo, load_payload=lambda member: {"changed": True}, analysis_factory=lambda _: pytest.fail("must not invoke Runtime"), profile_registry=SocMemoryProfileRegistry())
     with pytest.raises(CorpusExecutionError, match="payload"):
         executor(None, members()[0], context())
+
+
+def _failed_normalization_execution():
+    from soc_agent.core.runtime import analyze_alert
+
+    payload = {"alert_id": "test-invalid", "entities": {"supplementary_facts": [{"invalid": True}]}}
+    run = analyze_alert(payload)
+    assert run.alert_id == "unknown" and run.failure.step_name == "normalize"
+    member = members()[0].model_copy(update={"alert_id": "test-invalid", "payload_hash": stable_hash(payload)})
+    store = SimpleNamespace(get_experiment=lambda _: None)
+    repo = SimpleNamespace(corpus_experiments=lambda: store)
+    executor = CorpusRuntimeExecutor(repository=repo, load_payload=lambda _: payload, analysis_factory=lambda _: SimpleNamespace(analyze=lambda *a, **k: run), profile_registry=SocMemoryProfileRegistry())
+    return executor, SimpleNamespace(experiment_id="EXP-test"), member, run
+
+
+def test_pre_identity_normalization_failure_reports_real_error_without_blocking_batch():
+    from soc_agent.demo.corpus_experiments import CorpusExecutionError
+
+    executor, round_, member, run = _failed_normalization_execution()
+    with pytest.raises(CorpusExecutionError) as raised:
+        executor(round_, member, context())
+    assert str(raised.value) == run.failure.message
+    assert raised.value.run_id == run.run_id
+    assert not raised.value.block_round
+    assert not raised.value.retryable
+    assert run.alert_id == "unknown"  # Never manufacture a normalized identity.
+
+
+@pytest.mark.parametrize("change", ["foreign_identity", "foreign_hash", "foreign_payload", "later_failure", "missing_failure", "normalized_result", "successful_run"])
+def test_pre_identity_exception_cannot_hide_foreign_or_inconsistent_results(change):
+    from soc_agent.contracts import AnalysisRunStatus
+    from soc_agent.demo.corpus_experiments import CorpusExecutionError
+
+    executor, round_, member, run = _failed_normalization_execution()
+    if change == "foreign_identity":
+        run.alert_id = "another-alert"
+    elif change == "foreign_hash":
+        run.input_hash = "0" * 64
+    elif change == "foreign_payload":
+        run.input_payload = {"alert_id": "another-alert"}
+    elif change == "later_failure":
+        run.failure = run.failure.model_copy(update={"step_name": "analyze_llm"})
+    elif change == "missing_failure":
+        run.failure = None
+    elif change == "normalized_result":
+        from soc_agent.normalizers import normalize_alert_payload
+
+        run.normalized_alert = normalize_alert_payload({"alert_id": "test-invalid"})
+    else:
+        run.status = AnalysisRunStatus.SUCCESS
+    with pytest.raises(CorpusExecutionError, match="different alert identity") as raised:
+        executor(round_, member, context())
+    assert raised.value.block_round
+
+
+def test_normalization_failure_keeps_next_validation_member_dispatchable(tmp_path):
+    from soc_agent.core import SocAnalysisService
+
+    repo = repository(tmp_path)
+    payloads = {
+        "5": {"alert_id": "5", "tenant_id": "pingan", "entities": {"supplementary_facts": [{"invalid": True}]}},
+        "11": {"alert_id": "11", "tenant_id": "pingan"},
+    }
+    rows = [row.model_copy(update={"payload_hash": stable_hash(payloads[row.alert_id])}) for row in members() if row.batch == "validation"]
+    repo.corpus_experiments().prepare(experiment(), rows)
+    runtime = SocAnalysisService(repository=repo, audit_repository=repo, analysis_persistence=repo)
+    executor = CorpusRuntimeExecutor(repository=repo, load_payload=lambda member: payloads[member.alert_id], analysis_factory=lambda _: runtime, profile_registry=SocMemoryProfileRegistry())
+    service = SocCorpusExperimentService(repository=repo, execute=executor, configuration_provider=lambda _: {})
+    round_ = service.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="validation"), memory_mode="none"), context=context())
+    service.start(round_.round_id, context=context())
+    assert service.execute_one(round_.round_id)
+    assert service.store.get_round(round_.round_id).state == "running"
+    assert service.execute_one(round_.round_id)
+    items = {item.alert_id: item.job for item in service.store.list_round_items(round_.round_id).items}
+    assert items["5"].status.value == "failed"
+    assert items["11"].status.value == "completed"
+    failed_run = next(run for run in repo.list_runs(limit=10) if run.status.value == "failed")
+    assert failed_run.failure.step_name == "normalize"
+    assert items["5"].error_message == failed_run.failure.message[:2000]
+    assert items["5"].run_id == failed_run.run_id
 
 
 def test_runtime_accumulation_scope_keeps_restart_generation_for_every_alert(tmp_path):

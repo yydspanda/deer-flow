@@ -4,9 +4,9 @@
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
 - **Current Objective:** `PI-01H / D12-B` 真实内网集成验收继续保持未关闭。按用户最新选择，默认页面沿用原静态粗分组，仅将原主验证中的6367条移入学习：第一批9364、主验证2153、补充3764。取消全量事实预处理，语义核对随正常研判执行，实际经验仍按核心行为细分；支持数、审核门槛和并发上限16不变。完整阶段报告聚焦经验适用与建议分流，不比较原始处置标签。
-- **Next Gate:** 完成新版代码、页面回归和绑定提交的完整交付检查，更新READY-TO-TRANSFER。推荐内网停服完整备份后，按重新初始化手册显式归档重置SOC DEV，再在页面重新积累第一批、审核、完整验证5917条第二批；安装器自身仍保留数据库。原101条经验及旧运行保留于备份，不承接到本轮空库。只有新第二批全量完成才形成阶段结论；实际候选增量、覆盖及耗时仍待内网确认，真实callback/Provider门禁独立验收。
+- **Next Gate:** 用户已完成本轮第一批并审核经验；现在按授权提交推送多文件归一化及批次错误归因修复，再更新READY-TO-TRANSFER。本次只做保留数据升级，不清库、不重跑第一批、不重复审核。内网安装修复后等待活动归零，从页面重新配置并全部重跑第二批，旧结果保留历史；当前报告要求固定全量轮次完成，不能把旧轮次与部分补跑拼成阶段结论。真实内网恢复、模型与完整阶段效果仍待验证，callback/Provider门禁独立验收。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
-- **Last Updated:** `2026-10-10`
+- **Last Updated:** `2026-10-13`
 ## Current Constraints / 当前约束
 | Boundary | Current fact |
 |---|---|
@@ -17,6 +17,13 @@
 | Upstream baseline | `upstream/main@452d09b96b0dfdf00f53b8655e41c64232612dc3`；2026-09-11 同步新增 `105` 个提交，保留 SOC 增量边界；记录见月度归档 |
 
 ## Recent Completion Records / 近期完成记录
+### 2026-10-13 — Preserve multi-file evidence and report member normalization failures
+- **Task:** `PI-03E`
+- **Status:** `Done`
+- **Outcome:** 同一2746529语料含10文件/100附加事实，复现旧40条canonical上限造成normalize失败、unknown身份再被批次误判为跨告警并阻断。canonical与语义合并统一400条，模型单次补充仍40条；逐字段来源及原始载荷不裁切。仅对输入/哈希匹配固定成员、无canonical输出的normalize失败保留真实单条错误/Run ID并继续调度；真实身份不符仍阻断。start/retry与页面显示真实停止原因。旧blocked轮次不自动解锁；完整阶段采用保留第一批经验、页面全量重跑第二批的既有流程。
+- **Verification:** 101项后端相关回归、119项blocking-I/O、35项前端组件、前端check及Ruff通过；增强单条失败落库断言后对应集成测试复验通过。后端全量前后均在已有AGENTS长度检查失败处停止（302通过）；真实本地语料仅显式Stub连通验证，无模型/业务DB写入，内网RUN-5F1D2263C6EF仅取得外层错误。无迁移或经验变更，交付资格以绑定提交的构建回执为准。
+- **Next:** 按保留数据升级手册交付并在内网重跑完整第二批；阶段结论待完整结束。
+
 ### 2026-10-10 — Static main-validation samples moved to Web learning
 - **Task:** `PI-03E`
 - **Status:** `Done`
