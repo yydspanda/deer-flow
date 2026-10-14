@@ -222,7 +222,7 @@ export function SocCorpusExperiments({
     <section aria-label="批次执行" className="border-b px-5 py-4 md:px-7">
       {controls && options && configuration.data && (
         <SocCorpusRunSettings
-          title="运行设置"
+          title="新任务运行设置"
           resetTitle="恢复默认运行开关"
           controls={{
             ...controls,
@@ -347,7 +347,7 @@ export function SocCorpusExperiments({
           </Button>
         )}
         <span className="text-muted-foreground text-xs">
-          列表筛选只影响浏览；已排队任务沿用保存的运行设置。
+          开关仅用于新提交的任务；“继续”沿用各任务保存的设置，可能续跑多个历史轮次。定向复测请使用对应轮次的续跑命令。列表筛选只影响浏览。
         </span>
       </div>
       {data && (

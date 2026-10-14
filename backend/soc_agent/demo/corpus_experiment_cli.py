@@ -120,6 +120,7 @@ def parser():
         if name == "resume":
             command.add_argument("--limit", type=_limit)
             command.add_argument("--concurrency", type=int)
+            command.add_argument("--restore-full-scope", action="store_true", help="明确恢复本轮固定名单的完整调度范围；仍受运行上限约束，不重跑已完成项")
         if name == "export":
             command.add_argument("--output-dir", type=Path, required=True)
     compare = commands.add_parser("compare", help="比较同一实验的两个固定轮次报告")
@@ -422,6 +423,8 @@ def _dispatch(args, client):
     else:
         action = "start" if args.command == "resume" else args.command
         body = {key: value for key, value in {"execution_limit": args.limit, "concurrency": args.concurrency}.items() if value is not None} if args.command == "resume" else None
+        if args.command == "resume" and args.restore_full_scope:
+            body["restore_full_scope"] = True
         _print(request("POST", f"/rounds/{args.round}/{action}", **({"json": body} if body is not None else {})))
 
 

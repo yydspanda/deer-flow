@@ -542,6 +542,15 @@ test.each(["configuration", "controls"])(
       controls: { ...controls, can_configure: permission !== "controls" },
     });
     expect(await screen.findByText("当前生效：16")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "新任务运行设置" })).toBeTruthy();
+    expect(
+      screen.getByText(/开关仅用于新提交的任务；“继续”沿用各任务保存的设置/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        /可能续跑多个历史轮次。定向复测请使用对应轮次的续跑命令/,
+      ),
+    ).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "最大并发" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存并发" })).toBeNull();
     expect(api.concurrency).not.toHaveBeenCalled();

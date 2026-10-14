@@ -260,6 +260,13 @@ class CorpusQuickValidation:
             if job and command.action != "rerun":
                 continue  # Completed and failed work is retained; retry is explicit.
             new_members.append(member)
+        if not command.alert_id:
+            for round_ in rounds:
+                if round_.retest_provenance and not round_.superseded_by_round_id and (start_rounds - {round_.round_id} or new_members):
+                    # Retest scope remains a fence after completion and later
+                    # single-alert reruns. Only explicit whole-batch replacement
+                    # retires it. Reject before changing any dispatch/admission.
+                    raise ValueError(f"当前批次包含定向复测 {round_.round_id} 和其他未完成任务；请使用对应轮次的继续命令，避免页面“继续”恢复其他任务")
         for round_id in start_rounds:
             selected_ids = [m.alert_id for m, j in rows if j and j.input_payload["round_id"] == round_id]
             svc.store.set_dispatch_scope(round_id, selected_ids)

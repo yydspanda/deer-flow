@@ -529,7 +529,7 @@ def round_comparison(round_id: str, application: ApplicationDep, limit: Annotate
 def start(round_id: str, body: CorpusRoundStartCommand, request: Request, application: ApplicationDep):
     _round(application, round_id)
     with _command_errors():
-        result = application.service.start(round_id, context=_admin(request), execution_limit=body.execution_limit, concurrency=body.concurrency)
+        result = application.service.start(round_id, context=_admin(request), execution_limit=body.execution_limit, concurrency=body.concurrency, restore_full_scope=body.restore_full_scope)
         application.dispatcher.start()
         return result
 

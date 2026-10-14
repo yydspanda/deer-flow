@@ -272,6 +272,7 @@ class CorpusRoundStartCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
     execution_limit: int | None = Field(default=None, ge=1)
     concurrency: int | None = Field(default=None, ge=1, le=16)
+    restore_full_scope: bool = Field(default=False, strict=True)
 
 
 class CorpusQuickCommand(BaseModel):

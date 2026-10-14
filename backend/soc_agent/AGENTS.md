@@ -125,6 +125,15 @@ file for SOC code. The authoritative product and engineering documents are:
   attempts and retained terminal results cannot keep a recovered batch blocked; partial
   unfinished blocks and historical rounds remain visible. Browser filters never enter
   execution commands.
+  A non-superseded report-based retest fences batch Continue: reject before mutations
+  if the command would also resume another round or admit unsubmitted members. A later
+  single rerun must not hide that fence. Explicit round start remains scoped; batch pause
+  still stops every running round. Whole-batch restart supersedes the fence as usual.
+  Explicit `restore_full_scope` on round start restores dispatch to the immutable
+  selection, without rerunning terminal jobs or changing options/results. Default resume
+  retains its dispatch scope. Admission and scope restoration share one transaction;
+  rejected restoration must leave scope unchanged. Existing snapshot-drift blocking
+  remains authoritative; the new option cannot bypass it.
   Whole-batch `restart_learning` / `restart_validation` require matching batch, all
   scope, no alert ID and a server token bound to monotonic latest round identities
   (both batches for learning). Bind idempotency to the token; retries return the

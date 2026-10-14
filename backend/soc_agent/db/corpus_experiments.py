@@ -762,7 +762,9 @@ class SqlAlchemyCorpusExperimentRepository:
         with self._session_factory() as session:
             return list(session.scalars(query))
 
-    def set_round_state(self, round_id: str, *, expected_version: int, state: RoundState, reason: str | None, execution_limit: int | None = None, concurrency: int | None = None, actor_id: str = "soc-corpus-worker") -> CorpusRound:
+    def set_round_state(
+        self, round_id: str, *, expected_version: int, state: RoundState, reason: str | None, execution_limit: int | None = None, concurrency: int | None = None, actor_id: str = "soc-corpus-worker", restore_full_scope: bool = False
+    ) -> CorpusRound:
         with self._session_factory() as session:
             row = session.get(SocCorpusRoundRow, round_id)
             if row is None or row.version != expected_version:
@@ -778,6 +780,12 @@ class SqlAlchemyCorpusExperimentRepository:
                 raise ValueError("execution limit cannot shrink within a round")
             data = previous.model_dump()
             data.update(state=state, state_reason=reason, version=expected_version + 1, updated_at=datetime.now(UTC), execution_limit=new_limit, concurrency=concurrency if concurrency is not None else previous.concurrency)
+            if restore_full_scope:
+                if state != "running":
+                    raise ValueError("full dispatch scope can only be restored when starting a round")
+                # Scope and start share this version-fenced write. Fixed members,
+                # behavioral snapshots and every existing job remain unchanged.
+                data["dispatch_alert_ids"] = None
             data["state_history"] = [
                 *previous.state_history,
                 {"from": previous.state, "to": state, "reason": reason, "actor_id": actor_id, "at": data["updated_at"].isoformat(), "execution_limit": new_limit, "concurrency": data["concurrency"]},

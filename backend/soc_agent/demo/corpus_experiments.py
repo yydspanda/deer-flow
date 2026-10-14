@@ -220,7 +220,7 @@ class SocCorpusExperimentService:
                 raise ValueError("report results changed; export the parent round again before preparing a retest")
             return round_
 
-    def start(self, round_id: str, *, context: ServiceRequestContext, execution_limit: int | None = None, concurrency: int | None = None) -> CorpusRound:
+    def start(self, round_id: str, *, context: ServiceRequestContext, execution_limit: int | None = None, concurrency: int | None = None, restore_full_scope: bool = False) -> CorpusRound:
         _require_admin(context)
         if concurrency is not None and not 1 <= concurrency <= self._max_concurrency:
             raise ValueError("concurrency exceeds the server limit")
@@ -239,7 +239,16 @@ class SocCorpusExperimentService:
             experiment = store.get_experiment(round_.experiment_id)
             if experiment.rebalance and round_.selection.batch == "validation":
                 self._require_rebalanced_learning_complete(store, experiment.experiment_id)
-            return tx.corpus_experiments().set_round_state(round_id, expected_version=round_.version, state="running", reason=None, execution_limit=execution_limit, concurrency=concurrency, actor_id=context.actor.actor_id)
+            return store.set_round_state(
+                round_id,
+                expected_version=round_.version,
+                state="running",
+                reason="full_dispatch_scope_restored" if restore_full_scope else None,
+                execution_limit=execution_limit,
+                concurrency=concurrency,
+                actor_id=context.actor.actor_id,
+                restore_full_scope=restore_full_scope,
+            )
 
     def pause(self, round_id: str, *, context: ServiceRequestContext) -> CorpusRound:
         _require_admin(context)

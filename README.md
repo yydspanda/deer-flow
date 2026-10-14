@@ -121,6 +121,13 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > and the shared SOC processing queue. The page offers **开始积累 → 审核经验 → 开始验证**.
 > Batch starts cover the full selected scope; pause/continue skip completed alerts. Single
 > alerts run directly even while the batch is paused, with restart recovery and deduplication.
+> The settings panel describes **new tasks**, not every running round. Existing tasks
+> retain their saved settings. After a targeted retest, batch Continue rejects commands
+> that would also resume other queues; use the retest's explicit round command instead.
+> To restore a round's original dispatch scope after an older batch Continue narrowed it,
+> use `resume --round <ID> --limit all --restore-full-scope`; completed tasks remain intact
+> and the saved code/configuration/Memory snapshot must still match.
+> See the [round recovery steps](docs/soc-validation-restart.md).
 > After manually extracting an experience, the alert result shows **审核人工提炼经验**
 > even when automatic pattern accumulation has not yet produced a candidate.
 > Successful extraction keeps its review link if the following list refresh fails.

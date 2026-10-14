@@ -579,8 +579,10 @@ defaults. Keep only explicit unsubmitted edits in component state keyed by batch
 batches must not copy a draft or another batch's configuration. Full page refresh restores
 server settings, and the retired shared session-storage preference must not override them.
 Background configuration reads preserve an explicit Host draft; LAN commands always follow
-the current server settings. Visible switches describe subsequent new work, not a rewrite
-of options already frozen in queued or completed jobs.
+the current server settings. Label visible switches `新任务运行设置`: they apply to newly
+submitted jobs, not options already frozen in queued or completed jobs. Keep the persistent
+note beside batch commands: Continue uses each job's saved settings and can resume multiple
+historical rounds; targeted retests require the corresponding round's resume command.
 
 Running corpus details display a neutral waiting message and suppress stale outcome cards
 until the server reports a terminal state. Missing intermediate analysis must not appear
