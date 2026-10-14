@@ -2016,6 +2016,7 @@ export interface SocAuthorizationQuery {
   behaviors: Record<string, unknown>[];
   conflicts: Record<string, unknown>[];
   warnings: string[];
+  unavailable_dimensions?: string[];
 }
 
 export interface SocAuthorizationMatchResult {

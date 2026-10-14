@@ -38,6 +38,7 @@ from soc_agent.contracts import (
     HttpObservationRef,
     LLMAnalysisRequest,
     NetworkEntityRef,
+    ProcessEntityRef,
     ServiceRequestContext,
     SocDecisionStageKind,
     SocDecisionStageStatus,
@@ -54,10 +55,12 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import (
     SocAnalysisService,
+    SocAuthorizedActivityService,
     SocAutomationService,
     SocTenantPolicyEvaluationService,
 )
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
+from soc_agent.governed_context import InMemoryGovernedContextFactRepository
 from soc_agent.integrations.pingan.tenant_disposition import (
     PINGAN_TENANT_DISPOSITION_POLICY_PATH,
     PINGAN_TENANT_DISPOSITION_SKILL_PATH,
@@ -710,6 +713,32 @@ def test_exact_authorization_produces_independent_operational_close() -> None:
     assert decision.recommended_disposition is SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE
     assert decision.review_effect is TenantPolicyReviewEffect.CLEAR
     assert decision.auto_apply_allowed is True
+
+
+@pytest.mark.parametrize("before_analysis", [True, False])
+def test_long_command_does_not_abort_tenant_policy_decision(before_analysis: bool) -> None:
+    run = _run(category="command_execution", host="production.example.test", status_code=200)
+    command = "cscript \\\\192.0.2.1\\share\\script.vbs " + "a" * 600
+    process = ProcessEntityRef(process_name="cscript", command_line=command)
+    run.input_payload["entities"]["process"] = process.model_dump(mode="json")
+    run.llm_analysis_request.canonical_entities.process = process
+    original = run.model_dump(mode="json")
+    repository = InMemoryTenantPolicyDecisionRepository()
+    service = SocTenantPolicyEvaluationService(
+        policy_resolver=StaticTenantPolicyResolver([load_pingan_tenant_disposition_policy()]),
+        repository=repository,
+        environment="dev",
+        event_timezone="Asia/Shanghai",
+        authorized_activity_service=SocAuthorizedActivityService(repository=InMemoryGovernedContextFactRepository()),
+    )
+
+    decision = service.evaluate(run, context=ServiceRequestContext(), before_analysis=before_analysis)
+
+    assert decision is not None
+    assert decision.authorization_status is AuthorizationMatchStatus.UNAVAILABLE
+    assert decision.selected_rule_id != "authorized-activity-operational-close"
+    assert repository.get_tenant_policy_decision(decision.decision_id) == decision
+    assert run.model_dump(mode="json") == original
 
 
 def test_effective_decision_lineage_records_base_memory_tenant_and_final() -> None:

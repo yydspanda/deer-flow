@@ -135,6 +135,12 @@ class AuthorizationQuery(AuthorizationModel):
     behaviors: list[AuthorizationQueryBehavior] = Field(default_factory=list, max_length=300)
     conflicts: list[AuthorizationQueryConflict] = Field(default_factory=list, max_length=100)
     warnings: list[str] = Field(default_factory=list, max_length=100)
+    unavailable_dimensions: list[AuthorizationDimension] = Field(
+        default_factory=list,
+        max_length=9,
+        exclude_if=lambda value: not value,
+        description="Canonical evidence could not be fully projected for these dimensions; no exact authorization is permitted.",
+    )
 
     @field_validator("event_time")
     @classmethod

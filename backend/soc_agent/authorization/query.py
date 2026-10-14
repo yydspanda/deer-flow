@@ -8,8 +8,11 @@ from datetime import datetime
 from ipaddress import ip_address
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import ValidationError
+
 from soc_agent.contracts import (
     AlertInput,
+    AuthorizationDimension,
     AuthorizationQuery,
     AuthorizationQueryBehavior,
     AuthorizationQueryConflict,
@@ -42,6 +45,7 @@ class AuthorizationQueryBuilder:
     ) -> AuthorizationQuery:
         conflicts: list[AuthorizationQueryConflict] = []
         warnings: list[str] = []
+        unavailable_dimensions: list[AuthorizationDimension] = []
         selected_tenant = tenant_id or alert.tenant_id
         extension_environment = _extension_string(alert, "environment")
         selected_environment = environment or extension_environment
@@ -71,7 +75,7 @@ class AuthorizationQueryBuilder:
         _append_canonical_time_policy_warning(alert, warnings)
         subjects = _subject_candidates(alert, entities, fact_reconstruction, warnings=warnings)
         targets = _target_candidates(alert, fact_reconstruction, warnings=warnings)
-        behaviors = _behavior_candidates(alert, entities, fact_reconstruction)
+        behaviors = _behavior_candidates(alert, entities, fact_reconstruction, warnings=warnings, unavailable_dimensions=unavailable_dimensions)
 
         if fact_reconstruction is not None:
             conflicts.extend(_fact_conflicts(fact_reconstruction))
@@ -98,6 +102,7 @@ class AuthorizationQueryBuilder:
             behaviors=_deduplicate(behaviors),
             conflicts=_deduplicate_conflicts(conflicts),
             warnings=_unique(warnings),
+            unavailable_dimensions=unavailable_dimensions,
         )
 
 
@@ -298,19 +303,38 @@ def _behavior_candidates(
     alert: AlertInput,
     entities: ExtractedEntities | None,
     reconstruction: FactReconstructionResult | None,
+    *,
+    warnings: list[str],
+    unavailable_dimensions: list[AuthorizationDimension],
 ) -> list[AuthorizationQueryBehavior]:
     candidates: list[AuthorizationQueryBehavior] = []
     process = alert.entities.process
+    oversized_count = 0
+    first_oversized_warning: str | None = None
+
+    def add_behavior(kind: AuthorizedActivityBehaviorKind, value: str, evidence_path: str, *, confidence: float = 1.0) -> None:
+        nonlocal oversized_count, first_oversized_warning
+        try:
+            candidates.append(_behavior(kind, value, evidence_path, confidence=confidence))
+        except ValidationError as exc:
+            if any(error["loc"] != ("value",) or error["type"] != "string_too_long" for error in exc.errors(include_input=False)):
+                raise
+            # The full value remains in canonical evidence. A clipped or hashed
+            # replacement would change selector identity, and the remaining
+            # candidates must not establish authorization from an incomplete query.
+            oversized_count += 1
+            if first_oversized_warning is None:
+                first_oversized_warning = f"authorization_behavior_value_too_long:{evidence_path}:length={len(value)}"
+            if AuthorizationDimension.BEHAVIOR not in unavailable_dimensions:
+                unavailable_dimensions.append(AuthorizationDimension.BEHAVIOR)
 
     if reconstruction is not None:
         for index, scenario in enumerate(reconstruction.scenario_hypotheses):
-            candidates.append(
-                _behavior(
-                    AuthorizedActivityBehaviorKind.SCENARIO,
-                    scenario.scenario_type,
-                    scenario.evidence_paths[0] if scenario.evidence_paths else f"fact_reconstruction.scenario_hypotheses[{index}]",
-                    confidence=scenario.confidence,
-                )
+            add_behavior(
+                AuthorizedActivityBehaviorKind.SCENARIO,
+                scenario.scenario_type,
+                scenario.evidence_paths[0] if scenario.evidence_paths else f"fact_reconstruction.scenario_hypotheses[{index}]",
+                confidence=scenario.confidence,
             )
 
     for path, value in (
@@ -318,64 +342,52 @@ def _behavior_candidates(
         ("entities.process.parent_process_name", process.parent_process_name),
     ):
         if value:
-            candidates.append(_behavior(AuthorizedActivityBehaviorKind.PROCESS, value, path))
+            add_behavior(AuthorizedActivityBehaviorKind.PROCESS, value, path)
     if process.parent_process_name and process.process_name:
-        candidates.append(
-            _behavior(
-                AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
-                _process_signature([process.parent_process_name, process.process_name]),
-                "entities.process.parent_process_name->entities.process.process_name",
-            )
+        add_behavior(
+            AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
+            _process_signature([process.parent_process_name, process.process_name]),
+            "entities.process.parent_process_name->entities.process.process_name",
         )
     for path, value in (
         ("entities.process.command_line", process.command_line),
         ("entities.process.parent_command_line", process.parent_command_line),
     ):
         if value:
-            candidates.append(_behavior(AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE, _normalized_text(value), path))
+            add_behavior(AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE, _normalized_text(value), path)
 
     for observation_index, observation in enumerate(process.observations):
         names = [node.process_name for node in observation.nodes]
         for node_index, node in enumerate(observation.nodes):
-            candidates.append(
-                _behavior(
-                    AuthorizedActivityBehaviorKind.PROCESS,
-                    node.process_name,
-                    f"{observation.evidence_path}#process.nodes[{node_index}]",
-                )
+            add_behavior(
+                AuthorizedActivityBehaviorKind.PROCESS,
+                node.process_name,
+                f"{observation.evidence_path}#process.nodes[{node_index}]",
             )
         if len(names) >= 2:
-            candidates.append(
-                _behavior(
-                    AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
-                    _process_signature(names),
-                    observation.evidence_path,
-                )
+            add_behavior(
+                AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
+                _process_signature(names),
+                observation.evidence_path,
             )
             for index in range(len(names) - 1):
-                candidates.append(
-                    _behavior(
-                        AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
-                        _process_signature(names[index : index + 2]),
-                        observation.evidence_path,
-                    )
+                add_behavior(
+                    AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
+                    _process_signature(names[index : index + 2]),
+                    observation.evidence_path,
                 )
 
     if alert.entities.network.protocol:
-        candidates.append(
-            _behavior(
-                AuthorizedActivityBehaviorKind.PROTOCOL,
-                alert.entities.network.protocol,
-                "entities.network.protocol",
-            )
+        add_behavior(
+            AuthorizedActivityBehaviorKind.PROTOCOL,
+            alert.entities.network.protocol,
+            "entities.network.protocol",
         )
     for index, technique in enumerate(alert.classification.technique):
-        candidates.append(
-            _behavior(
-                AuthorizedActivityBehaviorKind.TECHNIQUE,
-                technique,
-                f"classification.technique[{index}]",
-            )
+        add_behavior(
+            AuthorizedActivityBehaviorKind.TECHNIQUE,
+            technique,
+            f"classification.technique[{index}]",
         )
     for path, value in (
         ("detection.rule_code", alert.detection.rule_code),
@@ -384,33 +396,32 @@ def _behavior_candidates(
         ("detection.rule_category", alert.detection.rule_category),
     ):
         if value:
-            candidates.append(_behavior(AuthorizedActivityBehaviorKind.DETECTION_ALIAS, value, path))
+            add_behavior(AuthorizedActivityBehaviorKind.DETECTION_ALIAS, value, path)
 
     if entities is not None:
         for mention in entities.mentions:
             path = mention.evidence_path or "extracted_entities.mentions"
             if mention.kind is EntityKind.PROCESS:
-                candidates.append(_behavior(AuthorizedActivityBehaviorKind.PROCESS, mention.value, path, confidence=mention.confidence))
+                add_behavior(AuthorizedActivityBehaviorKind.PROCESS, mention.value, path, confidence=mention.confidence)
             elif mention.kind is EntityKind.BEHAVIOR:
-                candidates.append(
-                    _behavior(
-                        AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
-                        mention.value,
-                        path,
-                        confidence=mention.confidence,
-                    )
+                add_behavior(
+                    AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE,
+                    mention.value,
+                    path,
+                    confidence=mention.confidence,
                 )
             elif mention.kind is EntityKind.MITRE:
-                candidates.append(_behavior(AuthorizedActivityBehaviorKind.TECHNIQUE, mention.value, path, confidence=mention.confidence))
+                add_behavior(AuthorizedActivityBehaviorKind.TECHNIQUE, mention.value, path, confidence=mention.confidence)
             elif mention.kind in {EntityKind.RULE, EntityKind.RULE_CODE, EntityKind.RULE_NAME}:
-                candidates.append(
-                    _behavior(
-                        AuthorizedActivityBehaviorKind.DETECTION_ALIAS,
-                        mention.value,
-                        path,
-                        confidence=mention.confidence,
-                    )
+                add_behavior(
+                    AuthorizedActivityBehaviorKind.DETECTION_ALIAS,
+                    mention.value,
+                    path,
+                    confidence=mention.confidence,
                 )
+    if first_oversized_warning is not None:
+        suffix = f":omitted_count={oversized_count}" if oversized_count > 1 else ""
+        warnings.append(first_oversized_warning + suffix)
     return candidates
 
 

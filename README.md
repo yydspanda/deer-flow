@@ -62,6 +62,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > A tenant policy that does not select a disposition preserves existing Runtime/Memory advice;
 > a request for operational review is not automatically a critical evidence gap. The Web and ZEUS
 > result adapter share this handling classification, and a recommendation never proves execution.
+> Commands exceeding the authorization selector limit remain intact in the alert evidence.
+> That authorization lookup is recorded as unavailable; it cannot establish an authorization
+> match, and the remaining triage continues instead of failing on the long command.
 > Ordinary evidence gaps do not force transfer. Unresolved decision-level conflicts or validation
 > defects do: the original verdict stays in audit, but an ignore plan cannot be adopted or automated.
 > Base may already use reference Memory; the later Memory stage applies eligible direct-use instructions.

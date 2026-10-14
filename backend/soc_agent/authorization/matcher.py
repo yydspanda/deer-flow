@@ -439,14 +439,14 @@ def _simple_dimension(
 
 
 def _unavailable_query_dimensions(query: AuthorizationQuery) -> list[AuthorizationDimension]:
-    dimensions: list[AuthorizationDimension] = []
+    dimensions: list[AuthorizationDimension] = list(query.unavailable_dimensions)
     if not query.tenant_id:
         dimensions.append(AuthorizationDimension.TENANT)
     if not query.environment:
         dimensions.append(AuthorizationDimension.ENVIRONMENT)
     if query.event_time is None:
         dimensions.append(AuthorizationDimension.EVENT_TIME)
-    return dimensions
+    return list(dict.fromkeys(dimensions))
 
 
 def _fact_ref(fact: GovernedContextFact) -> AuthorizationFactRef:

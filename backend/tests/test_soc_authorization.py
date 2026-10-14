@@ -37,7 +37,10 @@ from soc_agent.contracts import (
     AuthorizedActivityTargetKind,
     AuthorizedActivityTargetSelector,
     AuthorizedActivityType,
+    EntityKind,
+    EntityMention,
     EntrySurface,
+    ExtractedEntities,
     GovernedContextFactCreateCommand,
     GovernedContextFactTransitionCommand,
     GovernedContextSource,
@@ -55,8 +58,10 @@ from soc_agent.core import (
     SocGovernedContextService,
     SocReviewService,
 )
+from soc_agent.core.authorization_enrichment import authorization_query_hash
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.governed_context import InMemoryGovernedContextFactRepository
+from soc_agent.utils.hashing import stable_hash
 
 TENANT = "tenant-a"
 ENVIRONMENT = "production"
@@ -226,6 +231,135 @@ def test_authorization_contract_requires_aware_event_time_and_rejects_extra_fiel
     payload["vendor_rule_code"] = "not-allowed"
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         AuthorizationQuery.model_validate(payload)
+
+
+@pytest.mark.parametrize("source", ["command_line", "parent_command_line", "extracted_behavior", "rule_name"])
+def test_oversized_behavior_is_unavailable_without_truncating_evidence(source: str) -> None:
+    command = "cscript \\\\192.0.2.1\\share\\script.vbs " + "a" * 600
+    alert = AlertInput(
+        tenant_id=TENANT,
+        alert_id="ALT-LONG-COMMAND",
+        event=AlertEventRef(event_time=BASE_TIME + timedelta(days=2)),
+        entities=AlertEntitySet(
+            host=HostEntityRef(asset_id="asset-1"),
+            process=ProcessEntityRef(process_name="chattr", parent_process_name="java"),
+        ),
+    )
+    entities = None
+    if source == "extracted_behavior":
+        entities = ExtractedEntities(mentions=[EntityMention(kind=EntityKind.BEHAVIOR, value=command, key="behavior:long", evidence_path="raw.command")])
+        expected_path = "raw.command"
+    elif source == "rule_name":
+        alert.detection.rule_name = command
+        expected_path = "detection.rule_name"
+    else:
+        setattr(alert.entities.process, source, command)
+        expected_path = f"entities.process.{source}"
+    original = alert.model_dump(mode="json")
+    repository = InMemoryGovernedContextFactRepository()
+    _activate(repository, _payload())
+    # A clipped command must never become a valid exact-match selector either.
+    _activate(repository, _payload(behaviors=[AuthorizedActivityBehaviorSelector(kind=AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE, value=command[:512])]))
+    service = SocAuthorizedActivityService(repository=repository)
+
+    query = service.build_query(alert, entities=entities, environment=ENVIRONMENT)
+    result = service.match(query)
+
+    assert query.unavailable_dimensions == [AuthorizationDimension.BEHAVIOR]
+    assert all(item.value not in {command, command[:512]} for item in query.behaviors)
+    assert any("authorization_behavior_value_too_long" in warning and expected_path in warning for warning in query.warnings)
+    assert result.status is AuthorizationMatchStatus.UNAVAILABLE
+    assert result.matched_fact_refs == []
+    assert result.missing_dimensions == [AuthorizationDimension.BEHAVIOR]
+    assert result.warnings == [*query.warnings, "authorization_query_missing_required_context"]
+    assert alert.model_dump(mode="json") == original
+    if entities:
+        assert entities.mentions[0].value == command
+
+
+def test_behavior_at_512_character_boundary_still_matches_exactly() -> None:
+    command = "cscript " + "a" * 504
+    alert = AlertInput(
+        tenant_id=TENANT,
+        alert_id="ALT-BOUNDARY-COMMAND",
+        event=AlertEventRef(event_time=BASE_TIME + timedelta(days=2)),
+        entities=AlertEntitySet(host=HostEntityRef(asset_id="asset-1"), process=ProcessEntityRef(command_line=command)),
+    )
+    repository = InMemoryGovernedContextFactRepository()
+    _activate(repository, _payload(behaviors=[AuthorizedActivityBehaviorSelector(kind=AuthorizedActivityBehaviorKind.BEHAVIOR_SIGNATURE, value=command)]))
+    service = SocAuthorizedActivityService(repository=repository)
+
+    query = service.build_query(alert, environment=ENVIRONMENT)
+
+    assert query.unavailable_dimensions == []
+    assert service.match(query).status is AuthorizationMatchStatus.EXACT
+    assert query.behaviors[0].value == command
+
+
+def test_many_oversized_behaviors_keep_unavailable_query_and_bounded_warnings() -> None:
+    alert = AlertInput(
+        tenant_id=TENANT,
+        alert_id="ALT-MANY-LONG-BEHAVIORS",
+        event=AlertEventRef(event_time=BASE_TIME + timedelta(days=2)),
+        entities=AlertEntitySet(host=HostEntityRef(asset_id="asset-1")),
+    )
+    entities = ExtractedEntities(mentions=[EntityMention(kind=EntityKind.BEHAVIOR, value=f"cscript script-{index}.vbs " + "a" * 600, key=f"behavior:long:{index}", evidence_path=f"raw.behaviors[{index}]") for index in range(101)])
+    original = entities.model_dump(mode="json")
+    service = SocAuthorizedActivityService(repository=InMemoryGovernedContextFactRepository())
+
+    query = service.build_query(alert, entities=entities, environment=ENVIRONMENT)
+    result = service.match(query)
+
+    assert query.unavailable_dimensions == [AuthorizationDimension.BEHAVIOR]
+    assert query.behaviors == []
+    overflow_warnings = [warning for warning in query.warnings if "authorization_behavior_value_too_long" in warning]
+    assert len(overflow_warnings) == 1
+    assert "raw.behaviors[0]" in overflow_warnings[0]
+    assert "omitted_count=101" in overflow_warnings[0]
+    assert result.status is AuthorizationMatchStatus.UNAVAILABLE
+    assert result.missing_dimensions == [AuthorizationDimension.BEHAVIOR]
+    assert entities.model_dump(mode="json") == original
+
+
+def test_legacy_authorization_query_defaults_to_no_unavailable_dimensions() -> None:
+    payload = _query(event_time=BASE_TIME + timedelta(days=2)).model_dump(mode="json")
+    payload.pop("unavailable_dimensions", None)
+    query = AuthorizationQuery.model_validate(payload)
+    assert query.unavailable_dimensions == []
+    assert query.model_dump(mode="json") == payload
+    assert authorization_query_hash(query) == stable_hash({key: value for key, value in payload.items() if key != "query_id"})
+
+
+def test_unavailable_behavior_survives_enrichment_storage_and_replay() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    run = AnalysisRun(run_id="RUN-AUTH-LONG", alert_id="ALT-AUTH-1", status=AnalysisRunStatus.NEEDS_REVIEW)
+    repository.save_run(run)
+    _activate(repository, _payload())
+    service = SocAuthorizationEnrichmentService(
+        authorization_service=SocAuthorizedActivityService(repository=repository),
+        repository=repository,
+        alert_repository=repository,
+    )
+    query = _query(event_time=BASE_TIME + timedelta(days=2))
+    old_hash = authorization_query_hash(query)
+    query.unavailable_dimensions = [AuthorizationDimension.BEHAVIOR]
+    command = AuthorizationEnrichmentCommand(run_id=run.run_id, query=query, idempotency_key="authorization:long:initial")
+    try:
+        initial = service.enrich(command, context=_context("soc_analyst"))
+        saved = repository.get_authorization_enrichment(initial.record.enrichment_id)
+        replay = service.replay(initial.record.enrichment_id, idempotency_key="authorization:long:replay", context=_context("soc_analyst"))
+
+        assert saved.query.unavailable_dimensions == [AuthorizationDimension.BEHAVIOR]
+        assert saved.query_hash != old_hash
+        assert replay.record.query_hash == saved.query_hash
+        assert replay.record.query.unavailable_dimensions == [AuthorizationDimension.BEHAVIOR]
+        assert saved.match_result.status is AuthorizationMatchStatus.UNAVAILABLE
+        assert replay.record.match_result.status is AuthorizationMatchStatus.UNAVAILABLE
+        assert service.enrich(command, context=_context("soc_analyst")).idempotent is True
+    finally:
+        engine.dispose()
 
 
 def test_hids_java_chattr_matches_scoped_governed_fact() -> None:
