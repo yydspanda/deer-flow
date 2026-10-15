@@ -1134,6 +1134,8 @@ export function SocCorpusValidationWorkbench() {
     alertId: string;
     key: number;
     jobId?: string | null;
+    attemptCount?: number;
+    retry?: boolean;
     rerun?: boolean;
   } | null>(null);
   const [quickState, setQuickState] = useState<SocCorpusQuickState | null>(
@@ -2255,6 +2257,13 @@ export function SocCorpusValidationWorkbench() {
                       !quickJob.blocked_reason);
                   const quickPending =
                     requestedBatchAlert?.alertId === alert.alert_id;
+                  const quickBlocked =
+                    !!quickJob?.blocked_reason || !!quickState?.blocked_reason;
+                  const quickRetry =
+                    quickJob?.status === "failed" && !quickBlocked;
+                  const quickRerun =
+                    !!quickJob &&
+                    (quickJob.status === "completed" || quickBlocked);
                   const readinessItem = READINESS[alert.readiness];
                   const localProcessing =
                     processingAlertIds.has(alert.alert_id) ||
@@ -2429,24 +2438,19 @@ export function SocCorpusValidationWorkbench() {
                                   alertId: alert.alert_id,
                                   key: Date.now(),
                                   jobId: quickJob?.job_id,
-                                  rerun:
-                                    !!quickJob &&
-                                    (["completed", "failed"].includes(
-                                      quickJob.status,
-                                    ) ||
-                                      !!quickJob.blocked_reason),
+                                  attemptCount: quickJob?.attempt_count,
+                                  retry: quickRetry,
+                                  rerun: quickRerun,
                                 });
                               }}
                             >
                               <PlayIcon className="size-4" />
                               {quickRunning || quickPending
                                 ? "运行中"
-                                : quickJob?.status === "completed" ||
-                                    (!!quickState?.blocked_reason &&
-                                      !!quickJob?.job_id)
-                                  ? "重新运行"
-                                  : quickJob?.status === "failed"
-                                    ? "重试"
+                                : quickRetry
+                                  ? "重试"
+                                  : quickRerun
+                                    ? "重新运行"
                                     : "直接运行"}
                             </Button>
                             {quickJob?.error_message && (

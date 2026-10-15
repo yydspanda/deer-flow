@@ -213,6 +213,7 @@ export interface SocCorpusQuickState {
   blocked_reason: string | null;
   items: (SocCorpusRoundResult & {
     job_id: string | null;
+    attempt_count?: number;
     manual_dispatch?: boolean;
     blocked_reason?: string | null;
   })[];
@@ -240,6 +241,15 @@ export type SocCorpusRestartCommand =
 
 export type SocCorpusQuickCommand =
   | SocCorpusRestartCommand
+  | {
+      batch: SocCorpusBatch;
+      scope: "all" | "reuse" | "explore";
+      action: "retry";
+      alert_id: string;
+      job_id: string;
+      expected_attempt_count: number;
+      options: SocAnalysisExecutionOptions;
+    }
   | {
       batch: SocCorpusBatch;
       scope: "all" | "reuse" | "explore";

@@ -9,7 +9,8 @@ from uuid import uuid4
 
 from soc_agent.contracts import ActorContext, ActorType, EntrySurface, ProcessingJobStatus, ServiceRequestContext, SocMemoryRecord, SocProcessingJobSubmission
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
-from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome, CorpusExperiment, CorpusExperimentMember, CorpusMemorySnapshotEntry, CorpusRound, CorpusRoundCreateCommand
+from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome, CorpusExperiment, CorpusExperimentMember, CorpusMemorySnapshotEntry, CorpusRound, CorpusRoundCreateCommand, CorpusRoundRetryCommand, CorpusSemanticRetry
+from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict
 from soc_agent.db.jobs import ProcessingJobConflictError
@@ -20,6 +21,17 @@ from soc_agent.utils.hashing import stable_hash
 logger = logging.getLogger(__name__)
 CORPUS_WORKLOAD = "corpus_experiment"
 CORPUS_QUEUE = "deepseek-v4-flash"
+
+
+def semantic_failed(job) -> bool:
+    summary = (job.result_payload or {}).get("summary", {})
+    if "normalization_assist_status" in summary:
+        return summary["normalization_assist_status"] == "failed"
+    return any(step.get("phase") == "normalization_assist" and step.get("status") == "failed" for step in summary.get("phase_timings", []))
+
+
+def semantic_retry_key(base_key: str, generation: int) -> str:
+    return f"{base_key}:semantic:{generation}"
 
 
 def _require_saved_options(store, experiment_id: str, batch: str, submitted: SocAnalysisExecutionOptions, defaults: SocAnalysisExecutionOptions | None) -> None:
@@ -178,6 +190,7 @@ class SocCorpusExperimentService:
                 created_by=context.actor.actor_id,
                 created_at=created_at,
                 learning_generation=learning_generation,
+                pattern_accumulation_scope=continuous_accumulation_scope(store, experiment.experiment_id, learning_generation) if command.purpose != "facts" else None,
             )
             store.create_round(round_)
             offset = 0
@@ -341,8 +354,10 @@ class SocCorpusExperimentService:
             self._finish_if_drained(round_id)
             return False
         member = self.store.get_member(round_.experiment_id, job.alert_id)
-        request_context = ServiceRequestContext(actor=ActorContext(actor_id=round_.created_by, actor_type=ActorType.SERVICE, surface=EntrySurface.DAEMON, roles=["soc_batch_runner", "soc_admin"]), idempotency_key=job.idempotency_key)
         try:
+            semantic_retry = CorpusSemanticRetry.model_validate(job.metadata["semantic_retry"]) if job.metadata.get("semantic_retry") else None
+            runtime_key = semantic_retry_key(job.idempotency_key, semantic_retry.generation) if semantic_retry else job.idempotency_key
+            request_context = ServiceRequestContext(actor=ActorContext(actor_id=round_.created_by, actor_type=ActorType.SERVICE, surface=EntrySurface.DAEMON, roles=["soc_batch_runner", "soc_admin"]), idempotency_key=runtime_key)
             job = self.jobs.transition(job.job_id, worker_id=worker_id, expected_status=job.status, target_status=ProcessingJobStatus.PRECHECKING, event_type="corpus_precheck")
             problem = self.snapshot_problem(round_)
             if problem:
@@ -353,7 +368,7 @@ class SocCorpusExperimentService:
                 raise CorpusExecutionError("recovery attempt budget exhausted")
             job = self.jobs.transition(job.job_id, worker_id=worker_id, expected_status=job.status, target_status=ProcessingJobStatus.ANALYZING, event_type="corpus_runtime_started")
             with self._heartbeat(job.job_id, worker_id):
-                outcome = self._execute(round_, member, request_context)
+                outcome = self._execute(round_, member, request_context, semantic_retry=semantic_retry) if semantic_retry else self._execute(round_, member, request_context)
             job = self.jobs.transition(job.job_id, worker_id=worker_id, expected_status=job.status, target_status=ProcessingJobStatus.PROJECTING, event_type="corpus_runtime_saved", run_id=outcome.run_id)
             problem = self.snapshot_problem(round_)
             if problem:
@@ -394,35 +409,70 @@ class SocCorpusExperimentService:
 
     def retry_failed(self, round_id: str, *, context: ServiceRequestContext) -> dict[str, int]:
         _require_admin(context)
-        round_ = self._round(round_id)
-        if round_.superseded_by_round_id:
-            raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
-        reason = self.snapshot_problem(round_)
-        if reason or round_.state == "blocked":
-            raise CorpusExperimentConflict(f"{reason or round_.state_reason or 'round is blocked'}; create a new round")
-        retried = skipped = offset = 0
+        result = self.retry_items(round_id, CorpusRoundRetryCommand(kind="failed", expected_round_version=self._round(round_id).version), context=context)
+        return {key: result[key] for key in ("retried", "not_retryable")}
+
+    def retry_items(self, round_id: str, command: CorpusRoundRetryCommand, *, context: ServiceRequestContext, manual: bool = False) -> dict:
+        _require_admin(context)
+        if command.concurrency is not None and command.concurrency > self._max_concurrency:
+            raise ValueError("concurrency exceeds the server limit")
+        retried_ids, skipped, offset = [], 0, 0
         with self.repository.mutation_transaction() as tx:
             tx.lock_memory_governance()
             store = tx.corpus_experiments()
             round_ = store.get_round(round_id)
+            if round_ is None:
+                raise ValueError("round not found")
+            if round_.version != command.expected_round_version:
+                raise CorpusExperimentConflict("轮次状态已变化，请刷新后重试")
             if round_.superseded_by_round_id:
                 raise CorpusExperimentConflict("该轮任务已被全部重跑替换，请使用当前批次任务")
+            reason = self.snapshot_problem(round_)
+            if reason or round_.state == "blocked":
+                raise CorpusExperimentConflict(f"{reason or round_.state_reason or 'round is blocked'}; create a new round")
+            if not manual and (round_.state == "running" or store.round_progress(round_id).active_count):
+                raise CorpusExperimentConflict("请先暂停本轮并等待运行中的任务结束，再批量重试")
+            if command.kind == "semantic_failed" and (round_.purpose == "facts" or round_.options.normalization_review_mode != "apply"):
+                raise ValueError("语义失败补跑需要本轮已开启语义核对，且不是事实预处理任务")
+            selected = set(command.alert_ids)
+            seen = set()
             while True:
                 page = store.list_round_items(round_id, offset=offset, limit=500)
                 for item in page.items:
-                    if item.job.status != ProcessingJobStatus.FAILED:
+                    seen.add(item.alert_id)
+                    if selected and item.alert_id not in selected:
                         continue
-                    if not (item.job.result_payload or {}).get("retryable") or item.job.attempt_count >= 3:
+                    job = item.job
+                    if command.kind == "failed":
+                        if job.status != ProcessingJobStatus.FAILED:
+                            continue
+                        eligible = bool((job.result_payload or {}).get("retryable"))
+                    else:
+                        if job.status != ProcessingJobStatus.COMPLETED or not semantic_failed(job):
+                            continue
+                        eligible = bool(job.run_id)
+                    if not eligible or job.attempt_count >= 3:
                         skipped += 1
                         continue
-                    tx.processing_jobs().retry_failed(item.job_id, expected_version=item.job.version, actor_id=context.actor.actor_id)
-                    retried += 1
+                    if command.kind == "failed":
+                        tx.processing_jobs().retry_failed(item.job_id, expected_version=job.version, actor_id=context.actor.actor_id)
+                    else:
+                        retry = CorpusSemanticRetry(generation=job.metadata.get("semantic_retry", {}).get("generation", 0) + 1, previous_run_id=job.run_id)
+                        tx.processing_jobs().retry_completed(item.job_id, expected_version=job.version, actor_id=context.actor.actor_id, metadata={"semantic_retry": retry.model_dump(mode="json")}, event_type="corpus_semantic_retry")
+                    if manual:
+                        store.request_manual(round_id, item.alert_id, actor_id=context.actor.actor_id)
+                    retried_ids.append(item.alert_id)
                 offset += len(page.items)
                 if offset >= page.total:
                     break
-            if retried:
-                store.set_round_state(round_id, expected_version=round_.version, state="running", reason="retry_failed", actor_id=context.actor.actor_id)
-        return {"retried": retried, "not_retryable": skipped}
+            if selected - seen:
+                raise ValueError("selected alert is not in this round")
+            if retried_ids:
+                if not manual:
+                    store.set_dispatch_scope(round_id, retried_ids)
+                state = (round_.state if round_.state != "completed" else "paused") if manual else "running"
+                store.set_round_state(round_id, expected_version=round_.version, state=state, reason="retry_" + command.kind, concurrency=command.concurrency, actor_id=context.actor.actor_id)
+        return {"round_id": round_id, "retried": len(retried_ids), "not_retryable": skipped}
 
     def _round(self, round_id: str) -> CorpusRound:
         round_ = self.store.get_round(round_id)
@@ -472,6 +522,17 @@ class SocCorpusExperimentService:
 
 def corpus_alert_concurrency_key(tenant_id: str, environment: str, alert_id: str) -> str:
     return "corpus-alert:" + stable_hash([tenant_id, environment, alert_id])
+
+
+def continuous_accumulation_scope(store, experiment_id: str, learning_generation: str | None) -> MemoryPatternAccumulationScope:
+    first, last = store.experiment_event_range(experiment_id)
+    return MemoryPatternAccumulationScope(
+        experiment_id=experiment_id,
+        learning_generation=learning_generation,
+        accumulation_mode="continuous",
+        event_start=first,
+        event_end=last + timedelta(microseconds=1),
+    )
 
 
 def _require_admin(context: ServiceRequestContext):

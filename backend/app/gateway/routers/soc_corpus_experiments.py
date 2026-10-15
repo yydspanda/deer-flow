@@ -23,6 +23,7 @@ from soc_agent.contracts.corpus_experiments import (
     CorpusConcurrencyCommand,
     CorpusExperiment,
     CorpusMemberPage,
+    CorpusPatternBackfillCommand,
     CorpusPrepareCommand,
     CorpusQuickCommand,
     CorpusRound,
@@ -30,6 +31,7 @@ from soc_agent.contracts.corpus_experiments import (
     CorpusRoundCreateCommand,
     CorpusRoundItemPage,
     CorpusRoundProgress,
+    CorpusRoundRetryCommand,
     CorpusRoundSelection,
     CorpusRoundStartCommand,
     RoundState,
@@ -43,6 +45,8 @@ from soc_agent.core.memory_working_drafts import SocMemoryWorkingDraftService
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict, CorpusExperimentSchemaNotReady
 from soc_agent.db.jobs import ProcessingJobConflictError
 from soc_agent.demo.corpus_experiment_timing import item_timing, round_timing
+from soc_agent.demo.corpus_experiments import semantic_retry_key
+from soc_agent.demo.corpus_pattern_continuation import SocCorpusPatternContinuationService
 from soc_agent.demo.corpus_rebalance import CorpusRebalanceService
 from soc_agent.demo.corpus_round_comparison import compare_round_item
 
@@ -367,7 +371,7 @@ def submit_draft_jobs(experiment_id: str, body: MemoryDraftGenerateBatch, reques
     if application.service.store.get_experiment(experiment_id) is None:
         raise HTTPException(status_code=404, detail="该实验不存在")
     if application.service.store.learning_candidate_ids(experiment_id, ids) != set(ids):
-        raise HTTPException(status_code=409, detail="只能起草本实验第一批产生的候选")
+        raise HTTPException(status_code=409, detail="只能起草本实验当前积累代次的候选")
     with _command_errors():
         jobs = application.draft_jobs.submit_many(body.commands, context=_admin(request), external_ref=experiment_id)
     application.dispatcher.start()
@@ -466,11 +470,15 @@ def round_results(round_id: str, application: ApplicationDep, limit: Annotated[i
                 "observation_id": outcome.get("observation_id"),
                 "pattern_reason": outcome.get("pattern_reason"),
                 "summary": summary,
-                "attempt_measurements": application.service.repository.journaled_run_measurements(
-                    alert_id=member.alert_id,
-                    input_hash=member.payload_hash,
-                    idempotency_key_hash=hashlib.sha256(json.dumps(item.job.idempotency_key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest(),
-                ),
+                "attempt_measurements": [
+                    measurement
+                    for key in [item.job.idempotency_key, *(semantic_retry_key(item.job.idempotency_key, generation) for generation in range(1, item.job.metadata.get("semantic_retry", {}).get("generation", 0) + 1))]
+                    for measurement in application.service.repository.journaled_run_measurements(
+                        alert_id=member.alert_id,
+                        input_hash=member.payload_hash,
+                        idempotency_key_hash=hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest(),
+                    )
+                ],
                 "snapshot_changed_during_run": outcome.get("snapshot_changed_during_run", False),
                 **({} if applicability_report else {"label": application.workbench.experiment_label(member, decision_available=summary.get("effective_verdict") is not None)}),
                 "error_code": item.job.error_code,
@@ -549,6 +557,24 @@ def retry_failed(round_id: str, request: Request, application: ApplicationDep):
         if result["retried"]:
             application.dispatcher.start()
         return result
+
+
+@router.post("/rounds/{round_id}/retry")
+def retry_items(round_id: str, body: CorpusRoundRetryCommand, request: Request, application: ApplicationDep):
+    _round(application, round_id)
+    with _command_errors():
+        result = application.service.retry_items(round_id, body, context=_admin(request))
+        if result["retried"]:
+            application.dispatcher.start()
+        return result
+
+
+@router.post("/rounds/{round_id}/accumulate")
+def accumulate_patterns(round_id: str, body: CorpusPatternBackfillCommand, request: Request, application: ApplicationDep, dry_run: bool = False):
+    _round(application, round_id)
+    with _command_errors():
+        service = SocCorpusPatternContinuationService(coordinator=application.service, profiles=build_soc_memory_profile_registry())
+        return service.accumulate(round_id, body, context=_admin(request), dry_run=dry_run)
 
 
 @router.get("/quick-validation")

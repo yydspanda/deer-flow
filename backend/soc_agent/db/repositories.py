@@ -124,6 +124,7 @@ from soc_agent.memory.lineage import (
     memory_candidate_lineage_key,
     project_memory_candidates_to_pattern_lineages,
 )
+from soc_agent.memory.patterns import MemoryPatternRepositoryConflictError, validate_memory_pattern_replacement
 from soc_agent.memory.scoring import score_memory_record
 from soc_agent.tenant_policy import TenantPolicyDecisionConflictError
 
@@ -412,7 +413,7 @@ class SqlAlchemyAlertRepository:
     def journaled_run_measurements(self, *, alert_id: str, input_hash: str, idempotency_key_hash: str) -> list[dict[str, Any]]:
         row = SocAnalysisRunRow
         query = (
-            select(row.run_id, row.status, *self._run_measurement_columns())
+            select(row.run_id, row.status, row.total_duration_ms, *self._run_measurement_columns())
             .where(
                 row.alert_id == alert_id,
                 row.input_hash == input_hash,
@@ -2272,6 +2273,38 @@ class SqlAlchemyAlertRepository:
             row = session.get(SocMemoryPatternObservationRow, observation_id)
             return _memory_pattern_observation_from_row(row) if row is not None else None
 
+    def is_memory_pattern_observation_current(self, observation_id: str) -> bool:
+        with self._session_factory() as session:
+            return bool(session.scalar(select(SocMemoryPatternObservationRow.is_current).where(SocMemoryPatternObservationRow.observation_id == observation_id)))
+
+    def replace_memory_pattern_observations(self, observation: MemoryPatternObservation, *, superseded_ids: list[str]) -> None:
+        ids = set(superseded_ids)
+        if not ids or len(ids) != len(superseded_ids) or observation.observation_id in ids:
+            raise MemoryPatternRepositoryConflictError("memory pattern replacement requires distinct predecessor identities")
+        row_type = SocMemoryPatternObservationRow
+        payload = observation.model_dump(mode="json")
+        with self._session_factory() as session:
+            existing = session.get(row_type, observation.observation_id)
+            if existing is not None:
+                actual_ids = set(session.scalars(select(row_type.observation_id).where(row_type.superseded_by_observation_id == observation.observation_id)))
+                if existing.observation_payload != payload or actual_ids != ids:
+                    raise MemoryPatternRepositoryConflictError("memory pattern replacement idempotency or superseded identities differ")
+                return
+            previous = list(session.scalars(select(row_type).where(row_type.observation_id.in_(ids)).order_by(row_type.observation_id).with_for_update()))
+            if len(previous) != len(ids) or any(not row.is_current for row in previous):
+                raise MemoryPatternRepositoryConflictError("memory pattern predecessor is no longer current")
+            for row in previous:
+                validate_memory_pattern_replacement(_memory_pattern_observation_from_row(row), observation)
+            try:
+                changed = session.execute(update(row_type).where(row_type.observation_id.in_(ids), row_type.is_current.is_(True)).values(is_current=False, superseded_by_observation_id=observation.observation_id))
+                if changed.rowcount != len(ids):
+                    raise MemoryPatternRepositoryConflictError("memory pattern predecessor is no longer current")
+                session.add(row_type(observation_id=observation.observation_id, **_memory_pattern_observation_row_values(observation, payload)))
+                session.commit()
+            except (IntegrityError, MemoryPatternRepositoryConflictError) as exc:
+                session.rollback()
+                raise MemoryPatternRepositoryConflictError("memory pattern replacement conflicts with current source identity") from exc
+
     def find_memory_pattern_observation_by_idempotency_key(
         self,
         idempotency_key: str,
@@ -2290,11 +2323,14 @@ class SqlAlchemyAlertRepository:
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
         alert_id: str | None = None,
+        include_superseded: bool = False,
         limit: int = 500,
         offset: int = 0,
     ) -> list[MemoryPatternObservation]:
         with self._session_factory() as session:
             query = select(SocMemoryPatternObservationRow)
+            if not include_superseded:
+                query = query.where(SocMemoryPatternObservationRow.is_current.is_(True))
             if aggregation_key is not None:
                 query = query.where(SocMemoryPatternObservationRow.aggregation_key == aggregation_key)
             if lineage_key is not None:
@@ -2321,9 +2357,10 @@ class SqlAlchemyAlertRepository:
 
     def get_memory_center_inventory(self) -> MemoryCenterInventory:
         with self._session_factory() as session:
-            observation_count = int(session.scalar(select(func.count()).select_from(SocMemoryPatternObservationRow)) or 0)
-            pattern_count = int(session.scalar(select(func.count(func.distinct(SocMemoryPatternObservationRow.lineage_key)))) or 0)
-            aggregation_window_count = int(session.scalar(select(func.count(func.distinct(SocMemoryPatternObservationRow.aggregation_key)))) or 0)
+            current = SocMemoryPatternObservationRow.is_current.is_(True)
+            observation_count = int(session.scalar(select(func.count()).select_from(SocMemoryPatternObservationRow).where(current)) or 0)
+            pattern_count = int(session.scalar(select(func.count(func.distinct(SocMemoryPatternObservationRow.lineage_key))).where(current)) or 0)
+            aggregation_window_count = int(session.scalar(select(func.count(func.distinct(SocMemoryPatternObservationRow.aggregation_key))).where(current)) or 0)
             candidate_status_counts = {
                 str(status): int(count)
                 for status, count in session.execute(
@@ -2367,7 +2404,9 @@ class SqlAlchemyAlertRepository:
                         func.count(func.distinct(SocMemoryPatternObservationRow.lineage_key)),
                         func.count(func.distinct(SocMemoryPatternObservationRow.aggregation_key)),
                         func.count(SocMemoryPatternObservationRow.observation_id),
-                    ).group_by(
+                    )
+                    .where(current)
+                    .group_by(
                         SocMemoryPatternObservationRow.profile_id,
                         SocMemoryPatternObservationRow.profile_version,
                         SocMemoryPatternObservationRow.feature_schema_version,
@@ -2396,7 +2435,7 @@ class SqlAlchemyAlertRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> MemoryPatternLineageStatsPage:
-        filters = []
+        filters = [SocMemoryPatternObservationRow.is_current.is_(True)]
         if tenant_id is not None:
             filters.append(SocMemoryPatternObservationRow.tenant_id == tenant_id)
         if environment is not None:

@@ -88,7 +88,7 @@ class SocCorpusListQueries:
             observations = session.execute(
                 select(Observation.alert_id, Observation.observation_id, Observation.aggregation_key, Observation.created_at)
                 .join(Item, and_(Item.catalog_id == catalog_id, Item.alert_id == Observation.alert_id))
-                .where(Observation.tenant_id == tenant_id, Observation.environment == environment)
+                .where(Observation.tenant_id == tenant_id, Observation.environment == environment, Observation.is_current.is_(True))
                 .order_by(Observation.observation_id)
             )
             for row in observations:
@@ -97,11 +97,11 @@ class SocCorpusListQueries:
 
     def aggregation_counts(self) -> dict[str, int]:
         with self._sessions() as session:
-            return dict(session.execute(select(Observation.aggregation_key, func.count()).group_by(Observation.aggregation_key)).all())
+            return dict(session.execute(select(Observation.aggregation_key, func.count()).where(Observation.is_current.is_(True)).group_by(Observation.aggregation_key)).all())
 
     def support_count(self, aggregation_key: str) -> int:
         with self._sessions() as session:
-            return session.scalar(select(func.count()).select_from(Observation).where(Observation.aggregation_key == aggregation_key)) or 0
+            return session.scalar(select(func.count()).select_from(Observation).where(Observation.aggregation_key == aggregation_key, Observation.is_current.is_(True))) or 0
 
     def page(
         self,

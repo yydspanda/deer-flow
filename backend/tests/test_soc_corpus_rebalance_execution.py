@@ -136,7 +136,7 @@ def _parent_and_successor(fixture, *, transform_old=None):
     return old_learning, old_validation, plan, applied
 
 
-def test_existing_learning_is_imported_new_learning_uses_model_and_validation_never_learns(tmp_path, monkeypatch):
+def test_existing_learning_is_imported_and_both_batches_accumulate_within_their_experiment(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path, monkeypatch)
     old_learning, old_validation, plan, applied = _parent_and_successor(fixture)
     assert applied["imported_learning_runs"] == 2 and applied["inherited_memories"] == 1
@@ -160,15 +160,29 @@ def test_existing_learning_is_imported_new_learning_uses_model_and_validation_ne
         assert fixture.repo.get_run(original.job.run_id).analysis.verdict == Verdict.FALSE_POSITIVE
         assert fixture.repo.get_run(moved[original.alert_id].job.run_id).analysis.verdict == Verdict.SUSPICIOUS
     observations = fixture.repo.list_memory_pattern_observations(limit=100)
-    assert Counter(row.accumulation_scope.experiment_id for row in observations) == {"EXP-test": 2, "EXP-successor": 6}
+    # The parent retains its two learning and two validation observations;
+    # the successor independently accumulates its six learning members.
+    assert Counter(row.accumulation_scope.experiment_id for row in observations) == {"EXP-test": 4, "EXP-successor": 6}
+    assert {row.source.alert_id for row in observations if row.accumulation_scope.experiment_id == "EXP-test"} == {"0", "1", "2", "3"}
     candidate = fixture.repo.get_memory_candidate(learned[-1].job.result_payload["candidate_id"])
     assert candidate.source.metadata["experiment_id"] == "EXP-successor"
     validation = _round(fixture, "EXP-successor", "validation")
     assert [entry.memory_id for entry in validation.memory_snapshot] == ["MEM-origin"]
+    frozen_memory = fixture.repo.get_memory_record("MEM-origin")
     validated = _finish(fixture, validation)
     assert {item.alert_id for item in validated} == {"6", "7"}
-    assert all(item.job.result_payload["pattern_reason"] == "validation_learning_disabled" for item in validated)
-    assert fixture.repo.list_memory_pattern_observations(limit=100) == observations
+    assert [item.job.result_payload["summary"]["pattern_support_count"] for item in validated] == [7, 8]
+    after = fixture.repo.list_memory_pattern_observations(limit=100)
+    assert Counter(row.accumulation_scope.experiment_id for row in after) == {"EXP-test": 4, "EXP-successor": 8}
+    child_observations = [row for row in after if row.accumulation_scope.experiment_id == "EXP-successor"]
+    assert {row.source.alert_id for row in child_observations} == {str(i) for i in range(8)}
+    assert len({row.aggregation_key for row in child_observations}) == 1
+    # A snapshot alone is not a dependency: this fixture's analyzer did not
+    # receive Memory context, so its two new conclusions remain independent.
+    assert all(row.lesson is not None for row in child_observations)
+    assert all(fixture.repo.get_memory_pattern_observation(row.observation_id) == row for row in observations)
+    assert fixture.service.store.get_round(validation.round_id).memory_snapshot == validation.memory_snapshot
+    assert fixture.repo.get_memory_record("MEM-origin") == frozen_memory
     assert fixture.repo.corpus_experiments().get_experiment("EXP-test").member_count == 8
 
 

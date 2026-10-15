@@ -159,6 +159,43 @@ def test_handoff_requires_rebalance_workflow_and_regressions(
         _assert_required_handoff_sources(incomplete)
 
 
+@pytest.mark.parametrize(
+    "required_path",
+    [
+        "backend/soc_agent/contracts/corpus_experiments.py",
+        "backend/soc_agent/db/corpus_experiments.py",
+        "backend/soc_agent/db/jobs.py",
+        "backend/soc_agent/demo/corpus_experiment_cli.py",
+        "backend/soc_agent/demo/corpus_experiment_runtime.py",
+        "backend/soc_agent/demo/corpus_experiments.py",
+        "backend/soc_agent/demo/corpus_quick_validation.py",
+        "backend/app/gateway/routers/soc_corpus_experiments.py",
+        "backend/tests/test_soc_corpus_experiment_cli.py",
+        "backend/tests/test_soc_corpus_same_round_retry.py",
+        "backend/tests/test_soc_corpus_retry_isolation.py",
+        "backend/tests/test_soc_corpus_semantic_retry_runtime.py",
+        "backend/soc_agent/db/migrations/versions/0033_pattern_observation_revisions.py",
+        "backend/soc_agent/demo/corpus_pattern_continuation.py",
+        "backend/tests/test_soc_corpus_continuous_learning.py",
+        "backend/tests/test_soc_corpus_continuous_event_range.py",
+        "backend/tests/test_soc_corpus_pattern_learning_display.py",
+        "backend/tests/test_soc_corpus_pattern_continuation.py",
+        "backend/tests/test_soc_memory_pattern_continuous_scope.py",
+        "backend/tests/test_soc_memory_pattern_revisions.py",
+        "backend/tests/test_soc_memory_pattern_current_views.py",
+    ],
+)
+def test_handoff_requires_same_round_retry_and_regressions(
+    required_path: str,
+) -> None:
+    assert required_path in REQUIRED_HANDOFF_SOURCE_PATHS
+    incomplete = [
+        Path(item) for item in REQUIRED_HANDOFF_SOURCE_PATHS if item != required_path
+    ]
+    with pytest.raises(ValueError, match=re.escape(required_path)):
+        _assert_required_handoff_sources(incomplete)
+
+
 def test_private_overlay_keeps_corpus_metadata_but_excludes_large_data() -> None:
     paths = set(PRIVATE_OVERLAY_PATHS)
 
@@ -380,7 +417,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     )[0]
     assert "soc_agent.cli db upgrade" not in host_install
     assert "Host DEV `start` 统一负责 SOC SQLite migration" in host_install
-    assert "创建查询索引（`0032_corpus_revision_index`）" in host_install
+    assert "升级到 `0033_pattern_revisions`" in host_install
     assert "无需另跑建索引命令" in host_install
     assert "`database_busy` 表示读取时遇到锁" in runbook
     assert "新空库发生一次瞬时 `disk I/O error`" in host_install
@@ -406,7 +443,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "确认 Core 全部为 `true`、三个 Sidecar 都为 `running`" in runbook
     assert "首次提交这份\n新请求" in runbook
     assert "`soc_database.status=ready`" in runbook
-    assert "`soc_database.schema_revision=0032_corpus_revision_index`" in runbook
+    assert "`soc_database.schema_revision=0033_pattern_revisions`" in runbook
     assert "pingan-corpus-batch-runbook.md" in runbook
     assert "开始积累" in runbook
     assert "第一批5条、同轮续跑50条" not in runbook

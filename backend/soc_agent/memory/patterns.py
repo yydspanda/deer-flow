@@ -45,6 +45,31 @@ class MemoryPatternRepositoryConflictError(ValueError):
     """Raised when an immutable pattern observation identity conflicts."""
 
 
+def validate_memory_pattern_replacement(previous: MemoryPatternObservation, current: MemoryPatternObservation) -> None:
+    """Bound an explicit replacement to the same physical source and learning scope."""
+    if (previous.tenant_id, previous.environment, previous.data_class, previous.source.source_id, previous.source.alert_id, previous.source.source_type) != (
+        current.tenant_id,
+        current.environment,
+        current.data_class,
+        current.source.source_id,
+        current.source.alert_id,
+        current.source.source_type,
+    ):
+        raise MemoryPatternRepositoryConflictError("memory pattern replacement source identity differs")
+    before, after = previous.accumulation_scope, current.accumulation_scope
+    same_scope = before == after
+    continuous_scope = bool(
+        before is not None
+        and after is not None
+        and getattr(after, "accumulation_mode", None) == "continuous"
+        and before.experiment_id == after.experiment_id
+        and before.learning_generation == after.learning_generation
+        and after.event_start <= previous.source.observed_at < after.event_end
+    )
+    if not same_scope and not continuous_scope:
+        raise MemoryPatternRepositoryConflictError("memory pattern replacement accumulation scope differs")
+
+
 class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
     """Combined candidate/observation repository for tests and explicit simulations."""
 
@@ -59,6 +84,7 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         self._pattern_idempotency: dict[str, str] = {}
         self._pattern_source_identity: dict[tuple[str, str], str] = {}
         self._pattern_occurrence_identity: dict[tuple[str, str], str] = {}
+        self._pattern_superseded_by: dict[str, str] = {}
         for observation in observations:
             self.save_memory_pattern_observation(observation)
 
@@ -90,6 +116,35 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         self._pattern_source_identity[source_key] = observation.observation_id
         self._pattern_occurrence_identity[occurrence_key] = observation.observation_id
 
+    def is_memory_pattern_observation_current(self, observation_id: str) -> bool:
+        return observation_id in self._pattern_observations and observation_id not in self._pattern_superseded_by
+
+    def replace_memory_pattern_observations(self, observation: MemoryPatternObservation, *, superseded_ids: list[str]) -> None:
+        ids = set(superseded_ids)
+        if not ids or len(ids) != len(superseded_ids) or observation.observation_id in ids:
+            raise MemoryPatternRepositoryConflictError("memory pattern replacement requires distinct predecessor identities")
+        existing = self._pattern_observations.get(observation.observation_id)
+        if existing is not None:
+            actual_ids = {key for key, value in self._pattern_superseded_by.items() if value == observation.observation_id}
+            if existing != observation or actual_ids != ids:
+                raise MemoryPatternRepositoryConflictError("memory pattern replacement idempotency or superseded identities differ")
+            return
+        for identity in ids:
+            if not self.is_memory_pattern_observation_current(identity):
+                raise MemoryPatternRepositoryConflictError("memory pattern predecessor is no longer current")
+            validate_memory_pattern_replacement(self._pattern_observations[identity], observation)
+        sources, occurrences = self._pattern_source_identity.copy(), self._pattern_occurrence_identity.copy()
+        try:
+            for identity in ids:
+                old = self._pattern_observations[identity]
+                del self._pattern_source_identity[(old.aggregation_key, old.source.source_id)]
+                del self._pattern_occurrence_identity[(old.aggregation_key, old.occurrence_key)]
+            self.save_memory_pattern_observation(observation)
+        except Exception:
+            self._pattern_source_identity, self._pattern_occurrence_identity = sources, occurrences
+            raise
+        self._pattern_superseded_by.update({identity: observation.observation_id for identity in ids})
+
     def get_memory_pattern_observation(
         self,
         observation_id: str,
@@ -115,10 +170,11 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
         alert_id: str | None = None,
+        include_superseded: bool = False,
         limit: int = 500,
         offset: int = 0,
     ) -> list[MemoryPatternObservation]:
-        observations = list(self._pattern_observations.values())
+        observations = [item for item in self._pattern_observations.values() if include_superseded or self.is_memory_pattern_observation_current(item.observation_id)]
         if aggregation_key is not None:
             observations = [item for item in observations if item.aggregation_key == aggregation_key]
         if lineage_key is not None:
@@ -139,7 +195,7 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         )[offset : offset + limit]
 
     def get_memory_center_inventory(self) -> MemoryCenterInventory:
-        observations = list(self._pattern_observations.values())
+        observations = [item for item in self._pattern_observations.values() if self.is_memory_pattern_observation_current(item.observation_id)]
         profile_patterns: dict[tuple[str, str, str], set[str]] = {}
         profile_windows: dict[tuple[str, str, str], set[str]] = {}
         profile_observations: Counter[tuple[str, str, str]] = Counter()
@@ -188,6 +244,8 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         normalized_search = (search or "").strip().casefold()
         terminal_lineage_keys = set() if include_terminal_history else self._terminal_memory_pattern_lineage_keys()
         for item in self._pattern_observations.values():
+            if not self.is_memory_pattern_observation_current(item.observation_id):
+                continue
             if item.lineage_key in terminal_lineage_keys:
                 continue
             if tenant_id is not None and item.tenant_id != tenant_id:
@@ -257,6 +315,7 @@ def memory_pattern_command_from_run(
     policy_fingerprint: str,
     profile: SocMemoryProfile | None = None,
     source_metadata: dict[str, str] | None = None,
+    neutral_memory_references: bool = False,
 ) -> MemoryPatternObservationCreateCommand:
     """Project one completed Runtime result into a neutral recurrence observation."""
 
@@ -290,7 +349,8 @@ def memory_pattern_command_from_run(
     gap_projector = getattr(resolved_profile, "projection_gaps", None)
     signature = signature.model_copy(update={"scope_bindings": scope_bindings(request), "projection_gaps": gap_projector(request) if gap_projector else []})
     reused = run.direct_resolution is not None and run.direct_resolution.source_kind == "memory"
-    lesson = None if reused else _lesson_from_run(run)
+    referenced_memory = neutral_memory_references and any(item.kind.value == "confirmed_memory" for item in request.context_catalog)
+    lesson = None if reused or referenced_memory else _lesson_from_run(run)
     input_identity = run.input_hash or stable_hash({"tenant_id": tenant_id, "alert_id": run.alert_id})
     source_id = stable_hash(
         {
@@ -344,7 +404,9 @@ def memory_pattern_command_from_run(
         evidence_refs=list(dict.fromkeys(evidence_refs)),
         metadata={
             **({"conclusion_origin": "memory_reuse", "reused_memory_id": run.direct_resolution.source_id} if reused else {}),
+            **({"conclusion_origin": "memory_reference"} if referenced_memory and not reused else {}),
             **(source_metadata or {}),
+            **({"source_run_started_at": run.started_at.isoformat()} if neutral_memory_references else {}),
             "pipeline_version": run.pipeline_version,
             "model_name": run.model_name,
             "prompt_version": run.prompt_version,

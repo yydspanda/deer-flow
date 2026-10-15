@@ -548,7 +548,7 @@ test.each(["configuration", "controls"])(
     ).toBeTruthy();
     expect(
       screen.getByText(
-        /可能续跑多个历史轮次。定向复测请使用对应轮次的续跑命令/,
+        /可能续跑多个历史轮次。失败“重试”留在原轮次，沿用原设置。定向复测请使用对应轮次的续跑命令/,
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "最大并发" })).toBeNull();
@@ -645,6 +645,50 @@ test("second-batch scope is explicit and rerun uses the old task as retry identi
       "quick-rerun:JOB-old",
     ),
   );
+});
+
+test("failed alert retry pins the displayed task attempt instead of creating a rerun", async () => {
+  mount({
+    batch: "validation",
+    tier: "supplementary",
+    requestedAlert: {
+      alertId: "A-4",
+      key: 1,
+      jobId: "JOB-failed",
+      attemptCount: 2,
+      retry: true,
+    },
+  });
+  await waitFor(() =>
+    expect(api.run).toHaveBeenCalledWith(
+      {
+        batch: "validation",
+        scope: "explore",
+        action: "retry",
+        alert_id: "A-4",
+        job_id: "JOB-failed",
+        expected_attempt_count: 2,
+        options,
+      },
+      "quick-retry:JOB-failed:2",
+    ),
+  );
+});
+
+test("failed alert retry rejects missing attempt identity without submitting a new round", async () => {
+  const handled = rs.fn();
+  mount({
+    batch: "validation",
+    requestedAlert: {
+      alertId: "A-4",
+      key: 1,
+      jobId: "JOB-failed",
+      retry: true,
+    },
+    onRequestHandled: handled,
+  });
+  await waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
+  expect(api.run).not.toHaveBeenCalled();
 });
 
 test("LAN settings ignore stored preferences and still permit batch start", async () => {

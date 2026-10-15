@@ -3315,6 +3315,15 @@ tool permission denial rate
 
 ### DEV 定向复测与批次恢复边界
 
+- 同轮失败恢复保留 `round_id/job_id`，不以新单条轮次替代。页面 `retry` 绑定所见 job ID 与
+  attempt count；旧请求、错误批次和非重试失败拒绝后不能影响其他轮次。新批量 `retry` 绑定
+  expected round version，暂停且无 active 后仅调度本次选中的失败项，不恢复其他 queued。
+- 两批语义恢复只选择 completed 且 normalization_assist 明确 failed 的任务；partial/skipped
+  不纳入。每次使用服务端 generation 幂等键与 linked replay，显式强制刷新事实并重走后续研判，
+  不修改冻结的 round options。先前 Run/结果保存在 journal/job audit，报告只采用当前任务结果一行，
+  计入本任务原键与所有语义重试键的调用成本，不计入其他轮次。两类恢复共享三次领取预算；
+  代码/模型/经验快照变化仍阻断，不能以恢复为名跳过治理；事实修正通过当前观察版本替代，不改旧证据。
+
 - 仍未被整批重跑替代的报告定向复测约束页面批次 `start`：若拟启动其他轮次或新建范围外任务，
   在既有治理事务内、任何调度或队列变更前拒绝。不能仅检查最新轮次，后续单条重跑不解除保护。
   页面批次暂停继续覆盖所有运行轮次；按 ID 的轮次恢复保持单轮作用域。
@@ -3335,3 +3344,17 @@ tool permission denial rate
   再在短容量锁内检查活动数并提交领取，提交后释放；模型调用不持锁。
 - 调节容量不改既有 Run、Job、Memory、轮次配置快照或匹配语义，也不改底层模型网关上限。
   这保证资源调整不会触发 configuration_changed；源码升级仍遵循原来的冻结配置校验。
+
+
+### DEV 两批连续积累与保存结果接续
+
+- 新分析轮次冻结可选 continuous accumulation scope：同实验、同代次、完整成员事件范围，
+  不包含配置hash。运行配置仍分别冻结，Profile与真实行为签名仍参与匹配；旧scope序列化不变。
+- 两批都积累独立来源；参考或直接复用Memory只计出现、不计独立结论。语义核对明确failed暂缓积累。
+  第二批4+1跨批支持合并，新增候选须人工审核且不进入当前冻结经验快照。
+- `0033_pattern_revisions`保留观察原payload，以current标记和后继ID原子替代；当前源/事件唯一索引
+  使用SQLite/Postgres partial index。重跑只计一次，换行为组撤旧增新，旧Run和证据继续可追溯。
+  待审候选引用被替代证据时失效；已审核Memory不自动撤销、扩范围或改结论，只保留来源修正提示。
+- 显式 `accumulate --round` 将现有完成Run接续，HTTP每页最多100条并绑定轮次版本/alert:run清单；
+  校验admin、静止任务、当前积累代次、固定输入和最新任务来源，不调用LLM、不改旧job或报告。
+  普通读取不得隐式回填。旧代码快照仍阻止实际重新执行；接续不是执行恢复绕过口。

@@ -1795,6 +1795,7 @@ class SocCorpusWorkbenchService:
             data_class=MemoryPatternDataClass.OPERATIONAL,
             source_type=MemoryPatternSourceType.BATCH_ALERT,
             alert_id=alert_id,
+            include_superseded=run_id is not None,
             limit=100,
         )
         # Explicit historical Run IDs keep their original audit path. The live
@@ -1804,12 +1805,26 @@ class SocCorpusWorkbenchService:
             learning_scope = (pattern_job.experiment_id, pattern_job.learning_generation)
         matching_observations = [item for item in observations if _observation_matches_run(item, run, learning_scope=learning_scope)]
         if run_id is not None:
-            # A later generation can have the same behavior signature. Preserve
-            # the explicit Run's own observation instead of preferring that newer
-            # cohort only because it was written more recently.
-            matching_observations = [item for item in matching_observations if item.source.run_id == run_id] or matching_observations
+            # A saved job may explicitly reuse another Run's observation. Honor
+            # that exact reference, never an unrelated same-signature fallback.
+            saved_observation_id = pattern_job.observation_id if pattern_job is not None else None
+            if saved_observation_id:
+                saved_observation = self._repository.get_memory_pattern_observation(saved_observation_id)
+                matching_observations = (
+                    [saved_observation]
+                    if saved_observation is not None
+                    and saved_observation.source.alert_id == run.alert_id
+                    and saved_observation.tenant_id == CORPUS_WORKBENCH_TENANT
+                    and saved_observation.environment == CORPUS_WORKBENCH_ENVIRONMENT
+                    and saved_observation.data_class is MemoryPatternDataClass.OPERATIONAL
+                    and _observation_matches_run(saved_observation, run, learning_scope=learning_scope)
+                    else []
+                )
+            else:
+                matching_observations = [item for item in matching_observations if item.source.run_id == run_id]
         observation = max(matching_observations, key=lambda item: item.created_at) if matching_observations else None
-        replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None else None
+        pattern_historical = observation is not None and not self._repository.is_memory_pattern_observation_current(observation.observation_id)
+        replay = self._pattern_service.replay(observation.aggregation_key) if observation is not None and not pattern_historical else None
         pattern_source_id = f"memory_pattern:{observation.aggregation_key}" if observation is not None else None
         resolved_candidate = self._repository.get_memory_candidate(replay.candidate_id) if replay is not None and replay.candidate_id is not None else None
         candidates = self._repository.list_memory_candidates(status=None, limit=10_000, run_id=run.run_id)
@@ -1837,6 +1852,7 @@ class SocCorpusWorkbenchService:
             candidate=resolved_candidate or (candidates[0] if candidates else None),
             pattern_job=pattern_job,
             pattern_active=pattern_active,
+            pattern_historical=pattern_historical,
         )
         return _audit_bundle(
             run=run,
@@ -2533,8 +2549,7 @@ def _audit_bundle(
             source="persisted_downstream",
             metrics={
                 "observation": observation.observation_id if observation is not None else "not_written",
-                "support_count": replay.support_count if replay is not None else 0,
-                "distinct_sources": replay.distinct_source_count if replay is not None else 0,
+                **({"support_count": replay.support_count, "distinct_sources": replay.distinct_source_count} if replay is not None else {}),
                 "candidates": len(candidates),
                 "memory_records": len(memory_records),
                 "memory_uses": len(memory_uses),
@@ -2729,7 +2744,12 @@ def _execution_view(
     candidate: Any | None,
     pattern_job: CorpusRunJob | None = None,
     pattern_active: bool = False,
+    pattern_historical: bool = False,
 ) -> SocCorpusWorkbenchExecution:
+    pattern_deferred = pattern_job is not None and pattern_job.pattern_reason == "semantic_review_failed_learning_deferred"
+    if pattern_deferred:
+        observation = replay = candidate = None
+        pattern_historical = False
     now = datetime.now(UTC)
     if run is None:
         status: CorpusExecutionStatus = "not_started"
@@ -2774,7 +2794,7 @@ def _execution_view(
         pattern_status = "skipped"
     elif run is not None and run.status is AnalysisRunStatus.FAILED:
         pattern_status = "skipped"
-    elif pattern_job is not None and pattern_job.batch == "validation":
+    elif pattern_job is not None and pattern_job.pattern_reason == "validation_learning_disabled":
         pattern_status = "skipped"
     elif run is not None and run.status not in {AnalysisRunStatus.PENDING, AnalysisRunStatus.RUNNING} and _pattern_job_failed(pattern_job):
         pattern_status = "failed"
@@ -2813,8 +2833,10 @@ def _execution_view(
                 label=phase_label,
                 status=phase_status,
                 summary=(
-                    _pattern_terminal_summary(pattern_status, pattern_job)
-                    if phase_key == "memory" and run is not None and run.direct_resolution is None and run.status is not AnalysisRunStatus.FAILED and pattern_status in {"skipped", "failed"}
+                    "该历史模式观察已被后续补跑替代，不计入当前积累。"
+                    if phase_key == "memory" and pattern_historical
+                    else _pattern_terminal_summary(pattern_status, pattern_job)
+                    if phase_key == "memory" and run is not None and (run.direct_resolution is None or pattern_deferred) and run.status is not AnalysisRunStatus.FAILED and pattern_status in {"skipped", "failed"}
                     else _phase_summary(
                         phase_key,
                         phase_status,
@@ -2824,7 +2846,9 @@ def _execution_view(
                     )
                 ),
                 duration_ms=(sum(duration_values) if duration_values else None),
-                metrics=_phase_metrics(
+                metrics={"observation_id": observation.observation_id, "is_current_observation": False}
+                if phase_key == "memory" and pattern_historical
+                else _phase_metrics(
                     phase_key,
                     run=run,
                     observation=observation,
@@ -2890,8 +2914,10 @@ def _pattern_terminal_summary(status: CorpusExecutionPhaseStatus, job: CorpusRun
         return "模式积累失败，研判结果已保存；可重新运行重试。"
     if job is None:
         return "本次未记录模式观察，研判已结束。"
-    if job.batch == "validation" or job.pattern_reason == "validation_learning_disabled":
+    if job.pattern_reason == "validation_learning_disabled":
         return "第二批仅验证经验效果，本次不新增模式或经验。"
+    if job.pattern_reason == "semantic_review_failed_learning_deferred":
+        return "语义核对失败，本次暂缓积累模式与经验；研判结果已保存，可补跑语义核对。"
     if job.pattern_reason == EXACT_MEMORY_FACET_TOO_LONG:
         return EXACT_MEMORY_FACET_TOO_LONG
     return "本次未积累经验：当前告警不满足模式积累条件；研判结果已保存。"

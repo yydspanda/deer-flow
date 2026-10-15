@@ -107,6 +107,24 @@ def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeyp
     assert svc.store.list_learning_candidates("EXP-test", review_stage="confirmed").items[0].candidate_id == candidate_id
     assert record.source_candidate_id == candidate_id
     before_observations = repo.list_memory_pattern_observations(limit=100)
+
+    def assert_memory_reuse_accumulates_neutral_behavior(round_, item):
+        observations = repo.list_memory_pattern_observations(limit=100)
+        assert len(observations) == 6
+        assert {entry.source.alert_id for entry in observations} == {str(i) for i in range(6)}
+        assert len({entry.aggregation_key for entry in observations}) == 1
+        assert all(repo.get_memory_pattern_observation(entry.observation_id) == entry for entry in before_observations)
+        current = repo.get_memory_pattern_observation(item.job.result_payload["observation_id"])
+        assert current.source.run_id == item.job.run_id
+        assert current.lesson is None
+        assert current.metadata["conclusion_origin"] == "memory_reuse"
+        assert sum(entry.lesson is not None for entry in observations) == 5
+        assert item.job.result_payload["summary"]["pattern_support_count"] == 6
+        assert repo.get_memory_record(record.memory_id).version == record.version
+        assert repo.get_memory_record(record.memory_id).content_hash == record.content_hash
+        assert svc.store.get_round(round_.round_id).memory_snapshot == round_.memory_snapshot
+        return current
+
     if quick_entry:
         validation, after = run_batch("validation")
         quick = CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id))
@@ -114,8 +132,12 @@ def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeyp
         assert quick.snapshot("validation")["completed"] == 1
         assert after[0].job.result_payload["summary"]["processing_path"] == "memory"
         assert calls == ["0", "1", "2", "3", "4"]
+        assert_memory_reuse_accumulates_neutral_behavior(validation, after[0])
         return
     baseline, before = run_batch("validation", memory_mode="none")
+    baseline_observation = repo.get_memory_pattern_observation(before[0].job.result_payload["observation_id"])
+    assert baseline_observation.lesson is not None
+    assert before[0].job.result_payload["summary"]["pattern_support_count"] == 6
     validation, after = run_batch("validation")
     assert [e.memory_id for e in validation.memory_snapshot] == [record.memory_id]
     assert calls == ["0", "1", "2", "3", "4", "5"]
@@ -124,7 +146,11 @@ def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeyp
     uses = repo.list_memory_uses(run_id=after[0].job.run_id)
     assert len(uses) == 1 and uses[0].memory_id == record.memory_id
     assert uses[0].directive_applied
-    assert repo.list_memory_pattern_observations(limit=100) == before_observations
+    current = assert_memory_reuse_accumulates_neutral_behavior(validation, after[0])
+    # Re-running the same source replaces its current observation, while the
+    # independent baseline remains available for the fixed-round comparison.
+    assert current.observation_id != baseline_observation.observation_id
+    assert repo.get_memory_pattern_observation(baseline_observation.observation_id) == baseline_observation
     assert len(repo.list_memory_candidates()) == 1
     assert repo.get_memory_record(record.memory_id).version == record.version
     # Resume must not re-run completed members or fabricate another confirmation.

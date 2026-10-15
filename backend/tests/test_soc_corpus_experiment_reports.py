@@ -142,15 +142,28 @@ def test_invalidated_or_unlabeled_runs_do_not_imply_ground_truth():
 
 def test_model_cost_includes_persisted_failure_and_success_attempts_without_double_counting():
     row = rows()[0]
+    row["summary"]["total_duration_ms"] = 300
     row["attempt_measurements"] = [
-        {"run_id": "failed-1", "total_tokens": 200, "usage_measurement_status": "reported", "provider_call_count": 1},
-        {"run_id": "success-2", "total_tokens": 100, "usage_measurement_status": "reported", "provider_call_count": 2},
+        {"run_id": "failed-1", "total_tokens": 200, "usage_measurement_status": "reported", "provider_call_count": 1, "total_duration_ms": 900},
+        {"run_id": "success-2", "total_tokens": 100, "usage_measurement_status": "reported", "provider_call_count": 2, "total_duration_ms": 300},
     ]
     summary = summarize_results([row])["reuse"]
     assert summary["tokens"]["known_total"] == 300
     assert summary["provider_calls"] == 3
     assert summary["measured_run_attempts"] == 2
     assert summary["completed"] == 1
+    assert summary["summed_run_duration_ms"] == 300  # Final outcomes keep their original latency scope.
+    assert summary["attempt_duration"] == {"known_total_ms": 1200, "known_runs": 2, "unavailable_runs": 0}
+
+
+def test_attempt_duration_retains_unknown_history_and_legacy_final_measurement():
+    recovered, legacy, failed = rows()[0], rows()[1], rows()[3]
+    recovered["summary"]["total_duration_ms"] = 300
+    recovered["attempt_measurements"] = [{"run_id": "old"}, {"run_id": "new", "total_duration_ms": 300}]
+    legacy["summary"]["total_duration_ms"] = 0
+    failed["attempt_measurements"] = [{"run_id": "failed", "total_duration_ms": 800}]
+    summary = summarize_results([recovered, legacy, failed])["reuse"]
+    assert summary["attempt_duration"] == {"known_total_ms": 1100, "known_runs": 3, "unavailable_runs": 1}
 
 
 def test_private_export_is_atomic_formula_safe_and_comparison_is_paired(tmp_path):

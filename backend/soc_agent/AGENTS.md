@@ -153,6 +153,18 @@ file for SOC code. The authoritative product and engineering documents are:
   without jobs mask old outcomes as unrun before counting/pagination; active claims
   take priority. Bind compact pending IDs once per query, never scan historical Run
   JSON or rewrite list projections. Fixed-run history remains readable.
+  Failure retry retains the original round and job. Quick `retry` binds the displayed
+  job ID and attempt count; it must not fall through to `rerun` or block other rounds
+  after a stale request. The typed round `retry` command binds its observed version,
+  requires quiescence and restricts dispatch to the selected failed members. Both-batch
+  semantic recovery selects only completed jobs with a failed `normalization_assist`
+  phase, forces an explicitly recorded fact refresh and replays downstream analysis.
+  Its bounded generation key bypasses successful-result idempotency; old Runs/results
+  remain in the journal/job audit. Reports select the current job result once and sum
+  measurements across its original and semantic-generation keys, excluding other rounds.
+  Ordinary failed retries retain existing journal recovery and the shared three-attempt
+  budget. No retry may bypass frozen code/options/Memory checks. Corrected learning facts replace
+  the active observation while preserving the original evidence payload.
   An explicitly authorized second-batch discard is an offline DEV maintenance
   exception, owned by `scripts/soc_pingan_validation_database.py` and the pure SQL
   `backend/scripts/soc_validation_reset_store.py`. Stop all database owners and verify
@@ -240,7 +252,8 @@ file for SOC code. The authoritative product and engineering documents are:
   supply new-scope Pattern observations; exclude stubs, Memory uses and old validation
   conclusions. Freeze source hashes and reject semantic drift after splitting. Inherited
   calls do not count as new model usage. Validation waits for complete successor
-  learning and freezes the reviewed snapshot; no automatic validation learning.
+  learning and freezes the reviewed snapshot; new continuous rounds accumulate pending
+  evidence from validation without changing that snapshot.
   Successor reports omit operational-label agreement and require a complete fixed
   validation batch for a stage conclusion. This adds record-payload metadata, not a DB
   migration or a second queue. Explicit-ID CLI and bulk review support the new experiment;
@@ -759,3 +772,18 @@ file for SOC code. The authoritative product and engineering documents are:
 
 Use Understand Anything only when explicitly requested. Existing graphs are static
 snapshots and must not be updated as part of normal development.
+
+
+## Continuous corpus accumulation
+
+New non-facts rounds freeze `pattern_accumulation_scope` with `accumulation_mode=continuous`,
+full experiment event range and current learning generation, excluding configuration hash.
+Legacy rounds omit this optional field and retain their frozen hashes/behavior. Both batches
+call the same Pattern service after analysis. Explicit semantic failure defers accumulation;
+direct/referenced Memory contributes occurrence support but no independent lesson support.
+Validation Memory snapshots remain immutable; pending candidates never affect the current round.
+`demo/corpus_pattern_continuation.py` owns explicit bounded continuation of completed saved Runs
+through the same `accumulate_corpus_run` helper. Check administrator authority, round version,
+quiescence, generation and exact latest job/Run/input identity. No model calls, job/report
+rewrites or snapshot bypass for execution. CLI `accumulate --round` is an explicit mutation;
+ordinary page reads never backfill observations.

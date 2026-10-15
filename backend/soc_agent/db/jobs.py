@@ -347,6 +347,39 @@ class SqlAlchemyProcessingJobRepository:
             session.commit()
             return _job_from_row(row)
 
+    def retry_completed(self, job_id: str, *, expected_version: int, actor_id: str, metadata: dict[str, Any], event_type: str, max_attempts: int = 3) -> SocProcessingJob:
+        """Owner-approved recovery of a degraded result, with its prior result retained."""
+        with self._session_factory() as session:
+            row = session.get(SocProcessingJobRow, job_id)
+            if row is None:
+                raise ProcessingJobNotFoundError(job_id)
+            if row.version != expected_version or row.status != ProcessingJobStatus.COMPLETED.value:
+                raise ProcessingJobConflictError("only the current completed job can be recovered")
+            if not row.run_id or row.attempt_count >= max_attempts:
+                raise ProcessingJobConflictError("job has no saved Run or its attempt budget is exhausted")
+            now = datetime.now(UTC)
+            row.version += 1
+            self._append_event(
+                session,
+                row,
+                event_type=event_type,
+                from_status=ProcessingJobStatus.COMPLETED,
+                to_status=ProcessingJobStatus.QUEUED,
+                worker_id=actor_id,
+                occurred_at=now,
+                details={"run_id": row.run_id, "previous_result": row.result_payload, "recovery": metadata},
+            )
+            row.metadata_payload = {**row.metadata_payload, **metadata}
+            row.status = ProcessingJobStatus.QUEUED.value
+            row.available_at = now
+            row.completed_at = None
+            row.updated_at = now
+            row.error_code = row.error_message = None
+            row.result_payload = None
+            row.run_id = None
+            session.commit()
+            return _job_from_row(row)
+
     def renew_lease(
         self,
         job_id: str,

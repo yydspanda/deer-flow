@@ -769,6 +769,7 @@ for (const width of [1920, 390]) {
     };
     let running = false;
     let completed = false;
+    let failed = false;
     const audits: string[] = [];
     const writes: Record<string, unknown>[] = [];
     await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
@@ -808,16 +809,17 @@ for (const width of [1920, 390]) {
           if (body.action === "pause") running = false;
           if (body.action === "run" || body.action === "rerun")
             completed = true;
+          if (body.action === "retry") failed = false;
           return route.fulfill({ json: { accepted: true }, status: 202 });
         }
         return route.fulfill({
           json: {
             experiment_id: "EXP-quick",
             total: 10,
-            completed: completed ? 1 : 0,
+            completed: completed && !failed ? 1 : 0,
             active: 0,
             remaining: completed ? 9 : 10,
-            failed: 0,
+            failed: failed ? 1 : 0,
             pending_candidates: completed ? 1 : 0,
             running,
             blocked_reason: null,
@@ -825,7 +827,8 @@ for (const width of [1920, 390]) {
               {
                 alert_id: "1984426",
                 job_id: "JOB-1",
-                status: completed ? "completed" : "queued",
+                status: failed ? "failed" : completed ? "completed" : "queued",
+                attempt_count: 1,
                 run_id: completed ? "RUN-CORPUS-1" : null,
                 summary: {},
               },
@@ -892,6 +895,19 @@ for (const width of [1920, 390]) {
       .getByRole("button", { name: "重新运行", exact: true })
       .click();
     await expect.poll(() => writes.at(-1)?.action).toBe("rerun");
+    failed = true;
+    await page.reload();
+    await page
+      .locator('[data-alert-id="1984426"]')
+      .getByRole("button", { name: "重试", exact: true })
+      .click();
+    await expect.poll(() => writes.at(-1)?.action).toBe("retry");
+    expect(writes.at(-1)).toMatchObject({
+      alert_id: "1984426",
+      job_id: "JOB-1",
+      expected_attempt_count: 1,
+    });
+    expect(running).toBe(false);
     await page
       .locator('[data-alert-id="1984426"]')
       .getByRole("button", { name: /结果与历史记录/ })

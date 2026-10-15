@@ -76,6 +76,8 @@ export function SocCorpusExperiments({
     alertId: string;
     key: number;
     jobId?: string | null;
+    attemptCount?: number;
+    retry?: boolean;
     rerun?: boolean;
   } | null;
   onRequestHandled: () => void;
@@ -168,12 +170,30 @@ export function SocCorpusExperiments({
       action,
       alertId,
       jobId,
+      attemptCount,
     }: {
-      action: "start" | "pause" | "run" | "rerun";
+      action: "start" | "pause" | "run" | "rerun" | "retry";
       alertId?: string;
       jobId?: string | null;
+      attemptCount?: number;
     }) => {
       if (!options) throw new Error("运行设置尚未加载");
+      if (action === "retry") {
+        if (!alertId || !jobId || attemptCount === undefined)
+          throw new Error("缺少失败任务的重试信息，请刷新页面后再试");
+        return runSocCorpusQuick(
+          {
+            batch,
+            scope,
+            action,
+            alert_id: alertId,
+            job_id: jobId,
+            expected_attempt_count: attemptCount,
+            options,
+          },
+          `quick-retry:${jobId}:${attemptCount}`,
+        );
+      }
       return runSocCorpusQuick(
         { batch, scope, action, alert_id: alertId, options },
         action === "rerun" ? `quick-rerun:${jobId}` : undefined,
@@ -196,9 +216,14 @@ export function SocCorpusExperiments({
     handled.current = requestedAlert.key;
     submit(
       {
-        action: requestedAlert.rerun ? "rerun" : "run",
+        action: requestedAlert.retry
+          ? "retry"
+          : requestedAlert.rerun
+            ? "rerun"
+            : "run",
         alertId: requestedAlert.alertId,
         jobId: requestedAlert.jobId,
+        attemptCount: requestedAlert.attemptCount,
       },
       { onSettled: onRequestHandled },
     );
@@ -347,7 +372,7 @@ export function SocCorpusExperiments({
           </Button>
         )}
         <span className="text-muted-foreground text-xs">
-          开关仅用于新提交的任务；“继续”沿用各任务保存的设置，可能续跑多个历史轮次。定向复测请使用对应轮次的续跑命令。列表筛选只影响浏览。
+          开关仅用于新提交的任务；“继续”沿用各任务保存的设置，可能续跑多个历史轮次。失败“重试”留在原轮次，沿用原设置。定向复测请使用对应轮次的续跑命令。列表筛选只影响浏览。
         </span>
       </div>
       {data && (

@@ -259,6 +259,7 @@ class MemoryPatternAccumulationScope(BaseModel):
     experiment_id: str = Field(min_length=1, max_length=128)
     configuration_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     learning_generation: str | None = Field(default=None, min_length=1, max_length=128, exclude_if=lambda value: value is None)
+    accumulation_mode: Literal["continuous"] | None = Field(default=None, exclude_if=lambda value: value is None)
     event_start: datetime
     event_end: datetime
     review_mixed_conclusions: bool = True
@@ -267,6 +268,8 @@ class MemoryPatternAccumulationScope(BaseModel):
     def check_event_range(self) -> MemoryPatternAccumulationScope:
         if self.event_start.utcoffset() is None or self.event_end.utcoffset() is None or self.event_end <= self.event_start:
             raise ValueError("experiment accumulation requires an ordered timezone-aware event range")
+        if self.accumulation_mode == "continuous" and self.configuration_hash is not None:
+            raise ValueError("continuous accumulation shares one scope across execution configurations")
         return self
 
 
@@ -333,7 +336,7 @@ class MemoryPatternObservation(BaseModel):
             "soc.memory_pattern_aggregation.v2",
             MEMORY_PATTERN_AGGREGATION_POLICY_VERSION,
         }
-        neutral_reuse = self.schema_version == "soc.memory_pattern_observation.v4" and self.metadata.get("conclusion_origin") == "memory_reuse"
+        neutral_reuse = self.schema_version == "soc.memory_pattern_observation.v4" and self.metadata.get("conclusion_origin") in {"memory_reuse", "memory_reference"}
         if requires_lesson and self.lesson is None and not neutral_reuse:
             raise ValueError("v2 memory pattern observations require a lesson snapshot")
         if self.lesson is not None and neutral_reuse:

@@ -172,6 +172,7 @@ class SocMemoryPatternService:
             policy_fingerprint=policy_fingerprint,
             profile=profile,
             source_metadata=source_metadata,
+            neutral_memory_references=self._continuous_accumulation,
         )
         return self.ingest_observation(command, context=context)
 
@@ -228,8 +229,31 @@ class SocMemoryPatternService:
             policy=self._policy,
         )
 
+        if self._continuous_accumulation and self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as transaction_repository:
+                # Fence even an empty source scope: aggregation uniqueness alone
+                # cannot serialize concurrent corrections into different groups.
+                transaction_repository.lock_memory_governance()
+                result = SocMemoryPatternService(
+                    repository=transaction_repository,
+                    candidate_repository=transaction_repository,
+                    policy=self._policy,
+                    mutation_audit_repository=transaction_repository,
+                    mutation_uow=self._mutation_uow,
+                    event_sink=buffered_events,
+                    now_provider=self._now_provider,
+                    profile_registry=self._profile_registry,
+                    accumulation_scope=self._accumulation_scope,
+                    _transaction_active=True,
+                ).ingest_observation(command, context=context)
+            buffered_events.flush()
+            return result
+
         existing = repository.find_memory_pattern_observation_by_idempotency_key(command.idempotency_key)
         if existing is not None:
+            if self._continuous_accumulation and not repository.is_memory_pattern_observation_current(existing.observation_id):
+                raise SocServiceConflictError("source observation has been superseded; use the current completed Run")
             legacy_explanation = bool(existing.lesson is not None and not existing.lesson.memory_matching_facts and command.lesson is not None)
             compatible_hash = _observation_content_hash(command, self._policy, omit_matching_facts=True) if legacy_explanation else content_hash
             if existing.content_hash not in {content_hash, compatible_hash}:
@@ -243,15 +267,28 @@ class SocMemoryPatternService:
                 duplicate_occurrence=False,
             )
 
+        predecessors = self._continuous_predecessors(command)
+        for predecessor in predecessors:
+            if predecessor.accumulation_scope == self._accumulation_scope and predecessor.source.run_id == command.source.run_id and predecessor.signature == command.signature and predecessor.lesson == command.lesson:
+                return self._aggregation_result(predecessor, idempotent=True, duplicate_source=True, duplicate_occurrence=False)
+            previous_started = predecessor.metadata.get("source_run_started_at")
+            incoming_started = command.metadata.get("source_run_started_at")
+            if previous_started and incoming_started and predecessor.source.run_id != command.source.run_id and datetime.fromisoformat(incoming_started) < datetime.fromisoformat(previous_started):
+                raise SocServiceConflictError("source observation has been superseded by a newer completed Run")
+        predecessor_ids = {item.observation_id for item in predecessors}
+
         current_cohort = repository.list_memory_pattern_observations(
             aggregation_key=aggregation_key,
             limit=10_000,
         )
+        current_cohort = [item for item in current_cohort if item.observation_id not in predecessor_ids]
         same_occurrence = next(
             (item for item in current_cohort if item.occurrence_key == command.occurrence_key),
             None,
         )
         if same_occurrence is not None:
+            if predecessors:
+                raise SocServiceConflictError("corrected source collides with another current occurrence; explicit reconciliation is required")
             return self._aggregation_result(
                 same_occurrence,
                 idempotent=True,
@@ -310,11 +347,15 @@ class SocMemoryPatternService:
             aggregation_policy=self._policy,
             accumulation_scope=self._accumulation_scope,
             evidence_refs=command.evidence_refs,
-            metadata=command.metadata,
+            metadata={**command.metadata, **({"supersedes_observation_ids": ",".join(sorted(predecessor_ids))} if predecessor_ids else {})},
             mocked=command.data_class is MemoryPatternDataClass.SIMULATION,
             created_at=self._now_provider(),
         )
-        repository.save_memory_pattern_observation(observation)
+        if predecessors:
+            repository.replace_memory_pattern_observations(observation, superseded_ids=sorted(predecessor_ids))
+            self._invalidate_replaced_candidate_sources(predecessors, observation=observation, context=context)
+        else:
+            repository.save_memory_pattern_observation(observation)
         result = self._aggregation_result(
             observation,
             idempotent=False,
@@ -352,6 +393,93 @@ class SocMemoryPatternService:
             )
         )
         return result
+
+    @property
+    def _continuous_accumulation(self) -> bool:
+        return self._accumulation_scope is not None and self._accumulation_scope.accumulation_mode == "continuous"
+
+    def _continuous_predecessors(self, command: MemoryPatternObservationCreateCommand) -> list[MemoryPatternObservation]:
+        """Find current versions of this exact source within one experiment generation."""
+        if not self._continuous_accumulation:
+            return []
+        scope = self._accumulation_scope
+        found = []
+        offset = 0
+        while True:
+            rows = self._require_repository().list_memory_pattern_observations(tenant_id=command.tenant_id, environment=command.environment, data_class=command.data_class, alert_id=command.source.alert_id, limit=500, offset=offset)
+            found.extend(
+                item
+                for item in rows
+                if item.source.source_id == command.source.source_id
+                and item.accumulation_scope is not None
+                and item.accumulation_scope.experiment_id == scope.experiment_id
+                and item.accumulation_scope.learning_generation == scope.learning_generation
+            )
+            if len(rows) < 500:
+                return found
+            offset += len(rows)
+
+    def _invalidate_replaced_candidate_sources(self, predecessors: list[MemoryPatternObservation], *, observation: MemoryPatternObservation, context: ServiceRequestContext) -> None:
+        """Retire stale pending snapshots; leave approved Memory under human authority."""
+        if self._candidate_repository is None:
+            return
+        replaced_ids = {item.observation_id for item in predecessors}
+        candidates = self._candidate_repository.find_memory_candidates_by_lineage_keys(list({item.lineage_key for item in predecessors}))
+        for candidate in candidates:
+            affected = replaced_ids.intersection(_candidate_observation_ids(candidate))
+            if not affected:
+                continue
+            previous_status = candidate.status
+            pending = previous_status in {SocMemoryCandidateStatus.PENDING_REVIEW, SocMemoryCandidateStatus.CONFIRMED_CANDIDATE}
+            if not pending and previous_status is not SocMemoryCandidateStatus.CONFIRMED:
+                continue
+            now = self._now_provider()
+            reason = "Source observations were replaced by a corrected Runtime result; the frozen candidate evidence requires a new review."
+            candidate = candidate.model_copy(
+                update={
+                    **({"status": SocMemoryCandidateStatus.SUPERSEDED, "superseded_at": now, "supersession_reason": reason} if pending else {}),
+                    "updated_at": now,
+                    "metadata": {
+                        **candidate.metadata,
+                        "source_observations_replaced": sorted(set(candidate.metadata.get("source_observations_replaced", [])) | affected),
+                        "source_replacement_observation_id": observation.observation_id,
+                        "source_replacement_review_required": True,
+                    },
+                }
+            )
+            self._candidate_repository.save_memory_candidate(candidate)
+            if self._mutation_audit_repository is not None:
+                audit_context = context.model_copy(update={"idempotency_key": f"pattern-source-replacement:{candidate.candidate_id}:{observation.observation_id}"})
+                self._mutation_audit_repository.append_mutation_audit(
+                    build_mutation_audit(
+                        operation=SocMutationOperation.MEMORY_PATTERN_OBSERVATION_INGEST,
+                        target_type="memory_candidate",
+                        target_id=candidate.candidate_id,
+                        run_id=observation.source.run_id,
+                        alert_id=observation.source.alert_id,
+                        context=audit_context,
+                        reason=reason,
+                        command={"superseded_observation_ids": sorted(affected), "replacement_observation_id": observation.observation_id},
+                        result_ref=observation.observation_id,
+                        payload={"previous_status": previous_status.value, "status": candidate.status.value, "confirmed_memory_unchanged": not pending},
+                    )
+                )
+            self._event_sink.emit(
+                SocEvent(
+                    event_type=SocEventType.MEMORY_UPDATED,
+                    request_id=context.request_id,
+                    run_id=observation.source.run_id,
+                    alert_id=observation.source.alert_id,
+                    actor=context.actor,
+                    payload={
+                        "operation": "memory_candidate.source_observations_replaced",
+                        "candidate_id": candidate.candidate_id,
+                        "candidate_status": candidate.status.value,
+                        "replacement_observation_id": observation.observation_id,
+                        "confirmed_memory_unchanged": not pending,
+                    },
+                )
+            )
 
     def list_observations(
         self,
@@ -1100,7 +1228,9 @@ def _candidate_command(
             review_after_days=180,
             notes=("Candidate governance validity starts when the repeated pattern is proposed; the historical evidence window remains in source metadata."),
         ),
-        idempotency_key=_candidate_idempotency_key(lesson_fingerprint),
+        idempotency_key=_candidate_idempotency_key(
+            stable_hash({"lesson_fingerprint": lesson_fingerprint, "evidence_set_hash": evidence_set_hash}) if first.accumulation_scope is not None and first.accumulation_scope.accumulation_mode == "continuous" else lesson_fingerprint
+        ),
         confidence=cohort_quality.consistency_ratio,
         facets={
             "candidate_source": ["repeated_pattern"],

@@ -5,14 +5,14 @@ from test_soc_corpus_experiment_repository import experiment, members, repositor
 from test_soc_corpus_experiments import context
 from test_soc_memory_patterns import _run
 
-from soc_agent.contracts.corpus_experiments import CorpusRoundCreateCommand, CorpusRoundSelection
-from soc_agent.demo.corpus_experiment_runtime import CorpusRuntimeExecutor
+from soc_agent.contracts.corpus_experiments import CorpusRound, CorpusRoundCreateCommand, CorpusRoundSelection
+from soc_agent.demo.corpus_experiment_runtime import CorpusRuntimeExecutor, accumulate_corpus_run, corpus_accumulation_scope
 from soc_agent.demo.corpus_experiments import SocCorpusExperimentService
 from soc_agent.memory.profiles import SocMemoryProfileRegistry
 from soc_agent.utils.hashing import stable_hash
 
 
-def test_runtime_executor_uses_actual_pattern_service_and_second_batch_never_learns(tmp_path):
+def test_runtime_executor_uses_actual_pattern_service_across_both_batches(tmp_path):
     repo = repository(tmp_path)
     rows = members()
     runs = {}
@@ -58,8 +58,36 @@ def test_runtime_executor_uses_actual_pattern_service_and_second_batch_never_lea
     while svc.execute_one(validation.round_id):
         pass
     assert len(calls) == 7
-    assert repo.list_memory_pattern_observations(limit=100) == old
-    assert all(i.job.result_payload["pattern_reason"] == "validation_learning_disabled" for i in svc.store.list_round_items(validation.round_id).items)
+    validated = svc.store.list_round_items(validation.round_id).items
+    assert sorted(item.job.result_payload["summary"]["pattern_support_count"] for item in validated) == [6, 7]
+    observations = repo.list_memory_pattern_observations(limit=100)
+    assert len(observations) == 7
+    assert {item.source.alert_id for item in observations} == {"0", "1", "2", "3", "4", "5", "11"}
+    assert len({item.aggregation_key for item in observations}) == 1
+    assert all(item.lesson is not None for item in observations)
+    assert all(repo.get_memory_pattern_observation(item.observation_id) == item for item in old)
+    assert validation.pattern_accumulation_scope == learn.pattern_accumulation_scope
+    assert repo.list_memory_records() == []
+
+
+def test_manually_saved_legacy_validation_round_does_not_accumulate(tmp_path):
+    repo = repository(tmp_path)
+    legacy = CorpusRound(
+        round_id="ROUND-legacy-validation",
+        experiment_id="EXP-test",
+        selection=CorpusRoundSelection(batch="validation"),
+        config_hash="d" * 64,
+        config_snapshot={},
+        created_by="operator",
+        created_at=experiment().created_at,
+    )
+    repo.corpus_experiments().prepare(experiment(), members())
+    repo.corpus_experiments().create_round(legacy)
+    assert repo.corpus_experiments().get_round(legacy.round_id).pattern_accumulation_scope is None
+    result = accumulate_corpus_run(repository=repo, profiles=SocMemoryProfileRegistry(), round_=legacy, member=members()[5], run=_run(5, tenant_id="pingan"), context=context())
+    assert result.pattern_reason == "validation_learning_disabled"
+    assert result.observation_id is None and result.candidate_id is None
+    assert repo.list_memory_pattern_observations(limit=100) == []
 
 
 def test_payload_mismatch_blocks_before_runtime(tmp_path):
@@ -153,15 +181,19 @@ def test_normalization_failure_keeps_next_validation_member_dispatchable(tmp_pat
     assert items["5"].run_id == failed_run.run_id
 
 
-def test_runtime_accumulation_scope_keeps_restart_generation_for_every_alert(tmp_path):
+def test_runtime_accumulation_scope_uses_frozen_continuous_scope_and_legacy_restart_generation(tmp_path):
     repo = repository(tmp_path)
     repo.corpus_experiments().prepare(experiment(), members())
     service = SocCorpusExperimentService(repository=repo, execute=lambda *_: None, configuration_provider=lambda _: {})
     round_ = service.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch="learning")), context=context())
-    executor = CorpusRuntimeExecutor(repository=repo, load_payload=lambda _: {}, analysis_factory=lambda _: None, profile_registry=SocMemoryProfileRegistry())
-    original = executor._accumulation_scope(round_)
+    continuous = corpus_accumulation_scope(repo, round_)
+    assert continuous == round_.pattern_accumulation_scope
+    assert continuous.accumulation_mode == "continuous"
+    assert continuous.configuration_hash is None
+    legacy = round_.model_copy(update={"pattern_accumulation_scope": None})
+    original = corpus_accumulation_scope(repo, legacy)
     generation = "ROUND-RESTART-learning"
-    restarted = executor._accumulation_scope(round_.model_copy(update={"learning_generation": generation}))
+    restarted = corpus_accumulation_scope(repo, legacy.model_copy(update={"learning_generation": generation}))
     assert original.learning_generation is None
     assert restarted.learning_generation == generation
     assert restarted.experiment_id == original.experiment_id

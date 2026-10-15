@@ -3075,6 +3075,12 @@ class SocMemoryService:
 
         candidate = self.get_candidate(command.candidate_id)
         previous_status = candidate.status
+        if (
+            candidate.status is not SocMemoryCandidateStatus.CONFIRMED
+            and candidate.metadata.get("source_observations_replaced")
+            and command.decision in {SocMemoryCandidateReviewDecision.CONFIRM, SocMemoryCandidateReviewDecision.CONFIRM_CANDIDATE, SocMemoryCandidateReviewDecision.REOPEN}
+        ):
+            raise SocServiceConflictError("candidate source observations were replaced; review the new candidate instead of reopening the frozen snapshot")
         reviewed_at = self._now_provider()
         if reviewed_at.utcoffset() is None:
             raise SocServiceError("memory service clock must be timezone-aware")

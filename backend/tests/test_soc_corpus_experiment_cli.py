@@ -54,6 +54,70 @@ def test_resume_is_control_only_and_auth_error_is_readable(capsys):
     assert "Administrator required" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("kind", ["failed", "semantic_failed"])
+def test_retry_preserves_explicit_round_and_uses_saved_settings(kind, capsys):
+    import json
+
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        if request.method == "GET":
+            assert request.url.path == "/api/soc/dev/corpus-workbench/rounds/ROUND-current"
+            return httpx.Response(200, json={"round": {"round_id": "ROUND-current", "version": 7}})
+        assert request.method == "POST"
+        assert request.url.path == "/api/soc/dev/corpus-workbench/rounds/ROUND-current/retry"
+        assert json.loads(request.content) == {"kind": kind, "alert_ids": [], "expected_round_version": 7}
+        return httpx.Response(202, json={"round_id": "ROUND-current", "retried": 2, "not_retryable": 1})
+
+    with httpx.Client(transport=httpx.MockTransport(handle), base_url="http://localhost:2026") as http:
+        assert main(["retry", "--round", "ROUND-current", "--kind", kind], client=http) == 0
+    assert len(calls) == 2
+    assert json.loads(capsys.readouterr().out)["round_id"] == "ROUND-current"
+
+
+def test_retry_sends_explicit_alerts_and_operator_concurrency():
+    import json
+
+    def handle(request):
+        if request.method == "GET":
+            assert request.url.path.endswith("/rounds/ROUND-current")
+            return httpx.Response(200, json={"round": {"version": 12}})
+        assert request.url.path.endswith("/rounds/ROUND-current/retry")
+        assert json.loads(request.content) == {"kind": "semantic_failed", "alert_ids": ["a1", "a2"], "concurrency": 8, "expected_round_version": 12}
+        return httpx.Response(202, json={"round_id": "ROUND-current", "retried": 2, "not_retryable": 0})
+
+    with httpx.Client(transport=httpx.MockTransport(handle), base_url="http://localhost:2026") as http:
+        assert main(["retry", "--round", "ROUND-current", "--kind", "semantic_failed", "--alert", "a1", "--alert", "a2", "--concurrency", "8"], client=http) == 0
+
+
+def test_retry_snapshot_conflict_does_not_create_or_resume_another_round(capsys):
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"round": {"version": 4}})
+        assert request.url.path.endswith("/rounds/ROUND-current/retry")
+        return httpx.Response(409, json={"detail": "snapshot changed; create a new round"})
+
+    with httpx.Client(transport=httpx.MockTransport(handle), base_url="http://localhost:2026") as http:
+        assert main(["retry", "--round", "ROUND-current", "--kind", "failed"], client=http) == 1
+    assert len(calls) == 2
+    assert "snapshot changed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("options", [["--concurrency", "0"], ["--concurrency", "17"], ["--kind", "all"]])
+def test_retry_rejects_invalid_controls_before_http(options):
+    def handle(request):
+        raise AssertionError("invalid retry controls must not reach the server")
+
+    with httpx.Client(transport=httpx.MockTransport(handle), base_url="http://localhost:2026") as http:
+        with pytest.raises(SystemExit) as error:
+            main(["retry", "--round", "ROUND-current", "--kind", "failed", *options], client=http)
+    assert error.value.code == 2
+
+
 @pytest.mark.parametrize("change_version", [False, True])
 def test_export_ignores_live_clock_but_rejects_state_change(tmp_path, change_version):
     progress_reads = 0

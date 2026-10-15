@@ -285,6 +285,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/db/migrations/versions/0030_corpus_experiments.py",
     "backend/soc_agent/db/migrations/versions/0031_memory_working_drafts.py",
     "backend/soc_agent/db/migrations/versions/0032_corpus_revision_index.py",
+    "backend/soc_agent/db/migrations/versions/0033_pattern_observation_revisions.py",
     "backend/soc_agent/contracts/memory_drafts.py",
     "backend/soc_agent/core/memory_working_drafts.py",
     "backend/soc_agent/core/memory_draft_jobs.py",
@@ -302,6 +303,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/demo/corpus_round_comparison.py",
     "backend/soc_agent/demo/corpus_experiment_timing.py",
     "backend/soc_agent/demo/corpus_experiment_runtime.py",
+    "backend/soc_agent/demo/corpus_pattern_continuation.py",
     "backend/soc_agent/demo/corpus_experiments.py",
     "backend/soc_agent/demo/corpus_rebalance.py",
     "backend/soc_agent/demo/corpus_rebalance_plan.py",
@@ -349,6 +351,17 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/tests/test_soc_memory_revision_workflow.py",
     "backend/tests/test_soc_pingan_memory_profile.py",
     "backend/tests/test_soc_corpus_pattern_execution.py",
+    "backend/tests/test_soc_corpus_experiment_cli.py",
+    "backend/tests/test_soc_corpus_same_round_retry.py",
+    "backend/tests/test_soc_corpus_retry_isolation.py",
+    "backend/tests/test_soc_corpus_semantic_retry_runtime.py",
+    "backend/tests/test_soc_corpus_continuous_learning.py",
+    "backend/tests/test_soc_corpus_continuous_event_range.py",
+    "backend/tests/test_soc_corpus_pattern_learning_display.py",
+    "backend/tests/test_soc_corpus_pattern_continuation.py",
+    "backend/tests/test_soc_memory_pattern_continuous_scope.py",
+    "backend/tests/test_soc_memory_pattern_revisions.py",
+    "backend/tests/test_soc_memory_pattern_current_views.py",
     "backend/tests/test_soc_corpus_rebalance_api.py",
     "backend/tests/test_soc_corpus_rebalance_cli.py",
     "backend/tests/test_soc_corpus_rebalance_execution.py",
@@ -1662,6 +1675,21 @@ BASH
             "升级后可先在本机把“最大并发”保存为 `2`，再恢复运行，\n"
             "观察页面响应和任务结果正常后逐步调高；减少并发不能保证消除其他长事务造成的锁等待。"
         )
+    recovery_source = (
+        Path(__file__).resolve().parents[1] / "docs/soc-corpus-rebalance.md"
+    ).read_text(encoding="utf-8")
+    recovery_steps = recovery_source[
+        recovery_source.index("## 5. 在原轮次补跑失败项并导出完整报告") :
+    ]
+    recovery_steps = (
+        recovery_steps.replace("## 5.", "## 10.")
+        .replace("### 5.", "### 10.")
+        .replace("## 6.", "## 11.")
+    )
+    recovery_steps = recovery_steps.replace(
+        'cd "$HOME/deer-flow"',
+        'export TARGET_REPO="$HOME/deer-flow"\ncd "$TARGET_REPO"',
+    )
     return f"""# {title}
 
 > Built: `{timestamp}`
@@ -1907,7 +1935,8 @@ BASH
 
 不再手工初始化 SOC SQLite。Host DEV `start` 统一负责 SOC SQLite migration：它先从当前 checkout
 根据 `SOC_PINGAN_ENV` 解析绝对 `soc_agent_dev.db` 或 `soc_agent_stg.db` 路径，在任何 Sidecar 和 Web 服务启动前升级 Schema，并把 Sidecar 的
-重复自动迁移关闭。本次会为告警列表创建查询索引（`0032_corpus_revision_index`），不改写研判结果、经验或审核记录。
+重复自动迁移关闭。保留已有查询索引（`0032_corpus_revision_index`），本次升级到 `0033_pattern_revisions`，
+为观察增加当前版本与替代关系，保留原观察、研判结果、经验和审核记录。
 首次升级大数据库时创建索引可能耗时较长，请等待 `SOC database schema upgraded to head.` 后继续；无需另跑建索引命令。
 新空库发生一次瞬时 `disk I/O error` 时，启动器只清理本次失败产生的半库并安全
 重试一次；调用前已经存在的数据库永远不会被自动删除或重建。
@@ -1992,7 +2021,7 @@ Host DEV 驱动会先准备可复用的前端构建，再准备 SOC 数据库，
 DeerFlow Gateway/Frontend/Nginx；同时启用隔离 SQLite、LLM analyzer、已评审 DEV Tenant
 Policy 和两个 SOC DEV Workbench，关闭真实外部动作执行。仅本机使用时加 `--local-only`。
 `status` 必须同时显示 `soc_database.status=ready`、
-`soc_database.schema_revision=0032_corpus_revision_index`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
+`soc_database.schema_revision=0033_pattern_revisions`，并且三个 Sidecar 都为 `running`。Worker 只有在数据库、
 Runtime、Tenant Policy、ZEUS lifecycle 和 Callback 初始化完成并发布 PID-bound ready 信号后才会显示
 `running`；`stale`、`not_running` 或启动时报 `did not become ready` 都不能继续真实验收。
 
@@ -2352,6 +2381,8 @@ validation/compact_zeus/internal_batch/README.md
 ```
 
 不要把凭证、原始内部告警、Memory 数据库或完整 Provider 响应传回外网。
+
+{recovery_steps}
 """
 
 

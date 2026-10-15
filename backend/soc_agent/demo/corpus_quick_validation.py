@@ -106,11 +106,11 @@ class CorpusQuickValidation:
                     return quick._restart_learning(command, context=context, allow_options_override=allow_options_override, default_options=default_options)
                 if command.action == "restart_validation":
                     return quick._restart_validation(command, context=context, allow_options_override=allow_options_override, default_options=default_options)
-                if command.action != "pause" and not allow_options_override:
+                if command.action not in {"pause", "retry"} and not allow_options_override:
                     _require_saved_options(bound.store, quick.experiment(), command.batch, command.options, default_options)
                 return quick._command(command, context=context)
         except CorpusExperimentConflict:
-            if command.action in {"restart_validation", "restart_learning"}:
+            if command.action in {"restart_validation", "restart_learning", "retry"}:
                 # Rejected restarts are inert. In particular a stale browser token
                 # cannot block, pause or otherwise change newer accepted work.
                 raise
@@ -235,6 +235,23 @@ class CorpusQuickValidation:
         rows = svc.store.batch_jobs(experiment_id, selection)
         if not rows:
             raise ValueError("当前批次没有所选告警")
+        if command.action == "retry":
+            from soc_agent.contracts.corpus_experiments import CorpusRoundRetryCommand
+
+            job = rows[0][1]
+            if job is None or job.job_id != command.job_id:
+                raise CorpusExperimentConflict("告警已有新的运行任务，请刷新后重试")
+            if job.attempt_count != command.expected_attempt_count:
+                raise CorpusExperimentConflict("任务尝试次数已变化，请刷新后重试")
+            if not job.status.is_terminal:
+                return {"accepted": True}  # The same click was already queued.
+            if job.status.value != "failed":
+                raise CorpusExperimentConflict("任务已完成，请刷新；重新配置运行需使用重新运行")
+            round_ = svc.store.get_round(job.input_payload["round_id"])
+            result = svc.retry_items(round_.round_id, CorpusRoundRetryCommand(kind="failed", alert_ids=[command.alert_id], expected_round_version=round_.version), context=context, manual=True)
+            if not result["retried"]:
+                raise CorpusExperimentConflict("该失败不可重试或已达到重试上限，请检查失败原因")
+            return {"accepted": True, "round_id": job.input_payload["round_id"]}
         if command.action == "rerun":
             if not context.idempotency_key:
                 raise ValueError("重新运行需要 Idempotency-Key")

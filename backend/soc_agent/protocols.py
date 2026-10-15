@@ -770,12 +770,16 @@ class MemoryBusinessLessonDrafter(Protocol):
 
 
 class MemoryPatternObservationRepository(Protocol):
-    """Immutable persistence boundary for repeated-pattern source observations."""
+    """Immutable payload history with explicit replacement of current observations."""
 
     def save_memory_pattern_observation(
         self,
         observation: MemoryPatternObservation,
     ) -> None: ...
+
+    def replace_memory_pattern_observations(self, observation: MemoryPatternObservation, *, superseded_ids: list[str]) -> None: ...
+
+    def is_memory_pattern_observation_current(self, observation_id: str) -> bool: ...
 
     def get_memory_pattern_observation(
         self,
@@ -797,6 +801,7 @@ class MemoryPatternObservationRepository(Protocol):
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
         alert_id: str | None = None,
+        include_superseded: bool = False,
         limit: int = 500,
         offset: int = 0,
     ) -> list[MemoryPatternObservation]: ...

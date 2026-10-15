@@ -201,6 +201,9 @@ flowchart TD
     consensus strong anchor，才提出一个 frozen `pending_review` pattern lesson。低支持、冲突、未决或弱锚点
     cohort 只保留 observation，不进入专家队列；候选必须总结适用范围、结论分布、代表性理由和例外，不能
     复述单条告警。后续记录仅供 replay，重复本身不证明授权、影响或处置权限。
+    DEV corpus新轮次两批按同实验、同积累代次连续积累实际行为，第二批新候选不影响本轮冻结经验。
+    明确语义核对失败暂缓积累；成功补跑将旧观察标为已替代而非修改旧payload，旧候选证据失效需重新审核，
+    已确认Memory不自动修改。模型/语义补跑沿用round/job，实际调用保留新Run，报告每告警一行并保留所有尝试成本。
 10.1 若某条已完成研判未达到自动 Pattern 候选门槛，但分析师判断其中包含值得复用的业务经验，可通过
     `SocReviewService.promote_run_to_memory()` 显式提炼。该操作要求可信身份、幂等键和可复用
     facet，理由可选。人工与自动入口先统一检查现有范围：待审进入原候选，已确认进入经验详情，

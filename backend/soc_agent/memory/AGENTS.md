@@ -47,6 +47,15 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   or the validated predecessor of an explicit revision. Client metadata alone cannot
   grant a generation boundary. Scope refinements retain their generation and deduplicate
   within it while legacy refinement keys remain unchanged.
+- Continuous corpus accumulation shares the full experiment range across batches/configurations
+  within one learning generation; the matching Profile/signature remains unchanged. Failed
+  semantic review defers new support. Memory-dependent samples carry no independent lesson.
+  Migration `0033_pattern_revisions` adds current-observation status and successor identity;
+  partial unique indexes constrain only current source/occurrence rows. Replacement is atomic,
+  source/scope-bound and idempotent. Historical payloads and ID reads remain immutable, while
+  support and current behavior-group statistics exclude superseded rows. A corrected source
+  retires pending candidate evidence; confirmed Memory retains its content and authority with
+  a review-needed audit hint. Never reopen retired source snapshots through ordinary review.
 - `MemoryAdmissionService` is the gate for candidate value. Promotion from a note or
   correction is explicit. Pattern construction requires stable similarity anchors,
   bounded windows, distinct-source support, and an auditable quality gate.

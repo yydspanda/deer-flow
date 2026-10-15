@@ -132,6 +132,19 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > use `resume --round <ID> --limit all --restore-full-scope`; completed tasks remain intact
 > and the saved code/configuration/Memory snapshot must still match.
 > See the [round recovery steps](docs/soc-validation-restart.md).
+> A failed alert's **重试** now retains its original round, job and saved settings;
+> **重新运行** remains a separate new-round operation. Batch recovery uses
+> `retry --round <ID> --kind failed` or `--kind semantic_failed` for either batch.
+> Pause the target round first. Semantic recovery refreshes facts and reruns downstream
+> analysis; original Runs and all attempt costs remain available. Re-export that same
+> round for one complete report. Code/configuration/Memory drift still requires a new
+> round; see the [batch retry commands](docs/soc-corpus-rebalance.md).
+> New rounds share continuous behavior accumulation across both batches within the same
+> experiment and learning generation: four independent learning samples plus one validation
+> sample can meet the five-sample threshold. Validation retains its frozen reviewed Memory;
+> new candidates await review after the round. Retries replace active observations without
+> increasing support, preserving old evidence. Existing saved Runs can be continued with
+> `accumulate --round <ID>` without model calls; see the [continuation steps](docs/soc-corpus-rebalance.md#6-两批连续积累与已有结果接续).
 > After manually extracting an experience, the alert result shows **审核人工提炼经验**
 > even when automatic pattern accumulation has not yet produced a candidate.
 > Successful extraction keeps its review link if the following list refresh fails.

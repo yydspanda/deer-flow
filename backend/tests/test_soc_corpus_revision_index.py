@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 
-from sqlalchemy import create_engine, event, insert, inspect, select, update
+from sqlalchemy import MetaData, Table, create_engine, event, insert, inspect, select, update
 from sqlalchemy.orm import sessionmaker
 from test_soc_corpus_list_queries import _row
 
@@ -129,20 +129,22 @@ def test_large_run_revisions_use_covering_index_without_payload_table_reads(tmp_
 def test_revision_index_upgrade_preserves_0031_business_rows(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'upgrade.sqlite'}")
     upgrade_soc_schema(str(engine.url), revision="0031_memory_working_drafts")
+    observation_table = Table(Observation.__tablename__, MetaData(), autoload_with=engine)
+    tables = (Run.__table__, observation_table, Transition.__table__)
     with engine.begin() as connection:
         connection.execute(insert(Run), [_run(0, payload_size=500_000)])
-        connection.execute(insert(Observation), [_observation(0)])
+        connection.execute(insert(observation_table), [_observation(0)])
         connection.execute(insert(Transition), [_transition()])
         connection.exec_driver_sql("CREATE TABLE retained_marker (value TEXT)")
         connection.exec_driver_sql("INSERT INTO retained_marker VALUES ('existing application data')")
-        before = {table.__tablename__: connection.execute(select(table)).mappings().all() for table in (Run, Observation, Transition)}
+        before = {table.name: connection.execute(select(table)).mappings().all() for table in tables}
     old_schema = inspect(engine)
     before_tables = set(old_schema.get_table_names())
     before_indexes = {item["name"] for item in old_schema.get_indexes(Run.__tablename__)}
     assert INDEX_NAME not in before_indexes
 
-    upgrade_soc_schema(str(engine.url))
-    upgrade_soc_schema(str(engine.url))
+    upgrade_soc_schema(str(engine.url), revision="0032_corpus_revision_index")
+    upgrade_soc_schema(str(engine.url), revision="0032_corpus_revision_index")
 
     new_schema = inspect(engine)
     assert set(new_schema.get_table_names()) == before_tables
@@ -152,7 +154,7 @@ def test_revision_index_upgrade_preserves_0031_business_rows(tmp_path):
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT version_num FROM soc_alembic_version").scalar_one() == "0032_corpus_revision_index"
         assert connection.exec_driver_sql("SELECT value FROM retained_marker").scalar_one() == "existing application data"
-        after = {table.__tablename__: connection.execute(select(table)).mappings().all() for table in (Run, Observation, Transition)}
+        after = {table.name: connection.execute(select(table)).mappings().all() for table in tables}
     assert after == before
     engine.dispose()
 

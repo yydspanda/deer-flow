@@ -82,7 +82,7 @@ def test_preview_verifies_all_sources_without_mutation_or_label_export(source, t
     assert "本预览没有运行告警" in (output / "preview.md").read_text()
     assert "约80%" in (output / "preview.md").read_text()
     assert "仅从原主要验证样本移入学习" in (output / "preview.md").read_text()
-    assert "本轮第一批统一积累" in (output / "preview.md").read_text()
+    assert "两批衔接积累" in (output / "preview.md").read_text()
     assert "本预览不会启动" in (output / "preview.md").read_text()
     assert (output / "members.csv").is_file()
     assert (output / "groups.csv").is_file()

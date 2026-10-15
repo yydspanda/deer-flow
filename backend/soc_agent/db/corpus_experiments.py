@@ -63,6 +63,7 @@ class CorpusRunJob:
     pattern_reason: str | None
     experiment_id: str | None = None
     learning_generation: str | None = None
+    observation_id: str | None = None
 
 
 class SqlAlchemyCorpusExperimentRepository:
@@ -255,6 +256,26 @@ class SqlAlchemyCorpusExperimentRepository:
         if first is None or last is None:
             raise ValueError("learning experiment has no event times")
         return datetime.fromisoformat(first), datetime.fromisoformat(last)
+
+    def experiment_event_range(self, experiment_id: str) -> tuple[datetime, datetime]:
+        event_time = SocCorpusExperimentMemberRow.record_payload["event_time"].as_string()
+        query = select(event_time).where(SocCorpusExperimentMemberRow.experiment_id == experiment_id).execution_options(yield_per=500)
+        first = last = None
+        with self._session_factory() as session:
+            # Historical JSON can retain offsets or different fractional-second
+            # formatting. String ordering does not order those event instants.
+            for value in session.scalars(query):
+                if value is None:
+                    continue
+                observed = datetime.fromisoformat(value)
+                if observed.utcoffset() is None:
+                    raise ValueError("experiment event times must include a timezone")
+                observed = observed.astimezone(UTC)
+                first = observed if first is None else min(first, observed)
+                last = observed if last is None else max(last, observed)
+        if first is None or last is None:
+            raise ValueError("experiment has no event times")
+        return first, last
 
     def _learning_candidate_scope(self, experiment_id: str, *, excluded_run_ids: Sequence[str] = ()):
         learning_runs = (
@@ -611,7 +632,17 @@ class SqlAlchemyCorpusExperimentRepository:
         if idempotency_key_hash:
             identity = or_(identity, job.run_id.is_(None) & job.status.in_([status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]))
         query = (
-            select(job.run_id, job.idempotency_key, job.status, round_.batch, job.result_payload["pattern_reason"].as_string(), round_.experiment_id, round_.record_payload["learning_generation"].as_string())
+            select(
+                job.run_id,
+                job.idempotency_key,
+                job.status,
+                round_.batch,
+                job.result_payload["pattern_reason"].as_string(),
+                round_.experiment_id,
+                round_.record_payload["learning_generation"].as_string(),
+                job.metadata_payload["semantic_retry"]["generation"].as_integer(),
+                job.result_payload["observation_id"].as_string(),
+            )
             .join(item, item.job_id == job.job_id)
             .join(round_, round_.round_id == item.round_id)
             .join(experiment, experiment.experiment_id == round_.experiment_id)
@@ -628,10 +659,12 @@ class SqlAlchemyCorpusExperimentRepository:
             .order_by((job.run_id == run_id).desc(), round_.created_at.desc(), round_.round_id.desc())
         )
         with self._session_factory() as session:
-            for saved_run_id, key, status, batch, reason, experiment_id, generation in session.execute(query):
+            for saved_run_id, key, status, batch, reason, experiment_id, generation, semantic_generation, observation_id in session.execute(query):
+                if semantic_generation:
+                    key = f"{key}:semantic:{semantic_generation}"
                 # Use the journal's compact UTF-8 hash encoding, not stable_hash.
                 if saved_run_id == run_id or hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest() == idempotency_key_hash:
-                    return CorpusRunJob(ProcessingJobStatus(status), batch, reason, experiment_id, generation)
+                    return CorpusRunJob(ProcessingJobStatus(status), batch, reason, experiment_id, generation, observation_id)
         return None
 
     def set_dispatch_scope(self, round_id: str, alert_ids: list[str]) -> None:

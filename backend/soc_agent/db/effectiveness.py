@@ -313,6 +313,7 @@ class SqlAlchemySocEffectivenessRepository:
                     SocAlertSummaryRow.run_id == SocMemoryPatternObservationRow.run_id,
                 )
                 .where(
+                    SocMemoryPatternObservationRow.is_current.is_(True),
                     SocMemoryPatternObservationRow.observed_at >= scope.window_start,
                     SocMemoryPatternObservationRow.observed_at < scope.window_end,
                     *_rule_selector_filters(selector),
@@ -349,6 +350,8 @@ class SqlAlchemySocEffectivenessRepository:
         candidates_by_lineage: dict[str, list[SocMemoryCandidateRow]] = defaultdict(list)
         for row in candidate_rows:
             metadata = _json_mapping(row.candidate_payload.get("metadata"))
+            if row.status == "superseded" and metadata.get("source_observations_replaced"):
+                continue
             lineage_key = metadata.get("lineage_key")
             if isinstance(lineage_key, str) and lineage_key in lineage_keys:
                 candidates_by_lineage[lineage_key].append(row)

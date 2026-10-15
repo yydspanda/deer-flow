@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,7 +45,7 @@ def parser():
     listing = commands.add_parser("list", help="列出实验或某实验的轮次")
     listing.add_argument("--experiment")
     listing.add_argument("--offset", type=int, default=0)
-    candidates = commands.add_parser("candidates", help="分页查看本实验第一批产生的待审/已确认经验")
+    candidates = commands.add_parser("candidates", help="分页查看本实验当前积累代次的待审/已确认经验")
     candidates.add_argument("--experiment", required=True)
     candidates.add_argument("--stage", choices=("pending", "confirmed", "closed", "all"), default="pending")
     candidates.add_argument("--offset", type=int, default=0)
@@ -94,7 +95,7 @@ def parser():
     rebalance_apply.add_argument("--experiment", required=True, help="新的实验 ID")
     rebalance_apply.add_argument("--name", default="学习优先的阶段验证")
     rebalance_apply.add_argument("--request-key", help="应用名单的幂等键；默认由新实验、名单和名称稳定生成")
-    for name, description in (("learn", "第一批后台沉淀，经验仍需运营审核"), ("validate", "第二批只验证，固定已审核经验，不自动学习")):
+    for name, description in (("learn", "第一批后台沉淀，经验仍需运营审核"), ("validate", "第二批固定已审核经验验证，并接续积累待审核经验")):
         command = commands.add_parser(name, help=description)
         command.add_argument("--experiment", required=True)
         command.add_argument("--group", action="append", default=[])
@@ -112,6 +113,14 @@ def parser():
         command.add_argument("--request-key", help="网络中断后用原值重交，不重复创建轮次")
         command.add_argument("--dry-run", action="store_true", help="只看选择范围，不创建/启动任务")
         command.add_argument("--wait", action="store_true", help="观察至暂停、失败阻断或本次预算完成；退出不取消后台任务")
+    retry = commands.add_parser("retry", help="在指定原轮次补跑失败项，保留旧 Run；先暂停并等待活动任务结束")
+    retry.add_argument("--round", required=True)
+    retry.add_argument("--kind", choices=("failed", "semantic_failed"), required=True, help="failed=任务失败；semantic_failed=两批语义核对失败后兜底完成的任务")
+    retry.add_argument("--alert", action="append", default=[], help="只选本轮指定告警，可重复；省略时选择本轮该类失败项")
+    retry.add_argument("--concurrency", type=int, choices=range(1, 17), help="可选的重试并发上限；省略时沿用该轮保存值，仍受服务器容量限制")
+    accumulate = commands.add_parser("accumulate", help="将指定轮次已保存的成功 Run 接续到统一行为积累；不调用模型、不修改旧报告")
+    accumulate.add_argument("--round", required=True)
+    accumulate.add_argument("--dry-run", action="store_true", help="只检查本轮已完成来源是否可接续，不写模式或候选")
     for name in ("status", "pause", "resume", "retry-failed", "export"):
         command = commands.add_parser(name)
         command.add_argument("--round", required=True)
@@ -211,6 +220,37 @@ def _draft_export(client, args):
         raise ValueError("导出期间起草任务变化，请等待任务结束后重试；未写入不一致报告")
     export_draft_report(args.experiment, jobs, args.output_dir.expanduser().resolve())
     _print({"experiment_id": args.experiment, "job_count": len(jobs), "output_dir": str(args.output_dir)})
+
+
+def _accumulate(client, args):
+    progress = _request(client, "GET", f"/rounds/{args.round}")
+    round_ = progress["round"]
+    if round_["state"] == "running" or progress.get("active_count", 0):
+        raise ValueError("请先暂停本实验并等待活动任务结束，再接续已保存结果")
+    offset, total_selected = 0, 0
+    while True:
+        page = _request(client, "GET", f"/rounds/{args.round}/items", params={"offset": offset, "limit": 100})
+        sources = {item["alert_id"]: item["job"]["run_id"] for item in page["items"] if item.get("job", {}).get("status") == "completed" and item["job"].get("run_id")}
+        if sources:
+            result = _request(client, "POST", f"/rounds/{args.round}/accumulate", params={"dry_run": args.dry_run}, json={"expected_round_version": round_["version"], "source_runs": sources})
+            total_selected += len(sources)
+            _print(
+                {
+                    "round_id": args.round,
+                    "dry_run": args.dry_run,
+                    "counts": result["counts"],
+                    "model_calls": result["model_calls"],
+                    "processed": total_selected,
+                    "skipped_reasons": dict(Counter(item.get("reason", "unknown") for item in result.get("items", []) if item.get("status") == "skipped")),
+                }
+            )
+        offset += len(page["items"])
+        if offset >= page["total"]:
+            break
+        if not page["items"]:
+            raise ValueError("轮次分页提前结束，请刷新后重试；已成功接续的来源不会重复增加样本")
+    if not total_selected:
+        _print({"round_id": args.round, "dry_run": args.dry_run, "counts": {}, "model_calls": 0, "processed": 0, "skipped_reasons": {}})
 
 
 def _draft_plan(client, args):
@@ -373,6 +413,8 @@ def _dispatch(args, client):
         _print(request("POST", f"/experiments/{args.experiment}/draft-jobs/{args.job}/retry", params={"expected_version": args.version}))
     elif args.command == "draft-export":
         _draft_export(client, args)
+    elif args.command == "accumulate":
+        _accumulate(client, args)
     elif args.command == "rebalance-facts":
         _rebalance_facts(client, args)
     elif args.command == "rebalance-plan":
@@ -420,6 +462,12 @@ def _dispatch(args, client):
         _status(client, args.round, watch=args.watch)
     elif args.command == "export":
         _export(client, args.round, args.output_dir)
+    elif args.command == "retry":
+        progress = request("GET", f"/rounds/{args.round}")
+        body = {"kind": args.kind, "alert_ids": args.alert, "expected_round_version": progress["round"]["version"]}
+        if args.concurrency is not None:
+            body["concurrency"] = args.concurrency
+        _print(request("POST", f"/rounds/{args.round}/retry", json=body))
     else:
         action = "start" if args.command == "resume" else args.command
         body = {key: value for key, value in {"execution_limit": args.limit, "concurrency": args.concurrency}.items() if value is not None} if args.command == "resume" else None

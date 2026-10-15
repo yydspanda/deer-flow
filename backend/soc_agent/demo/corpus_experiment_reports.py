@@ -183,8 +183,15 @@ def _summarize(rows, *, include_history=True):
     eligible = [row for row in completed if not row.get("snapshot_changed_during_run")]
     scorable = [row for row in eligible if row.get("label", {}).get("scorable") and row.get("summary", {}).get("recommended_handling") in {"ignore", "transfer"}] if include_history else []
     label_transfers = [row for row in scorable if row["label"]["expected_handling"] == "transfer"]
-    measured = [measurement for row in rows for measurement in (row.get("attempt_measurements") or ([row.get("summary", {}).get("measurements", {})] if row["status"] == "completed" or row.get("run_id") else []))]
+    measured = [
+        measurement
+        for row in rows
+        for measurement in (
+            row.get("attempt_measurements") or ([{"total_duration_ms": row.get("summary", {}).get("total_duration_ms"), **row.get("summary", {}).get("measurements", {})}] if row["status"] == "completed" or row.get("run_id") else [])
+        )
+    ]
     known_tokens = [item["total_tokens"] for item in measured if isinstance(item.get("total_tokens"), int)]
+    known_durations = [item["total_duration_ms"] for item in measured if type(item.get("total_duration_ms")) is int and item["total_duration_ms"] >= 0]
     return {
         "selected": len(rows),
         "status_counts": dict(Counter(row["status"] for row in rows)),
@@ -212,6 +219,7 @@ def _summarize(rows, *, include_history=True):
         "provider_calls_unknown_runs": sum(item.get("provider_call_count") is None for item in measured),
         "measured_run_attempts": len(measured),
         "summed_run_duration_ms": sum(row.get("summary", {}).get("total_duration_ms") or 0 for row in completed),
+        "attempt_duration": {"known_total_ms": sum(known_durations), "known_runs": len(known_durations), "unavailable_runs": len(measured) - len(known_durations)},
         "candidate_count": len({row["candidate_id"] for row in rows if row.get("candidate_id")}),
     }
 
@@ -421,6 +429,7 @@ def _render_applicability_report(report: dict) -> str:
         lines += [
             "",
             f"已记录模型调用 {metrics['provider_calls']} 次，{metrics['provider_calls_unknown_runs']} 次运行调用数未知；已知 Token {metrics['tokens']['known_total']}，{metrics['tokens']['unavailable_runs']} 次运行用量缺失。",
+            f"含重试的已知运行耗时累计 {metrics['attempt_duration']['known_total_ms']} ms，{metrics['attempt_duration']['unavailable_runs']} 次运行耗时缺失；不含两次尝试之间的人工等待，也不是并发批次墙钟时间。",
             "",
         ]
     lines += [
@@ -472,7 +481,8 @@ def render_report(report: dict) -> str:
             "",
             f"{metrics['measured_run_attempts']} 次持久化运行（含失败重试），模型调用已记录 {metrics['provider_calls']} 次；"
             f"Token 已知合计 {tokens['known_total']}，{tokens['unavailable_runs']} 次未获用量。用量来源详见 JSON，不把缺失当作零。",
-            f"运行耗时累计 {metrics['summed_run_duration_ms']} ms，这是各条耗时之和，不是并发批次的墙钟时间。",
+            f"最终完成结果的运行耗时合计 {metrics['summed_run_duration_ms']} ms；含重试的已知运行耗时累计 {metrics['attempt_duration']['known_total_ms']} ms，"
+            f"{metrics['attempt_duration']['unavailable_runs']} 次运行耗时缺失。均不是并发批次墙钟时间，重试间的人工等待不计入运行耗时。",
             "",
         ]
     lines += [

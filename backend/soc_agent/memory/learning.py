@@ -93,6 +93,8 @@ def resolve_learning_candidate(repository: MemoryCandidateRepository, incoming: 
             pool[item.candidate_id] = item
     resolved = []
     for candidate in pool.values():
+        if candidate.status is SocMemoryCandidateStatus.SUPERSEDED and candidate.metadata.get("source_observations_replaced"):
+            continue
         seen = set()
         while candidate.status is SocMemoryCandidateStatus.SUPERSEDED and candidate.superseded_by_candidate_id and candidate.candidate_id not in seen:
             seen.add(candidate.candidate_id)
@@ -100,6 +102,8 @@ def resolve_learning_candidate(repository: MemoryCandidateRepository, incoming: 
             if successor is None:
                 break
             candidate = successor
+        if candidate.status is SocMemoryCandidateStatus.SUPERSEDED and candidate.metadata.get("source_observations_replaced"):
+            continue
         record = _record(record_repository or repository, candidate)
         if record is not None and record.superseded_by_memory_id:
             getter = getattr(record_repository or repository, "get_memory_record", None)

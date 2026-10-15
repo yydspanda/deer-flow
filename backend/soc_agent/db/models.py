@@ -1064,15 +1064,21 @@ class SocMemoryPatternObservationRow(SocBase):
 
     __tablename__ = "soc_memory_pattern_observations"
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "uq_soc_memory_pattern_current_source",
             "aggregation_key",
             "source_id",
-            name="uq_soc_memory_pattern_aggregation_source",
+            unique=True,
+            sqlite_where=text("is_current = 1"),
+            postgresql_where=text("is_current = true"),
         ),
-        UniqueConstraint(
+        Index(
+            "uq_soc_memory_pattern_current_occurrence",
             "aggregation_key",
             "occurrence_key",
-            name="uq_soc_memory_pattern_aggregation_occurrence",
+            unique=True,
+            sqlite_where=text("is_current = 1"),
+            postgresql_where=text("is_current = true"),
         ),
         Index(
             "ix_soc_memory_pattern_scope_window",
@@ -1089,6 +1095,8 @@ class SocMemoryPatternObservationRow(SocBase):
     )
 
     observation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), nullable=False)
+    superseded_by_observation_id: Mapped[str | None] = mapped_column(String(64), index=True)
     idempotency_key: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
     aggregation_key: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     lineage_key: Mapped[str] = mapped_column(String(64), index=True, nullable=False)

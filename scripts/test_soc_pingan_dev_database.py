@@ -260,7 +260,7 @@ def test_empty_database_migrates_and_keeps_old_experience_only_in_backup(
             connection.execute(
                 "SELECT version_num FROM soc_alembic_version"
             ).fetchone()[0]
-            == "0032_corpus_revision_index"
+            == "0033_pattern_revisions"
         )
         assert (
             connection.execute("SELECT count(*) FROM soc_memory_records").fetchone()[0]

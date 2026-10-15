@@ -638,6 +638,19 @@ regression in the required inventory. Do not direct routine reruns through offli
 deletion maintenance; legacy staged CLI commands
 remain optional. Host startup and source-plus-private-overlay delivery are unchanged;
 apply code updates with a frontend rebuild and service restart, preserving data.
+The round CLI `retry --round ... --kind failed|semantic_failed` reuses the frozen
+round and dispatches only selected failures; optional concurrency never replaces its
+saved business settings. The CLI reads and sends the round version once, without
+automatic HTTP retries. Document pause/drain before bulk retry and export
+the same complete round afterward. Semantic retry is validation/apply-only; partial
+or skipped checks are not failures. Snapshot drift still requires a new round. Keep
+`docs/soc-corpus-rebalance.md` as the operator source, and mark any updated handoff
+manual as pending when its source archive does not yet contain the new command.
 The required handoff inventory also includes PingAn's `corpus_validation.py` scope
 predicate. Both Web and CLI omit its selected detector from two-batch evaluation,
 while the transferred corpus and its hash/count verification remain unchanged.
+
+Corpus handoffs must include migration `0033_pattern_revisions`, saved-Run continuation,
+and continuous/same-round recovery regressions. The generated upgrade runbook embeds the
+maintained retry/continuation sections from `docs/soc-corpus-rebalance.md`; retain exact
+archive identity and distinguish documentation-only updates from rebuilt source archives.

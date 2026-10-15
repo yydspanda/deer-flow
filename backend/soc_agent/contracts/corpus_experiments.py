@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
+from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
 from soc_agent.contracts.processing_jobs import SocProcessingJob
 from soc_agent.contracts.schemas import SocMemoryCandidate
 
@@ -164,6 +165,7 @@ class CorpusRound(BaseModel):
     dispatch_alert_ids: list[str] | None = None
     superseded_by_round_id: str | None = Field(default=None, min_length=1, max_length=64)
     learning_generation: str | None = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
+    pattern_accumulation_scope: MemoryPatternAccumulationScope | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def _facts_do_not_decide(self):
@@ -275,21 +277,55 @@ class CorpusRoundStartCommand(BaseModel):
     restore_full_scope: bool = Field(default=False, strict=True)
 
 
+class CorpusRoundRetryCommand(BaseModel):
+    """Recover selected failures under the round's immutable behavior snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+    expected_round_version: int = Field(ge=1, strict=True)
+    kind: Literal["failed", "semantic_failed"]
+    alert_ids: list[BoundedCorpusId] = Field(default_factory=list, max_length=20000)
+    concurrency: int | None = Field(default=None, ge=1, le=16, strict=True)
+
+
+class CorpusPatternBackfillCommand(BaseModel):
+    """Explicit saved results, never a request to rerun a model."""
+
+    model_config = ConfigDict(extra="forbid")
+    expected_round_version: int = Field(ge=1, strict=True)
+    source_runs: dict[BoundedCorpusId, BoundedCorpusId] = Field(min_length=1, max_length=100)
+
+
+class CorpusSemanticRetry(BaseModel):
+    """Server-owned attempt metadata; never a change to the frozen round options."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    generation: int = Field(ge=1, le=2)
+    previous_run_id: BoundedCorpusId
+    refresh_normalization: Literal[True] = True
+
+
 class CorpusQuickCommand(BaseModel):
     """Analyst commands have no experiment, round, budget or browser filters."""
 
     model_config = ConfigDict(extra="forbid")
     batch: Batch
     scope: Literal["all", "reuse", "explore"] = "all"
-    action: Literal["start", "pause", "run", "rerun", "restart_validation", "restart_learning"] = "start"
+    action: Literal["start", "pause", "run", "rerun", "retry", "restart_validation", "restart_learning"] = "start"
     alert_id: str | None = Field(default=None, min_length=1, max_length=128)
+    job_id: BoundedCorpusId | None = None
+    expected_attempt_count: int | None = Field(default=None, ge=1, strict=True)
     restart_token: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     options: SocAnalysisExecutionOptions = Field(default_factory=SocAnalysisExecutionOptions)
 
     @model_validator(mode="after")
     def _single(self):
-        if (self.action in {"run", "rerun"}) != bool(self.alert_id):
+        if (self.action in {"run", "rerun", "retry"}) != bool(self.alert_id):
             raise ValueError("single-alert commands require an alert ID")
+        if self.action == "retry":
+            if not self.job_id or self.expected_attempt_count is None:
+                raise ValueError("retry requires the displayed job and attempt count")
+        elif self.job_id is not None or self.expected_attempt_count is not None:
+            raise ValueError("job identity is only accepted for retry")
         if self.action in {"restart_validation", "restart_learning"}:
             expected_batch = "learning" if self.action == "restart_learning" else "validation"
             if self.batch != expected_batch or self.scope != "all" or not self.restart_token:

@@ -105,15 +105,47 @@ def test_active_pattern_write_matches_request_before_job_run_id_is_saved(workben
     assert _memory(workbench.get_execution(job.alert_id)).status == "skipped"
 
 
-def test_validation_claim_never_claims_to_be_writing_new_patterns(workbench):
+def test_validation_claim_displays_actual_pattern_write(workbench):
     job = _job(workbench, batch="validation")
     run = _saved_run(workbench, job.alert_id, idempotency_key=job.idempotency_key)
     _update_job(workbench, job, status="analyzing", started_at=run.started_at)
 
     memory = _memory(workbench.get_execution(job.alert_id))
 
-    assert memory.status == "skipped"
-    assert "第二批仅验证经验效果" in memory.summary
+    assert memory.status == "running"
+    assert "正在写入" in memory.summary
+
+
+def test_historical_audit_reads_superseded_observation_without_current_support(workbench):
+    job = _job(workbench)
+    run = _pingan_run(1)
+    run.alert_id = job.alert_id
+    run.input_hash = workbench._cases[job.alert_id].payload_hash
+    run.llm_analysis_request.alert_id = job.alert_id
+    run.llm_analysis_request.environment = "dev-corpus-eval"
+    workbench._repository.save_run(run)
+    patterns = SocMemoryPatternService(repository=workbench._repository, candidate_repository=workbench._repository, profile_registry=build_soc_memory_profile_registry())
+    workbench._pattern_service = patterns
+    old = patterns.observe_run(run, source_type=MemoryPatternSourceType.BATCH_ALERT, transport_ref="before-semantic-retry", environment="dev-corpus-eval", data_class=MemoryPatternDataClass.OPERATIONAL, context=context()).observation
+    frozen = old.model_dump(mode="json")
+    current = run.model_copy(deep=True, update={"run_id": "RUN-revised-pattern", "started_at": run.started_at + timedelta(seconds=1)})
+    workbench._repository.save_run(current)
+    new = old.model_copy(update={"observation_id": "MPO-revised-pattern", "idempotency_key": "revised-pattern", "source": old.source.model_copy(update={"run_id": current.run_id}), "content_hash": "a" * 64})
+    workbench._repository.replace_memory_pattern_observations(new, superseded_ids=[old.observation_id])
+    _update_job(workbench, job, status="completed", run_id=current.run_id, result_payload={"observation_id": new.observation_id})
+
+    assert workbench.get_execution(current.alert_id).observation_id == new.observation_id
+    audit = workbench.get_audit_bundle(run.alert_id, context=context(), run_id=run.run_id)
+    assert audit.execution.observation_id == old.observation_id
+    assert "后续补跑替代" in _memory(audit.execution).summary
+    assert "support_count" not in _memory(audit.execution).metrics
+    artifact = next(item for item in audit.artifacts if item.artifact_id == "memory-pattern-write")
+    assert artifact.payload["pattern_observation"] == frozen
+    assert "support_count" not in artifact.metrics
+
+    unobserved = run.model_copy(deep=True, update={"run_id": "RUN-same-pattern-without-observation"})
+    workbench._repository.save_run(unobserved)
+    assert workbench.get_audit_bundle(run.alert_id, context=context(), run_id=unobserved.run_id).execution.observation_id is None
 
 
 def test_new_attempt_does_not_make_fixed_historical_audit_run_active(workbench):
