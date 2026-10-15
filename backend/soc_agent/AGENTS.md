@@ -294,11 +294,13 @@ file for SOC code. The authoritative product and engineering documents are:
   A language mismatch alone must not trigger another LLM call or degrade a usable verdict.
 - Keep detection truth, tenant disposition, Memory directives, action authorization, and
   external execution as separate decision layers with explicit lineage.
-- Authorization behavior values retain their 512-character selector contract. If canonical
-  behavior exceeds it, the query builder records typed `unavailable_dimensions` and a
-  source-path/length warning while preserving the complete evidence. The matcher returns
+- Authorization behavior values retain their 1–512-character selector contract. If a behavior
+  candidate is empty after whitespace/entity normalization or exceeds the limit, the query
+  builder records typed `unavailable_dimensions` and a source-path/length warning while
+  preserving the complete evidence. The matcher returns
   `unavailable` before evaluating any remaining selectors; never clip or hash a command
-  into an authorization match. Empty unavailable dimensions are omitted from serialization
+  into an authorization match. Aggregate repeated omissions by reason to bound warnings.
+  Empty unavailable dimensions are omitted from serialization
   to preserve existing enrichment query hashes and idempotent replay.
 - Treat `run_id` as the stable investigation identity. Every persisted Runtime run has an
   alert result and run-scoped investigation context; a `ReviewQueueItem` is an optional

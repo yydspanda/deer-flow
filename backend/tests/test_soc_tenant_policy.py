@@ -716,9 +716,9 @@ def test_exact_authorization_produces_independent_operational_close() -> None:
 
 
 @pytest.mark.parametrize("before_analysis", [True, False])
-def test_long_command_does_not_abort_tenant_policy_decision(before_analysis: bool) -> None:
+@pytest.mark.parametrize("command", ["cscript \\\\192.0.2.1\\share\\script.vbs " + "a" * 600, " "], ids=["oversized", "blank"])
+def test_invalid_command_selector_does_not_abort_tenant_policy_decision(before_analysis: bool, command: str) -> None:
     run = _run(category="command_execution", host="production.example.test", status_code=200)
-    command = "cscript \\\\192.0.2.1\\share\\script.vbs " + "a" * 600
     process = ProcessEntityRef(process_name="cscript", command_line=command)
     run.input_payload["entities"]["process"] = process.model_dump(mode="json")
     run.llm_analysis_request.canonical_entities.process = process

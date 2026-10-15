@@ -277,8 +277,85 @@ def test_oversized_behavior_is_unavailable_without_truncating_evidence(source: s
         assert entities.mentions[0].value == command
 
 
-def test_behavior_at_512_character_boundary_still_matches_exactly() -> None:
-    command = "cscript " + "a" * 504
+@pytest.mark.parametrize(
+    ("source", "value"),
+    [
+        ("command_line", " "),
+        ("command_line", "\t&nbsp;\r\n"),
+        ("parent_command_line", "\u00a0"),
+        ("technique", ""),
+        ("rule_name", " \t"),
+        ("extracted_behavior", " \n"),
+    ],
+)
+def test_empty_behavior_is_unavailable_without_mutating_evidence(source: str, value: str) -> None:
+    alert = AlertInput(
+        tenant_id=TENANT,
+        alert_id="ALT-BLANK-COMMAND",
+        event=AlertEventRef(event_time=BASE_TIME + timedelta(days=2)),
+        entities=AlertEntitySet(
+            host=HostEntityRef(asset_id="asset-1"),
+            process=ProcessEntityRef(process_name="chattr", parent_process_name="java"),
+        ),
+    )
+    entities = None
+    if source == "extracted_behavior":
+        entities = ExtractedEntities(mentions=[EntityMention(kind=EntityKind.BEHAVIOR, value=value, key="behavior:blank", evidence_path="raw.command")])
+        expected_path = "raw.command"
+    elif source == "technique":
+        alert.classification.technique = [value]
+        expected_path = "classification.technique[0]"
+    elif source == "rule_name":
+        alert.detection.rule_name = value
+        expected_path = "detection.rule_name"
+    else:
+        setattr(alert.entities.process, source, value)
+        expected_path = f"entities.process.{source}"
+    original = alert.model_dump(mode="json")
+    original_entities = entities.model_dump(mode="json") if entities else None
+    repository = InMemoryGovernedContextFactRepository()
+    # Valid sibling process features must not authorize the incomplete query.
+    _activate(repository, _payload())
+    service = SocAuthorizedActivityService(repository=repository)
+
+    query = service.build_query(alert, entities=entities, environment=ENVIRONMENT)
+    result = service.match(query)
+
+    assert query.unavailable_dimensions == [AuthorizationDimension.BEHAVIOR]
+    assert all(item.value.strip() for item in query.behaviors)
+    assert any("authorization_behavior_value_empty" in warning and expected_path in warning for warning in query.warnings)
+    assert result.status is AuthorizationMatchStatus.UNAVAILABLE
+    assert result.matched_fact_refs == []
+    assert result.missing_dimensions == [AuthorizationDimension.BEHAVIOR]
+    assert alert.model_dump(mode="json") == original
+    if entities:
+        assert entities.model_dump(mode="json") == original_entities
+
+
+def test_many_empty_and_oversized_behaviors_keep_bounded_diagnostics() -> None:
+    alert = AlertInput(
+        tenant_id=TENANT,
+        alert_id="ALT-INVALID-BEHAVIORS",
+        event=AlertEventRef(event_time=BASE_TIME + timedelta(days=2)),
+        entities=AlertEntitySet(host=HostEntityRef(asset_id="asset-1")),
+    )
+    alert.classification.technique = [" "] * 101 + ["x" * 513] * 101
+    service = SocAuthorizedActivityService(repository=InMemoryGovernedContextFactRepository())
+
+    query = service.build_query(alert, environment=ENVIRONMENT)
+
+    assert query.behaviors == []
+    assert query.unavailable_dimensions == [AuthorizationDimension.BEHAVIOR]
+    for code in ("empty", "too_long"):
+        warnings = [warning for warning in query.warnings if f"authorization_behavior_value_{code}:" in warning]
+        assert len(warnings) == 1
+        assert "omitted_count=101" in warnings[0]
+    assert service.match(query).status is AuthorizationMatchStatus.UNAVAILABLE
+
+
+@pytest.mark.parametrize("length", [1, 512])
+def test_behavior_at_character_boundaries_still_matches_exactly(length: int) -> None:
+    command = "a" * length
     alert = AlertInput(
         tenant_id=TENANT,
         alert_id="ALT-BOUNDARY-COMMAND",

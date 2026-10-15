@@ -647,10 +647,11 @@ Authorized activity / 授权活动事实约束：
 - query builder 只能消费 canonical `AlertInput`、`ExtractedEntities`、`FactReconstructionResult` 和显式
   tenant/environment/timezone context。`RoleResolution.selected_value` 必须先判型；不能把任意 asset/account
   字符串强制解释为 IP。无时区 event time 缺少显式 IANA timezone 时返回 `unavailable`。
-- canonical 行为超过授权 selector 的512字符上限时，完整证据保留；query 通过类型化
+- 行为候选经空白/HTML实体规范化后为空，或超过授权 selector 的512字符上限时，完整证据保留；query 通过类型化
   `unavailable_dimensions=[behavior]` 和来源路径/长度 warning 标记投影缺口。matcher 在匹配其他
   selector 前返回 `unavailable`，不得截断、哈希替换或仅凭剩余短特征建立授权；该缺口不应中断
-  其他研判。新增字段为空时省略序列化，保持旧 enrichment query hash、幂等重试和历史回放兼容。
+  其他研判。同一原因的多个省略项合并计数，避免诊断再次超过warnings上限；合法候选取值不改写。
+  新增字段为空时省略序列化，保持旧 enrichment query hash、幂等重试和历史回放兼容。
 - 历史匹配必须从 append-only fact versions 中选择 `state_changed_at <= alert.event_time` 的最后版本；
   事后创建的 proposed/active fact 不能反向授权旧告警。后续 revoke/suspend 不能改写撤销前的历史 replay。
 - selector 语义固定为不同 `kind@namespace` group AND、同 group 多值 OR；CIDR 可包含 canonical IP。

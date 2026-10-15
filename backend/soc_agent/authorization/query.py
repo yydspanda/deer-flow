@@ -309,11 +309,20 @@ def _behavior_candidates(
 ) -> list[AuthorizationQueryBehavior]:
     candidates: list[AuthorizationQueryBehavior] = []
     process = alert.entities.process
-    oversized_count = 0
-    first_oversized_warning: str | None = None
+    omitted_behaviors: dict[str, tuple[str, int]] = {}
+
+    def omit_behavior(reason: str, value: str, evidence_path: str) -> None:
+        first_warning, count = omitted_behaviors.get(reason, (f"authorization_behavior_value_{reason}:{evidence_path}:length={len(value)}", 0))
+        omitted_behaviors[reason] = (first_warning, count + 1)
+        if AuthorizationDimension.BEHAVIOR not in unavailable_dimensions:
+            unavailable_dimensions.append(AuthorizationDimension.BEHAVIOR)
 
     def add_behavior(kind: AuthorizedActivityBehaviorKind, value: str, evidence_path: str, *, confidence: float = 1.0) -> None:
-        nonlocal oversized_count, first_oversized_warning
+        # Source placeholders can be truthy but become empty after the same
+        # whitespace/entity normalization used by command signatures.
+        if not _normalized_text(value):
+            omit_behavior("empty", value, evidence_path)
+            return
         try:
             candidates.append(_behavior(kind, value, evidence_path, confidence=confidence))
         except ValidationError as exc:
@@ -322,11 +331,7 @@ def _behavior_candidates(
             # The full value remains in canonical evidence. A clipped or hashed
             # replacement would change selector identity, and the remaining
             # candidates must not establish authorization from an incomplete query.
-            oversized_count += 1
-            if first_oversized_warning is None:
-                first_oversized_warning = f"authorization_behavior_value_too_long:{evidence_path}:length={len(value)}"
-            if AuthorizationDimension.BEHAVIOR not in unavailable_dimensions:
-                unavailable_dimensions.append(AuthorizationDimension.BEHAVIOR)
+            omit_behavior("too_long", value, evidence_path)
 
     if reconstruction is not None:
         for index, scenario in enumerate(reconstruction.scenario_hypotheses):
@@ -419,9 +424,9 @@ def _behavior_candidates(
                     path,
                     confidence=mention.confidence,
                 )
-    if first_oversized_warning is not None:
-        suffix = f":omitted_count={oversized_count}" if oversized_count > 1 else ""
-        warnings.append(first_oversized_warning + suffix)
+    for first_warning, count in omitted_behaviors.values():
+        suffix = f":omitted_count={count}" if count > 1 else ""
+        warnings.append(first_warning + suffix)
     return candidates
 
 
