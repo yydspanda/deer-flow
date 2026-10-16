@@ -142,6 +142,58 @@ def test_accumulate_api_requires_admin_and_never_starts_dispatcher(tmp_path, mon
     assert applied.json()["model_calls"] == 0
 
 
+def test_legacy_edr_capacity_skip_preserves_page_progress_and_saved_results(tmp_path, monkeypatch):
+    from soc_agent.contracts import AlertSourceType, ProcessEntityRef
+    from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
+
+    fixture = _legacy_fixture(tmp_path, monkeypatch)
+    profile = PingAnSocMemoryProfile()
+    fixture.continuation = SocCorpusPatternContinuationService(coordinator=fixture.service, profiles=SocMemoryProfileRegistry([profile]))
+    command = _command(fixture, fixture.learning)
+    for alert_id, run_id in command.source_runs.items():
+        run = fixture.repo.get_run(run_id)
+        request = run.llm_analysis_request
+        request.source.source_type = AlertSourceType.EDR
+        request.source.integration_name = "pingan_legacy_alert_platform"
+        request.memory_profile = {
+            "profile_id": profile.identity.profile_id,
+            "profile_version": profile.identity.profile_version,
+            "feature_schema_version": profile.identity.feature_schema_version,
+        }
+        request.canonical_entities.process = ProcessEntityRef(process_name="x" * 513 if alert_id == "1" else "cmd.exe")
+        fixture.repo.save_run(run)
+    before_runs = fixture.repo.list_runs(limit=100)
+    before_rounds = fixture.service.store.list_rounds()
+    before_jobs = fixture.service.store.list_round_items(fixture.learning.round_id)
+    calls = list(fixture.calls)
+
+    # One prior page is already committed; the next page has a long core value
+    # between two ordinary samples. Its neighbors must still be accumulated.
+    first = command.model_copy(update={"source_runs": {"0": command.source_runs["0"]}})
+    later = command.model_copy(update={"source_runs": {key: value for key, value in command.source_runs.items() if key != "0"}})
+    fixture.continuation.accumulate(fixture.learning.round_id, first, context=context())
+    result = fixture.continuation.accumulate(fixture.learning.round_id, later, context=context())
+
+    assert result["counts"] == {"skipped": 1, "accumulated": 2}
+    skipped = next(item for item in result["items"] if item["status"] == "skipped")
+    assert skipped["alert_id"] == "1"
+    assert skipped["reason"].startswith("pattern_facet_value_out_of_bounds:")
+    assert skipped["observation_id"] is None and skipped["candidate_id"] is None
+    assert result["model_calls"] == 0
+    observations = _continuous_observations(fixture)
+    assert {item.source.alert_id for item in observations} == {"0", "2", "3"}
+    assert all(item["support_count"] < 5 for item in result["items"] if item["status"] == "accumulated")
+
+    # Restarting the CLI from its first page neither duplicates nor loses support.
+    repeated = fixture.continuation.accumulate(fixture.learning.round_id, command, context=context())
+    assert repeated["counts"] == {"accumulated": 3, "skipped": 1}
+    assert _continuous_observations(fixture) == observations
+    assert fixture.repo.list_runs(limit=100) == before_runs
+    assert fixture.service.store.list_rounds() == before_rounds
+    assert fixture.service.store.list_round_items(fixture.learning.round_id) == before_jobs
+    assert fixture.calls == calls
+
+
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_cli_accumulate_pages_explicit_saved_results_without_start_or_model(dry_run, capsys):
     calls = []

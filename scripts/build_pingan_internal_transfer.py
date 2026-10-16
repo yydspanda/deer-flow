@@ -359,6 +359,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/tests/test_soc_corpus_continuous_event_range.py",
     "backend/tests/test_soc_corpus_pattern_learning_display.py",
     "backend/tests/test_soc_corpus_pattern_continuation.py",
+    "backend/tests/test_soc_pingan_pattern_capacity.py",
     "backend/tests/test_soc_memory_pattern_continuous_scope.py",
     "backend/tests/test_soc_memory_pattern_revisions.py",
     "backend/tests/test_soc_memory_pattern_current_views.py",

@@ -3041,6 +3041,11 @@ tool permission denial rate
   仍展示原因，不构造无效跳转。过滤长度沿用 Pattern 的既有空白归一语义，人工条件保持 strip 边界。
   其他契约错误仍是处理失败，不得笼统将所有 `ValidationError` 当作正常不准入。兼容回归固定旧经验
   和告警输入，检查原有命中与排除条件均不因升级改变；不得通过重新审核或重跑第一批掩盖不兼容。
+- PingAn 新 Pattern 签名只对实际选入的 facet 检查既有空白规范化后的1～512字符容量；
+  无法完整表示的样本以 `pattern_facet_value_out_of_bounds:<facet keys>` 整条不准入积累，
+  不删除、截断或摘要替换核心行为后降格积累。原因仅含字段名，不回传完整长值。
+  原 Run、查询特征/指纹、历史 Observation 与审核经验不变，Profile 不升级；其他校验及数据库异常仍失败。
+  接续的来源预检不等于 Pattern 准入；实际执行返回明确 skipped，正常样本继续按页提交，重复执行不增加支持数。
 - PingAn Profile v7（feature schema v5）把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
   `detection_key`，但该 key 只表示规则大类，不得单独复制历史 verdict。Profile 必须从 canonical
   rule name 生成版本化 `detection_signature`；不得用 `alert_id/run_id` 合成任一检测身份。

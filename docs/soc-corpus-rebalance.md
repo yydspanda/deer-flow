@@ -344,7 +344,11 @@ backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py accumulate \
 | `model_calls=0` | 未调用模型，正常 |
 | `newer_batch_result_exists` | 旧结果已被替代，改用保存最新结果的轮次接续 |
 | `semantic_review_failed_learning_deferred` | 语义核对失败，暂缓积累；按第5节检查能否补跑 |
+| `pattern_facet_value_out_of_bounds:...` | 匹配特征为空或超过512字符，整条暂不计入积累；原始研判保留，其余样本继续 |
 | 错误退出 | 先处理错误，再执行；已经成功接续的来源不会重复计数 |
+
+`processed` 是累计处理的来源数，包含跳过项；`accumulated` 是当前页已接续项，不是新增经验条数。
+容量跳过不表示缺少核心行为，也不会截断核心行为后合并分组。`--dry-run` 只检查来源身份，实际准入以执行结果为准。
 
 完成后在页面启动新版第二批。两批共用本代次的实际行为积累；4条独立有效样本加1条可达5条门槛，仍须通过质量检查。
 直接复用或使用已审核经验的结果不作为独立结论支持。第二批新候选等本轮结束后在页面审核，不能用要求“第二批尚未开始”的第一批批量审核脚本。

@@ -18,6 +18,7 @@ FIXTURE_PATH = "backend/tests/fixtures/soc_memory/profile7_v5_release_20260918.j
 REQUIRED_TEST_FILES = (
     "backend/tests/test_soc_release_memory_compatibility.py",
     "backend/tests/test_soc_pingan_memory_profile_restore.py",
+    "backend/tests/test_soc_pingan_pattern_capacity.py",
     "backend/tests/test_soc_corpus_pattern_execution.py",
     "backend/tests/test_soc_memory_experiment_retrieval.py",
     "backend/tests/test_soc_memory_reference_retrieval.py",
@@ -40,6 +41,12 @@ REQUIRED_TEST_FILES = (
 )
 # Keep these behavioral checks mandatory even if a file still contains other tests.
 REQUIRED_TEST_NAMES: dict[str, tuple[str, ...]] = {
+    "backend/tests/test_soc_pingan_pattern_capacity.py": (
+        "test_oversized_core_is_ineligible_without_rewriting_either_frozen_scope",
+        "test_complete_512_character_core_remains_eligible",
+        "test_long_non_pattern_facet_does_not_block_learning",
+        "test_unrelated_pattern_schema_failure_still_propagates",
+    ),
     "backend/tests/test_soc_hids_file_fallback_scope.py": (
         "test_non_webshell_login_retains_session_user_and_legacy_file_projection",
     ),

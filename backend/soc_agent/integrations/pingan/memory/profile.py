@@ -595,7 +595,16 @@ def _pingan_pattern_facets(
 ) -> dict[str, list[str]]:
     """Freeze only decision-relevant and reviewer-useful facets on a cohort."""
 
-    return {key: list(facets[key]) for key in _PINGAN_PATTERN_FACET_KEYS if facets.get(key)}
+    projected = {key: list(facets[key]) for key in _PINGAN_PATTERN_FACET_KEYS if facets.get(key)}
+    # A saved Run can contain complete behavior facts that exceed the Pattern
+    # and reviewed-condition capacity. Reject this observation explicitly:
+    # dropping/truncating a core value would weaken the reviewed scope. Keep
+    # query projection, frozen identities, raw evidence and other schema gates
+    # unchanged. The shared observer records ValueError as learning ineligibility.
+    invalid = [key for key, values in projected.items() if any(not 1 <= len(" ".join(value.split())) <= 512 for value in values)]
+    if invalid:
+        raise ValueError("pattern_facet_value_out_of_bounds:" + ",".join(sorted(invalid)))
+    return projected
 
 
 _ATTACK_FAMILY_LABELS = {

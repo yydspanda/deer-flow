@@ -95,6 +95,11 @@ generic `soc_agent` code.
   replacing a still-current candidate simply because the other identity exists.
   Only unmarked historical runs retain review-mode inference (apply -> 8, otherwise 7).
   Reject invalid saved identities rather than silently falling back to another Profile.
+  Before constructing a new Pattern signature, validate the complete selected facet values
+  against its existing whitespace-normalized 1–512 capacity. An unrepresentable sample is
+  explicitly ineligible (`pattern_facet_value_out_of_bounds:<facet keys>`), never a reduced
+  core scope. Preserve full Run/query facts, fingerprints and all saved records; unrelated
+  schema errors still fail. This admission check does not change the matching Profile.
   `memory/reference_retrieval.py` is the narrow reference-only compatibility boundary:
   eligible reviewed `review_hint` records with no directive and exactly detector key,
   detection signature and environment as required keys may remain model context across
