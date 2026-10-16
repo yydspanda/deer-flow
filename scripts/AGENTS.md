@@ -89,7 +89,8 @@ The handoff inventory must include the rebalance contracts/services, facts-only 
 successor experiment regressions, explicit-experiment bulk review tool/tests, and
 `docs/soc-corpus-rebalance.md` plus the review guide. Default Web execution uses
 static groups without a facts prepass; the semantic successor CLI remains opt-in.
-Source delivery preserves the DEV database and old history, not new-plan progress.
+Source delivery preserves the DEV database and existing progress for the same plan;
+changed membership creates a separate plan and does not inherit old-plan progress.
 `soc_learning_candidate_audit.py` reads only persisted first-batch facts with SQLite
 read-only/query-only guards and drift detection; do not rebuild groups or compare
 operational labels. Keep both procedures in `docs/soc-learning-review-batch.md` and
@@ -630,7 +631,10 @@ Quick corpus validation adds `backend/soc_agent/demo/corpus_quick_validation.py`
 the required handoff source inventory. Generated operator instructions retain Web
 start/pause/continue/review: 9,364 learning, 2,153 main validation, 3,764 supplementary.
 Only 6,367 old main-validation members move to learning; old learning stays and the
-supplementary set is unchanged. No facts prepass or automatic progress inheritance.
+supplementary set is unchanged. No facts prepass or automatic progress inheritance
+across different plans. Upgrades already using the 9,364/5,917 split preserve learning
+results and reviewed Memory. Document optional saved-Run accumulation before preparing
+new validation, rather than instructing every upgrade to restart learning.
 Full fresh validation requires explicit operator reset, never installer-side clearing.
 Second-batch all/reuse/explore retains explicit all-alert
 restart with retained history (`docs/soc-validation-restart.md`). Include the restart
@@ -642,7 +646,8 @@ The round CLI `retry --round ... --kind failed|semantic_failed` reuses the froze
 round and dispatches only selected failures; optional concurrency never replaces its
 saved business settings. The CLI reads and sends the round version once, without
 automatic HTTP retries. Document pause/drain before bulk retry and export
-the same complete round afterward. Semantic retry is validation/apply-only; partial
+the same complete round afterward. Semantic retry supports both learning and validation
+rounds saved with review mode `apply`; facts inventories are excluded, and partial
 or skipped checks are not failures. Snapshot drift still requires a new round. Keep
 `docs/soc-corpus-rebalance.md` as the operator source, and mark any updated handoff
 manual as pending when its source archive does not yet contain the new command.

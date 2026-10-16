@@ -85,17 +85,11 @@ backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
 
 ## 5. 在原轮次补跑失败项并导出完整报告
 
-第一批、第二批的模型研判失败和语义核对失败，都支持原轮次补跑。`round_id` 表示这次固定样本与设置，
-每次实际运行另有 `run_id`；补跑保留旧 Run，更新该轮告警的当前结果。完成后导出同一个轮次，
-每条告警只计一次，无需合并报告。
+**第一批、第二批都支持执行失败和语义核对失败重试，轮次ID不变，不用合并报告。需先安装支持 `retry` 的新版。**
 
-页面中失败告警的“重试”沿用其所属轮次及保存设置；成功告警的“重新运行”仍是另一次运行，
-不能用它替代原轮次的失败恢复。批量恢复和语义核对恢复可使用本节命令。
-这些命令要求安装包含 `retry` 子命令的新版本；旧包不支持时需要更新代码，不能只复制教程执行。
+### 5.1 查轮次，设置轮次ID和并发
 
-### 5.1 选定这次要恢复、汇报的完整轮次
-
-以下只读查询列出当前网页实验的指定批次轮次。`SOC_RETRY_BATCH` 选 `learning`（第一批）或 `validation`（第二批）；不启动任务、不打印经验快照：
+查询第二批用 `validation`；查第一批把下面一行改为 `learning`。
 
 ```bash
 cd "$HOME/deer-flow"
@@ -124,117 +118,147 @@ with httpx.Client(base_url="http://127.0.0.1:2026", headers=headers, timeout=120
         rows = get(f"/experiments/{current['experiment_id']}/rounds", batch=batch, limit=100, offset=offset)
         for row in rows:
             p = get(f"/rounds/{row['round_id']}")
-            print(row["round_id"], "状态=" + p["round"]["state"], "范围=" + str(p["selected_count"]),
-                  "完成=" + str(p["completed_count"]), "失败=" + str(p["failed_count"]))
+            saved = p["round"]
+            print(row["round_id"], "状态=" + saved["state"], "范围=" + str(p["selected_count"]),
+                  "完成=" + str(p["completed_count"]), "失败=" + str(p["failed_count"]),
+                  "运行中=" + str(p.get("active_count", 0)))
+            print("  保存设置：", saved.get("options", {}), "用途：", saved.get("purpose"),
+                  "积累代次：", saved.get("learning_generation"),
+                  "连续积累：", bool(saved.get("pattern_accumulation_scope")))
         if len(rows) < 100:
             break
         offset += len(rows)
 PYREPORT
 ```
 
-选择这次要恢复的完整轮次，核对范围和保存设置。不要选择只有一条或少量告警的历史复测轮次。
-页面按各告警最新任务汇总；页面全部完成，不一定表示某个固定轮次也全部完成。
-仅在这里填写一次轮次 ID，后续命令都使用同一个值；重新打开终端后需重新设置。
+选择本次完整轮次，核对数量和保存设置。填写一次，后续保持同一个终端：
 
 ```bash
 cd "$HOME/deer-flow"
 export SOC_RETRY_ROUND="替换为本次完整ROUND-ID"
+export SOC_RETRY_CONCURRENCY=8
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}"
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}"
 ```
 
-配置、模型、代码或已审核经验快照变化时，旧轮次仍会拒绝重试。此时按提示重新配置并新建完整轮次，
-保留旧记录；升级新功能不代表升级前的旧轮次能直接补跑。不要手工改数据库或绕过快照检查。
+并发可设为1～16，不能超过服务器上限。轮次ID用 `ROUND-...`，不要填 `RUN-...`。
 
-### 5.2 同轮次批量补跑
+### 5.2 暂停、重试、查看状态
 
-先暂停选中的轮次，等待 `active_count=0`。已完成的轮次无需暂停，直接检查状态。
-若同批其他轮次仍在运行，先让它结束或暂停收尾，避免两个验证配置交叉运行。
+**① 暂停并等待收尾。** 已完成且 `active_count=0` 的轮次跳过此块。
 
 ```bash
 cd "$HOME/deer-flow"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py pause \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}"
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" --watch
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --watch
 ```
 
-**任务失败：** 补跑该轮允许重试的失败任务，包括模型研判失败。示例并发8，可手工改为1～16，
-仍受服务器保存的最大并发限制；省略 `--concurrency` 则沿用该轮原并发。
+看到 `active_count=0` 且状态不是 `running` 后继续；其他正在运行的轮次也先暂停收尾。
+
+**② 重试执行失败（含模型研判失败）。** 没有执行失败就跳过。
 
 ```bash
 cd "$HOME/deer-flow"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py retry \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" --kind failed --concurrency 8
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" \
+  --kind failed --concurrency "${SOC_RETRY_CONCURRENCY:?先设置并发}"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" --watch
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --watch
 ```
 
-**语义核对失败：** 等前一类补跑结束后，补跑该轮语义核对明确失败、但已兜底完成的告警（两批均支持）。
-只选取 `normalization_assist=failed`；`partial`、`skipped` 和关闭核对不算失败。
-原轮次必须开启语义核对 `apply`，并且不是事实准备轮次。关闭核对的旧轮次不能用此命令补开功能，需重新配置运行。
+**③ 重试语义核对失败。** 等②结束后执行；原轮次必须已开启语义核对 `apply`。
 
 ```bash
 cd "$HOME/deer-flow"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py retry \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" --kind semantic_failed --concurrency 8
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" \
+  --kind semantic_failed --concurrency "${SOC_RETRY_CONCURRENCY:?先设置并发}"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" --watch
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --watch
 ```
 
-两类命令分别按需执行，没有对应失败项就跳过。命令直接查询指定轮次当前失败项，
-不依赖旧报告目录或手工失败名单，也不会误用页面上另一轮的开关。
-只重试个别告警时，在对应命令后加 `--alert 告警ID`；多条可重复添加 `--alert`。
-命令会自动读取该轮当前版本再提交；期间状态变化会拒绝提交，不会自动重复发送。
-网络超时或响应丢失时先用 `status` 确认是否已开始；再次执行 `retry` 表示明确发起下一次补跑。
+只重试核对明确失败、已兜底完成的告警；`partial`、`skipped` 不算失败。会重新核对并执行后续研判。
+**②③提交成功会自动运行，不再点击页面“继续”。** 只选个别告警时，在 `retry` 命令末尾加 `--alert 告警ID`，多条可重复添加。
 
-`retried` 是本次重新入队数，`not_retryable` 是因错误性质或重试次数限制未入队的数量。
-命令提交后后台自动启动选中项，不用再执行 `resume`；`status --watch` 只看进度，Ctrl+C只退出观察。
-需要暂停时用同一个轮次的 `pause`；继续补跑用该轮 `resume`，不加 `--restore-full-scope`。
-语义补跑会重新核对事实并重新执行后续研判，可能再次调用研判模型；不是只改核对状态。
-原轮的业务开关、模型和经验快照保留，单次事实刷新作为重试信息记录。
-新版连续积累中，核对明确失败的样本暂缓积累；成功补跑后才纳入。同一来源只保留一个当前有效观察，
-修正行为组会撤销旧组中这条支持，旧观察和原 Run 仍保留审计。不会把重试次数算作多个独立样本。
-
-补跑只调度本次选中项。若这个轮次原本还有尚未运行的排队任务，补跑结束后先确认该轮暂停且
-`active_count=0`，再恢复其完整固定范围继续执行：
+**④ 随时查看进度。** 另开终端时先重新设置同一个轮次ID。
 
 ```bash
 cd "$HOME/deer-flow"
-backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py pause \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}"
+backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --watch
+```
+
+看 `state`、`active_count`、`completed_count`、`failed_count`、`counts` 和 `concurrency`。
+去掉 `--watch` 只查一次；没有变化时不重复输出。**Ctrl+C只退出查看，不停止后台任务。**
+
+**⑤ 暂停后继续补跑。** 暂停用①；等运行中为0，再执行：
+
+```bash
+cd "$HOME/deer-flow"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py resume \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" --restore-full-scope
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" --watch
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --watch
 ```
 
-这个恢复范围命令不会重跑已完成任务，也不会自动重试失败任务。已经完整结束则无需执行。
-再次失败会继续保留失败状态或语义兜底状态，不能只选择成功尝试汇报。
+**⑥ 中途修改并发。** 先执行①暂停并等运行中为0，再改数字后执行：
+
+```bash
+cd "$HOME/deer-flow"
+export SOC_RETRY_CONCURRENCY=16
+backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py resume \
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" \
+  --concurrency "${SOC_RETRY_CONCURRENCY:?先设置并发}"
+backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --watch
+```
+
+核对输出 `concurrency`；只改变量不会改变后台并发。业务开关不变，实际同时运行数可能低于上限。
+
+**⑦ 补跑结束后，继续该轮原来未执行的队列。** 仅还有原排队任务时执行；先用①暂停并等运行中为0。
+
+```bash
+cd "$HOME/deer-flow"
+backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py resume \
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --restore-full-scope
+backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" --watch
+```
+
+只继续补跑名单用⑤；恢复整轮剩余队列才用⑦。已完成项不重跑，失败项不自动重试。
+
+| 输出或报错 | 怎么处理 |
+| --- | --- |
+| `retried` 大于0 | 已启动本次重试，用④看状态 |
+| `retried=0` | 没有选中可重试项；查看 `not_retryable` |
+| `not_retryable` | 检查失败原因/尝试数；单个任务累计最多3次尝试 |
+| `snapshot changed` / `configuration_changed` / 轮次阻断或已被替代 | 不能强行同轮重试；处理原因后，在页面重新配置并全部重跑 |
+| 网络超时，未收到提交结果 | 先用④查状态，不立即重复提交 |
 
 ### 5.3 导出同一个轮次的完整报告
 
-确认该轮覆盖完整第二批、全部完成且没有任务失败后导出。语义兜底仍需在报告中说明。
-每次使用新的输出目录，保留先前导出；无需新建复测轮次或人工替换报告行。
+第二批完整结束、`failed_count=0` 后执行。目录每次新建，旧报告保留。
 
 ```bash
 cd "$HOME/deer-flow"
+export SOC_STAGE_REPORT_DIR="$HOME/soc-stage-report-$(date +%Y%m%d-%H%M%S)"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py export \
-  --round "${SOC_RETRY_ROUND:?先设置要恢复的轮次ID}" \
-  --output-dir "$HOME/soc-stage-report-$(date +%Y%m%d-%H%M%S)"
+  --round "${SOC_RETRY_ROUND:?先设置轮次ID}" \
+  --output-dir "$SOC_STAGE_REPORT_DIR"
 ```
 
-目录包含 `REPORT.md`、`report.json` 和明细CSV。结论采用该轮每条告警最新的补跑结果，
-历史 Run 及已保存调用用量保留；缺失用量不会假设为零。报告不使用历史处置标签评分。
-正式汇报须核对 `report_scope=stage`、`stage_conclusion_allowed=true`；未完整结束的导出仅为诊断。
+打开该目录 `REPORT.md`；核对 `report_scope=stage`、`stage_conclusion_allowed=true`。
+报告每条告警只统计当前结果，保留历史尝试成本；不需要另建复测轮次或合并报告。
 
-### 5.4 统计最终剩余的语义核对失败
+### 5.4 统计报告中剩余的语义核对失败
 
-下面只读取指定报告，不会启动模型；换报告只改目录变量。
+紧接第5.3节执行；换终端时，把目录变量改为已导出的报告路径。
 
 ```bash
 cd "$HOME/deer-flow"
-export SOC_SEMANTIC_REPORT_DIR="$HOME/替换为刚导出的报告目录"
+export SOC_SEMANTIC_REPORT_DIR="${SOC_STAGE_REPORT_DIR:?先填写或设置报告目录}"
 backend/.venv/bin/python - <<'PYSEMANTIC'
 import json
 import os
@@ -243,14 +267,18 @@ from pathlib import Path
 path = Path(os.environ["SOC_SEMANTIC_REPORT_DIR"]).expanduser() / "report.json"
 report = json.loads(path.read_text(encoding="utf-8"))
 rows = report["rows"]
-failed = [
-    row for row in rows
-    if any(
+
+def semantic_failed(row):
+    summary = row.get("summary") or {}
+    if "normalization_assist_status" in summary:
+        return summary["normalization_assist_status"] == "failed"
+    return any(
         step.get("phase") == "normalization_assist"
         and step.get("status") == "failed"
-        for step in row.get("summary", {}).get("phase_timings", [])
+        for step in summary.get("phase_timings", [])
     )
-]
+
+failed = [row for row in rows if semantic_failed(row)]
 print("统计轮次：", report["round"]["round_id"])
 print("告警总数：", len(rows))
 print("最终语义核对阶段失败：", len(failed))
@@ -263,42 +291,61 @@ for row in failed:
 PYSEMANTIC
 ```
 
-这是最终采用 Run 的阶段失败数，包含超时、输出解析或合并异常等情况；不是严格的LLM请求失败率，
-也不包含先前失败但已恢复的 Run 或 SDK 内部重试。`partial` 和 `skipped` 不算失败。
-要区分具体原因，按 Run ID 查看运行审计；历史失败尝试不因补跑成功而删除。
-
-## 旧命令的边界
-
-代码仍保留可选的语义事实后继实验接口和历史结果读取能力，便于审计与兼容；
-本次不使用这条高级命令流程。无需Git整体回退，也不回退已经修复的核心行为提取、
-经验匹配和180天默认值。内网部署、数据库归档重置和真实效果验证由操作员执行。
-
+看“最终语义核对阶段失败”；`partial`、`skipped` 不计入。这里统计最终结果的阶段失败，不是LLM请求失败率。
 
 ## 6. 两批连续积累与已有结果接续
 
-新版创建的轮次在同一实验、同一积累代次内共用实际行为积累池。粗分组仅用于浏览和名单划分；
-不同核心行为、Profile 或独立事件仍按原有规则区分。第一批同一行为已有4条独立有效样本，
-第二批再出现1条即可达到5条支持；还需满足结论质量等门槛，才生成待审核候选。
-直接复用经验或研判输入含已审核经验的样本可以计入出现次数，但不作为独立结论支持。
+**旧版第一批已完成时执行本节，再开始新版第二批。新版轮次已自动连续积累，无需重复接续。**
 
-第二批仍使用启动时冻结的已审核经验。新增候选不会自动通过审核，也不会改变本轮后续告警的判断；
-等本轮完成再审核，下一轮才能使用。两批全部完成后，在经验中心查看合并后的实际行为组，
-不要将两批静态分组数相加当作行为指纹总数。显式“第一批全部重跑”仍开启新的积累代次。
+### 6.1 查来源轮次，暂停两批
 
-升级前已经完成的第一批不必为了接续积累重跑模型。新版部署后，先暂停该实验的运行并等待活动任务归零，
-使用保存的成功 Run 接续到连续积累池。先选择来源第一批轮次；如旧版单条重跑产生了独立轮次，
-再对那些来源轮次执行同样步骤。已被更新任务替代的旧结果会跳过，重复执行不会重复计数。
+按第5.1节查询轮次：`learning` 查第一批，`validation` 查第二批。找到当前代次的第一批来源轮次。
+对每个仍在运行的轮次，填入对应ID后执行；已完成且运行中为0的跳过：
+
+```bash
+cd "$HOME/deer-flow"
+export SOC_PAUSE_ROUND="替换为仍在运行的ROUND-ID"
+backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py pause \
+  --round "${SOC_PAUSE_ROUND:?先设置要暂停的轮次}"
+backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py status \
+  --round "${SOC_PAUSE_ROUND:?先设置要暂停的轮次}" --watch
+```
+
+两批全部停止运行、`active_count=0`、单条任务结束后继续；接续期间不要开始任务或审核经验。
+
+### 6.2 预检，再接续保存结果
+
+填写已有第一批的来源轮次，先预检：
 
 ```bash
 cd "$HOME/deer-flow"
 export SOC_ACCUMULATE_ROUND="替换为已有第一批ROUND-ID"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py accumulate \
   --round "${SOC_ACCUMULATE_ROUND:?先选择来源轮次}" --dry-run
+```
+
+没有错误且来源正确，再执行：
+
+```bash
+cd "$HOME/deer-flow"
 backend/.venv/bin/python backend/scripts/soc_corpus_experiment.py accumulate \
   --round "${SOC_ACCUMULATE_ROUND:?先选择来源轮次}"
 ```
 
-此命令只根据保存的事实、Profile 和结果更新观察与候选，不调用语义核对或研判模型，不改旧 Run、旧任务、
-轮次报告或已审核 Memory。只有当前积累代次的匹配来源可接续；不能借此恢复旧轮次的代码快照。
-旧待审核候选若引用被替代的观察，会保留为失效历史并重新满足门槛后生成新候选；已审核经验保留原内容。
-接续完成后，在页面按所需设置创建新版第二批轮次，正常开始验证即可。
+不调用模型，不改旧报告和已审核经验。旧版单条重跑有独立轮次的，再对保存最新成功结果的轮次重复本节。
+
+### 6.3 看输出，再启动第二批
+
+| 输出 | 含义或操作 |
+| --- | --- |
+| `eligible` | 来源预检通过，不保证生成候选 |
+| `processed` | 累计检查的成功来源数 |
+| `counts` / `skipped_reasons` | 当前页统计；每页最多100条 |
+| `model_calls=0` | 未调用模型，正常 |
+| `newer_batch_result_exists` | 旧结果已被替代，改用保存最新结果的轮次接续 |
+| `semantic_review_failed_learning_deferred` | 语义核对失败，暂缓积累；按第5节检查能否补跑 |
+| 错误退出 | 先处理错误，再执行；已经成功接续的来源不会重复计数 |
+
+完成后在页面启动新版第二批。两批共用本代次的实际行为积累；4条独立有效样本加1条可达5条门槛，仍须通过质量检查。
+直接复用或使用已审核经验的结果不作为独立结论支持。第二批新候选等本轮结束后在页面审核，不能用要求“第二批尚未开始”的第一批批量审核脚本。
+本轮使用的经验快照不变；观察修正保留历史，不重复计数。旧代次不能接续到新代次；不需要重跑第一批或清库。

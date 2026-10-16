@@ -552,9 +552,14 @@ def test_transfer_runbook_learning_instructions_match_data_mode(
         assert "本轮第一批及经验审核完成后" in evaluation
     else:
         assert "旧实验结果与审核记录保留" in verification
-        assert "新名单需要独立运行" in verification
+        assert "只有仍使用旧第一批2,997条名单" in verification
         assert "如果升级后旧任务提示" in evaluation
-        assert "新名单需从网页第一批“开始积累”启动" in evaluation
+        assert "保留已经完成的第一批和已审核经验" in evaluation
+        assert "新名单需从网页第一批“开始积累”启动" not in evaluation
+        assert "第11节" in evaluation
+    assert "--kind failed" in evaluation
+    assert "--kind semantic_failed" in evaluation
+    assert "第10节" in evaluation
 
 
 def test_source_bundle_readme_documents_sixteen_capacity_and_local_control() -> None:
@@ -597,7 +602,9 @@ def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
     assert "原实验记录不会改写成新名单" in section
     assert "重新配置并全部重跑" in section
     assert "旧结果仍保留在历史中" in section
-    assert "新名单需要独立运行" in section
+    assert "第一批9,364条、第二批5,917条" in section
+    assert "无需重新积累或重新审核这些经验" in section
+    assert "只有仍使用旧第一批2,997条名单" in section
     assert "仅在同一代码版本下修改“最大并发”不会触发" in section
 
 

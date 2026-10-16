@@ -145,6 +145,11 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > new candidates await review after the round. Retries replace active observations without
 > increasing support, preserving old evidence. Existing saved Runs can be continued with
 > `accumulate --round <ID>` without model calls; see the [continuation steps](docs/soc-corpus-rebalance.md#6-两批连续积累与已有结果接续).
+> After upgrading an existing learning run, pause both batches, preview and continue its
+> saved results before starting the new validation round. First-batch bulk-review tooling
+> requires validation not to have started; review validation's new candidates in the UI
+> after the round ends. Round listings show saved settings, and semantic-failure statistics
+> use the saved review status, falling back to phase timings only for older records.
 > After manually extracting an experience, the alert result shows **审核人工提炼经验**
 > even when automatic pattern accumulation has not yet produced a candidate.
 > Successful extraction keeps its review link if the following list refresh fails.

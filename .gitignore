@@ -91,3 +91,6 @@ backend/soc_agent/.understand-anything/
 validation/git-commit-pack.zip
 validation/detector_celery
 validation/detector-python-agent-v3.2.3.zip
+validation/sec_know_model.zip
+validation/rule_refine/规则配置表结果集.xlsx
+validation/rule_refine/输出优化建议.txt
