@@ -144,6 +144,7 @@ def test_handoff_requires_process_facts_and_projection_audit_regressions(
         "backend/tests/test_soc_fact_preparation.py",
         "scripts/soc_bulk_review_learning.py",
         "scripts/test_soc_bulk_review_learning.py",
+        "scripts/test_soc_bulk_review_incremental.py",
         "docs/soc-corpus-rebalance.md",
         "docs/soc-learning-review-batch.md",
     ],

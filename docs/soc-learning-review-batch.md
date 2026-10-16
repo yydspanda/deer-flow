@@ -1,6 +1,10 @@
-# 内网第一批：候选数量诊断与批量审核
+# 内网：候选数量诊断与两阶段批量审核
 
-这套独立工具适用于当前内网 Mac DEV：第一批已全部完成，尚未开始第二批。
+这套独立工具适用于当前内网 Mac DEV，分为两种显式模式：
+
+- 首次审核：`plan --phase initial`，默认模式；第一批已全部完成、第二批尚未开始，按第3～5节执行。
+- 增量审核：`plan --phase incremental --report-dir 报告目录`；第一批已完成、第二批已有固定导出报告，两批暂停且活动任务为0，按第6节执行。
+
 工具通过现有接口提交审核，服务保持运行，无需重置数据库或重跑告警。
 新建计划默认 180 天复核、365 天有效期，需先部署本次配套应用，解除旧服务端重复模式经验
 90 天有效期上限；仅更新独立脚本不足以支持新期限。恢复旧计划仍沿用原期限。
@@ -71,13 +75,14 @@ python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_learning_candidate
 新实验流程见[保留数据的补充学习手册](soc-corpus-rebalance.md)。
 将输出目录中的 `summary.json` 用于核对数量差异；其中没有原始告警正文或模型推理正文。
 
-## 3. 冻结本次批量审核名单
+## 3. 首次审核：冻结本次批量审核名单
 
 保持服务启动，不要同时在页面审核这些候选，也不要启动第二批。
 本次 117 条的命令如下：
 
 ```bash
 python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" plan \
+  --phase initial \
   --expected-count 117 \
   --output-dir "$HOME/soc-review-117"
 ```
@@ -141,6 +146,18 @@ python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learni
 刷新经验页面，对照成功、失败和跳过数量。只有实际确认且精确复用已启用的经验计为成功；
 确认完毕后再从页面启动第二批，以冻结这次已审核的经验。
 
+查看计划本地进度时，可另开终端执行；不提交审核、不调用模型：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+read -r -p '审核目录完整路径：' soc_review_dir </dev/tty
+test -f "$soc_review_dir/plan.json"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" status \
+  --plan "$soc_review_dir/plan.json"
+BASH
+```
+
 ### 117 条计划中剩余 31 条的恢复
 
 本次返回 `completed=86、blocked=16、draft_failed=15`。保留整个 `soc-review-117` 目录，
@@ -163,6 +180,91 @@ python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learni
 应用启动正常、审核工具校验通过后，使用本节前面的 `--retry-failed` 命令，仍可 8 路并发。
 已成功的 86 条自动跳过，计划内 16 条 blocked 继续保留，只重试 15 条起草失败项目。
 尚不能从这些失败数推导最初候选数量减少的原因；候选数量调查继续以只读积累诊断为依据。
+
+## 6. 第二批已运行：先保存报告，再批量审核增量经验
+
+按部署教程第11.5节导出第二批首次报告，保留目录中的 `report.json` 和 `manifest.json`。
+暂停第一批、第二批及单条任务，等待所有运行中为0。服务保持运行，审核期间不开始新任务或同时在页面审核同一名单。
+本节使用新计划目录，与第3节首次审核计划分开；已有审核不重复处理。
+
+### 6.1 从固定报告建立增量计划
+
+先按第1节校验新版工具，再执行。待审核为0时跳过审核，按部署教程新建复测轮次：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+umask 077
+read -r -p '第二批首次报告目录完整路径：' soc_report_dir </dev/tty
+read -r -p '当前实验本次待审核条数：' soc_pending_count </dev/tty
+test -f "$soc_report_dir/report.json"
+test -f "$soc_report_dir/manifest.json"
+[[ "$soc_pending_count" =~ ^[1-9][0-9]*$ ]]
+soc_review_dir="$HOME/soc-review-incremental-$(date +%Y%m%d-%H%M%S)-$$"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" plan \
+  --phase incremental --report-dir "$soc_report_dir" \
+  --expected-count "$soc_pending_count" --output-dir "$soc_review_dir"
+printf '\n增量审核目录，请复制保存：%s\n' "$soc_review_dir"
+BASH
+```
+
+工具从报告读取实验和轮次，不硬编码编号、不选择页面最新轮次。它核验报告清单、第一批完成、来源第二批非运行且未被替代、当前结果与固定报告一致，并确认无活动任务。
+只有计划中冻结的待审候选可以提交；报告过时、任务仍运行、数量不符等情况会停止，不会静默切换来源。
+没有 `--phase incremental` 时仍执行原来的首次审核限制，不能借此绕过第二批已开始的检查。
+
+### 6.2 执行审核；普通中断后用同一计划续审
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+read -r -p '本次增量审核目录完整路径：' soc_review_dir </dev/tty
+read -r -p '审核并发（1～8，回车用8）：' soc_review_concurrency </dev/tty
+soc_review_concurrency="${soc_review_concurrency:-8}"
+[[ "$soc_review_concurrency" =~ ^[1-8]$ ]]
+test -f "$soc_review_dir/plan.json"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" apply \
+  --plan "$soc_review_dir/plan.json" --concurrency "$soc_review_concurrency" \
+  --confirm APPROVE-FALSE-POSITIVE
+BASH
+```
+
+同样采用运营指定的误报／精确复用、默认核心行为、保留已有附加条件，复核180天、有效期365天。
+它不证明每条候选都已逐条人工核实，也不自动启动第二批。已完成项跳过，`blocked`保持阻断。
+
+### 6.3 显式重试失败；查看状态
+
+显示 `draft_failed` 等失败、处理原因后执行；不要重建原计划：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+read -r -p '同一个增量审核目录完整路径：' soc_review_dir </dev/tty
+read -r -p '审核并发（1～8，回车用8）：' soc_review_concurrency </dev/tty
+soc_review_concurrency="${soc_review_concurrency:-8}"
+[[ "$soc_review_concurrency" =~ ^[1-8]$ ]]
+test -f "$soc_review_dir/plan.json"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" apply \
+  --plan "$soc_review_dir/plan.json" --concurrency "$soc_review_concurrency" \
+  --retry-failed --confirm APPROVE-FALSE-POSITIVE
+BASH
+```
+
+只读查看本地状态，另一终端也可运行：
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+read -r -p '本次增量审核目录完整路径：' soc_review_dir </dev/tty
+test -f "$soc_review_dir/plan.json"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" status \
+  --plan "$soc_review_dir/plan.json"
+BASH
+```
+
+保留计划、状态和回执。`confirmed_unverified`先在页面核对，缺少核心行为的 `blocked`不能强行改为精确复用。
+若需要不同审核结论或单独处理阻断项，使用 `http://localhost:2026/workspace/soc/review/memory-candidates`，核对当前实验后逐条处理。
+本次名单处理完，按部署教程第13.2节对第二批**重新配置并全部重跑**，冻结新增经验；不要点旧轮次“继续”。
+首次报告与复测报告分别保存、分别生成精简统计，学习与验证样本重叠用于已见场景的复用验证。
 
 ## 认证与执行范围
 

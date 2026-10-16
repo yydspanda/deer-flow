@@ -393,6 +393,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "scripts/test_soc_memory_snapshot_audit.py",
     "scripts/soc_bulk_review_learning.py",
     "scripts/test_soc_bulk_review_learning.py",
+    "scripts/test_soc_bulk_review_incremental.py",
     "docs/soc-corpus-rebalance.md",
     "docs/soc-learning-review-batch.md",
     "scripts/soc_validation_report_data.py",

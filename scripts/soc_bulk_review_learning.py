@@ -30,6 +30,7 @@ MEMORY = "/api/soc/memory/candidates"
 PENDING = {"pending_review", "confirmed_candidate"}
 PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v2"
 LEGACY_PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v1"
+INCREMENTAL_PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v3"
 REVIEW_POLICY = {"review_after_days": 180, "validity_days": 365}
 # The synchronous endpoint may use a model call plus one output repair. Keep
 # the client above the dedicated nginx route's 1800s response wait budget.
@@ -38,6 +39,10 @@ DRAFT_HTTP_TIMEOUT_SECONDS = 1810.0
 
 class BulkReviewError(RuntimeError):
     """An operator-visible bounded error, never a raw HTTP body."""
+
+
+class ReviewScopeChanged(BulkReviewError):
+    """Stop further admissions when the frozen incremental scope is no longer idle."""
 
 
 class ApiError(BulkReviewError):
@@ -212,7 +217,13 @@ def _candidate_path(candidate_id: str) -> str:
 
 
 def _idle_learning(
-    client, expected_experiment=None, *, explicit=False, expected_plan_id=None
+    client,
+    expected_experiment=None,
+    *,
+    explicit=False,
+    expected_plan_id=None,
+    validation_started=False,
+    expected_validation_count=None,
 ):
     if explicit:
         if not isinstance(expected_experiment, str) or not re.fullmatch(
@@ -269,15 +280,273 @@ def _idle_learning(
         raise BulkReviewError("Current experiment does not match the review plan")
     if (
         validation.get("experiment_id") != experiment
-        or any(validation.get(key) != 0 for key in ("completed", "failed", "active"))
+        or any(
+            validation.get(key) != 0
+            for key in (
+                ("active",) if validation_started else ("completed", "failed", "active")
+            )
+        )
         or any(
             validation.get(key) is not False for key in ("running", "manual_pending")
         )
     ):
-        raise BulkReviewError("This tool requires a second batch that has not started")
-    if validation.get("remaining") != validation.get("total"):
+        raise BulkReviewError(
+            "Pause and drain validation before incremental review"
+            if validation_started
+            else "This tool requires a second batch that has not started"
+        )
+    if not validation_started and validation.get("remaining") != validation.get(
+        "total"
+    ):
         raise BulkReviewError("Validation state is not untouched")
+    if validation_started and validation.get("total") != expected_validation_count:
+        raise BulkReviewError("Report must cover the complete validation batch")
     return learning
+
+
+def _result_identity(rows):
+    if not isinstance(rows, list) or not rows:
+        raise BulkReviewError("The validation report has no saved members")
+    result = []
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("alert_id"), str)
+            or not row["alert_id"]
+            or row.get("status") not in {"completed", "failed", "queued", "cancelled"}
+            or (row["status"] == "completed" and not row.get("run_id"))
+        ):
+            raise BulkReviewError(
+                "Validation report contains invalid or active members"
+            )
+        result.append(
+            {
+                key: row.get(key)
+                for key in (
+                    "alert_id",
+                    "job_id",
+                    "run_id",
+                    "status",
+                    "attempt_count",
+                    "payload_hash",
+                    "group_id",
+                )
+            }
+        )
+    if len({row["alert_id"] for row in result}) != len(result):
+        raise BulkReviewError("Validation report contains duplicate members")
+    return canonical_hash(sorted(result, key=lambda row: row["alert_id"]))
+
+
+def _round_identity(round_):
+    return canonical_hash(
+        {
+            key: round_.get(key)
+            for key in (
+                "round_id",
+                "experiment_id",
+                "selection",
+                "purpose",
+                "learning_generation",
+                "config_hash",
+                "options",
+                "memory_mode",
+                "memory_snapshot",
+            )
+        }
+    )
+
+
+def _incremental_report(report_dir):
+    directory = Path(report_dir).expanduser().absolute()
+    path = directory / "report.json"
+    if path.is_symlink() or path.stat().st_size > 256 * 1024 * 1024:
+        raise BulkReviewError("Invalid or oversized report.json")
+    raw = path.read_bytes()
+    report = json.loads(raw)
+    try:
+        manifest = _load(directory / "manifest.json")
+    except FileNotFoundError as exc:
+        raise BulkReviewError(
+            "Missing manifest.json; export the fixed validation report first"
+        ) from exc
+    digest = hashlib.sha256(raw).hexdigest()
+    round_ = report.get("round") or {}
+    selection = round_.get("selection") or {}
+    if (
+        report.get("schema_version") != "soc.corpus_round_report.v1"
+        or not isinstance(round_.get("round_id"), str)
+        or not re.fullmatch(r"ROUND-[A-Za-z0-9_-]+", round_["round_id"])
+        or manifest.get("round_id") != round_["round_id"]
+        or manifest.get("files", {}).get("report.json") != digest
+        or selection.get("batch") != "validation"
+        or selection.get("scope") != "all"
+        or selection.get("alert_ids")
+        or selection.get("group_ids")
+        or selection.get("rule_codes")
+        or round_.get("purpose") == "facts"
+        or round_.get("state") == "running"
+        or report.get("progress", {}).get("active_count") != 0
+    ):
+        raise BulkReviewError(
+            "Use the verified full validation report exported before incremental review"
+        )
+    rows = report.get("rows")
+    identity = _result_identity(rows)
+    if len(rows) != report.get("progress", {}).get("selected_count") or not any(
+        row["status"] == "completed" for row in rows
+    ):
+        raise BulkReviewError(
+            "Validation report membership is incomplete or has no completed results"
+        )
+    return {
+        "directory": str(directory),
+        "report_sha256": digest,
+        "round_id": round_["round_id"],
+        "experiment_id": round_.get("experiment_id"),
+        "round_identity": _round_identity(round_),
+        "result_identity": identity,
+        "selected_count": len(rows),
+    }
+
+
+def _incremental_guard(
+    client, baseline, *, expected_plan_id=None, check_all_active=False
+):
+    experiment = baseline["experiment_id"]
+    learning = _idle_learning(
+        client,
+        experiment,
+        explicit=True,
+        expected_plan_id=expected_plan_id,
+        validation_started=True,
+        expected_validation_count=baseline["selected_count"],
+    )
+    progress = client.get(f"{BASE}/rounds/{baseline['round_id']}")
+    round_ = progress.get("round") or {}
+    if (
+        _round_identity(round_) != baseline["round_identity"]
+        or round_.get("superseded_by_round_id")
+        or round_.get("state") not in {"paused", "completed"}
+        or progress.get("active_count") != 0
+        or progress.get("selected_count") != baseline["selected_count"]
+    ):
+        raise BulkReviewError(
+            "Validation source changed, is superseded, or has not paused and drained"
+        )
+    rounds, offset = [], 0
+    while True:
+        page = client.get(
+            f"{BASE}/rounds?experiment_id={experiment}&limit=20&offset={offset}"
+        )
+        if not isinstance(page, list) or any(
+            not isinstance(row, dict) or row.get("experiment_id") != experiment
+            for row in page
+        ):
+            raise BulkReviewError("Invalid experiment round inventory")
+        rounds.extend(page)
+        if any(row.get("state") == "running" for row in page):
+            raise BulkReviewError(
+                "Pause all experiment rounds before incremental review"
+            )
+        if len(page) < 20:
+            break
+        offset += len(page)
+        if offset > 100_000:
+            raise BulkReviewError("Experiment round inventory is too large")
+    learning_rounds = [
+        row for row in rounds if (row.get("selection") or {}).get("batch") == "learning"
+    ]
+    if not learning_rounds:
+        raise BulkReviewError("Current learning generation cannot be verified")
+    latest = max(
+        learning_rounds,
+        key=lambda row: (
+            datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")),
+            row["round_id"],
+        ),
+    )
+    if latest.get("learning_generation") != round_.get("learning_generation"):
+        raise BulkReviewError(
+            "Validation report belongs to a different learning generation"
+        )
+    inventory = canonical_hash(
+        sorted(
+            [
+                {
+                    key: row.get(key)
+                    for key in (
+                        "round_id",
+                        "version",
+                        "state",
+                        "learning_generation",
+                        "superseded_by_round_id",
+                    )
+                }
+                for row in rounds
+            ],
+            key=lambda row: row["round_id"],
+        )
+    )
+    if (
+        baseline.get("round_inventory") is not None
+        and baseline["round_inventory"] != inventory
+    ):
+        raise BulkReviewError(
+            "Experiment rounds changed after planning; export and plan again"
+        )
+    if check_all_active:
+        for row in rounds:
+            other = (
+                progress
+                if row["round_id"] == round_["round_id"]
+                else client.get(f"{BASE}/rounds/{row['round_id']}")
+            )
+            if (
+                other.get("active_count") != 0
+                or other.get("round", {}).get("state") == "running"
+            ):
+                raise BulkReviewError(
+                    "Wait for active tasks in all experiment rounds before review"
+                )
+    # Frozen round state and job counts must stay unchanged. Reviewed Memory itself
+    # may change as this plan proceeds; it is intentionally not a Runtime retry.
+    fence = canonical_hash(
+        {key: value for key, value in progress.items() if key != "timing"}
+    )
+    if baseline.get("round_fence") is not None and fence != baseline["round_fence"]:
+        raise BulkReviewError(
+            "Validation round changed after planning; export and plan again"
+        )
+    return learning, fence, inventory
+
+
+def _verify_report_results(client, baseline):
+    rows, offset = [], 0
+    while True:
+        page = client.get(
+            f"{BASE}/rounds/{baseline['round_id']}/results?limit=100&offset={offset}"
+        )
+        items = page.get("items")
+        if (
+            page.get("total") != baseline["selected_count"]
+            or not isinstance(items, list)
+            or not items
+        ):
+            raise BulkReviewError(
+                "Validation results changed or pagination is incomplete"
+            )
+        rows.extend(items)
+        offset += len(items)
+        if offset >= page["total"]:
+            break
+    if (
+        len(rows) != baseline["selected_count"]
+        or _result_identity(rows) != baseline["result_identity"]
+    ):
+        raise BulkReviewError(
+            "Validation was retried after export; export the report again"
+        )
 
 
 def _inventory(client, experiment, *, review_stage="pending"):
@@ -357,12 +626,38 @@ def default_applicability(candidate):
     return base
 
 
-def build_plan(client, output_dir, expected_count, experiment_id=None):
+def build_plan(
+    client,
+    output_dir,
+    expected_count,
+    experiment_id=None,
+    *,
+    phase="initial",
+    report_dir=None,
+):
     if not isinstance(expected_count, int) or expected_count <= 0:
         raise BulkReviewError("Expected candidate count must be positive")
     url = validate_url(client.url)
+    if phase not in {"initial", "incremental"} or (
+        (phase == "incremental") != (report_dir is not None)
+    ):
+        raise BulkReviewError(
+            "Incremental review requires --report-dir; initial review must not use it"
+        )
+    baseline = None
+    if phase == "incremental":
+        baseline = _incremental_report(report_dir)
+        if experiment_id is not None and experiment_id != baseline["experiment_id"]:
+            raise BulkReviewError("Report experiment does not match --experiment")
+        experiment_id = baseline["experiment_id"]
     explicit = experiment_id is not None
-    learning = _idle_learning(client, experiment_id, explicit=explicit)
+    if baseline:
+        learning, baseline["round_fence"], baseline["round_inventory"] = (
+            _incremental_guard(client, baseline, check_all_active=True)
+        )
+        _verify_report_results(client, baseline)
+    else:
+        learning = _idle_learning(client, experiment_id, explicit=explicit)
     experiment = learning["experiment_id"]
     inventory = _inventory(client, experiment)
     if (
@@ -398,16 +693,19 @@ def build_plan(client, output_dir, expected_count, experiment_id=None):
         )
     if canonical_hash(_inventory(client, experiment)) != canonical_hash(inventory):
         raise BulkReviewError("Candidate inventory changed before plan publication")
-    _idle_learning(
-        client,
-        experiment,
-        explicit=explicit,
-        expected_plan_id=learning.get("plan_id") if explicit else None,
-    )
+    if baseline:
+        _incremental_guard(client, baseline, expected_plan_id=learning["plan_id"])
+    else:
+        _idle_learning(
+            client,
+            experiment,
+            explicit=explicit,
+            expected_plan_id=learning.get("plan_id") if explicit else None,
+        )
     directory = Path(output_dir).expanduser().absolute()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     plan = {
-        "schema_version": PLAN_SCHEMA,
+        "schema_version": INCREMENTAL_PLAN_SCHEMA if baseline else PLAN_SCHEMA,
         "url": url,
         "experiment_id": experiment,
         "created_at": datetime.now(UTC).isoformat(),
@@ -416,6 +714,11 @@ def build_plan(client, output_dir, expected_count, experiment_id=None):
         "future_use": "exact_reuse",
         "review_policy": dict(REVIEW_POLICY),
         "items": items,
+        **(
+            {"review_phase": "incremental", "baseline_report": baseline}
+            if baseline
+            else {}
+        ),
         **(
             {
                 "experiment_selection": "explicit",
@@ -492,6 +795,8 @@ def review_payload(
     *,
     review_after_days=180,
     validity_days=365,
+    review_phase="initial",
+    source_round_id=None,
 ):
     lesson = validate_draft(candidate["candidate_id"], draft)
     now = now or datetime.now(UTC)
@@ -512,7 +817,11 @@ def review_payload(
         )
     return {
         "decision": "confirm",
-        "reason": "审核人按本次 DEV 第一批批量审核指令统一选择误报，精确匹配时复用结论；保留页面默认的核心行为勾选条件。",
+        "reason": (
+            "审核人按本次 DEV 增量批量审核指令统一选择误报，精确匹配时复用结论；保留页面默认的核心行为勾选条件。"
+            if review_phase == "incremental"
+            else "审核人按本次 DEV 第一批批量审核指令统一选择误报，精确匹配时复用结论；保留页面默认的核心行为勾选条件。"
+        ),
         "record_lesson": lesson,
         "record_applicability": applicability,
         "confirmed_verdict": "false_positive",
@@ -524,8 +833,13 @@ def review_payload(
         "metadata": {
             "source": "operator_bulk_review",
             "experiment_id": experiment_id,
-            "batch": "learning",
+            "batch": "validation" if review_phase == "incremental" else "learning",
             "individual_manual_review_claimed": False,
+            **(
+                {"review_phase": "incremental", "source_round_id": source_round_id}
+                if review_phase == "incremental"
+                else {}
+            ),
         },
     }
 
@@ -612,7 +926,7 @@ def _plan_review_policy(plan):
     if plan.get("schema_version") == LEGACY_PLAN_SCHEMA:
         if "review_policy" not in plan:
             return {"review_after_days": 30, "validity_days": 60}
-    elif plan.get("schema_version") == PLAN_SCHEMA:
+    elif plan.get("schema_version") in {PLAN_SCHEMA, INCREMENTAL_PLAN_SCHEMA}:
         policy = plan.get("review_policy")
         if policy == REVIEW_POLICY and all(
             type(value) is int for value in policy.values()
@@ -654,7 +968,8 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
     with _locked(directory):
         plan = _load(path)
         if (
-            plan.get("schema_version") not in {LEGACY_PLAN_SCHEMA, PLAN_SCHEMA}
+            plan.get("schema_version")
+            not in {LEGACY_PLAN_SCHEMA, PLAN_SCHEMA, INCREMENTAL_PLAN_SCHEMA}
             or plan.get("url") != validate_url(client.url)
             or plan.get("operator_verdict") != "false_positive"
             or plan.get("future_use") != "exact_reuse"
@@ -663,10 +978,35 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                 "Plan identity, origin or requested decision is invalid"
             )
         review_policy = _plan_review_policy(plan)
+        incremental = plan["schema_version"] == INCREMENTAL_PLAN_SCHEMA
+        if incremental:
+            baseline = plan.get("baseline_report")
+            if (
+                plan.get("review_phase") != "incremental"
+                or not isinstance(baseline, dict)
+                or baseline.get("experiment_id") != plan["experiment_id"]
+            ):
+                raise BulkReviewError("Incremental plan provenance is invalid")
+            source = _incremental_report(baseline["directory"])
+            if any(
+                baseline.get(key) != value for key, value in source.items()
+            ) or not all(
+                isinstance(baseline.get(key), str)
+                and re.fullmatch(r"[0-9a-f]{64}", baseline[key])
+                for key in ("round_fence", "round_inventory")
+            ):
+                raise BulkReviewError("Saved baseline report changed after planning")
+        elif (
+            plan.get("review_phase", "initial") != "initial"
+            or "baseline_report" in plan
+        ):
+            raise BulkReviewError("Legacy plans cannot enable incremental review")
         selection = plan.get("experiment_selection", "quick")
         if selection not in {"quick", "explicit"}:
             raise BulkReviewError("Unknown experiment selection mode")
         explicit = selection == "explicit"
+        if incremental and not explicit:
+            raise BulkReviewError("Incremental plans must bind an explicit experiment")
         if explicit and (
             not isinstance(plan.get("experiment_plan_id"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", plan["experiment_plan_id"])
@@ -676,6 +1016,23 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
             "explicit": explicit,
             "expected_plan_id": plan.get("experiment_plan_id") if explicit else None,
         }
+
+        def guard(*, check_all_active=False):
+            if incremental:
+                try:
+                    _incremental_guard(
+                        client,
+                        baseline,
+                        expected_plan_id=plan["experiment_plan_id"],
+                        check_all_active=check_all_active,
+                    )
+                except ApiError:
+                    raise
+                except BulkReviewError as exc:
+                    raise ReviewScopeChanged(str(exc)) from exc
+            else:
+                _idle_learning(client, plan["experiment_id"], **scope_options)
+
         ids = [item.get("candidate_id") for item in plan.get("items", [])]
         if (
             len(ids) != plan.get("expected_count")
@@ -696,7 +1053,7 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                 != item["record_applicability"]
             ):
                 raise BulkReviewError("Plan changes the default review scope")
-        _idle_learning(client, plan["experiment_id"], **scope_options)
+        guard(check_all_active=True)
         if explicit and not set(ids).issubset(
             _inventory(client, plan["experiment_id"], review_stage="all")
         ):
@@ -754,7 +1111,7 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                 return
             stage = "precheck"
             try:
-                _idle_learning(client, plan["experiment_id"], **scope_options)
+                guard()
                 # Resume only an unchanged pending candidate. A confirmed candidate
                 # could belong to another operator; no read API proves our audit key.
                 if "review_payload" not in saved:
@@ -768,7 +1125,11 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                             _candidate_path(cid) + "/lesson-draft",
                             {
                                 "reviewer_verdict": "false_positive",
-                                "reviewer_context": "操作人指定本次 DEV 实验第一批经验批量采用误报结论；这不是逐条人工复核记录，不得虚构业务授权或缺失证据。",
+                                "reviewer_context": (
+                                    "操作人指定本次 DEV 实验新增待审经验批量采用误报结论；这不是逐条人工复核记录，不得虚构业务授权或缺失证据。"
+                                    if incremental
+                                    else "操作人指定本次 DEV 实验第一批经验批量采用误报结论；这不是逐条人工复核记录，不得虚构业务授权或缺失证据。"
+                                ),
                                 "promoted_facet_keys": [],
                                 "promoted_facet_values": {},
                                 "selected_behavior_components": item[
@@ -789,6 +1150,14 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                         saved["draft"],
                         plan["experiment_id"],
                         **review_policy,
+                        **(
+                            {
+                                "review_phase": "incremental",
+                                "source_round_id": baseline["round_id"],
+                            }
+                            if incremental
+                            else {}
+                        ),
                     )
                     saved.update(
                         review_payload=payload,
@@ -820,6 +1189,8 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                         raise BulkReviewError(
                             "Candidate is no longer pending; not reviewed"
                         )
+                if incremental:
+                    guard()
                 stage = "review"
                 result = post(
                     cid,
@@ -850,17 +1221,26 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                     error=(exc.detail if isinstance(exc, ApiError) else str(exc)),
                     error_code=(exc.status if isinstance(exc, ApiError) else None),
                 )
-                if isinstance(exc, ApiError) and exc.status in {401, 403}:
+                if isinstance(exc, ReviewScopeChanged) or (
+                    isinstance(exc, ApiError) and exc.status in {401, 403}
+                ):
                     with state_lock:
                         stop.set()
                         if not fatal:
                             fatal.append(
                                 BulkReviewError(
-                                    "Authentication/authorization failed; batch stopped, see private receipts"
+                                    str(exc)
+                                    if isinstance(exc, ReviewScopeChanged)
+                                    else "Authentication/authorization failed; batch stopped, see private receipts"
                                 )
                             )
                             print(
-                                "Authorization failed; stopping new admissions and saving in-flight outcomes.",
+                                (
+                                    "Review scope changed"
+                                    if isinstance(exc, ReviewScopeChanged)
+                                    else "Authorization failed"
+                                )
+                                + "; stopping new admissions and saving in-flight outcomes.",
                                 flush=True,
                             )
                         checkpoint(cid, saved)
@@ -921,14 +1301,55 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
         return result
 
 
+def review_status(plan_path):
+    """Read atomic local receipts, without locking a running apply or using HTTP."""
+    path = Path(plan_path).expanduser().absolute()
+    plan = _load(path)
+    if plan.get("schema_version") not in {
+        LEGACY_PLAN_SCHEMA,
+        PLAN_SCHEMA,
+        INCREMENTAL_PLAN_SCHEMA,
+    }:
+        raise BulkReviewError("Unknown review plan schema")
+    state_path = path.parent / "state.json"
+    state = (
+        _load(state_path)
+        if state_path.exists()
+        else {"plan_hash": canonical_hash(plan), "items": {}}
+    )
+    if state.get("plan_hash") != canonical_hash(plan):
+        raise BulkReviewError("Resume state belongs to a different plan")
+    counts = Counter(
+        state["items"].get(item["candidate_id"], {}).get("status")
+        or ("blocked" if item["blocked_reason"] else "pending")
+        for item in plan["items"]
+    )
+    result = {
+        "experiment_id": plan["experiment_id"],
+        "review_phase": plan.get("review_phase", "initial"),
+        "source_round_id": (plan.get("baseline_report") or {}).get("round_id"),
+        "candidate_count": len(plan["items"]),
+        "counts": dict(counts),
+        "concurrency": state.get("execution", {}).get("concurrency"),
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser(
-        "plan", help="Read and freeze current DEV first-batch pending candidates"
+        "plan",
+        help="Read and freeze DEV pending candidates for initial or incremental review",
     )
     plan.add_argument("--output-dir", required=True)
     plan.add_argument("--expected-count", required=True, type=int)
+    plan.add_argument("--phase", choices=("initial", "incremental"), default="initial")
+    plan.add_argument(
+        "--report-dir",
+        help="Incremental mode: fixed validation export with report.json and manifest.json",
+    )
     plan.add_argument(
         "--experiment",
         help="Review this existing DEV experiment, including a rebalanced experiment; defaults to quick validation",
@@ -948,16 +1369,30 @@ def main(argv=None):
     apply.add_argument(
         "--retry-failed",
         action="store_true",
-        help="Explicitly retry blocked/failed drafts; may make another model call",
+        help="Explicitly retry failed or uncertain drafts; applicability blocks remain",
     )
+    status = commands.add_parser(
+        "status", help="Read local plan progress without calling the API"
+    )
+    status.add_argument("--plan", required=True)
     for command in (plan, apply):
         command.add_argument("--url", default="http://127.0.0.1:2026")
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.command == "status":
+            review_status(args.plan)
+            return 0
         client = ApiClient(args.url)
         if args.command == "plan":
-            build_plan(client, args.output_dir, args.expected_count, args.experiment)
+            build_plan(
+                client,
+                args.output_dir,
+                args.expected_count,
+                args.experiment,
+                phase=args.phase,
+                report_dir=args.report_dir,
+            )
         else:
             result = apply_plan(client, args.plan, args.retry_failed, args.concurrency)
             return 0 if set(result["counts"]) <= {"completed"} else 2

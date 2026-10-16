@@ -286,10 +286,12 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > backup receipts and separate restart instructions.
 > The [corpus operation chapters](docs/soc-corpus-operations-runbook.md) give the ordered
 > first-batch run/retry/review, second-batch baseline export, optional saved-result
-> accumulation, incremental page review, fixed-sample retest and summary-copy commands.
+> accumulation, report-bound incremental batch review (or page review), fixed-sample
+> retest and summary-copy commands.
 > Retry learning failures before reviewing; export the first validation result before
-> changing Memory. The first-batch bulk-review tool cannot review later validation
-> candidates. Later reports use a new frozen Memory snapshot and remain separate.
+> changing Memory. Initial bulk review requires validation not to have started;
+> incremental review explicitly selects `--phase incremental` and a saved report.
+> Later reports use a new frozen Memory snapshot and remain separate.
 > After learning completes, the [candidate audit and bulk-review tools](docs/soc-learning-review-batch.md)
 > can export saved first-batch diagnostics and apply an operator-selected false-positive
 > verdict to a frozen pending list through the existing draft/review APIs. Default

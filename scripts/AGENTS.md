@@ -15,7 +15,8 @@ copying the statistics tool updates Runtime. Require it and its tests in future 
 inventories. `docs/soc-corpus-operations-runbook.md` owns generated chapters 8–14:
 first-batch retries precede review in chapter 8; first validation report precedes
 incremental review; `accumulate` only records saved results and never dispatches a
-batch. Keep first-batch bulk review and post-validation page review distinct. Freeze
+batch. Keep first-batch bulk review and report-bound incremental bulk review distinct;
+page review remains available for individual decisions. Freeze
 new reviewed Memory in a new validation round, then explicitly export and summarize
 that round. Do not merge before/after snapshots or infer no experience from no use.
 Use the same chapter source in the delivered manual and future generated manuals;
@@ -87,18 +88,28 @@ response that does not confirm that choice. Older installations must upgrade bef
 using this new Host option; changing the standalone wrapper does not update Host code.
 
 `soc_bulk_review_learning.py` is an explicit DEV operator HTTP client for a frozen
-first-batch candidate list. Plan reads are inert. Apply uses the existing lesson
+candidate list. Default `initial` planning requires completed learning and untouched
+validation. Explicit `incremental` planning binds an exported validation report and
+its verified manifest to the same experiment and saved results; derive round and
+experiment identities from that report, never the latest UI round. Require completed
+learning, a non-running, non-superseded source validation round, and no active work
+in either batch or single-alert tasks. Preserve these guards during apply/resume;
+do not reinterpret an old initial plan as incremental. Plan reads are inert.
+Apply uses the existing lesson
 draft and review endpoints, authenticated identity and idempotent review payloads;
 never write SQL, invent business facts, relax applicability, replace conflicts or
 approve candidates added after the plan. Preserve default core selections and saved
 optional limits. Cache successful drafts; ambiguous model completion requires an
 explicit retry. Store private per-item receipts and leave second-batch start manual.
+`status --plan` is a local read-only view: no network, model call or review mutation.
+After incremental review, operators create a new validation round and frozen Memory
+snapshot; never resume the source snapshot as though it included newly approved Memory.
 Apply defaults to at most eight concurrent candidate pipelines (configurable 1..8),
 with bounded rolling dispatch and each candidate's draft-before-review ordering.
 Serialize local state/receipt checkpoints and isolate HTTP handlers; authentication
 failure or interruption stops new requests while already submitted work is drained
 and recorded. Concurrency must not alter frozen plan identity or review idempotency.
-New v2 plans freeze a 180-day review interval and 365-day activation validity. Accept
+New plans freeze a 180-day review interval and 365-day activation validity. Accept
 legacy v1 plans only with their implicit 30/60-day policy; validate the schema and
 policy together. Resume never rewrites the plan, its hash, cached review payloads,
 idempotency keys or completed records to adopt newer defaults.
@@ -109,8 +120,9 @@ timeout with unknown completion, never as a model refusal or permission to retry
 Updating standalone tools does not patch the installed application or nginx.
 Explicit `--experiment` plans use that experiment's server status and freeze its
 plan ID; do not compare a successor against the canonical quick-workbench ID.
-Reject facts inventories, incomplete learning and an already-started validation
-batch. Pending candidates and resumed plan membership remain scoped to this explicit
+Reject facts inventories and incomplete learning in either phase; reject an already-started
+validation batch in `initial`, and require the report-bound guards above in `incremental`.
+Pending candidates and resumed plan membership remain scoped to this explicit
 experiment; inherited confirmed records are not approved again. Legacy plans without
 the explicit-selection field retain their original quick-workbench behavior.
 The handoff inventory must include the rebalance contracts/services, facts-only and

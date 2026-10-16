@@ -122,7 +122,7 @@ BASH
 
 ## 9. 审核第一批经验，再启动第二批
 
-本节批量脚本只用于**第一批已全部完成、第二批尚未开始**的实验。第二批已经跑过，直接使用第13.1节页面审核，不能用本脚本绕过检查。
+本节使用默认的首次审核模式，只用于**第一批已全部完成、第二批尚未开始**的实验。第二批已经跑过，使用第13.1节的增量审核模式，不能复用本节的首次审核计划。
 批量结论统一为“误报／精确复用”，核心行为沿用默认勾选，保留已保存附加条件；复核180天、有效期365天。仅用于运营已决定统一采用该结论的名单，不代表逐条人工核实。
 
 ### 9.1 校验工具
@@ -202,7 +202,7 @@ http://localhost:2026/workspace/soc/corpus-validation
 2. 设置：**语义核对开启；企业策略、安全软件路径策略、LLM策略建议关闭**。不勾选“重新核对事实”，可复用此前有效语义结果；最大并发单独保存为16或所需值。
 3. 第二批尚未开始时点“开始验证”。已有同设置任务只需接着跑时点“继续”。已有旧设置结果且需要重新测时，先暂停等待运行中0，再点“重新配置并全部重跑”，确认上述设置并提交。
 4. 本轮使用启动时冻结的已审核经验。**本轮期间不审核新经验、不修改已有经验。**
-5. 整批结束后到第11节补跑失败并导出首次报告，然后按第12～13节处理积累与增量审核。
+5. 整批结束后到第11节补跑失败并导出首次报告。新版正常轮次直接进入第13节审核增量经验；仅旧结果补记或接续失败恢复时查看第12节。
 
 第二批新版正常轮次会自动接续第一批的行为积累；**不需要先执行 `accumulate` 才能运行第二批**。
 第二批新增候选暂不影响正在运行的经验快照。粗分组仍是2,153条“预估有适用历史经验”和3,764条“预估无历史经验”，实际使用经验以Runtime结果为准。
@@ -430,7 +430,80 @@ BASH
 
 ### 13.1 审核增量经验
 
-先确认第11.5节首次报告已导出，并暂停两批、等所有活动任务结束。通过以下入口进入经验审核：
+先确认第一批已完成、第11.5节首次报告已导出。暂停两批及单条任务，等待所有运行中为0；审核期间不启动任务、不同时在页面审核同一名单。
+本节批量指定“误报／精确复用”，核心行为沿用默认勾选、已有附加条件保持，复核180天、有效期365天。仅用于运营已决定统一采用该结论的名单，不代表脚本逐条核实。
+
+**第一步：校验工具，保存增量待审名单。** 输入第11.5节打印的首次报告目录，以及当前实验页面待审核数；待审为0则跳到第13.2节。
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+umask 077
+cd "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS"
+shasum -a 256 -c SHA256SUMS
+read -r -p '第11.5节首次报告目录完整路径：' soc_report_dir </dev/tty
+read -r -p '当前实验本次待审核条数：' soc_pending_count </dev/tty
+test -f "$soc_report_dir/report.json"
+test -f "$soc_report_dir/manifest.json"
+[[ "$soc_pending_count" =~ ^[1-9][0-9]*$ ]]
+soc_review_dir="$HOME/soc-review-incremental-$(date +%Y%m%d-%H%M%S)-$$"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" plan \
+  --phase incremental --report-dir "$soc_report_dir" \
+  --expected-count "$soc_pending_count" --output-dir "$soc_review_dir"
+printf '\n增量审核目录，请复制保存：%s\n' "$soc_review_dir"
+BASH
+```
+
+工具从固定报告读取实验和轮次，核对报告校验值、第一批完成、来源第二批非运行且未被替代、保存结果仍与报告一致，再冻结待审名单。不会自动选择最新轮次或修改旧报告；不满足条件时按报错处理，不删除旧验证记录绕过检查。
+本次必须使用新目录，不能拿第9节旧计划冒充增量计划。看到 `Plan saved` 后保存打印出的路径。
+
+**第二步：执行审核；普通中断后仍用这一块续审。**
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+read -r -p '本次增量审核目录完整路径：' soc_review_dir </dev/tty
+read -r -p '审核并发（1～8，回车用8）：' soc_review_concurrency </dev/tty
+soc_review_concurrency="${soc_review_concurrency:-8}"
+[[ "$soc_review_concurrency" =~ ^[1-8]$ ]]
+test -f "$soc_review_dir/plan.json"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" apply \
+  --plan "$soc_review_dir/plan.json" --concurrency "$soc_review_concurrency" \
+  --confirm APPROVE-FALSE-POSITIVE
+BASH
+```
+
+**第三步：有 `draft_failed` 等失败时，处理原因后显式重试。** 已完成项自动跳过，`blocked`保持阻断，不强行通过。
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+read -r -p '同一个增量审核目录完整路径：' soc_review_dir </dev/tty
+read -r -p '审核并发（1～8，回车用8）：' soc_review_concurrency </dev/tty
+soc_review_concurrency="${soc_review_concurrency:-8}"
+[[ "$soc_review_concurrency" =~ ^[1-8]$ ]]
+test -f "$soc_review_dir/plan.json"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" apply \
+  --plan "$soc_review_dir/plan.json" --concurrency "$soc_review_concurrency" \
+  --retry-failed --confirm APPROVE-FALSE-POSITIVE
+BASH
+```
+
+**随时查看状态：** 可另开终端执行，仅读取本地计划和进度，不调用模型、不提交审核。
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+read -r -p '本次增量审核目录完整路径：' soc_review_dir </dev/tty
+test -f "$soc_review_dir/plan.json"
+python3.12 "$HOME/READY-TO-TRANSFER/LEARNING-REVIEW-TOOLS/soc_bulk_review_learning.py" status \
+  --plan "$soc_review_dir/plan.json"
+BASH
+```
+
+保留整个审核目录，包括 `plan.json`、`state.json` 和回执。`confirmed_unverified`先在页面核对，不能当作已验证成功。新出现的候选不会加入已冻结计划；需要另审时重新核对范围、建立新计划。
+
+**不采用统一结论，或需要单独处理阻断项时，在页面审核：**
 
 ```text
 http://localhost:2026/workspace/soc/review/memory-candidates
@@ -442,8 +515,8 @@ http://localhost:2026/workspace/soc/review/memory-candidates
 http://localhost:2026/workspace/soc/review/memory-candidates?experiment=替换为当前EXP-ID&return_batch=validation
 ```
 
-核对当前实验，只处理新增待审核经验；已有审核不重做。按实际业务选择结论、复用方式及条件。缺少核心行为或证据不足的候选不强行精确复用，可按页面流程不沉淀。
-**第9节批量脚本要求第二批尚未开始，不能用来审核这里的新增候选。** 本节从页面审核，不删除验证记录绕过限制。
+核对当前实验，只处理本次待审核经验；已有审核不重做。按实际业务选择结论、复用方式及条件。缺少核心行为或证据不足的候选不强行精确复用，可按页面流程不沉淀。
+处理完毕进入第13.2节，**新建第二批复测轮次**，不要继续旧经验快照下的轮次。
 
 ### 13.2 用新经验快照重新跑第二批
 
