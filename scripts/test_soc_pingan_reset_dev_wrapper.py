@@ -30,11 +30,13 @@ previous = [json.loads(line) for line in call_file.read_text(encoding="utf-8").s
 args = sys.argv[1:]
 with call_file.open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(args) + "\n")
+no_backup = "--no-backup" in args
+args = [arg for arg in args if arg != "--no-backup"]
 if args == ["stop"]:
     print("All services stopped")
     sys.exit(config.get("stop_exit", 0))
 if args == ["reset-dev-data"]:
-    preview_index = sum(call == ["reset-dev-data"] for call in previous)
+    preview_index = sum([arg for arg in call if arg != "--no-backup"] == ["reset-dev-data"] for call in previous)
     previews = config.get("previews", [{}])
     changes = previews[min(preview_index, len(previews) - 1)]
     payload = {
@@ -45,6 +47,8 @@ if args == ["reset-dev-data"]:
         "blockers": [],
         "files": [],
     }
+    if no_backup:
+        payload.update(backup_enabled=False, backup_directory=None, recovery="unavailable_no_backup")
     payload.update(changes)
     print(json.dumps(payload))
     sys.exit(config.get("preview_exit", 0))
@@ -61,6 +65,8 @@ if args == ["reset-dev-data", "--confirm", "RESET-SOC-DEV"]:
         "files": [],
         "backup_directory": str(root / "backend/.deer-flow/data/soc-dev-reset-backups/test-backup"),
     }
+    if no_backup:
+        payload.update(backup_enabled=False, backup_directory=None, recovery="unavailable_no_backup")
     payload.update(config.get("receipt", {}))
     print(json.dumps(payload))
     sys.exit(0)
@@ -137,6 +143,55 @@ def test_default_is_preview_without_stopping_or_resetting(
     assert deployment.calls() == [["reset-dev-data"]]
     assert not deployment.receipt.exists()
     assert deployment.history() == []
+
+
+def test_no_backup_preview_is_read_only_and_explicit(
+    deployment: FakeDeployment,
+) -> None:
+    result = deployment.run("--no-backup")
+    assert result.returncode == 0, result.stderr
+    assert deployment.calls() == [["reset-dev-data", "--no-backup"]]
+    assert "unavailable_no_backup" in result.stdout
+    assert not deployment.receipt.exists()
+
+
+@pytest.mark.parametrize("status", ["reset", "already_empty"])
+def test_no_backup_apply_preserves_receipts_and_never_starts(
+    deployment: FakeDeployment, status: str
+) -> None:
+    deployment.configure(receipt={"status": status})
+    result = deployment.run("--no-backup", "--confirm", "RESET-SOC-DEV")
+    assert result.returncode == 0, result.stderr
+    assert deployment.calls() == [
+        ["reset-dev-data", "--no-backup"],
+        ["stop"],
+        ["reset-dev-data", "--no-backup"],
+        ["reset-dev-data", "--no-backup", "--confirm", "RESET-SOC-DEV"],
+    ]
+    receipt = json.loads(deployment.receipt.read_text(encoding="utf-8"))
+    assert receipt["status"] == status
+    assert receipt["backup_enabled"] is False
+    assert receipt["backup_directory"] is None
+    assert receipt["recovery"] == "unavailable_no_backup"
+    assert len(deployment.history()) == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"backup_enabled": True},
+        {"backup_directory": "somewhere"},
+        {"recovery": "available"},
+    ],
+)
+def test_no_backup_refuses_host_ignoring_choice_before_stop(
+    deployment: FakeDeployment, changes: dict
+) -> None:
+    deployment.configure(previews=[changes])
+    result = deployment.run("--no-backup", "--confirm", "RESET-SOC-DEV")
+    assert result.returncode != 0
+    assert deployment.calls() == [["reset-dev-data", "--no-backup"]]
+    assert not deployment.receipt.exists()
 
 
 @pytest.mark.parametrize(

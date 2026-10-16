@@ -71,6 +71,104 @@ def test_reset_archives_only_soc_dev_family_and_restore_is_explicit(
     assert (backup / database.name).exists()
 
 
+def test_no_backup_preview_and_reset_never_hash_or_archive(
+    checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        reset, "_sha", lambda path: pytest.fail("must not hash database")
+    )
+    database = checkout / reset.DEV_DATABASE
+    for suffix in ("-shm", "-journal"):
+        database.with_name(database.name + suffix).write_bytes(b"sidecar")
+    preview = invoke(checkout, no_backup=True)
+    assert preview["status"] == "preview"
+    assert preview["backup_enabled"] is False
+    assert preview["backup_directory"] is None
+    assert preview["recovery"] == "unavailable_no_backup"
+    assert len(preview["files"]) == 4
+    assert all("sha256" not in item for item in preview["files"])
+    assert database.read_bytes() == b"old database"
+    assert not (checkout / reset.BACKUPS).exists()
+
+    receipt = invoke(checkout, no_backup=True, confirmation="RESET-SOC-DEV")
+    assert receipt["status"] == "reset"
+    assert receipt["backup_enabled"] is False
+    assert receipt["backup_directory"] is None
+    assert receipt["recovery"] == "unavailable_no_backup"
+    assert len(receipt["files"]) == 4
+    assert not any(
+        database.with_name(database.name + suffix).exists() for suffix in reset.SUFFIXES
+    )
+    assert not (checkout / reset.BACKUPS).exists()
+    assert database.with_name("soc_agent_stg.db").read_bytes() == b"preserve"
+    assert database.with_name("deerflow.db").read_bytes() == b"preserve"
+    empty = invoke(checkout, no_backup=True, confirmation="RESET-SOC-DEV")
+    assert empty["status"] == "already_empty"
+    assert empty["backup_enabled"] is False
+    assert empty["backup_directory"] is None
+    assert empty["files"] == []
+
+
+@pytest.mark.parametrize(
+    "obstacle", ["stg", "busy", "symlink", "hardlink", "lock", "confirmation"]
+)
+def test_no_backup_keeps_all_reset_guards(checkout: Path, obstacle: str) -> None:
+    database = checkout / reset.DEV_DATABASE
+    protected = database.with_name("soc_agent_stg.db")
+    kwargs = dict(
+        root=checkout,
+        environment="dev",
+        no_backup=True,
+        confirmation="RESET-SOC-DEV",
+        inspect_processes=lambda paths: [],
+    )
+    if obstacle == "stg":
+        kwargs["environment"] = "stg"
+    elif obstacle == "busy":
+        kwargs["inspect_processes"] = lambda paths: ["TCP 2026 is listening"]
+    elif obstacle == "symlink":
+        database.unlink()
+        database.symlink_to(protected)
+    elif obstacle == "hardlink":
+        database.unlink()
+        database.hardlink_to(protected)
+    elif obstacle == "confirmation":
+        kwargs["confirmation"] = "yes"
+    if obstacle == "lock":
+        with reset.database_maintenance_lock(checkout):
+            with pytest.raises(ValueError):
+                reset.reset_dev_database(**kwargs)
+    else:
+        with pytest.raises(ValueError):
+            reset.reset_dev_database(**kwargs)
+    assert database.exists()
+    assert protected.read_bytes() == b"preserve"
+    assert not (checkout / reset.BACKUPS).exists()
+
+
+def test_no_backup_delete_error_is_not_reported_as_success(
+    checkout: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = Path.unlink
+    database = checkout / reset.DEV_DATABASE
+    backup_marker = checkout / reset.BACKUPS / "previous" / "soc_agent_dev.db"
+    backup_marker.parent.mkdir(parents=True)
+    backup_marker.write_bytes(b"previous backup")
+
+    def fail_wal(path, *args, **kwargs):
+        if path.name == "soc_agent_dev.db-wal":
+            raise PermissionError("simulated unlink failure")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_wal)
+    with pytest.raises(ValueError, match="removed files cannot be restored") as error:
+        invoke(checkout, no_backup=True, confirmation="RESET-SOC-DEV")
+    assert "soc_agent_dev.db" in str(error.value)
+    assert not database.exists()
+    assert database.with_name(database.name + "-wal").read_bytes() == b"old wal"
+    assert backup_marker.read_bytes() == b"previous backup"
+
+
 @pytest.mark.parametrize("environment", ["stg", "prd", "", "unknown"])
 def test_no_other_environment_can_reset(checkout: Path, environment: str) -> None:
     with pytest.raises(ValueError, match="DEV only"):

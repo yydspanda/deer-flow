@@ -402,6 +402,9 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "scripts/test_soc_validation_report_render.py",
     "scripts/test_soc_validation_report_integration.py",
     "docs/soc-validation-effect-report.md",
+    "docs/soc-corpus-operations-runbook.md",
+    "scripts/soc_stage_report_summary.py",
+    "scripts/test_soc_stage_report_summary.py",
     "backend/scripts/soc_validation_reset_store.py",
     "backend/tests/test_soc_validation_reset_store.py",
     "docs/soc-validation-reset.md",
@@ -603,6 +606,15 @@ def _write_transfer_artifacts(
     installer_path.chmod(0o700)
     installer = _sidecar_result(installer_path)
 
+    summary_tool_path = output_dir / "soc_stage_report_summary.py"
+    _write_private_text(
+        summary_tool_path,
+        Path(__file__)
+        .with_name("soc_stage_report_summary.py")
+        .read_text(encoding="utf-8"),
+    )
+    operator_tools = {"stage_report_summary": _sidecar_result(summary_tool_path)}
+
     report_path = output_dir / f"transfer-report-{timestamp}.json"
     runbooks = _write_transfer_runbooks(
         output_dir=output_dir,
@@ -619,6 +631,7 @@ def _write_transfer_artifacts(
         "output_directory": str(output_dir),
         "archives": archives,
         "installer": installer,
+        "operator_tools": operator_tools,
         "runbook": runbooks[default_runbook],
         "runbooks": runbooks,
         "default_runbook": default_runbook,
@@ -653,6 +666,7 @@ def _publish_transfer_artifacts(
     for item in [
         *report["archives"].values(),
         report["installer"],
+        *report.get("operator_tools", {}).values(),
         *report["runbooks"].values(),
     ]:
         item["path"] = str(output_dir / Path(item["path"]).name)
@@ -1556,8 +1570,8 @@ def _transfer_runbook(
         title = "内网 Mac DEV：完全初始化重新部署"
         mode = "reinitialize"
         introduction = (
-            "仅在明确决定从零重新验证时使用本手册。先停止并卸下旧项目服务，备份后由安装器替换旧项目代码，\n"
-            "再显式归档重置 SOC DEV：告警结果、第一批/第二批任务、经验、草稿和审核记录从空库开始。\n"
+            "仅在明确决定从零重新验证时使用本手册。先停止并卸下旧项目服务，选择是否备份，再由安装器替换旧项目代码，\n"
+            "再显式重置 SOC DEV：告警结果、第一批/第二批任务、经验、草稿和审核记录从空库开始。\n"
             "账号库、STG 数据库和仓库外原始语料保留；Mac 的 Python、Node、nginx 等基础工具无需卸载。\n"
             "已明确要求从零验证时，即使旧部署已有第一批或审核成果，也按本手册重新积累。\n"
             f"**如要保留这些成果，请改用[保留数据升级手册]({TRANSFER_RUNBOOK_NAME})。**"
@@ -1567,17 +1581,19 @@ def _transfer_runbook(
             "再用这些新经验验证第二批。"
         )
         install_sequence = (
-            "仅在明确决定从零重新验证时：先按本节停服、备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
+            "仅在明确决定从零重新验证时：先按本节停服、选择是否备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
             "再执行第 6.1 节显式重置 SOC DEV，最后第 7 节启动。"
         )
         reset_section = """### 6.1 Restart Validation / 本次从零验证：重置 SOC DEV
 
 仅在明确决定从零重新验证时，在第一次启动前执行本节。
-普通保留数据升级跳过本节。重置只归档 `soc_agent_dev.db` 和它的 SQLite sidecars：
+普通保留数据升级跳过本节。重置只处理 `soc_agent_dev.db` 和它的 SQLite sidecars：
 SOC DEV 的研判、批次任务、经验、候选与审核记录从空库重新开始；账号、STG、原始语料、配置和私钥保持不变。
-安装器已保留的旧 SOC DEV 数据会先移入有 Hash 清单的备份目录，不直接删除。
+数据库备份与第3.1节的项目压缩备份独立选择。下方 `soc_backup_database=yes` 保留默认备份；
+改成 `no` 会直接删除本次旧 DEV 数据库及附属文件，不压缩、不复制、不读取整库计算哈希，不能通过本次重置恢复。
+如果第3.1节已备份整个项目，那份压缩包已包含数据库，可选择不再单独备份。
 
-先预览，确认 `database` 是本 checkout 的 `soc_agent_dev.db`、`ready=true`、`blockers=[]`：
+先快速预览（不计算整库哈希，也不删除文件），确认 `database` 是本 checkout 的 `soc_agent_dev.db`、`ready=true`、`blockers=[]`：
 
 ```bash
 bash <<'BASH'
@@ -1585,31 +1601,41 @@ set -euo pipefail
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
-backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data
+backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data --no-backup
 BASH
 ```
 
-确认范围正确后执行已授权的重置。只在本次从零验证开始前执行一次：
+确认范围正确后，修改下面第一行选项再执行。只在本次从零验证开始前执行一次：
 
 ```bash
 bash <<'BASH'
 set -euo pipefail
+soc_backup_database=yes # yes：备份数据库；no：不备份，直接清空 DEV 数据库
 umask 077
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py stop
+case "$soc_backup_database" in
+  yes|no) ;;
+  *) printf 'soc_backup_database must be yes or no\\n' >&2; exit 1 ;;
+esac
 mkdir -p backend/.deer-flow/internal-host-dev
 receipt=backend/.deer-flow/internal-host-dev/dev-reset-receipt.json
 receipt_pending="$(mktemp "$receipt.XXXXXX")"
-backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data --confirm RESET-SOC-DEV > "$receipt_pending"
+if [[ "$soc_backup_database" == no ]]; then
+  backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data --no-backup --confirm RESET-SOC-DEV > "$receipt_pending"
+else
+  backend/.venv/bin/python scripts/soc_pingan_macos_host_dev.py reset-dev-data --confirm RESET-SOC-DEV > "$receipt_pending"
+fi
 mv "$receipt_pending" "$receipt"
 backend/.venv/bin/python -m json.tool "$receipt"
 BASH
 ```
 
-报告必须是 `status=reset`（记录 `backup_directory`）或 `status=already_empty`（原本就是空库）。
+报告必须是 `status=reset` 或 `status=already_empty`（原本就是空库）。
+不备份时显示 `backup_enabled=false`、`backup_directory=null`；备份时记录实际 `backup_directory`。
 报告保存在 `backend/.deer-flow/internal-host-dev/dev-reset-receipt.json`，与批次手册的恢复入口一致。
-重置归档位于 `backend/.deer-flow/data/soc-dev-reset-backups/`，第 7 节普通 `start` 自动初始化空 SOC Schema。
+选择备份时，归档位于 `backend/.deer-flow/data/soc-dev-reset-backups/`。第 7 节普通 `start` 自动初始化空 SOC Schema。
 这就是本次所需初始化，不需要手工 migration、删库、重新安装 Mac 工具或重新搬运未变化的语料。
 后续重启、继续积累或第二批验证都不要再次执行；进入批次操作手册时也跳过其中已完成的重置步骤。"""
         database_recovery = "服务尚未启动；保留已有数据库排查。查明原因后重试；需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置"
@@ -1636,7 +1662,7 @@ BASH
             "请先保存正在编辑的审核草稿，暂停同事操作，记下第一批完成数量、待审核及已审核经验。\n"
             "在服务仍运行时，将仍在运行的旧事实准备轮次及旧学习/验证轮次通过网页暂停或 CLI `pause` 持久化为 `paused`，\n"
             "逐轮确认 `active_count=0`；只执行 Host `stop` 不会把轮次改为暂停，后续启动可能恢复领取旧任务。\n"
-            "再按本篇停服备份、替换代码、恢复语料、安装依赖和启动。整个流程保留数据库和原实验历史。\n"
+            "再按本篇停服、选择是否备份、替换代码、恢复语料、安装依赖和启动。整个流程保留数据库和原实验历史。\n"
             f"仅另外决定从零验证时才使用[完全初始化重新部署手册]({TRANSFER_REINITIALIZE_RUNBOOK_NAME})。"
         )
         compatibility_followup = (
@@ -1644,7 +1670,7 @@ BASH
             "升级后保留该实验第一批及已审核经验；只有仍使用旧第一批2,997条名单的部署，才需要独立运行新版名单。"
         )
         install_sequence = (
-            "本手册保留运行数据：先按本节备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
+            "本手册保留运行数据：先按本节选择是否备份并替换代码，第 4–6 节完成语料、依赖和预检，\n"
             "核对第 6.1 节保留范围后，直接执行第 7 节启动。"
         )
         reset_section = """### 6.1 Preserve Existing Validation / 保留已有 SOC DEV 数据
@@ -1654,7 +1680,7 @@ BASH
 完成第 6 节预检后，直接继续第 7 节启动。启动会升级现有数据库结构，不会重新初始化已有数据。
 启动后核对原实验历史和审核记录。若当前已经使用第一批9,364条、第二批5,917条名单，
 本次升级保留该实验第一批结果及已审核经验，无需重新积累或重新审核这些经验。
-需要让已有第一批结果接入两批连续积累时，先按第11节预览并接续，再启动新的第二批。
+需要让已有第一批结果接入两批连续积累时，先按第12节预览并接续，再启动新的第二批。
 只有仍使用旧第一批2,997条名单时，页面才会切换到新版名单对应的新实验；原实验记录不会改写成新名单，
 旧名单结果不自动算作新版进度。
 只有另外选择从空库验证时才使用重新初始化手册。
@@ -1669,7 +1695,7 @@ BASH
         database_recovery = "服务尚未启动；保留已有数据库和备份排查，查明原因后重试，不要通过清库解决启动失败"
         batch_start_instruction = (
             "保留数据升级跳过批次手册第 1.1 节重置。当前已是第一批9,364条、第二批5,917条时，\n"
-            "保留已经完成的第一批和已审核经验；若需接续已有结果，先执行第11节，再为第二批建立新轮次。\n"
+            "保留已经完成的第一批和已审核经验；若需接续已有结果，按第12节处理，再为第二批建立新轮次。\n"
             "仅第一批尚未开始，或仍从旧2,997条名单切换时，才从网页第一批“开始积累”启动。"
         )
         batch_restart_instruction = (
@@ -1682,26 +1708,13 @@ BASH
             "升级后可先在本机把“最大并发”保存为 `2`，再恢复运行，\n"
             "观察页面响应和任务结果正常后逐步调高；减少并发不能保证消除其他长事务造成的锁等待。"
         )
-    recovery_source = (
-        Path(__file__).resolve().parents[1] / "docs/soc-corpus-rebalance.md"
-    ).read_text(encoding="utf-8")
-    recovery_steps = recovery_source[
-        recovery_source.index("## 5. 在原轮次补跑失败项并导出完整报告") :
-    ]
-    recovery_steps = (
-        recovery_steps.replace("## 5.", "## 10.")
-        .replace("### 5.", "### 10.")
-        .replace("## 6.", "## 11.")
-        .replace("### 6.", "### 11.")
-    )
-    recovery_steps = re.sub(
-        r"第([56])(\.\d+)?节",
-        lambda match: f"第{int(match[1]) + 5}{match[2] or ''}节",
-        recovery_steps,
-    )
-    recovery_steps = recovery_steps.replace(
-        'cd "$HOME/deer-flow"',
-        'export TARGET_REPO="$HOME/deer-flow"\ncd "$TARGET_REPO"',
+    operations_steps = (
+        (Path(__file__).resolve().parents[1] / "docs/soc-corpus-operations-runbook.md")
+        .read_text(encoding="utf-8")
+        .replace(
+            'cd "$HOME/deer-flow"',
+            'export TARGET_REPO="$HOME/deer-flow"\ncd "$TARGET_REPO"',
+        )
     )
     return f"""# {title}
 
@@ -1737,6 +1750,7 @@ PRD `isec-gw.paic.com.cn`，并受独立 target、host allowlist 和 production 
 {TRANSFER_RUNBOOK_NAME}
 {TRANSFER_REINITIALIZE_RUNBOOK_NAME}
 {installer_name}
+soc_stage_report_summary.py
 ```
 
 SHA-256：
@@ -1781,7 +1795,7 @@ cat "{report_name}"
 {install_sequence}安装器本身始终保留运行数据；后续数据处理以本手册第 6.1 节为准。
 不要把“重新初始化演练”理解为删除整个仓库或账号。
 
-### 3.1 Before Replacement / 替换前备份
+### 3.1 Before Replacement / 替换前备份（可选）
 
 已有成功部署的 Mac 先执行下面一块；全新机器没有旧 checkout 时跳过本小节。
 停掉旧 Host、确认端口释放，再交给第 3.2 节安装器替换，就是卸下旧项目服务的过程；
@@ -1790,21 +1804,28 @@ cat "{report_name}"
 若只有仓库内副本，先复制到第 4 节所列路径并完成校验，再继续；不要先运行安装器。
 数据 hash 未变时不需要重新跨网传输。
 
-此命令先核对语料，再停止旧 Host，确认五个端口释放，最后把完整旧 checkout 独立备份到
-`$HOME/deer-flow-backups/`。预留足够磁盘空间；备份含私有配置、凭证和数据库，只能留在本机受保护目录。
-备份失败时不要继续安装，旧 checkout 仍保留。
-看到 `{{"status":"stopped"}}` 只表示停服完成；后面的整项目压缩和 SHA-256 计算可能较久没有新增输出。
-下方会显示四个阶段提示。看到第 3/4 阶段时请等待，不要关闭终端或按 Ctrl+C；
-只有最后出现 `Verified stopped-checkout backup:` 才表示备份完成。
+先修改下面的 `soc_backup_project`，再执行整块命令：
+
+- `yes`：压缩备份完整旧项目（含数据库）到 `$HOME/deer-flow-backups/`，默认选择。
+- `no`：跳过项目压缩和哈希计算，不创建上述备份；安装器仍保留当前数据库和运行数据。
+
+两种选择都会检查语料、停服和检查五个端口。2026端口暂未释放时，等待释放再重试本节。
+选择备份时，压缩和哈希计算可能耗时较久；直到出现 `Verified stopped-checkout backup:` 才完成。
+选择不备份时，会显示 `Project backup skipped by operator`。随后继续第3.2节。
 
 ```bash
 bash <<'BASH'
 set -euo pipefail
+soc_backup_project=yes # yes：备份整个项目；no：跳过压缩备份
 umask 077
 export TARGET_REPO="$HOME/deer-flow"
 cd "$TARGET_REPO"
 test ! -L "$TARGET_REPO"
 test -f scripts/soc_pingan_macos_host_dev.py
+case "$soc_backup_project" in
+  yes|no) ;;
+  *) printf 'soc_backup_project must be yes or no\\n' >&2; false ;;
+esac
 printf '[backup 1/4] Checking corpus / 检查仓库外语料\\n'
 for corpus_file in \\
   "$HOME/Downloads/source/full_alert_2026_month_forth_sample_200.pkl" \\
@@ -1826,20 +1847,24 @@ for port in 3000 8001 2026 4001 8090; do
     test "$probe_status" -eq 1
   fi
 done
-backup_dir="$HOME/deer-flow-backups/before-redeploy-$(date +%Y%m%dT%H%M%S)-$$"
-mkdir -p "$backup_dir"
-chmod 700 "$backup_dir"
-printf '[backup 3/4] Compressing old checkout / 正在压缩备份，请等待: %s\\n' "$backup_dir"
-tar -czf "$backup_dir/deer-flow.tar.gz" -C "$HOME" deer-flow
-printf '[backup 4/4] Computing SHA-256 / 正在计算校验值，请等待\\n'
-shasum -a 256 "$backup_dir/deer-flow.tar.gz" > "$backup_dir/SHA256SUMS"
-printf 'Verified stopped-checkout backup: %s\\n' "$backup_dir"
+if [[ "$soc_backup_project" == yes ]]; then
+  backup_dir="$HOME/deer-flow-backups/before-redeploy-$(date +%Y%m%dT%H%M%S)-$$"
+  mkdir -p "$backup_dir"
+  chmod 700 "$backup_dir"
+  printf '[backup 3/4] Compressing old checkout / 正在压缩备份，请等待: %s\\n' "$backup_dir"
+  tar -czf "$backup_dir/deer-flow.tar.gz" -C "$HOME" deer-flow
+  printf '[backup 4/4] Computing SHA-256 / 正在计算校验值，请等待\\n'
+  shasum -a 256 "$backup_dir/deer-flow.tar.gz" > "$backup_dir/SHA256SUMS"
+  printf 'Verified stopped-checkout backup: %s\\n' "$backup_dir"
+else
+  printf 'Project backup skipped by operator / 已选择不备份项目，停服检查通过\\n'
+fi
 BASH
 ```
 
-必须看到最后的备份路径，并保留到新版本验收通过。安装器成功后立即删除临时回退目录，
-其事务回退只覆盖安装过程，不覆盖后续依赖安装、前端构建或启动失败；上面的独立备份才供这些情况恢复。
-恢复时也必须先停止新 Host，不得把运行中的 checkout 直接移动或覆盖。
+选择备份时，请将备份保留到新版本验收通过。安装器成功后立即删除临时回退目录，
+其事务回退只覆盖安装过程；选择不备份后，本次不会留下用于后续构建或启动失败恢复的项目压缩包。
+这两个选项不会清理以前的备份。恢复时也必须先停止新 Host，不得覆盖运行中的 checkout。
 
 ### 3.2 Install / 安装配套源码与私有配置
 
@@ -2265,20 +2290,22 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 {batch_start_instruction}
 {batch_restart_instruction}
 
-1. 第一批尚未开始时，网页第一批点击“开始积累”，完成后审核经验；已有第一批不重复执行。
-2. 第二批确认语义核对、企业策略、安全软件路径策略和LLM策略建议四项设置后提交。两批分别保存设置，点“继续”沿用已排队任务原配置。
-3. 两批的模型失败按第10节 `--kind failed` 补跑，已开启语义核对的失败按 `--kind semantic_failed` 补跑；并发可手工设置。
-4. 完整第二批结束后，按第10节导出同一轮次的完整报告，无需合并补跑报告。
+1. 第一批尚未开始时，网页第一批点击“开始积累”；第8节内完成执行失败、语义核对失败补跑，再按第9节审核经验。已有完成的第一批不重复执行。
+2. 第10节启动第二批，语义核对开启，其余三项策略关闭；第11节处理失败并保存首次报告。两批分别保存设置，点“继续”沿用已排队任务原配置。
+3. 第12节仅在需要时接续保存结果，不启动第二批；第13节页面审核新增经验，再重新配置第二批复测。
+4. 第14节导出新复测报告，生成精简统计并复制给外网总结。不同经验快照的两轮分别保留报告，不合并。
 
 第二批接续第一批核心行为积累，新候选待审核；本轮使用开始时冻结的已审核经验，验证期间不修改经验。
-历史语料任务不查询/回写 ZEUS，不执行真实处置。只做两批验证时跳过第8、9节真实集成验收。
+历史语料任务不查询/回写 ZEUS，不执行真实处置。只做两批验证时不执行附录A、B的真实集成验收。
 静态粗分组只用于名单，不运行全量语义事实预处理；实际经验按核心行为细分积累。
 第一批9,364条、第二批主要验证2,153条、补充3,764条，合计15,281条。
 原第一批2,997条全部保留在学习侧；仅从原主要验证8,520条中移入6,367条，补充3,764条成员不变。
 只有实际研判时才按运行设置执行语义核对；旧实验的任务和历史结果不会自动算作新名单已完成。
 原始15,288条语料保留，7条 `RPAADM_002192` SIEM 邮件告警不参加验证；旧4,343条载荷库不能混用新版索引。
 
-## 8. Promote Runtime To STG / 切换到 STG
+{operations_steps}
+
+## 附录A. Promote Runtime To STG / 切换到 STG（不属于语料验证流程）
 
 DEV 页面、模型和真实 Provider 验收通过后，可以在同一份代码上切到隔离 STG 部署 profile。该命令原子
 应用项目 STG -> ZEUS STG + Agent Platform STG 映射：Memory、Tenant Policy、Automation 和 SOC SQLite 会一起切到 `stg`，数据库使用
@@ -2329,7 +2356,7 @@ mode 验收步骤。
 如需回到演练 DEV，先停服务，再执行相同命令的 `--environment dev`；它会同时恢复项目 DEV -> ZEUS
 PRD + Agent Platform PRD 映射，随后可用 `start --daemon --demo-no-auth` 启动。DEV 和 STG 的 SOC 数据不会混库。
 
-## 9. Real Integration Follow-up / 真实验收顺序
+## 附录B. Real Integration Follow-up / 真实验收顺序（不属于语料验证流程）
 
 完成模型与生命周期连通性后，先用旧实现中的三个示例值做只读发现。它们只是查找候选，不是当前资产
 归属真值；只有核对 Provider attempts 和内网返回后，才能写入 mode-`0600` 的 D12-B 七用例矩阵：
@@ -2388,7 +2415,6 @@ validation/compact_zeus/internal_batch/README.md
 
 不要把凭证、原始内部告警、Memory 数据库或完整 Provider 响应传回外网。
 
-{recovery_steps}
 """
 
 

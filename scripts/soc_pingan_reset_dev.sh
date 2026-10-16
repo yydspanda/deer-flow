@@ -9,15 +9,16 @@ umask 077
 
 usage() {
   cat <<'USAGE'
-用法：bash RESET-SOC-DEV.sh [--root PATH] [--confirm RESET-SOC-DEV]
+用法：bash RESET-SOC-DEV.sh [--root PATH] [--no-backup] [--confirm RESET-SOC-DEV]
 
 默认只预览；目标默认为 $HOME/deer-flow。
 --confirm RESET-SOC-DEV  明确确认后：检查目标、停服、再次检查、归档重置。
+--no-backup              不备份数据库；确认后直接清空，本次重置无法恢复。
 --root PATH             指定已安装的 DeerFlow 目录。
 --help                  显示说明。
 
 执行前先暂停页面中的批量任务，等待运行中数量为 0。
-会清空整个 SOC DEV 的研判、批次及经验；原数据库归档备份。
+会清空整个 SOC DEV 的研判、批次及经验；默认归档备份原数据库。
 不会自动启动服务。账号、STG、原始语料和配置不在重置范围内。
 USAGE
 }
@@ -29,6 +30,8 @@ fail() {
 
 target_root="${HOME:?HOME is required}/deer-flow"
 confirmation=''
+no_backup=false
+reset_args=(reset-dev-data)
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)
@@ -41,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       confirmation="$2"
       shift 2
       ;;
+    --no-backup)
+      no_backup=true
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -48,6 +55,9 @@ while [[ $# -gt 0 ]]; do
     *) fail "不支持的参数：$1" ;;
   esac
 done
+if [[ "$no_backup" == true ]]; then
+  reset_args+=(--no-backup)
+fi
 
 [[ -d "$target_root" ]] || fail "安装目录不存在：$target_root"
 target_root="$(cd "$target_root" && pwd -P)"
@@ -67,19 +77,19 @@ cleanup() {
   fi
   if [[ -n "$receipt_pending" && -f "$receipt_pending" ]]; then
     echo "未发布的重置输出已保留：$receipt_pending" >&2
-    echo '请先核对该输出及数据库备份，不要因回执发布失败再次重置。' >&2
+    echo '请先核对该输出与备份选择，不要因回执发布失败再次重置。' >&2
   fi
   return "$result"
 }
 trap cleanup EXIT
 
 validate_report() {
-  "$host_python" - "$1" "$target_root" "$2" <<'PY'
+  "$host_python" - "$1" "$target_root" "$2" "$no_backup" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-report_path, root, phase = sys.argv[1:]
+report_path, root, phase, no_backup = sys.argv[1:]
 try:
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
     if not isinstance(report, dict):
@@ -99,6 +109,14 @@ try:
         raise ValueError("Host 返回的 ready/blockers 格式不正确")
     if phase != "initial" and (report["ready"] is not True or report["blockers"] != []):
         raise ValueError("数据库仍不可重置；要求 ready=true 且 blockers=[]")
+    if no_backup == "true" and (
+        report.get("backup_enabled") is not False
+        or report.get("backup_directory") is not None
+        or report.get("recovery") != "unavailable_no_backup"
+    ):
+        raise ValueError("Host 未确认不备份模式及不可恢复状态；请更新 Host 脚本")
+    if no_backup == "false" and report.get("backup_enabled") is False:
+        raise ValueError("未选择 --no-backup，Host 却关闭了数据库备份")
 except (OSError, ValueError, RuntimeError) as error:
     print(f"验证失败：{error}", file=sys.stderr)
     sys.exit(1)
@@ -108,7 +126,7 @@ PY
 
 # Verify DEV and target identity before even stopping the installed services.
 echo "目标安装目录：$target_root"
-"$host_python" "$host_script" reset-dev-data > "$preview_dir/initial.json"
+"$host_python" "$host_script" "${reset_args[@]}" > "$preview_dir/initial.json"
 validate_report "$preview_dir/initial.json" initial
 if [[ -z "$confirmation" ]]; then
   echo '以上仅为预览，未停服、未重置。确认需要从空经验库重跑时，再加 --confirm RESET-SOC-DEV。'
@@ -116,14 +134,14 @@ if [[ -z "$confirmation" ]]; then
 fi
 
 "$host_python" "$host_script" stop
-"$host_python" "$host_script" reset-dev-data > "$preview_dir/stopped.json"
+"$host_python" "$host_script" "${reset_args[@]}" > "$preview_dir/stopped.json"
 validate_report "$preview_dir/stopped.json" stopped
 
 receipt_dir="$target_root/backend/.deer-flow/internal-host-dev"
 history_dir="$receipt_dir/reset-receipts"
 mkdir -p "$history_dir"
 receipt_pending="$(mktemp "$history_dir/reset-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
-"$host_python" "$host_script" reset-dev-data --confirm RESET-SOC-DEV > "$receipt_pending"
+"$host_python" "$host_script" "${reset_args[@]}" --confirm RESET-SOC-DEV > "$receipt_pending"
 validate_report "$receipt_pending" receipt
 
 canonical_receipt="$receipt_dir/dev-reset-receipt.json"

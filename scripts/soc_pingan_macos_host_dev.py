@@ -1320,6 +1320,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="preview SOC DEV reset; stopped services and explicit confirmation required",
     )
     reset.add_argument("--confirm", choices=("RESET-SOC-DEV",))
+    reset.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="delete SOC DEV data without a backup; this reset cannot be restored",
+    )
     restore = subparsers.add_parser(
         "restore-dev-data",
         help="restore a verified reset backup into an empty stopped DEV database",
@@ -1365,6 +1370,8 @@ def main(argv: list[str] | None = None) -> int:
                 "confirmation": args.confirm,
             }
             if args.action == "reset-dev-data":
+                if args.no_backup:
+                    params["no_backup"] = True
                 result = reset_dev_database(**params)
             else:
                 result = restore_dev_database(**params, backup_name=args.backup_name)

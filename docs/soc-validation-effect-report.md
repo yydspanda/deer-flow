@@ -1,5 +1,7 @@
 # 第二批效果统计与分批抽查
 
+已有 `soc_corpus_experiment.py export` 导出的报告，只需回传汇报数字时，直接使用下方“已有报告的精简统计”；无需重新导出数据库报告。
+
 适用于第一批已完成经验积累和审核、第二批已运行结束的内网 Mac DEV。
 工具只读取本地数据库，生成报告和 Excel 可打开的 CSV；不调用模型、不重跑告警、
 不修改数据库或经验，不需要重新安装应用或修改服务配置。Python 3.12 即可运行，无需安装依赖。
@@ -46,6 +48,46 @@ $HOME/Downloads/VALIDATION-REPORT-TO-TRANSFER/
 ```
 
 这个文件夹放在项目外，运行时通过 `--root` 指定已安装的项目。无需将文件覆盖进 `deer-flow`。
+
+### 1.1 已有报告的精简统计
+
+先按部署教程导出选定轮次的报告，记下终端打印的报告目录。若要比较“第一批经验下的第二批结果”和
+“两批全部积累并审核后的第二批复测结果”，分别导出两个轮次，并对各自报告执行一次本节。
+脚本不自动合并两轮结果，也不查询当前页面或选择最新轮次。
+
+当前交付目录将单文件工具放在 `$HOME/READY-TO-TRANSFER/soc_stage_report_summary.py`，
+先按部署教程第 2 节校验整个交付目录。不需要安装依赖或重启服务。
+旧源码压缩包不一定包含它，下面明确使用交付目录中的脚本。
+只有确认新项目中已有该文件时，才可将 `soc_summary_tool` 改为
+`$HOME/deer-flow/scripts/soc_stage_report_summary.py`；单独传输源码脚本也可放到任意固定位置后修改此变量。
+
+修改下面 `soc_report_dir` 为本次导出的报告目录（内含 `report.json`），复制整块执行。每次生成一个新摘要文件，
+只将摘要复制到剪贴板，不输出或复制大体积的 `report.json`。
+
+```bash
+bash <<'BASH'
+set -euo pipefail
+umask 077
+soc_report_dir="$HOME/soc-stage-report-请替换为本次导出的目录名"
+soc_summary_tool="$HOME/READY-TO-TRANSFER/soc_stage_report_summary.py"
+test -f "$soc_report_dir/report.json"
+test -f "$soc_summary_tool"
+soc_summary_file="$soc_report_dir/summary-$(date +%Y%m%d-%H%M%S)-$$.json"
+python3.12 "$soc_summary_tool" "$soc_report_dir" \
+  --output "$soc_summary_file" >/dev/null
+pbcopy < "$soc_summary_file"
+printf '\n统计已复制到剪贴板，文件：%s\n' "$soc_summary_file"
+BASH
+```
+
+将剪贴板中的全部 JSON 发回外网即可；比较两阶段时，为两份摘要分别注明“增量经验审核前”和“全量经验审核后”。
+输出保留两组粗分组、忽略/转交、实际经验使用（含参考）、直接复用、平均最终 Run 耗时、保存设置及完成情况，不含逐条告警或原始标签。
+`stage_conclusion_ready=false` 表示该文件尚不能支撑完整阶段结论，按 `issues` 核查；若只汇报已完成样本，明确使用
+`included_completed_stable` 作为范围和分母，不把已完成部分写成整批完成。
+平均耗时同时输出计量条数与缺失数，不将未知补零；不包含被替换的旧尝试或初始排队。
+四项全开时结果同时受企业策略影响，不能把全部忽略归因于经验；第一批计划数也不单独证明审核已全部完成。
+脚本支持 `soc_corpus_experiment.py export` 的固定轮次报告及已有合并报告，不适用于本页旧数据库统计工具的所有输出格式。
+已有清单时核验 `report.json` 哈希；失败返回非零退出码，不会执行后面的剪贴板步骤。输出文件拒绝覆盖，原始报告保持不变。
 
 ## 2. 执行统计
 

@@ -1,4 +1,4 @@
-"""Offline, reversible reset of the checkout-owned SOC DEV SQLite family."""
+"""Offline reset of the checkout-owned SOC DEV SQLite family; backup by default."""
 
 from __future__ import annotations
 
@@ -126,9 +126,13 @@ def _sha(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def _files(paths: tuple[Path, ...]) -> list[dict]:
+def _files(paths: tuple[Path, ...], *, hash_contents: bool = True) -> list[dict]:
     return [
-        {"name": path.name, "size_bytes": path.stat().st_size, "sha256": _sha(path)}
+        {
+            "name": path.name,
+            "size_bytes": path.stat().st_size,
+            **({"sha256": _sha(path)} if hash_contents else {}),
+        }
         for path in paths
         if path.exists()
     ]
@@ -149,6 +153,7 @@ def reset_dev_database(
     root: Path,
     environment: str,
     confirmation: str | None = None,
+    no_backup: bool = False,
     inspect_processes: Inspector = inspect_database_processes,
 ) -> dict:
     root = root.resolve()
@@ -162,7 +167,10 @@ def reset_dev_database(
         "database": str(paths[0]),
         "ready": not blockers,
         "blockers": blockers,
-        "files": _files(paths),
+        "files": _files(paths, hash_contents=not no_backup),
+        "backup_enabled": not no_backup,
+        "backup_directory": None,
+        "recovery": "unavailable_no_backup" if no_backup else "backup_planned",
     }
     if confirmation is None:
         return report
@@ -171,9 +179,32 @@ def reset_dev_database(
         blockers = inspect_processes(paths)
         if blockers:
             raise ValueError("stop Host DEV before reset: " + "; ".join(blockers))
-        files = _files(paths)
+        files = _files(paths, hash_contents=not no_backup)
+        report.update(ready=True, blockers=[])
         if not files:
             return {**report, "status": "already_empty", "files": []}
+        if no_backup:
+            # All destructive operations stay under the startup/maintenance lock.
+            # Revalidate the complete file family before unlinking; no content read,
+            # archive, copy or hash is needed for this explicitly irreversible mode.
+            paths = _paths(root, environment)
+            removed = []
+            try:
+                for path in paths:
+                    if path.exists():
+                        path.unlink()
+                        removed.append(path.name)
+            except OSError as exc:
+                raise ValueError(
+                    "reset without backup interrupted; removed files cannot be "
+                    f"restored by this reset: {removed}; {exc}"
+                ) from exc
+            return {
+                **report,
+                "status": "reset",
+                "files": files,
+                "next_step": "start Host DEV to initialize an empty SOC database",
+            }
         parent = _safe_path(root, BACKUPS)
         parent.mkdir(mode=0o700, exist_ok=True)
         parent.chmod(0o700)
@@ -214,6 +245,7 @@ def reset_dev_database(
             "status": "reset",
             "files": files,
             "backup_directory": str(backup),
+            "recovery": "backup_available",
             "next_step": "start Host DEV to initialize an empty SOC database",
         }
 

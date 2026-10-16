@@ -296,6 +296,42 @@ def _render_transfer_runbook(*, initialize_soc_dev: bool = False) -> str:
     )
 
 
+@pytest.mark.parametrize("initialize_soc_dev", [False, True])
+def test_transfer_runbook_covers_learning_retries_incremental_review_and_summary(
+    initialize_soc_dev: bool,
+) -> None:
+    runbook = _render_transfer_runbook(initialize_soc_dev=initialize_soc_dev)
+    headings = [
+        re.search(rf"^## {number}\. .+$", runbook, re.MULTILINE)
+        for number in range(8, 15)
+    ]
+    assert all(headings), "operator chapters 8 through 14 must be present"
+    positions = [heading.start() for heading in headings if heading]
+    assert positions == sorted(positions)
+    learning = runbook[positions[0] : positions[1]]
+    assert "--kind failed" in learning
+    assert "--kind semantic_failed" in learning
+    assert "--restore-full-scope" in learning
+    assert "--watch" in learning
+    assert "本次跳过" not in learning
+    baseline = runbook[positions[3] : positions[4]]
+    assert "soc_corpus_experiment.py export" in baseline
+    accumulation = runbook[positions[4] : positions[5]]
+    assert "不会启动第二批" in accumulation
+    assert "--dry-run" in accumulation
+    incremental = runbook[positions[5] : positions[6]]
+    assert "页面审核" in incremental
+    assert "重新配置并全部重跑" in incremental
+    assert "不能" in incremental and "第9节" in incremental
+    reporting = runbook[positions[6] :]
+    assert "soc_corpus_experiment.py export" in reporting
+    assert "soc_stage_report_summary.py" in reporting
+    assert "pbcopy" in reporting
+    assert "--output" in reporting
+    assert "scripts/soc_stage_report_summary.py" in REQUIRED_HANDOFF_SOURCE_PATHS
+    assert "docs/soc-corpus-operations-runbook.md" in REQUIRED_HANDOFF_SOURCE_PATHS
+
+
 def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     runbook = _render_transfer_runbook()
 
@@ -454,7 +490,7 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
         "正常重部署不要删除 `deerflow.db`、`soc_agent_dev.db` 或 "
         "`soc_agent_stg.db`" in runbook
     )
-    assert "## 8. Promote Runtime To STG / 切换到 STG" in runbook
+    assert "## 附录A. Promote Runtime To STG / 切换到 STG" in runbook
     assert "soc_pingan_set_runtime_environment.py" in runbook
     assert "--environment stg" in runbook
     assert "soc_agent_stg.db" in runbook
@@ -473,8 +509,8 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert '--query "zhangjianming627"' in runbook
     assert runbook.count("soc_pingan_asset_direct_smoke.py \\\n  --confirm-live") >= 3
     stg_section = runbook.split(
-        "## 8. Promote Runtime To STG / 切换到 STG", maxsplit=1
-    )[1].split("## 9. Real Integration Follow-up", maxsplit=1)[0]
+        "## 附录A. Promote Runtime To STG / 切换到 STG", maxsplit=1
+    )[1].split("## 附录B. Real Integration Follow-up", maxsplit=1)[0]
     stg_command = re.findall(r"```bash\n(.*?)```", stg_section, flags=re.DOTALL)[0]
     assert "--demo-no-auth" not in stg_command
     assert "--mode fake" in stg_section
@@ -520,7 +556,7 @@ def test_transfer_runbook_resets_only_dev_after_preflight_before_first_start() -
     assert "已保存的较低并发设置仍保留" in runbook
     blocks = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)
     assert len(blocks) == 2
-    assert "reset-dev-data\n" in blocks[0]
+    assert "reset-dev-data --no-backup\n" in blocks[0]
     assert "--confirm" not in blocks[0]
     assert "reset-dev-data --confirm RESET-SOC-DEV" in blocks[1]
     for block in blocks:
@@ -557,8 +593,9 @@ def test_transfer_runbook_learning_instructions_match_data_mode(
         assert "保留已经完成的第一批和已审核经验" in evaluation
         assert "新名单需从网页第一批“开始积累”启动" not in evaluation
         assert "第11节" in evaluation
-    assert "--kind failed" in evaluation
-    assert "--kind semantic_failed" in evaluation
+    learning_steps = runbook.split("## 8.", maxsplit=1)[1].split("## 9.", maxsplit=1)[0]
+    assert "--kind failed" in learning_steps
+    assert "--kind semantic_failed" in learning_steps
     assert "第10节" in evaluation
 
 
@@ -579,7 +616,7 @@ def test_preserving_upgrade_persists_pause_before_service_stop_and_backup() -> N
     assert "`active_count=0`" in introduction
     assert "只执行 Host `stop` 不会把轮次改为暂停" in introduction
     assert introduction.index("持久化为 `paused`") < introduction.index(
-        "再按本篇停服备份"
+        "再按本篇停服、选择是否备份"
     )
 
 
@@ -663,6 +700,18 @@ def test_transfer_runbook_requires_explicit_fresh_validation_request(
     assert saved_report["default_runbook"] == expected_default
     assert set(saved_report["runbooks"]) == {"upgrade", "reinitialize"}
     assert saved_report["runbook"] == saved_report["runbooks"][expected_default]
+    summary_tool = saved_report["operator_tools"]["stage_report_summary"]
+    summary_path = Path(summary_tool["path"])
+    assert summary_path.parent == tmp_path / "output"
+    assert summary_path.name == "soc_stage_report_summary.py"
+    assert (
+        summary_path.read_bytes()
+        == Path(transfer_builder.__file__)
+        .with_name("soc_stage_report_summary.py")
+        .read_bytes()
+    )
+    assert _sha256_file(summary_path) == summary_tool["sha256"]
+    assert summary_path.stat().st_mode & 0o777 == 0o600
     for mode, item in saved_report["runbooks"].items():
         path = Path(item["path"])
         assert _sha256_file(path) == item["sha256"]
@@ -714,8 +763,9 @@ def test_transfer_runbook_shell_blocks_parse(initialize_soc_dev: bool) -> None:
 
 
 @pytest.mark.parametrize("failure", [None, "stop", "reset-dev-data"])
+@pytest.mark.parametrize("backup_database", ["yes", "no"])
 def test_runbook_reset_publishes_receipt_only_after_success(
-    tmp_path: Path, failure: str | None
+    tmp_path: Path, failure: str | None, backup_database: str
 ) -> None:
     home = tmp_path / "home"
     repo = home / "deer-flow"
@@ -739,6 +789,9 @@ def test_runbook_reset_publishes_receipt_only_after_success(
         .split("## 7. Start Host DEV", maxsplit=1)[0]
     )
     block = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)[1]
+    block = block.replace(
+        "soc_backup_database=yes", f"soc_backup_database={backup_database}"
+    )
     env = dict(os.environ)
     env.update(HOME=str(home), RESET_TEST_FAILURE=failure or "")
     completed = subprocess.run(
@@ -756,11 +809,14 @@ def test_runbook_reset_publishes_receipt_only_after_success(
         assert completed.returncode == 0, completed.stderr
         assert saved["backup_directory"] == "new-backup"
         assert receipt.stat().st_mode & 0o777 == 0o600
+        calls = (home / "host-calls").read_text(encoding="utf-8")
+        assert ("--no-backup" in calls) is (backup_database == "no")
 
 
 @pytest.mark.parametrize("failure", [None, "missing_corpus", "stop", "listener"])
+@pytest.mark.parametrize("backup_project", ["yes", "no", "invalid"])
 def test_runbook_backup_is_private_and_stops_before_copying(
-    tmp_path: Path, failure: str | None
+    tmp_path: Path, failure: str | None, backup_project: str
 ) -> None:
     home = tmp_path / "home"
     repo = home / "deer-flow"
@@ -797,6 +853,9 @@ def test_runbook_backup_is_private_and_stops_before_copying(
         .split("### 3.2 Install", maxsplit=1)[0]
     )
     block = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)[0]
+    block = block.replace(
+        "soc_backup_project=yes", f"soc_backup_project={backup_project}"
+    )
     env = dict(os.environ)
     env.update(
         HOME=str(home),
@@ -808,7 +867,7 @@ def test_runbook_backup_is_private_and_stops_before_copying(
     )
     backups = list((home / "deer-flow-backups").glob("*/deer-flow.tar.gz"))
     assert (repo / "private-marker").read_text(encoding="utf-8") == "saved-local-config"
-    if failure:
+    if failure or backup_project == "invalid":
         assert completed.returncode != 0
         assert backups == []
         if failure == "missing_corpus":
@@ -818,6 +877,13 @@ def test_runbook_backup_is_private_and_stops_before_copying(
     assert (home / "stopped").exists()
     assert "[backup 1/4] Checking corpus" in completed.stdout
     assert "[backup 2/4] Stopping services" in completed.stdout
+    if backup_project == "no":
+        assert backups == []
+        assert not (home / "deer-flow-backups").exists()
+        assert "Project backup skipped by operator" in completed.stdout
+        assert "Compressing old checkout" not in completed.stdout
+        assert "Computing SHA-256" not in completed.stdout
+        return
     assert "[backup 3/4] Compressing old checkout" in completed.stdout
     assert "[backup 4/4] Computing SHA-256" in completed.stdout
     assert completed.stdout.index("[backup 3/4]") < completed.stdout.index(

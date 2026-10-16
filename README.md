@@ -184,6 +184,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > review/activation evidence and source links without models or database writes; current
 > state and missing historical proof remain distinct.
 > See the [internal Mac statistics and review procedure](docs/soc-validation-effect-report.md).
+> If a fixed round report has already been exported inside the internal network,
+> `python3.12 scripts/soc_stage_report_summary.py REPORT_DIRECTORY` produces a small
+> aggregate JSON for the stage conclusion, including both coarse groups and mean
+> final-run latency. This standalone tool reads report files only, with no DB or API access.
 > The PingAn SIEM email detector `RPAADM_002192` on `T_GBD_zeus_data` is excluded
 > from both validation batches and manual execution; original corpus data is retained.
 > On Mac Host DEV, edit run settings from `http://localhost:2026` on the deployment
@@ -273,10 +277,19 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > `draft-export` saves a separate background-drafting cost report, including unknown
 > usage; it does not inflate alert-analysis totals. For a fresh internal DEV experiment,
 > the Host wrapper's explicit `reset-dev-data` previews and archives only the SOC DEV
-> database. Ordinary deployment never resets it; accounts, corpus and secrets remain intact.
+> database by default. Explicit `--no-backup` instead clears only SOC DEV without
+> copying or hashing the database; it still requires reset confirmation and all offline
+> checks, and cannot restore from that reset. Ordinary deployment never resets it;
+> accounts, corpus and secrets remain intact.
 > The reusable [whole-DEV reset procedure](docs/soc-dev-database-reset.md) provides a
 > standalone preview-first wrapper with explicit confirmation, stop/readiness checks,
 > backup receipts and separate restart instructions.
+> The [corpus operation chapters](docs/soc-corpus-operations-runbook.md) give the ordered
+> first-batch run/retry/review, second-batch baseline export, optional saved-result
+> accumulation, incremental page review, fixed-sample retest and summary-copy commands.
+> Retry learning failures before reviewing; export the first validation result before
+> changing Memory. The first-batch bulk-review tool cannot review later validation
+> candidates. Later reports use a new frozen Memory snapshot and remain separate.
 > After learning completes, the [candidate audit and bulk-review tools](docs/soc-learning-review-batch.md)
 > can export saved first-batch diagnostics and apply an operator-selected false-positive
 > verdict to a frozen pending list through the existing draft/review APIs. Default
@@ -301,17 +314,19 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > learning history. A matching standalone maintenance tool can run outside the checkout
 > with `--root` while the application remains stopped, without another application deployment.
 > Isolated mock full-loop, browser and synthetic capacity checks have passed. The current
-> internal handoff preserves completed learning and experience reviews: back up the
-> stopped checkout, install the matching source/private packages, stage the existing
+> internal handoff preserves completed learning and experience reviews: stop the
+> checkout, choose whether to back it up, install the matching source/private packages, stage the existing
 > corpus, install dependencies, then start with the preserved database. Startup upgrades
 > its schema in place. Every transfer includes two complete guides:
 > `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md` preserves learning and reviews and is the default;
-> `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md` stops the old services, backs up the checkout,
-> reinstalls the project, then explicitly archives and resets SOC DEV before starting fresh.
+> `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md` stops the old services, offers a checkout backup,
+> reinstalls the project, then explicitly resets SOC DEV with a separate database-backup choice.
 > Reinitialization preserves accounts, STG and source corpus, and does not uninstall Mac tools.
 > `--initialize-soc-dev` only selects the default guide and report flag; it never resets data.
 > Backup steps show their current stage; compression and hashing may take time without
-> further output. Wait for `Verified stopped-checkout backup` before installing.
+> further output. Wait for `Verified stopped-checkout backup`, or explicitly choose
+> `soc_backup_project=no` and verify the skip marker before installing. Reset's separate
+> `soc_backup_database=no` option requires a package containing the new Host `--no-backup` flag.
 > Code, private configuration and corpus data remain separate
 > deliverables. Before creating a transfer, the builder automatically checks fixed synthetic
 > records from a previously delivered version: historical sample display, approved experience

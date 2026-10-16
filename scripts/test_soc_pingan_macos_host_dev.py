@@ -110,6 +110,35 @@ def test_main_start_holds_database_maintenance_lock(
     assert host_dev.main(["start", "--daemon"]) == 0
 
 
+def test_reset_no_backup_is_explicit_and_forwarded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    calls = []
+    monkeypatch.setattr(host_dev, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        host_dev, "load_local_runtime_environment", lambda: {"SOC_PINGAN_ENV": "dev"}
+    )
+    monkeypatch.setattr(
+        host_dev,
+        "reset_dev_database",
+        lambda **kwargs: calls.append(kwargs) or {"status": "reset"},
+    )
+    assert parse_args(["reset-dev-data"]).no_backup is False
+    assert (
+        host_dev.main(["reset-dev-data", "--no-backup", "--confirm", "RESET-SOC-DEV"])
+        == 0
+    )
+    assert calls == [
+        {
+            "root": tmp_path,
+            "environment": "dev",
+            "confirmation": "RESET-SOC-DEV",
+            "no_backup": True,
+        }
+    ]
+    assert json.loads(capsys.readouterr().out)["status"] == "reset"
+
+
 def test_local_config_profile_requires_project_gateway_and_sqlite(
     tmp_path: Path,
 ) -> None:

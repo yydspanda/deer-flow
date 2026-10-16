@@ -1,5 +1,26 @@
 ## Service Startup Contracts
 
+`soc_stage_report_summary.py` is a standalone stdlib reader of one explicit exported
+`report.json`, not a live database or API reporter. Verify its report checksum when
+the manifest exists, reject duplicate members, and mark incomplete stages diagnostic.
+Only emit allowlisted metadata and aggregates; no alert details, labels, Memory content
+or configuration snapshots. Match the operator conclusion's broad `memory_uses`
+definition (including reference), keep missing usage/duration unknown, and average
+only final Run durations, not all retry attempts. Retain both static coarse groups;
+policy-enabled outcomes cannot all be attributed to Memory. Never rewrite source
+reports; optional output must be a new private file. Test with synthetic reports.
+The operator handoff may carry this standalone file alongside an older application
+archive: hash it independently, retain the archive identity, and never imply that
+copying the statistics tool updates Runtime. Require it and its tests in future source
+inventories. `docs/soc-corpus-operations-runbook.md` owns generated chapters 8–14:
+first-batch retries precede review in chapter 8; first validation report precedes
+incremental review; `accumulate` only records saved results and never dispatches a
+batch. Keep first-batch bulk review and post-validation page review distinct. Freeze
+new reviewed Memory in a new validation round, then explicitly export and summarize
+that round. Do not merge before/after snapshots or infer no experience from no use.
+Use the same chapter source in the delivered manual and future generated manuals;
+STG and real integration procedures are appendices, not intervening corpus steps.
+
 `soc_pingan_validation_report.py` is a standalone stdlib read-only statistics tool,
 with sibling `soc_validation_report_data.py` and `soc_validation_report_render.py`.
 It may run outside the installed checkout; `--root` resolves only the target DEV DB
@@ -43,7 +64,11 @@ executing/reimplementing policy. Commands and evidence limits live in the report
 Host `reset-dev-data` is an explicit, DEV-only offline operation, never part of
 ordinary install/start/resume. Default is read-only preview; `--confirm RESET-SOC-DEV`
 archives only `soc_agent_dev.db` and its SQLite sidecars with a hash manifest before
-leaving the active path empty. Refuse listening services, orphan workers, open file
+leaving the active path empty. Explicit `--no-backup` is an operator-selected destructive
+alternative, still requiring the same confirmation, DEV identity and maintenance guards.
+Preview and apply in that mode do not hash, copy or archive database contents; receipts
+declare `backup_enabled=false`, null backup directory and unavailable reset recovery.
+Never infer this choice from a fresh-install flag or prior project backup. Refuse listening services, orphan workers, open file
 handles, symlinks and hard links; share a maintenance lock with Host startup. Keep
 STG, authentication, source corpus, configuration and secrets untouched. Restore
 requires explicit confirmation, verifies the saved file set, and never overwrites
@@ -57,6 +82,9 @@ then delegates one reset. Validate JSON schema, target and status, retain a uniq
 historical receipt, and atomically publish the latest successful receipt. Never
 auto-start or repeat reset after a startup failure. Keep the procedure in
 `docs/soc-dev-database-reset.md`; tests invoke only a fake installed Host checkout.
+Forward an explicit `--no-backup` consistently to preview and apply, and reject a Host
+response that does not confirm that choice. Older installations must upgrade before
+using this new Host option; changing the standalone wrapper does not update Host code.
 
 `soc_bulk_review_learning.py` is an explicit DEV operator HTTP client for a frozen
 first-batch candidate list. Plan reads are inert. Apply uses the existing lesson
@@ -321,10 +349,10 @@ start step.
 Every full transfer generates two independently complete manuals:
 `PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md` preserves existing learning/review data and
 contains no executable reset commands; `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`
-stops the old Host, checks ports, backs up the whole stopped checkout, delegates
+stops the old Host, checks ports, offers a whole-checkout backup, delegates
 replacement to the installer, and places `reset-dev-data` preview and
 `--confirm RESET-SOC-DEV` after dependency installation/preflight, before the first
-Host start. Reinitialization archives SOC DEV only; it does not uninstall Mac tools
+Host start. Reinitialization resets SOC DEV only, with a separately selected backup; it does not uninstall Mac tools
 or erase accounts, STG or original corpus. The two manuals replace the old single
 `PINGAN-INTERNAL-MAC-RUNBOOK.md`; the full source/private handoff therefore contains
 six files. The report's `runbooks` mapping records both manuals and their SHA-256;
@@ -340,10 +368,15 @@ restarting/resuming a batch must never repeat the reset. Preserve authentication
 STG, raw corpus, configuration and secrets. Do not use whole-checkout deletion as
 an initialization shortcut. Before replacing an existing checkout, verify its four
 external Downloads corpus copies, stop Host, verify all five ports are free, and
-retain a private independent checkout backup outside the target. Show explicit
+offer a private independent checkout backup outside the target. Default both backup
+choices to yes; explicit `soc_backup_project=no` skips compression and archive hashing,
+while `soc_backup_database=no` passes the Host's `--no-backup` only for reset. Ordinary
+upgrade never deletes the database. Skipping backup does not skip preflight, service
+stop, port checks or the installer's transaction recovery. Show explicit
 backup stage messages and explain that tar compression and shasum hashing can take
 a long time without further output. Installation follows only after the success
-marker `Verified stopped-checkout backup`. A documentation-only split may update
+marker `Verified stopped-checkout backup`, or the explicit operator skip marker.
+Neither choice removes earlier backups. A documentation-only split may update
 the manuals and their report hashes for an existing release without rebuilding or
 modifying its verified source/private archives or installer. Operators already
 upgrading continue at their unfinished step instead of restarting the procedure.
