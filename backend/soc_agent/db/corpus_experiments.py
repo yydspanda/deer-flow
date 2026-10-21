@@ -409,6 +409,40 @@ class SqlAlchemyCorpusExperimentRepository:
         with self._session_factory() as session:
             return [CorpusRound.model_validate(row.record_payload) for row in session.scalars(query.order_by(SocCorpusRoundRow.created_at, SocCorpusRoundRow.round_id).offset(offset).limit(limit))]
 
+    def list_memory_continuation_rounds(self, *, limit: int = 100, offset: int = 0) -> list[CorpusRound]:
+        _page(limit, offset)
+        row = SocCorpusRoundRow
+        history, item, job = aliased(SocCorpusRoundRow), SocCorpusRoundItemRow, SocProcessingJobRow
+        latest = (
+            select(
+                item.job_id,
+                func.row_number().over(partition_by=(history.experiment_id, history.batch, item.alert_id), order_by=(history.created_at.desc(), history.round_id.desc())).label("rank"),
+            )
+            .join(history, history.round_id == item.round_id)
+            .subquery()
+        )
+        pending = (
+            select(job.job_id)
+            .join(latest, latest.c.job_id == job.job_id)
+            .where(
+                latest.c.rank == 1,
+                job.input_payload["round_id"].as_string() == row.round_id,
+                job.attempt_count + func.coalesce(job.metadata_payload["inherited_corpus_attempt_count"].as_integer(), 0) < 3,
+                or_(job.status == "queued", (job.status == "completed") & job.result_payload["snapshot_changed_during_run"].as_boolean().is_(True)),
+            )
+            .correlate(row)
+            .exists()
+        )
+        query = select(row).where(
+            row.state == "blocked",
+            row.record_payload["state_reason"].as_string() == "memory_governance_changed",
+            row.record_payload["superseded_by_round_id"].as_string().is_(None),
+            _current_generation_round(row, row.experiment_id),
+            pending,
+        )
+        with self._session_factory() as session:
+            return [CorpusRound.model_validate(item.record_payload) for item in session.scalars(query.order_by(row.created_at, row.round_id).offset(offset).limit(limit))]
+
     def list_round_briefs(self, experiment_id: str, *, batch: str | None = None, limit: int = 50, offset: int = 0) -> list[CorpusRoundBrief]:
         _page(limit, offset)
         row = SocCorpusRoundRow
@@ -727,6 +761,46 @@ class SqlAlchemyCorpusExperimentRepository:
         with self._session_factory() as session:
             return [(CorpusExperimentMember.model_validate(m.record_payload), _job_from_row(j) if j else None) for m, j in session.execute(query)]
 
+    def batch_result_jobs(self, experiment_id: str, selection: CorpusRoundSelection, *, limit: int = 100, offset: int = 0):
+        _page(limit, offset)
+        item, job = SocCorpusRoundItemRow, SocProcessingJobRow
+        sequence = select(item.sequence_number).where(item.job_id == job.job_id).correlate(job).scalar_subquery()
+        query = self._batch_jobs_query(experiment_id, selection).add_columns(sequence).offset(offset).limit(limit)
+        with self._session_factory() as session:
+            return [(CorpusExperimentMember.model_validate(m.record_payload), _job_from_row(j) if j else None, sequence or 0) for m, j, sequence in session.execute(query)]
+
+    def batch_result_manifest(self, experiment_id: str, selection: CorpusRoundSelection) -> list[dict]:
+        """Small polling/export fence: job versions cover saved payload changes."""
+        member, job = SocCorpusExperimentMemberRow, SocProcessingJobRow
+        query = self._batch_jobs_query(experiment_id, selection).with_only_columns(
+            member.alert_id,
+            job.job_id,
+            job.version,
+            job.status,
+            job.run_id,
+            job.attempt_count,
+            job.metadata_payload["inherited_corpus_attempt_count"].as_integer().label("inherited_attempt_count"),
+            job.input_payload["round_id"].as_string().label("round_id"),
+            job.result_payload["snapshot_changed_during_run"].as_boolean().label("snapshot_changed"),
+            job.result_payload["summary"]["normalization_assist_status"].as_string().label("semantic_status"),
+            job.result_payload["summary"]["phase_timings"].label("phase_timings"),
+            maintain_column_froms=True,
+        )
+        with self._session_factory() as session:
+            return [dict(row) for row in session.execute(query).mappings()]
+
+    def memory_continuation_alert_ids(self, round_: CorpusRound, selected: set[str] | None = None) -> list[str]:
+        job, member = SocProcessingJobRow, SocCorpusExperimentMemberRow
+        selection = CorpusRoundSelection(batch=round_.selection.batch, scope="reuse" if round_.selection.batch == "learning" else "all")
+        query = self._batch_jobs_query(round_.experiment_id, selection).where(job.input_payload["round_id"].as_string() == round_.round_id)
+        if selected is not None:
+            query = query.where(member.alert_id.in_(selected))
+        else:
+            query = query.where(or_(job.status == "queued", (job.status == "completed") & job.result_payload["snapshot_changed_during_run"].as_boolean().is_(True)))
+        query = query.with_only_columns(member.alert_id, maintain_column_froms=True)
+        with self._session_factory() as session:
+            return list(session.scalars(query))
+
     def batch_counts(self, experiment_id: str, selection: CorpusRoundSelection):
         query = self._batch_jobs_query(experiment_id, selection).with_only_columns(SocProcessingJobRow.status, maintain_column_froms=True).order_by(None).subquery()
         with self._session_factory() as session:
@@ -753,7 +827,14 @@ class SqlAlchemyCorpusExperimentRepository:
         # can keep the batch blocked; retain the round and terminal jobs for audit.
         latest_jobs = (
             self._batch_jobs_query(experiment_id, CorpusRoundSelection(batch=batch, scope="reuse" if batch == "learning" else "all"))
-            .where(SocProcessingJobRow.status.in_([ProcessingJobStatus.QUEUED.value, *[status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]]))
+            .where(
+                or_(
+                    SocProcessingJobRow.status.in_([ProcessingJobStatus.QUEUED.value, *[status.value for status in ACTIVE_PROCESSING_JOB_STATUSES]]),
+                    (SocProcessingJobRow.status == "completed")
+                    & SocProcessingJobRow.result_payload["snapshot_changed_during_run"].as_boolean().is_(True)
+                    & SocProcessingJobRow.input_payload["round_id"].as_string().in_(select(row.round_id).where(row.experiment_id == experiment_id, row.record_payload["state_reason"].as_string() == "memory_governance_changed")),
+                )
+            )
             .with_only_columns(SocProcessingJobRow.job_id, maintain_column_froms=True)
             .order_by(None)
         )

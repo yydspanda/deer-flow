@@ -3,6 +3,8 @@
 `soc_stage_report_summary.py` is a standalone stdlib reader of one explicit exported
 `report.json`, not a live database or API reporter. Verify its report checksum when
 the manifest exists, reject duplicate members, and mark incomplete stages diagnostic.
+Accept fixed round, explicitly merged, and batch reports. Batch reports retain per-row
+source identities and source settings; validate provenance without inventing one round.
 Only emit allowlisted metadata and aggregates; no alert details, labels, Memory content
 or configuration snapshots. Match the operator conclusion's broad `memory_uses`
 definition (including reference), keep missing usage/duration unknown, and average
@@ -15,10 +17,16 @@ copying the statistics tool updates Runtime. Require it and its tests in future 
 inventories. `docs/soc-corpus-operations-runbook.md` owns generated chapters 8–14:
 first-batch retries precede review in chapter 8; first validation report precedes
 incremental review; `accumulate` only records saved results and never dispatches a
-batch. Keep first-batch bulk review and report-bound incremental bulk review distinct;
-page review remains available for individual decisions. Freeze
-new reviewed Memory in a new validation round, then explicitly export and summarize
-that round. Do not merge before/after snapshots or infer no experience from no use.
+batch. Routine status, retry, continuation, backfill and export use `--batch` without
+operator-supplied round IDs. `plan --phase pending` freezes the current shared candidate
+queue and rechecks experiment/plan/learning-generation plus candidate hashes during
+apply; new arrivals never expand that plan. Legacy initial/report-bound incremental
+modes retain their old validation contracts. Page review remains available.
+After additional review, fully rerun validation and save a separate batch report.
+Batch reports automatically assemble current per-member results, including continuations;
+retain the actual options/Memory provenance and never claim a single frozen snapshot
+when sources differ. Do not combine separate full validation passes or infer no
+experience from no use.
 Use the same chapter source in the delivered manual and future generated manuals;
 STG and real integration procedures are appendices, not intervening corpus steps.
 
@@ -88,7 +96,12 @@ response that does not confirm that choice. Older installations must upgrade bef
 using this new Host option; changing the standalone wrapper does not update Host code.
 
 `soc_bulk_review_learning.py` is an explicit DEV operator HTTP client for a frozen
-candidate list. Default `initial` planning requires completed learning and untouched
+candidate list. Operator-facing `--phase pending` uses v4 plans that derive and freeze
+the current batch experiment/plan/learning generation. It requires neither a fixed
+report nor completed/idle batches; every draft/review admission rechecks scope and
+candidate hash. New arrivals are outside the plan, not a reason to block it; a changed
+learning generation is. Empty pending plans are valid no-ops. Legacy default `initial`
+planning requires completed learning and untouched
 validation. Explicit `incremental` planning binds an exported validation report and
 its verified manifest to the same experiment and saved results; derive round and
 experiment identities from that report, never the latest UI round. Require completed
@@ -125,6 +138,13 @@ validation batch in `initial`, and require the report-bound guards above in `inc
 Pending candidates and resumed plan membership remain scoped to this explicit
 experiment; inherited confirmed records are not approved again. Legacy plans without
 the explicit-selection field retain their original quick-workbench behavior.
+Incremental review also accepts a full-scope source stopped specifically for
+`memory_governance_changed`, after all experiment work has drained. This is review
+admission only: preserve frozen report/result/inventory checks, reject superseded
+sources and every other blocked reason, and never resume or rewrite the stopped
+round. Pending candidates come from the whole current experiment/generation, including
+completed subset followups and any earlier pending work; the report is provenance,
+not a candidate-source filter or proof that all validation members completed.
 The handoff inventory must include the rebalance contracts/services, facts-only and
 successor experiment regressions, explicit-experiment bulk review tool/tests, and
 `docs/soc-corpus-rebalance.md` plus the review guide. Default Web execution uses

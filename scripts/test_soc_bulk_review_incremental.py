@@ -365,6 +365,161 @@ def test_incremental_plan_accepts_fixed_paused_full_scope_with_failed_and_queued
     assert not api.posts
 
 
+class GovernanceBlockedAPI(IncrementalAPI):
+    """A full validation source stopped before its 33-member recovery child."""
+
+    def __init__(self):
+        super().__init__(3)
+        self.round.update(state="blocked", state_reason="memory_governance_changed")
+        self.progress.update(
+            selected_count=5917,
+            admitted_count=5917,
+            completed_count=5884,
+            counts={"completed": 5884, "queued": 33},
+        )
+        template = self.rows[0]
+        self.rows = [
+            {
+                **template,
+                "alert_id": f"ALERT-{index}",
+                "job_id": f"JOB-{index}",
+                "run_id": f"RUN-VALIDATION-{index}" if index < 5884 else None,
+                "status": "completed" if index < 5884 else "queued",
+                "attempt_count": 1 if index < 5884 else 0,
+                "payload_hash": hashlib.sha256(str(index).encode()).hexdigest(),
+            }
+            for index in range(5917)
+        ]
+        self.child = {
+            **deepcopy(self.round),
+            "round_id": "ROUND-REMAINING-33",
+            "parent_round_id": self.round["round_id"],
+            "selection": {
+                **self.round["selection"],
+                "alert_ids": [row["alert_id"] for row in self.rows[-33:]],
+            },
+            "state": "completed",
+            "state_reason": "selected_scope_completed",
+            "version": 2,
+        }
+        self.child_progress = {
+            "selected_count": 33,
+            "admitted_count": 33,
+            "completed_count": 33,
+            "failed_count": 0,
+            "active_count": 0,
+            "counts": {"completed": 33},
+        }
+        self.status_overrides["validation"].update(
+            total=5917, completed=5917, remaining=0
+        )
+        for number, source_round in enumerate(
+            (
+                self.round["round_id"],
+                self.child["round_id"],
+                "ROUND-LEARNING-CURRENT",
+            ),
+            start=1,
+        ):
+            self.candidates[candidate(number)["candidate_id"]]["metadata"][
+                "round_id"
+            ] = source_round
+
+    def get(self, path):
+        parsed = urlsplit(path)
+        if parsed.path == f"{BASE}/rounds/{self.child['round_id']}":
+            self.calls.append(("GET", path))
+            return {**deepcopy(self.child_progress), "round": deepcopy(self.child)}
+        response = super().get(path)
+        if parsed.path == BASE + "/rounds":
+            assert parse_qs(parsed.query).get("offset") == ["0"]
+            response.append(deepcopy(self.child))
+        return response
+
+
+def test_incremental_review_accepts_idle_governance_blocked_full_source_and_child(
+    tmp_path,
+):
+    api = GovernanceBlockedAPI()
+    round_before, progress_before = deepcopy(api.round), deepcopy(api.progress)
+    child_before = deepcopy(api.child)
+    path = plan_for(api, tmp_path)
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    assert plan["baseline_report"]["selected_count"] == 5917
+    assert plan["baseline_report"]["round_id"] == api.round["round_id"]
+    assert {item["candidate_id"] for item in plan["items"]} == set(api.candidates)
+    assert ("GET", f"{BASE}/rounds/{api.child['round_id']}") in api.calls
+    assert not api.posts
+    assert bulk.apply_plan(api, path, concurrency=1)["counts"] == {"completed": 3}
+    assert all(
+        call[1].startswith("/api/soc/memory/candidates/")
+        and call[1].endswith(("/lesson-draft", "/review"))
+        for call in api.posts
+    )
+    assert api.round == round_before
+    assert api.progress == progress_before
+    assert api.child == child_before
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [None, "configuration_changed", "memory_snapshot_changed_or_expired", "unknown"],
+)
+def test_incremental_review_rejects_other_blocked_reasons(tmp_path, reason):
+    api = GovernanceBlockedAPI()
+    api.round["state_reason"] = reason
+    with pytest.raises(bulk.BulkReviewError):
+        plan_for(api, tmp_path)
+    assert not api.posts
+
+
+@pytest.mark.parametrize(
+    "defect", ["active", "superseded", "running", "child_active", "child_running"]
+)
+def test_incremental_blocked_review_requires_all_rounds_idle(tmp_path, defect):
+    api = GovernanceBlockedAPI()
+    if defect == "active":
+        api.progress["active_count"] = 1
+    elif defect == "superseded":
+        api.round["superseded_by_round_id"] = "ROUND-REPLACEMENT"
+    elif defect == "running":
+        api.round["state"] = "running"
+    elif defect == "child_active":
+        api.child_progress["active_count"] = 1
+    else:
+        api.child["state"] = "running"
+    with pytest.raises(bulk.BulkReviewError):
+        plan_for(api, tmp_path)
+    assert not api.posts
+
+
+def test_incremental_blocked_review_rejects_33_member_child_as_full_report(tmp_path):
+    api = GovernanceBlockedAPI()
+    api.round = deepcopy(api.child)
+    api.progress = deepcopy(api.child_progress)
+    api.rows = api.rows[-33:]
+    for row in api.rows:
+        row.update(status="completed", run_id=f"RUN-RECOVERY-{row['alert_id']}")
+    with pytest.raises(bulk.BulkReviewError):
+        plan_for(api, tmp_path)
+    assert not api.posts
+
+
+@pytest.mark.parametrize("defect", ["child_version", "source_result"])
+def test_incremental_blocked_review_still_fences_source_and_child_after_plan(
+    tmp_path, defect
+):
+    api = GovernanceBlockedAPI()
+    path = plan_for(api, tmp_path)
+    if defect == "child_version":
+        api.child["version"] += 1
+    else:
+        api.rows[0]["run_id"] = "RUN-CHANGED-AFTER-PLAN"
+    with pytest.raises(bulk.BulkReviewError):
+        bulk.apply_plan(api, path, concurrency=1)
+    assert not api.posts
+
+
 def test_incremental_plan_accepts_legacy_none_generation_if_current(tmp_path):
     api = IncrementalAPI()
     api.generation = None

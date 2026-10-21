@@ -4,7 +4,8 @@ import pytest
 from soc_agent.demo.corpus_experiment_cli import main
 
 
-def test_learning_cli_uses_server_defaults_and_preserves_scope_and_budget(capsys):
+@pytest.mark.parametrize("command", ["learn", "validate"])
+def test_batch_cli_uses_server_defaults_and_preserves_scope_and_budget(capsys, command):
     seen = []
 
     def handle(request):
@@ -12,19 +13,32 @@ def test_learning_cli_uses_server_defaults_and_preserves_scope_and_budget(capsys
 
         seen.append((request.method, request.url.path, json.loads(request.content) if request.content else None))
         if request.url.path.endswith("/configuration"):
-            return httpx.Response(200, json={"max_concurrency": 3, "defaults": {"normalization_review_mode": "apply", "tenant_policy_enabled": False}})
+            return httpx.Response(
+                200,
+                json={
+                    "max_concurrency": 3,
+                    "defaults": {
+                        "normalization_review_mode": "apply",
+                        "refresh_normalization": False,
+                        "tenant_policy_enabled": False,
+                        "tenant_policy_advisor_enabled": False,
+                        "tenant_policy_signal_providers_enabled": False,
+                    },
+                },
+            )
         if request.url.path.endswith("/rounds"):
             body = seen[-1][2]
             assert body["selection"]["group_ids"] == ["group-a"]
             assert body["selection"]["rule_codes"] == ["RULE-1"]
             assert body["execution_limit"] == 10
             assert body["options"]["normalization_review_mode"] == "apply"
+            assert all(body["options"][key] is False for key in ("refresh_normalization", "tenant_policy_enabled", "tenant_policy_advisor_enabled", "tenant_policy_signal_providers_enabled"))
             assert request.headers["Idempotency-Key"] == "reliable-submit"
             return httpx.Response(201, json={"round_id": "ROUND-test", "state": "prepared"})
         return httpx.Response(202, json={"round_id": "ROUND-test", "state": "running"})
 
     with httpx.Client(transport=httpx.MockTransport(handle), base_url="http://localhost:2026") as http:
-        assert main(["learn", "--experiment", "EXP-test", "--group", "group-a", "--rule", "RULE-1", "--limit", "10", "--request-key", "reliable-submit"], client=http) == 0
+        assert main([command, "--experiment", "EXP-test", "--group", "group-a", "--rule", "RULE-1", "--limit", "10", "--request-key", "reliable-submit"], client=http) == 0
     assert seen[-1][1].endswith("/rounds/ROUND-test/start")
     assert "ROUND-test" in capsys.readouterr().out
 

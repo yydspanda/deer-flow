@@ -59,6 +59,15 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 - `MemoryAdmissionService` is the gate for candidate value. Promotion from a note or
   correction is explicit. Pattern construction requires stable similarity anchors,
   bounded windows, distinct-source support, and an auditable quality gate.
+- Profile-owned `candidate_review_ineligibility()` additionally gates new automatic
+  Pattern candidates and explicit completed-run promotion. PingAn requires its existing
+  decision-eligible applicability (a required behavior fingerprint); a detector name,
+  protocol, or nonempty list of weak components is insufficient. Weak observations still
+  accumulate and remain visible, but report `missing_reusable_core_behavior` instead of
+  entering pending review. This is not a Runtime analysis failure. Recurrence/quality
+  thresholds are unchanged. Preserve existing candidates, approved reference-only Memory,
+  historical navigation and Generic Profile reference-learning behavior; do not rewrite
+  matching identity, remove history or manufacture a core feature to satisfy the gate.
 - An authenticated analyst may explicitly promote any completed `AnalysisRun` through
   `SocReviewService.promote_run_to_memory()`. This bypasses the automatic recurrence
   threshold, not governance: the authenticated explicit action plus exact run/alert

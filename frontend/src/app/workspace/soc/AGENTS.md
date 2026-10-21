@@ -28,9 +28,11 @@ dates; these defaults do not migrate previously confirmed experience.
 
 ## API And Navigation
 
-- Two-batch controls use the server experiment/round API; preparing membership or a
-  round does not start inference. CLI-created rounds appear in the same paginated list.
-  Keep all four run switches visible above the round controls as `新轮次运行设置`.
+- Daily two-batch controls use the server batch projection and quick commands; internal
+  experiment/round records remain technical provenance rather than operator inputs.
+  Preparing membership or a round does not start inference. CLI-created rounds remain
+  available through the technical API. Keep all four run switches visible above the
+  batch controls as `新任务运行设置`.
   New rounds submit those selections, masked by server capabilities; policy enabled
   means `full_flow`, disabled means `memory`. Do not overwrite selections through a
   second purpose preset. Use separate batch/session preferences, default to the server's
@@ -56,7 +58,9 @@ dates; these defaults do not migrate previously confirmed experience.
   wall time, operator pause, queue wait and model duration are different measures;
   never infer an ETA or convert unknown measurements into zero on the client.
   Blocked notices retain the server reason; do not assume every stop means changed
-  settings or Memory. Continue cannot clear a blocked round.
+  settings or Memory. For `memory_governance_changed`, offer Continue: the backend
+  automatically creates the necessary continuation and folds results into the batch.
+  React never clears or modifies an internal round's blocked state.
 
 - Corpus list requests set `include_group_catalog=false&include_rehearsal=false`. Keep
   the selected group in that lightweight response; open the group picker to fetch
@@ -549,11 +553,25 @@ review scoped experience, and validate all/reuse/explore (default all). Keep gro
 filters out of commands. Single alerts submit directly with per-alert progress; paused
 bulk work stays paused. Unblocked failed rows submit `retry` with the displayed job
 and attempt, preserving its round/settings. A row or batch `blocked_reason` instead
-requires explicit `rerun`; its button must say `重新运行`, and completed reruns remain
-new tasks. Counts use latest-per-alert
+requires explicit `rerun` for individual rows; its button must say `重新运行`, and
+completed reruns remain new tasks. Batch-level Memory governance recovery instead uses
+Continue and the server-owned continuation. Counts use latest-per-alert
 batch projection, including manual tasks across internal rounds. Preserve `experiment`
 and `return_batch` through candidate list/detail navigation. Running settings apply to
 new jobs; do not expose experiment, round, budget or comparison controls.
+
+Both batches expose `重试执行失败` and `重试语义核对失败` without a round selector.
+Read `/batches/{batch}` for complete-batch activity, failure counts and semantic failures;
+retry buttons must not infer idleness from a filtered quick view. POST only the retry
+kind and the saved maximum concurrency to `/batches/{batch}/retry`, omitting concurrency
+for callers who cannot configure it. An unsaved concurrency draft and new-task switch
+draft never affect retries. Require idle batch state and render server rejection without
+automatically replaying the command. Refresh batch/quick progress and lightweight
+workbench queries after acceptance; never invalidate immutable audit bundles. Batch retry
+scope is the entire selected batch, independent of list filters.
+Render a positive server `memory_recovery_exhausted_count` as an explicit-rerun
+notice. Do not turn that notice into a blanket batch disable: remaining unstarted
+members can still continue, and the backend owns recovery attempt limits.
 
 The deployment-wide maximum concurrency is a separate server-owned setting shared by
 both batches. Expose the 1..`concurrency_limit` selector and explicit save inside run
@@ -570,21 +588,25 @@ and explain that started tasks finish before scheduling follows the new maximum.
 
 Host DEV can restrict run-setting edits to the deployment Mac. Honor the server's
 `can_configure=false` by disabling all switches, fact refresh and reset, while keeping
-start, pause, single-alert run and rerun available. Batch commands use `saved_options`
+start, pause, single-alert run and rerun available. Read-only batch commands use `saved_options`
 from the batch-scoped configuration read, ignoring browser preferences; the legacy
 single-alert surface uses `run_controls.defaults`. Refresh read-only batch settings
 every 10 seconds, on window focus and after a command failure without automatically
 replaying the command. Missing permission fields retain older deployment behavior.
 The backend enforces this boundary; never derive authority from the browser hostname.
-The Host also initializes each batch from its server `saved_options` before deployment
-defaults. Keep only explicit unsubmitted edits in component state keyed by batch; switching
-batches must not copy a draft or another batch's configuration. Full page refresh restores
-server settings, and the retired shared session-storage preference must not override them.
+The Host initializes new tasks in either batch from server deployment `defaults`, rather
+than restoring options from a historical round. These defaults enable semantic review (`apply`),
+leave fact refresh off, and disable enterprise policy, software-path policy and LLM policy
+advice. Keep these defaults server-owned; do not override saved task settings or infer
+historical settings from the current defaults. Keep only explicit unsubmitted edits in
+component state keyed by batch; switching batches must not copy a draft or another
+batch's configuration. Full page refresh restores deployment defaults for the Host
+and saved options for LAN callers; retired session-storage preferences never override them.
 Background configuration reads preserve an explicit Host draft; LAN commands always follow
 the current server settings. Label visible switches `新任务运行设置`: they apply to newly
 submitted jobs, not options already frozen in queued or completed jobs. Keep the persistent
-note beside batch commands: Continue uses each job's saved settings and can resume multiple
-historical rounds; targeted retests require the corresponding round's resume command.
+note beside batch commands: Continue uses each job's saved settings, and batch retries
+ignore list filters. Operators do not need to find or enter internal execution IDs.
 
 Running corpus details display a neutral waiting message and suppress stale outcome cards
 until the server reports a terminal state. Missing intermediate analysis must not appear

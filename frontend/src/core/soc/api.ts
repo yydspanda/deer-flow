@@ -2,6 +2,9 @@ import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
 import type {
+  SocCorpusBatchRetryCommand,
+  SocCorpusBatchRetryResult,
+  SocCorpusBatchState,
   SocCorpusQuickCommand,
   SocCorpusQuickState,
 } from "./corpus-experiments";
@@ -32,6 +35,7 @@ import type {
   SocAlertResult,
   SocAlertResultListResponse,
   SocAnalysisRun,
+  SocCorpusBatch,
   SocCorpusWorkbenchActivity,
   SocCorpusGroupPage,
   SocAnalysisExecutionOptions,
@@ -1449,6 +1453,16 @@ export const getSocCorpusQuickState = (
 ) =>
   corpusExperimentRequest<SocCorpusQuickState>(
     `quick-validation?batch=${batch}&scope=${scope}&offset=${offset}&alert_ids=${encodeURIComponent(alertIds.join(","))}`,
+  );
+export const getSocCorpusBatchState = (batch: SocCorpusBatch) =>
+  corpusExperimentRequest<SocCorpusBatchState>(`batches/${batch}`);
+export const retrySocCorpusBatch = (
+  batch: SocCorpusBatch,
+  body: SocCorpusBatchRetryCommand,
+) =>
+  corpusExperimentRequest<SocCorpusBatchRetryResult>(
+    `batches/${batch}/retry`,
+    body,
   );
 export const runSocCorpusQuick = (body: SocCorpusQuickCommand, key?: string) =>
   corpusExperimentRequest<{ accepted: boolean }>(

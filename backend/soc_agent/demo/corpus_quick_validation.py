@@ -9,7 +9,7 @@ from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
 from soc_agent.contracts.corpus_experiments import Batch, CorpusQuickCommand, CorpusRound, CorpusRoundCreateCommand, CorpusRoundSelection
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict
 from soc_agent.demo.corpus_batches import CorpusBatchPlan
-from soc_agent.demo.corpus_experiments import SocCorpusExperimentService, _eligible, _require_admin, _require_saved_options
+from soc_agent.demo.corpus_experiments import SocCorpusExperimentService, _eligible, _require_admin, _require_saved_options, corpus_attempt_count
 from soc_agent.demo.corpus_round_comparison import job_result_row
 from soc_agent.utils.hashing import stable_hash
 
@@ -222,11 +222,14 @@ class CorpusQuickValidation:
         experiment_id = self.experiment()
         if svc.store.get_experiment(experiment_id) is None:
             svc.prepare(self.plan, experiment_id=experiment_id, name="告警快速验证", context=context)
-        rounds = self._rounds(experiment_id, command.batch)
         if command.action == "pause":
-            for round_ in rounds:
+            for round_ in self._rounds(experiment_id, command.batch):
                 if round_.state == "running" and not round_.superseded_by_round_id:
                     svc.pause(round_.round_id, context=context)
+                elif round_.state == "blocked" and round_.state_reason == "memory_governance_changed" and not round_.superseded_by_round_id:
+                    # Record an explicit pause while draining a changed snapshot.
+                    # Automatic continuation only follows running -> blocked.
+                    svc.store.set_round_state(round_.round_id, expected_version=round_.version, state="blocked", reason=round_.state_reason, actor_id=context.actor.actor_id)
             return {"accepted": True}
         selection = self.selection(command.batch, command.scope, command.alert_id)
         # Single alerts are independent of the current second-batch browser scope.
@@ -235,6 +238,23 @@ class CorpusQuickValidation:
         rows = svc.store.batch_jobs(experiment_id, selection)
         if not rows:
             raise ValueError("当前批次没有所选告警")
+        if command.action in {"start", "run"}:
+            from soc_agent.demo.corpus_batch_operations import MEMORY_CONTINUATION_REASONS, continue_memory_round
+
+            recovering = {}
+            snapshot_problems = {}
+            for member, job in rows:
+                if job is None or job.status.is_terminal and not (job.result_payload or {}).get("snapshot_changed_during_run"):
+                    continue
+                saved_id = job.input_payload["round_id"]
+                if saved_id not in snapshot_problems:
+                    snapshot_problems[saved_id] = svc.snapshot_problem(svc.store.get_round(saved_id))
+                if snapshot_problems[saved_id] in MEMORY_CONTINUATION_REASONS:
+                    recovering.setdefault(saved_id, []).append(member.alert_id)
+            for round_id, selected_ids in recovering.items():
+                continue_memory_round(svc, round_id, context=context, alert_ids=selected_ids, concurrency=svc.capacity.max_concurrency)
+            if recovering:
+                rows = svc.store.batch_jobs(experiment_id, selection)
         if command.action == "retry":
             from soc_agent.contracts.corpus_experiments import CorpusRoundRetryCommand
 
@@ -248,6 +268,13 @@ class CorpusQuickValidation:
             if job.status.value != "failed":
                 raise CorpusExperimentConflict("任务已完成，请刷新；重新配置运行需使用重新运行")
             round_ = svc.store.get_round(job.input_payload["round_id"])
+            if svc.snapshot_problem(round_) == "memory_governance_changed":
+                from soc_agent.demo.corpus_batch_operations import continue_memory_round
+
+                if not (job.result_payload or {}).get("retryable") or corpus_attempt_count(job) >= 3:
+                    raise CorpusExperimentConflict("该失败不可重试或已达到重试上限，请检查失败原因")
+                child = continue_memory_round(svc, round_.round_id, context=context, alert_ids=[command.alert_id], concurrency=svc.capacity.max_concurrency)
+                return {"accepted": True, "round_id": child.round_id}
             result = svc.retry_items(round_.round_id, CorpusRoundRetryCommand(kind="failed", alert_ids=[command.alert_id], expected_round_version=round_.version), context=context, manual=True)
             if not result["retried"]:
                 raise CorpusExperimentConflict("该失败不可重试或已达到重试上限，请检查失败原因")
@@ -277,13 +304,9 @@ class CorpusQuickValidation:
             if job and command.action != "rerun":
                 continue  # Completed and failed work is retained; retry is explicit.
             new_members.append(member)
-        if not command.alert_id:
-            for round_ in rounds:
-                if round_.retest_provenance and not round_.superseded_by_round_id and (start_rounds - {round_.round_id} or new_members):
-                    # Retest scope remains a fence after completion and later
-                    # single-alert reruns. Only explicit whole-batch replacement
-                    # retires it. Reject before changing any dispatch/admission.
-                    raise ValueError(f"当前批次包含定向复测 {round_.round_id} 和其他未完成任务；请使用对应轮次的继续命令，避免页面“继续”恢复其他任务")
+        # Batch Continue explicitly means all unfinished members in its selected
+        # scope, including work outside a completed targeted retest. Each saved
+        # task retains its own settings; no small retest can relabel older work.
         for round_id in start_rounds:
             selected_ids = [m.alert_id for m, j in rows if j and j.input_payload["round_id"] == round_id]
             svc.store.set_dispatch_scope(round_id, selected_ids)

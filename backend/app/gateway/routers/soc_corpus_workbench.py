@@ -17,6 +17,7 @@ from app.gateway.soc_dev_workbench import resolve_soc_dev_workbench_runtime, str
 from soc_agent.application.analysis import build_soc_analysis_service
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
+from soc_agent.contracts.corpus_experiments import default_corpus_execution_options
 from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
 from soc_agent.demo.corpus_batches import CorpusBatch, CorpusValidationTier
 from soc_agent.demo.corpus_capacity import CorpusCapacity
@@ -74,12 +75,7 @@ def get_soc_corpus_workbench_service(
             )
         )
         try:
-            defaults = SocAnalysisExecutionOptions(
-                normalization_review_mode=os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower(),
-                tenant_policy_enabled=runtime.tenant_policy != "disabled",
-                tenant_policy_advisor_enabled=runtime.tenant_policy == "deterministic_and_llm",
-                tenant_policy_signal_providers_enabled=runtime.software_path_fast_policy,
-            )
+            defaults = default_corpus_execution_options()
             policy_available = strict_env_bool("SOC_DEV_WORKBENCH_ALLOW_TENANT_POLICY", False) and bool(os.environ.get("SOC_TENANT_DISPOSITION_POLICY_PATH", "").strip())
             controls = SocCorpusWorkbenchRunControls(
                 defaults=defaults,
@@ -112,9 +108,9 @@ def get_soc_corpus_workbench_service(
                 settings=runtime.settings,
                 capacity=CorpusCapacity(ceiling=runtime.settings.max_concurrency, path=runtime.database_file.with_suffix(".corpus-capacity.json")),
                 database_file=runtime.database_file.name,
-                tenant_policy=runtime.tenant_policy,
-                software_path_fast_policy=runtime.software_path_fast_policy,
-                normalization_review_mode=os.environ.get("SOC_NORMALIZATION_ASSIST_MODE", "off").strip().lower(),
+                tenant_policy="disabled",
+                software_path_fast_policy=defaults.tenant_policy_signal_providers_enabled,
+                normalization_review_mode=defaults.normalization_review_mode,
             )
         except (OSError, ValueError, SocCorpusWorkbenchError) as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -256,7 +252,7 @@ def process_corpus_workbench_alert(
     try:
         if body is not None and body.settings is not None:
             if not can_configure_corpus(request):
-                defaults = service.run_controls.defaults if service.run_controls else SocAnalysisExecutionOptions()
+                defaults = service.run_controls.defaults if service.run_controls else default_corpus_execution_options()
                 require_saved_corpus_options(request, body.settings, defaults)
             return service.start_alert(alert_id, context=context, settings=body.settings)
         return service.start_alert(alert_id, context=context)

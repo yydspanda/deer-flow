@@ -17,11 +17,15 @@ const api = rs.hoisted(() => ({
   run: rs.fn(),
   configuration: rs.fn(),
   workbench: rs.fn(),
+  batchState: rs.fn(),
+  batchRetry: rs.fn(),
 }));
 rs.mock("@/core/soc/api", () => ({
   getSocCorpusQuickState: api.state,
   runSocCorpusQuick: api.run,
   getSocCorpusExperimentConfiguration: api.configuration,
+  getSocCorpusBatchState: api.batchState,
+  retrySocCorpusBatch: api.batchRetry,
 }));
 rs.mock("@/core/soc", () => ({
   useSocCorpusWorkbench: api.workbench,
@@ -48,6 +52,13 @@ beforeEach(() => {
   window.sessionStorage.clear();
   api.run.mockReset().mockResolvedValue({ accepted: true });
   api.state.mockReset();
+  api.batchState.mockReset().mockResolvedValue({
+    active: 0,
+    running: false,
+    failed: 0,
+    semantic_failed_count: 0,
+  });
+  api.batchRetry.mockReset();
   api.configuration.mockReset().mockResolvedValue({ defaults: options });
   api.workbench.mockReset().mockReturnValue({
     state: {

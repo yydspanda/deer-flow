@@ -23,6 +23,8 @@ import {
   getSocCorpusGroups,
   getSocCorpusExperimentCandidates,
   getSocCorpusExperimentConfiguration,
+  getSocCorpusBatchState,
+  retrySocCorpusBatch,
   runSocCorpusQuick,
   updateSocCorpusConcurrency,
   getSocMemoryCenterOverview,
@@ -57,6 +59,33 @@ import {
 import { type SocMemoryCandidate } from "@/core/soc/types";
 
 const mockedFetch = rs.mocked(fetcher);
+
+test.each(["learning", "validation"] as const)(
+  "%s batch retry sends only batch, failure kind and concurrency",
+  async (batch) => {
+    mockedFetch.mockImplementation(async () =>
+      jsonResponse(200, { retried: 2 }),
+    );
+    await getSocCorpusBatchState(batch);
+    await retrySocCorpusBatch(batch, {
+      kind: "semantic_failed",
+      concurrency: 4,
+    });
+    expect(mockedFetch.mock.calls[0]![0]).toBe(
+      `/api/soc/dev/corpus-workbench/batches/${batch}`,
+    );
+    const [url, init] = mockedFetch.mock.calls[1]!;
+    expect(url).toBe(`/api/soc/dev/corpus-workbench/batches/${batch}/retry`);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      kind: "semantic_failed",
+      concurrency: 4,
+    });
+    expect(new Headers(init?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
+  },
+);
 
 test.each(["learning", "validation"] as const)(
   "%s restart sends full settings with the token-bound idempotency key",

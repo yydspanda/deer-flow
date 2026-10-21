@@ -15,6 +15,11 @@ RoundState = Literal["prepared", "running", "paused", "blocked", "completed"]
 BoundedCorpusId = Annotated[str, Field(min_length=1, max_length=128)]
 
 
+def default_corpus_execution_options() -> SocAnalysisExecutionOptions:
+    """Defaults for new corpus work, without reinterpreting saved Runtime options."""
+    return SocAnalysisExecutionOptions(normalization_review_mode="apply")
+
+
 class CorpusExperimentRebalance(BaseModel):
     """Explicit references to preserved learning; never copies review authority."""
 
@@ -166,6 +171,7 @@ class CorpusRound(BaseModel):
     superseded_by_round_id: str | None = Field(default=None, min_length=1, max_length=64)
     learning_generation: str | None = Field(default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None)
     pattern_accumulation_scope: MemoryPatternAccumulationScope | None = Field(default=None, exclude_if=lambda value: value is None)
+    memory_continuation_depth: int = Field(default=0, ge=0, exclude_if=lambda value: value == 0)
 
     @model_validator(mode="after")
     def _facts_do_not_decide(self):
@@ -180,7 +186,7 @@ class CorpusRoundCreateCommand(BaseModel):
     experiment_id: str = Field(min_length=1, max_length=64)
     selection: CorpusRoundSelection
     purpose: Literal["memory", "full_flow", "facts"] = "memory"
-    options: SocAnalysisExecutionOptions = Field(default_factory=SocAnalysisExecutionOptions)
+    options: SocAnalysisExecutionOptions = Field(default_factory=default_corpus_execution_options)
     memory_mode: Literal["snapshot", "none"] = "snapshot"
     parent_round_id: str | None = None
     retest_provenance: CorpusRetestProvenance | None = None
@@ -315,7 +321,7 @@ class CorpusQuickCommand(BaseModel):
     job_id: BoundedCorpusId | None = None
     expected_attempt_count: int | None = Field(default=None, ge=1, strict=True)
     restart_token: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    options: SocAnalysisExecutionOptions = Field(default_factory=SocAnalysisExecutionOptions)
+    options: SocAnalysisExecutionOptions = Field(default_factory=default_corpus_execution_options)
 
     @model_validator(mode="after")
     def _single(self):
@@ -333,6 +339,14 @@ class CorpusQuickCommand(BaseModel):
         elif self.restart_token is not None:
             raise ValueError("restart token is only accepted for restarting a batch")
         return self
+
+
+class CorpusBatchRetryCommand(BaseModel):
+    """Retry current batch failures without exposing execution lineage IDs."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["failed", "semantic_failed"]
+    concurrency: int | None = Field(default=None, ge=1, le=16, strict=True)
 
 
 class CorpusConcurrencyCommand(BaseModel):

@@ -192,11 +192,14 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > from both validation batches and manual execution; original corpus data is retained.
 > On Mac Host DEV, edit run settings from `http://localhost:2026` on the deployment
 > machine. LAN colleagues can start, pause and rerun using the batch's last saved
-> settings (deployment defaults before its first round). Local selections are saved
-> on submission; queued tasks keep their original settings. The Host also restores the
-> selected batch's saved settings when the page opens. Unsubmitted edits stay separate
-> for each batch and are discarded on a full page refresh; browser preferences do not
-> replace the saved server settings. Host startup automatically
+> settings (corpus defaults before its first round). Both learning and validation
+> default to semantic review on, with enterprise policy, software-path policy and LLM
+> policy advice off; force-refresh of semantic facts is also off. The deployment Mac
+> opens new-run settings with these defaults. Explicit edits remain separate for each
+> batch and are discarded on a full page refresh. Local selections are saved on
+> submission; continuing queued tasks uses their saved settings, shown separately
+> from the new-run controls. LAN colleagues still use the saved server settings.
+> Host startup automatically
 > binds Gateway/Next to loopback while nginx remains the shared LAN entry.
 > Explicit experiment APIs enforce the same current-plan settings; creating another
 > experiment or selecting a historical plan cannot bypass the host-only controls.
@@ -253,9 +256,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Memory patterns. Prior plans and results remain historical; source upgrades never
 > reset the database. A clean rerun requires a separate operator-confirmed DEV reset.
 > It supports filters, limits, concurrency, pause/resume, explicit retries and fixed-run
-> exports. Learning uses no existing Memory and accumulates within the experiment;
-> validation freezes reviewed learning Memory and does not automatically create new
-> observations. New ordinary observations use a 180-day window; historical windows stay frozen.
+> exports. Learning uses no existing Memory; both batches contribute eligible independent
+> observations to the same experiment and learning generation. Validation uses reviewed
+> Memory, while newly generated candidates still require review. New ordinary observations
+> use a 180-day window; historical windows stay frozen.
 > The Web scopes read `验证经验复用` (holdouts with first-batch peers) and
 > `其他测试告警` (sparse/time-unknown samples), with **全部** selected by default. Four visible
 > `运行设置` switches are saved with new tasks; existing queued tasks retain
@@ -286,12 +290,19 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > backup receipts and separate restart instructions.
 > The [corpus operation chapters](docs/soc-corpus-operations-runbook.md) give the ordered
 > first-batch run/retry/review, second-batch baseline export, optional saved-result
-> accumulation, report-bound incremental batch review (or page review), fixed-sample
-> retest and summary-copy commands.
-> Retry learning failures before reviewing; export the first validation result before
-> changing Memory. Initial bulk review requires validation not to have started;
-> incremental review explicitly selects `--phase incremental` and a saved report.
-> Later reports use a new frozen Memory snapshot and remain separate.
+> accumulation, incremental review, fixed-sample retest and summary-copy commands.
+> Routine CLI operations select `--batch learning` or `--batch validation`: status,
+> pause/resume, failed/semantic retry, accumulation and export require no round ID.
+> Batch exports combine each member's current task result and retain its actual source
+> settings and Memory snapshot; a full restart replaces the current view without erasing history.
+> Memory-governance changes automatically continue remaining or affected work with a new
+> internal snapshot after in-flight work drains. Explicit pause is respected; model/source
+> configuration drift still requires an explicit restart.
+> `soc_bulk_review_learning.py plan --phase pending` freezes the current experiment's
+> pending queue, including both batches; apply checks the learning generation and candidate
+> revision before each review. No source report or task ID is required. Save the first
+> validation report before reviewing additional experience, then fully rerun validation
+> and export a separate report to observe the expanded Memory library.
 > After learning completes, the [candidate audit and bulk-review tools](docs/soc-learning-review-batch.md)
 > can export saved first-batch diagnostics and apply an operator-selected false-positive
 > verdict to a frozen pending list through the existing draft/review APIs. Default
@@ -304,7 +315,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > ranges retain their original boundaries. Evidence and candidate quality gates still apply.
 > The same guide covers draft timeouts and identifier-format errors. Application updates for
 > those errors preserve existing candidates and reviews; resume the original plan to skip
-> completed items. Context-only candidates remain ineligible for exact decision reuse.
+> completed items. New PingAn pattern candidates and explicit promotions require reusable
+> core behavior; rule-only observations continue accumulating without entering review.
+> Historical context-only candidates remain ineligible for exact decision reuse.
 > To deliberately restart only the second batch after a settings mistake, use the
 > [validation-only recovery procedure](docs/soc-validation-reset.md). Its offline DEV
 > command previews one fixed experiment, verifies a full database backup, and clears

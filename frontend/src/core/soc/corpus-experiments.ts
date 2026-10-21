@@ -219,6 +219,37 @@ export interface SocCorpusQuickState {
   })[];
 }
 
+export interface SocCorpusBatchState {
+  batch: SocCorpusBatch;
+  experiment_id: string;
+  total: number;
+  completed: number;
+  failed: number;
+  active: number;
+  remaining: number;
+  running: boolean;
+  blocked_reason: string | null;
+  semantic_failed_count: number;
+  memory_recovery_exhausted_count?: number;
+  counts: Record<string, number>;
+  report_token: string;
+}
+
+export type SocCorpusBatchRetryKind = "failed" | "semantic_failed";
+
+export interface SocCorpusBatchRetryCommand {
+  kind: SocCorpusBatchRetryKind;
+  concurrency?: number;
+}
+
+export interface SocCorpusBatchRetryResult {
+  batch: SocCorpusBatch;
+  experiment_id: string;
+  retried: number;
+  not_retryable: number;
+  source_round_ids: string[];
+}
+
 export interface SocCorpusRestartValidationCommand {
   batch: "validation";
   scope: "all";

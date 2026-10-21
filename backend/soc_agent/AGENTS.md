@@ -42,7 +42,10 @@ file for SOC code. The authoritative product and engineering documents are:
   Learning uses an empty Memory allowlist and an experiment/config/actual-pattern
   accumulation scope; ordinary windows and event times stay unchanged. Validation
   freezes eligible reviewed learning Memory, checks current governance, and disables
-  automatic Pattern learning. Dataset/config/snapshot drift blocks further claims.
+  automatic Pattern learning in legacy rounds; continuous accumulation is described
+  below. Dataset/config/snapshot drift blocks claims against that saved snapshot.
+  Batch operations can replace pending work after reviewed-Memory governance changes
+  with a fresh, separately audited snapshot, as described below.
   A pre-identity normalization failure remains a member failure only when its saved
   payload/hash match the frozen member, identity is unknown and canonical output is
   absent; preserve the original failure/Run ID. Other identity mismatches block the
@@ -125,10 +128,11 @@ file for SOC code. The authoritative product and engineering documents are:
   attempts and retained terminal results cannot keep a recovered batch blocked; partial
   unfinished blocks and historical rounds remain visible. Browser filters never enter
   execution commands.
-  A non-superseded report-based retest fences batch Continue: reject before mutations
-  if the command would also resume another round or admit unsubmitted members. A later
-  single rerun must not hide that fence. Explicit round start remains scoped; batch pause
-  still stops every running round. Whole-batch restart supersedes the fence as usual.
+  Explicit batch Continue resumes all unfinished latest members in its selected batch
+  scope, including work outside a completed report-based retest. Retain each source
+  task's saved settings; the latest small retest never changes an older task's behavior.
+  Explicit historical round start remains scoped; batch pause stops every running
+  source task. Whole-batch restart replaces the full current selection as usual.
   Explicit `restore_full_scope` on round start restores dispatch to the immutable
   selection, without rerunning terminal jobs or changing options/results. Default resume
   retains its dispatch scope. Admission and scope restoration share one transaction;
@@ -163,7 +167,9 @@ file for SOC code. The authoritative product and engineering documents are:
   remain in the journal/job audit. Reports select the current job result once and sum
   measurements across its original and semantic-generation keys, excluding other rounds.
   Ordinary failed retries retain existing journal recovery and the shared three-attempt
-  budget. No retry may bypass frozen code/options/Memory checks. Corrected learning facts replace
+  budget. No retry may bypass frozen code/options/Memory checks. Batch recovery may
+  create a successor with a fresh Memory snapshot instead of changing the original.
+  Corrected learning facts replace
   the active observation while preserving the original evidence payload.
   An explicitly authorized second-batch discard is an offline DEV maintenance
   exception, owned by `scripts/soc_pingan_validation_database.py` and the pure SQL
@@ -328,7 +334,12 @@ file for SOC code. The authoritative product and engineering documents are:
   Workbench owns one shared executor, capacity limit and per-alert claim across all combinations.
   Explicit options may disable configured policy children; enabled options must fit server capabilities.
   Paths, models, tenant scope, provider modes and external-action authority are not request options.
-  Bodyless calls retain deployment defaults; existing stored runs need no migration.
+  New learning/validation work uses `default_corpus_execution_options()`: semantic
+  apply, no forced refresh, and all three policy switches off. Gateway controls,
+  new-command defaults and CLI configuration agree independently of deployment policy
+  defaults. The generic Runtime contract and persisted `CorpusRound.options` retain
+  their legacy defaults; explicit options and resumed jobs retain their saved settings.
+  Bodyless corpus calls use corpus defaults; existing stored runs need no migration.
 
 - The composition root enables policy-first direct resolution by default
   (`SOC_DIRECT_RESOLUTION_ENABLED=false` restores the full analysis path). After canonical
@@ -787,3 +798,32 @@ through the same `accumulate_corpus_run` helper. Check administrator authority, 
 quiescence, generation and exact latest job/Run/input identity. No model calls, job/report
 rewrites or snapshot bypass for execution. CLI `accumulate --round` is an explicit mutation;
 ordinary page reads never backfill observations.
+
+## Batch operations
+
+`demo/corpus_batch_operations.py` provides the daily first/second-batch workflow over
+the existing durable execution journal. `/batches/{batch}` reports the latest job per
+member in the current learning generation; `/results` exports that same selection,
+and `/retry` retries only its current execution or semantic-review failures. Historical
+successful attempts never mask a newer failed or queued attempt. Full restarts mask the
+entire previous selection. Expose full frozen source executions only with
+`include_sources=true`; normal polling returns compact provenance. The report token
+binds source execution versions and current job versions/results, excluding moving
+clocks; pages reject changed tokens before or during extraction. Batch exports retain
+each row's source execution and its actual frozen settings/Memory snapshot.
+
+When `memory_governance_changed` stops a running execution, the dispatcher waits for
+its in-flight work, then creates a same-settings successor for only current queued
+members and completed results marked `snapshot_changed_during_run`. Keep stable
+completed results and ordinary failures intact. Revoke-all continuation may use no
+Memory; it must never reuse a revoked record. Preserve old snapshots and outcomes,
+and disclose mixed snapshots through report provenance. A batch pause recorded while
+draining prevents automatic resumption; batch Continue explicitly recovers that work.
+Automatic continuation is bounded to three successive generations; an explicit batch
+Continue can acknowledge further changes. Continuation jobs inherit actual prior
+attempt counts, so snapshot changes cannot reset the three-attempt budget. Unclaimed
+queued work consumes no attempt; exhausted affected members stay visible and do not
+prevent untouched members from continuing.
+Configuration, dataset, expired snapshot and other blocking errors remain fenced.
+Explicit historical round commands retain their strict frozen-snapshot semantics;
+operators use batch commands for automatic selection and recovery.

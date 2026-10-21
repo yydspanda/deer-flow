@@ -15,7 +15,11 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-SCHEMAS = {"soc.corpus_round_report.v1", "soc.corpus_merged_stage_report.v1"}
+SCHEMAS = {
+    "soc.corpus_round_report.v1",
+    "soc.corpus_merged_stage_report.v1",
+    "soc.corpus_batch_report.v1",
+}
 BOOL_OPTIONS = (
     "refresh_normalization",
     "tenant_policy_enabled",
@@ -132,9 +136,12 @@ def summarize_report(report):
         raise ValueError("duplicate report members; refusing double counting")
     scope = report.get("stage_scope") or {}
     merged = report["schema_version"] == "soc.corpus_merged_stage_report.v1"
+    batch = report["schema_version"] == "soc.corpus_batch_report.v1"
     rounds = (
         [s["round"] for s in report.get("source_reports", [])]
         if merged
+        else report.get("source_rounds", [])
+        if batch
         else [report["round"]]
     )
     status = dict(Counter(r.get("status") or "unknown" for r in rows))
@@ -172,7 +179,7 @@ def summarize_report(report):
         )
         require(merge.get("merged_count") == len(rows), "merge_member_count_mismatch")
     else:
-        round_ = rounds[0]
+        round_ = rounds[0] if rounds else {}
         selection = round_.get("selection") or {}
         progress = report.get("progress") or {}
         require(
@@ -180,12 +187,31 @@ def summarize_report(report):
             and report.get("report_scope") == "stage",
             "report_is_not_a_stage_conclusion",
         )
-        require(
-            selection.get("batch") == "validation"
-            and selection.get("scope") == "all"
-            and round_.get("purpose") != "facts",
-            "round_is_not_full_validation",
-        )
+        if batch:
+            source_ids = {source.get("round_id") for source in rounds}
+            require(
+                bool(rounds)
+                and None not in source_ids
+                and len(source_ids) == len(rounds)
+                and all(row.get("source_round_id") in source_ids for row in rows),
+                "invalid_batch_result_sources",
+            )
+            require(
+                report.get("batch") == "validation"
+                and all(
+                    (source.get("selection") or {}).get("batch") == "validation"
+                    and source.get("purpose") != "facts"
+                    for source in rounds
+                ),
+                "batch_is_not_validation",
+            )
+        else:
+            require(
+                selection.get("batch") == "validation"
+                and selection.get("scope") == "all"
+                and round_.get("purpose") != "facts",
+                "round_is_not_full_validation",
+            )
         require(progress.get("selected_count") == len(rows), "selected_count_mismatch")
         require(
             progress.get("completed_count") == status.get("completed", 0),
@@ -273,6 +299,13 @@ def summarize_report(report):
             "平均耗时按最终Run计量，不含被替换旧尝试和初始排队；缺失不补零。",
             "第一批数量是计划数，不能单凭此报告证明全部完成或审核。",
             "忽略/转交是系统建议；四项全开时不能把全部忽略归因于历史经验。",
+            *(
+                [
+                    "按批次当前成员的最终结果汇总，自动纳入补跑；来源任务各自保留实际运行设置及经验快照，不能视为固定单一快照的因果对照。"
+                ]
+                if batch
+                else []
+            ),
         ],
     }
 
@@ -293,6 +326,11 @@ def read_summary(directory):
             "round_id"
         ):
             raise ValueError("manifest round identity mismatch")
+        if report.get("schema_version") == "soc.corpus_batch_report.v1" and any(
+            manifest.get(key) != report.get(key)
+            for key in ("batch", "experiment_id", "report_token")
+        ):
+            raise ValueError("manifest batch identity mismatch")
         verified = True
     result = summarize_report(report)
     result["source"] = {

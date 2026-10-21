@@ -33,10 +33,13 @@ from soc_agent.contracts import (
 )
 from soc_agent.memory.admission import MemoryAdmissionService
 from soc_agent.memory.facets import filter_learning_entity_facets, memory_facets_from_analysis_run
+from soc_agent.memory.patterns import MemoryPatternIneligibleError
 from soc_agent.memory.profiles import (
+    MISSING_REUSABLE_CORE_BEHAVIOR_DETAIL,
     GenericSocMemoryProfile,
     SocMemoryProfile,
     SocMemoryProfileRegistry,
+    candidate_review_ineligibility,
 )
 from soc_agent.normalizers import normalize_alert_payload
 
@@ -205,13 +208,16 @@ class SocMemoryCandidateSourceBridge:
     ) -> MemoryAdmissionOutcome:
         """Admit an explicit analyst promotion without changing the run decision."""
 
+        candidate_command = memory_candidate_command_from_run_promotion(
+            run,
+            command,
+            profile_registry=self._profile_registry,
+            source_surface=context.actor.surface if context is not None else None,
+        )
+        if candidate_review_ineligibility(self._profile_registry.resolve_run(run), candidate_command.applicability) is not None:
+            raise MemoryPatternIneligibleError(MISSING_REUSABLE_CORE_BEHAVIOR_DETAIL)
         return self.admit_command(
-            memory_candidate_command_from_run_promotion(
-                run,
-                command,
-                profile_registry=self._profile_registry,
-                source_surface=context.actor.surface if context is not None else None,
-            ),
+            candidate_command,
             context=context,
             coordinate_learning=True,
         )

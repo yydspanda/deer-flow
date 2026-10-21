@@ -15,6 +15,7 @@ import httpx
 
 from soc_agent.contracts.corpus_rebalance import CorpusRebalancePlan, CorpusRebalancePolicy
 from soc_agent.contracts.memory_drafts import MemoryDraftGenerateCommand
+from soc_agent.demo.corpus_batch_cli import dispatch_batch
 from soc_agent.demo.corpus_experiment_reports import compare_reports, export_draft_report, export_report
 from soc_agent.demo.corpus_rebalance_plan import verify_corpus_rebalance_plan
 from soc_agent.demo.corpus_retest_selection import build_retest_plan, read_retest_plan
@@ -114,21 +115,27 @@ def parser():
         command.add_argument("--dry-run", action="store_true", help="只看选择范围，不创建/启动任务")
         command.add_argument("--wait", action="store_true", help="观察至暂停、失败阻断或本次预算完成；退出不取消后台任务")
     retry = commands.add_parser("retry", help="在指定原轮次补跑失败项，保留旧 Run；先暂停并等待活动任务结束")
-    retry.add_argument("--round", required=True)
+    target = retry.add_mutually_exclusive_group(required=True)
+    target.add_argument("--batch", choices=("learning", "validation"), help="第一批 learning；第二批 validation；自动选择当前结果")
+    target.add_argument("--round", help="高级诊断：指定后台任务编号")
     retry.add_argument("--kind", choices=("failed", "semantic_failed"), required=True, help="failed=任务失败；semantic_failed=两批语义核对失败后兜底完成的任务")
     retry.add_argument("--alert", action="append", default=[], help="只选本轮指定告警，可重复；省略时选择本轮该类失败项")
     retry.add_argument("--concurrency", type=int, choices=range(1, 17), help="可选的重试并发上限；省略时沿用该轮保存值，仍受服务器容量限制")
     accumulate = commands.add_parser("accumulate", help="将指定轮次已保存的成功 Run 接续到统一行为积累；不调用模型、不修改旧报告")
-    accumulate.add_argument("--round", required=True)
+    target = accumulate.add_mutually_exclusive_group(required=True)
+    target.add_argument("--batch", choices=("learning", "validation"), help="自动选取当前批次已完成结果，含成功补跑")
+    target.add_argument("--round", help="高级诊断：指定后台任务编号")
     accumulate.add_argument("--dry-run", action="store_true", help="只检查本轮已完成来源是否可接续，不写模式或候选")
     for name in ("status", "pause", "resume", "retry-failed", "export"):
         command = commands.add_parser(name)
-        command.add_argument("--round", required=True)
+        target = command.add_mutually_exclusive_group(required=True)
+        target.add_argument("--batch", choices=("learning", "validation"), help="按第一批/第二批操作，无需查找编号")
+        target.add_argument("--round", help="高级诊断：指定后台任务编号")
         if name == "status":
             command.add_argument("--watch", action="store_true")
         if name == "resume":
             command.add_argument("--limit", type=_limit)
-            command.add_argument("--concurrency", type=int)
+            command.add_argument("--concurrency", type=int, choices=range(1, 17))
             command.add_argument("--restore-full-scope", action="store_true", help="明确恢复本轮固定名单的完整调度范围；仍受运行上限约束，不重跑已完成项")
         if name == "export":
             command.add_argument("--output-dir", type=Path, required=True)
@@ -385,6 +392,9 @@ def _rebalance_apply(client, args):
 
 
 def _dispatch(args, client):
+    if getattr(args, "batch", None):
+        return dispatch_batch(args, lambda method, path, **kwargs: _request(client, method, path, **kwargs), _print)
+
     def request(method, path, **kwargs):
         return _request(client, method, path, **kwargs)
 

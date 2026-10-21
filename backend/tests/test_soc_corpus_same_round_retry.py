@@ -100,7 +100,7 @@ def test_semantic_recovery_rejects_facts_and_disabled_review(tmp_path):
     svc, round_, _, _ = fixture(tmp_path)
     svc.store.prepare(experiment().model_copy(update={"experiment_id": "EXP-facts", "fact_source_experiment_id": "EXP-test"}), [member.model_copy(update={"batch": "validation", "validation_tier": "supplementary"}) for member in members()])
     for command in (
-        CorpusRoundCreateCommand(experiment_id="EXP-test", selection=round_.selection, memory_mode="none"),
+        CorpusRoundCreateCommand(experiment_id="EXP-test", selection=round_.selection, memory_mode="none", options={"normalization_review_mode": "off"}),
         CorpusRoundCreateCommand(experiment_id="EXP-facts", selection=round_.selection, purpose="facts", memory_mode="none", options={"normalization_review_mode": "apply"}),
     ):
         target = svc.create_round(command, context=context())

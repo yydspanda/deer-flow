@@ -25,7 +25,7 @@ from soc_agent.memory.facets import (
     memory_facets_from_analysis_request,
     memory_facets_from_analysis_run,
 )
-from soc_agent.memory.profiles import SocMemoryProfileIdentity
+from soc_agent.memory.profiles import MISSING_REUSABLE_CORE_BEHAVIOR, SocMemoryProfileIdentity
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.utils.hashing import rule_entity_key, stable_hash
 
@@ -61,6 +61,13 @@ class PingAnSocMemoryProfile:
     default_aggregation_window_seconds = 180 * 24 * 60 * 60
 
     exclusive_scope_facet_keys = frozenset({"environment", "detection_key", "detection_signature", "behavior_fingerprint", "behavior_strength"})
+
+    def candidate_review_ineligibility(self, applicability: SocMemoryApplicabilitySpec | None) -> str | None:
+        """New run-derived review work requires the existing decision scope."""
+
+        if applicability is None or not applicability.required_facets.get("behavior_fingerprint"):
+            return MISSING_REUSABLE_CORE_BEHAVIOR
+        return None
 
     def explain_scope_facets(self, spec: SocMemoryApplicabilitySpec, facets: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
         from soc_agent.integrations.pingan.memory.scope_view import explain_scope_facets

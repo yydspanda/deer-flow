@@ -163,6 +163,7 @@ from soc_agent.memory.governance import assessed_verdict, governed_records, prev
 from soc_agent.memory.learning import aggregation_key, learning_view, resolve_learning_candidate
 from soc_agent.memory.lessons import promote_memory_applicability_facets
 from soc_agent.memory.lineage import learning_generation_scope
+from soc_agent.memory.profiles import MISSING_REUSABLE_CORE_BEHAVIOR_DETAIL, candidate_review_ineligibility
 from soc_agent.memory.scoring import (
     evaluate_memory_anchor_gate,
     evaluate_memory_applicability,
@@ -1820,6 +1821,11 @@ class SocReviewService:
         except MemoryPatternIneligibleError as exc:
             return SocMemoryLearningView(state="closed", label="本次未生成经验", detail=str(exc), action="view_history", action_label="查看研判结果")
         candidate = resolve_learning_candidate(self._memory_candidate_repository, command, record_repository=self._memory_record_repository)
+        if candidate is None and candidate_review_ineligibility(self._memory_profile_registry.resolve_run(run), command.applicability) is not None:
+            previous = self._memory_candidate_repository.find_memory_candidate_by_idempotency_key(command.idempotency_key)
+            if previous is not None and (previous.source.run_id, previous.source.alert_id, previous.tenant_id, previous.applicability) == (run.run_id, run.alert_id, command.tenant_id, command.applicability):
+                return learning_view(self._memory_candidate_repository, previous, record_repository=self._memory_record_repository)
+            return SocMemoryLearningView(state="closed", label="本次未生成经验", detail=MISSING_REUSABLE_CORE_BEHAVIOR_DETAIL, action="view_history", action_label="查看研判结果")
         return learning_view(self._memory_candidate_repository, candidate, record_repository=self._memory_record_repository)
 
     def _run_pattern_lineage_metadata(

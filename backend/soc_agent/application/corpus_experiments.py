@@ -11,6 +11,7 @@ from deerflow.config import get_app_config
 from soc_agent.application.analysis import build_soc_analysis_service
 from soc_agent.application.memory import build_soc_memory_lesson_draft_service, build_soc_memory_profile_registry
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
+from soc_agent.contracts.corpus_experiments import default_corpus_execution_options
 from soc_agent.core.memory_draft_jobs import SocMemoryDraftJobService
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.demo.corpus_experiment_dispatcher import CorpusExperimentDispatcher
@@ -34,7 +35,7 @@ class CorpusExperimentApplication:
 
 def build_corpus_experiment_application(*, repository: SqlAlchemyAlertRepository, workbench: SocCorpusWorkbenchService, settings: SocLLMSettings) -> CorpusExperimentApplication:
     controls = workbench.run_controls
-    defaults = (controls.defaults if controls else SocAnalysisExecutionOptions()).model_copy(update={"tenant_policy_enabled": False, "tenant_policy_advisor_enabled": False, "tenant_policy_signal_providers_enabled": False})
+    defaults = (controls.defaults if controls else default_corpus_execution_options()).model_copy(update={"tenant_policy_enabled": False, "tenant_policy_advisor_enabled": False, "tenant_policy_signal_providers_enabled": False})
 
     def configuration(options):
         if controls is not None:

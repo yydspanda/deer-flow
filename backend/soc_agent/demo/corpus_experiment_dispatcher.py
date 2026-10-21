@@ -4,7 +4,7 @@ import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event, Lock, Thread
 
-from soc_agent.contracts import ProcessingJobStatus
+from soc_agent.contracts import ActorContext, ActorType, EntrySurface, ProcessingJobStatus, ServiceRequestContext
 from soc_agent.core.memory_draft_jobs import DRAFT_WORKLOAD, SocMemoryDraftJobService
 from soc_agent.demo.corpus_experiments import SocCorpusExperimentService
 from soc_agent.llm.admission import soc_model_workload
@@ -25,6 +25,7 @@ class CorpusExperimentDispatcher:
         self._pool: ThreadPoolExecutor | None = None
         self._futures: set[Future] = set()
         self._round_cursor = 0
+        self._blocked_cursor = 0
 
     @property
     def is_running(self) -> bool:
@@ -70,6 +71,7 @@ class CorpusExperimentDispatcher:
                     future.result()
                 except Exception:
                     logger.exception("Corpus dispatcher task failed")
+        self._continue_changed_memory()
         slots = min(self._max_concurrency, self._service.capacity.max_concurrency) - len(self._futures)
         if slots <= 0 or self._pool is None:
             return
@@ -96,6 +98,29 @@ class CorpusExperimentDispatcher:
                 break
         # Keep later rounds reachable without scanning an unbounded inventory per tick.
         self._round_cursor += min(round_index, len(rounds))
+
+    def _continue_changed_memory(self):
+        from soc_agent.demo.corpus_batch_operations import continue_memory_round
+
+        blocked = self._service.store.list_memory_continuation_rounds(limit=100, offset=self._blocked_cursor)
+        self._blocked_cursor = self._blocked_cursor + len(blocked) if len(blocked) == 100 else 0
+        for round_ in blocked:
+            if (
+                round_.state_reason != "memory_governance_changed"
+                or round_.superseded_by_round_id
+                or round_.retest_provenance
+                or not round_.state_history
+                or round_.state_history[-1].get("from") != "running"
+                or round_.memory_continuation_depth >= 3
+            ):
+                continue
+            context = ServiceRequestContext(actor=ActorContext(actor_id=round_.created_by, actor_type=ActorType.SERVICE, surface=EntrySurface.DAEMON, roles=["soc_admin", "soc_batch_runner"]))
+            try:
+                continue_memory_round(self._service, round_.round_id, context=context, automatic=True)
+            except ValueError:
+                # A simultaneous configuration/data change still requires an
+                # explicit operator restart; never relax that fence.
+                logger.info("Memory continuation waits for operator recovery: %s", round_.round_id)
 
     def _dispatch_one(self, fallback_round_id: str | None):
         # Recheck at execution time: a manual request can arrive while a full pool

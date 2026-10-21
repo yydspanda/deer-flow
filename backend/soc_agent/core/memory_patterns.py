@@ -46,7 +46,13 @@ from soc_agent.memory.patterns import (
     MemoryPatternIneligibleError,
     memory_pattern_command_from_run,
 )
-from soc_agent.memory.profiles import SocMemoryProfile, SocMemoryProfileRegistry
+from soc_agent.memory.profiles import (
+    MISSING_REUSABLE_CORE_BEHAVIOR,
+    MISSING_REUSABLE_CORE_BEHAVIOR_DETAIL,
+    SocMemoryProfile,
+    SocMemoryProfileRegistry,
+    candidate_review_ineligibility,
+)
 from soc_agent.memory.scoring import memory_strong_anchor_keys
 from soc_agent.protocols import (
     MemoryCandidateRepository,
@@ -513,10 +519,16 @@ class SocMemoryPatternService:
             raise SocServiceConflictError("memory pattern cohort contains more than one aggregation policy")
         distinct_count = len({item.source.source_id for item in observations})
         threshold_met = len(observations) >= policy.minimum_support and distinct_count >= policy.minimum_distinct_sources
+        try:
+            profile = self._profile_for_observation(observations[0])
+        except (SocServiceConflictError, ValueError):
+            # Historical candidates remain readable without their old projector.
+            profile = None
         cohort_quality = _cohort_quality(
             observations,
             policy=policy,
             recurrence_threshold_met=threshold_met,
+            profile=profile,
         )
         candidate, candidate_coverage = self._find_candidate(
             aggregation_key,
@@ -578,6 +590,7 @@ class SocMemoryPatternService:
             observations,
             policy=self._policy,
             recurrence_threshold_met=threshold_met,
+            profile=self._profile_for_observation(observation),
         )
         existing, existing_coverage = self._find_candidate(
             observation.aggregation_key,
@@ -623,7 +636,11 @@ class SocMemoryPatternService:
                 idempotent=idempotent,
                 duplicate_source=duplicate_source,
                 duplicate_occurrence=duplicate_occurrence,
-                note=("recurrence threshold reached, but lesson quality gate withheld expert review: " + ", ".join(cohort_quality.reason_codes)),
+                note=(
+                    MISSING_REUSABLE_CORE_BEHAVIOR_DETAIL
+                    if MISSING_REUSABLE_CORE_BEHAVIOR in cohort_quality.reason_codes
+                    else "recurrence threshold reached, but lesson quality gate withheld expert review: " + ", ".join(cohort_quality.reason_codes)
+                ),
             )
         if existing is not None:
             return MemoryPatternAggregationResult(
@@ -1015,6 +1032,7 @@ def _cohort_quality(
     *,
     policy: MemoryPatternAggregationPolicy,
     recurrence_threshold_met: bool,
+    profile: SocMemoryProfile | None = None,
 ) -> MemoryPatternCohortQuality:
     lessons = [item.lesson for item in observations if item.lesson is not None]
     verdict_counts = Counter(item.verdict.value for item in lessons)
@@ -1046,6 +1064,11 @@ def _cohort_quality(
         reason_codes.append("inconsistent_risk_outcomes")
     if not strong_anchor_facets:
         reason_codes.append("missing_reusable_strong_anchor")
+    if profile is not None:
+        applicability = profile.build_applicability(consensus_facets=applicability_facets, strong_anchor_facets=strong_anchor_facets)
+        ineligibility = candidate_review_ineligibility(profile, applicability)
+        if ineligibility is not None:
+            reason_codes.append(ineligibility)
 
     scope = observations[0].accumulation_scope
     mixed_review = bool(scope is not None and scope.review_mixed_conclusions and reason_codes == ["inconsistent_risk_outcomes"])

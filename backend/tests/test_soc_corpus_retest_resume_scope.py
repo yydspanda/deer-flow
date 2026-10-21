@@ -1,4 +1,4 @@
-"""A batch continue must not silently widen a fixed report-based retest."""
+"""Explicit batch Continue covers pending work; historical round commands stay scoped."""
 
 from types import SimpleNamespace
 
@@ -66,7 +66,7 @@ def _snapshot(svc):
 
 @pytest.mark.parametrize("batch", ["learning", "validation"])
 @pytest.mark.parametrize("child_completed", [False, True], ids=["paused-retest", "completed-retest"])
-def test_quick_continue_rejects_old_pending_work_outside_fixed_retest(tmp_path, batch, child_completed):
+def test_quick_continue_resumes_pending_batch_work_outside_fixed_retest(tmp_path, batch, child_completed):
     svc, quick, calls = _setup(tmp_path)
     parent = _parent(svc, batch)
     child = _child(svc, parent)
@@ -78,29 +78,34 @@ def test_quick_continue_rejects_old_pending_work_outside_fixed_retest(tmp_path, 
     quick.command(CorpusQuickCommand(batch=batch, action="pause", options=child.options), context=context())
     before, previous_calls = _snapshot(svc), list(calls)
 
-    with pytest.raises(ValueError, match="定向复测"):
-        quick.command(CorpusQuickCommand(batch=batch, action="start", options=child.options), context=context())
-
-    assert _snapshot(svc) == before
+    quick.command(CorpusQuickCommand(batch=batch, action="start", options=child.options), context=context())
+    resumed = svc.store.get_round(parent.round_id)
+    assert resumed.state == "running" and resumed.options == parent.options
+    assert set(resumed.dispatch_alert_ids).isdisjoint(child.selection.alert_ids)
+    current_child = svc.store.get_round(child.round_id)
+    assert current_child.state == ("completed" if child_completed else "running")
+    assert current_child.options == child.options
+    assert svc.store.list_round_items(parent.round_id).model_dump(mode="json") == before[parent.round_id]["jobs"]
     assert calls == previous_calls
     assert svc.store.latest_run_options("EXP-test", batch) == child.options
 
 
-def test_quick_continue_rejects_creating_unsubmitted_work_outside_fixed_retest(tmp_path):
+def test_quick_continue_admits_unsubmitted_batch_members_after_fixed_retest(tmp_path):
     svc, quick, calls = _setup(tmp_path)
     parent = _parent(svc, alert_ids=["0", "1"])
     child = _child(svc, parent)
     svc.pause(child.round_id, context=context())
     before = _snapshot(svc)
 
-    with pytest.raises(ValueError, match="定向复测"):
-        quick.command(CorpusQuickCommand(batch="learning", action="start", options=child.options), context=context())
-
-    assert _snapshot(svc) == before
+    quick.command(CorpusQuickCommand(batch="learning", action="start", options=child.options), context=context())
+    fresh = svc.store.list_rounds()[-1]
+    assert len(fresh.selection.alert_ids) == 8
+    assert set(fresh.selection.alert_ids).isdisjoint(child.selection.alert_ids)
+    assert _snapshot(svc)[parent.round_id] == before[parent.round_id]
     assert calls == []
 
 
-def test_quick_continue_preserves_completed_report_and_paused_full_flow_sibling(tmp_path):
+def test_quick_continue_preserves_completed_report_and_resumes_sibling_with_saved_settings(tmp_path):
     svc, quick, calls = _setup(tmp_path)
     report = svc.create_round(
         CorpusRoundCreateCommand(
@@ -127,10 +132,12 @@ def test_quick_continue_preserves_completed_report_and_paused_full_flow_sibling(
     assert not retest.options.tenant_policy_enabled
     assert svc.store.get_round(sibling.round_id).state == "paused"
 
-    with pytest.raises(ValueError, match="定向复测"):
-        quick.command(CorpusQuickCommand(batch="learning", action="start", options=retest.options), context=context())
-
-    assert _snapshot(svc) == before
+    quick.command(CorpusQuickCommand(batch="learning", action="start", options=retest.options), context=context())
+    assert _snapshot(svc)[report.round_id] == before[report.round_id]
+    assert svc.store.get_round(sibling.round_id).state == "running"
+    assert svc.store.get_round(sibling.round_id).options == sibling.options
+    assert svc.store.get_round(retest.round_id).state == "running"
+    assert svc.store.get_round(retest.round_id).options == retest.options
     assert calls == previous_calls
     assert svc.store.latest_run_options("EXP-test", "learning") == retest.options
 
@@ -209,7 +216,7 @@ def test_ordinary_multiple_round_continue_preserves_existing_batch_behavior(tmp_
     assert calls == []
 
 
-def test_later_single_rerun_cannot_hide_completed_retest_scope(tmp_path):
+def test_later_single_rerun_and_completed_retest_do_not_block_batch_continue(tmp_path):
     svc, quick, calls = _setup(tmp_path)
     parent = _parent(svc)
     child = _child(svc, parent)
@@ -224,12 +231,11 @@ def test_later_single_rerun_cannot_hide_completed_retest_scope(tmp_path):
     assert not svc.store.get_round(latest_id).retest_provenance
     before, previous_calls = _snapshot(svc), list(calls)
 
-    with pytest.raises(ValueError, match="定向复测"):
-        quick.command(CorpusQuickCommand(batch="learning", action="start", options=child.options), context=context())
-
-    assert _snapshot(svc) == before
+    quick.command(CorpusQuickCommand(batch="learning", action="start", options=child.options), context=context())
+    assert _snapshot(svc)[child.round_id] == before[child.round_id]
+    assert svc.store.get_round(parent.round_id).options == parent.options
+    assert svc.store.get_round(parent.round_id).state == "running"
     assert calls == previous_calls
-    assert svc.store.get_round(parent.round_id).state == "paused"
 
 
 def test_whole_batch_restart_retires_retest_fence_for_normal_continue(tmp_path):

@@ -22,13 +22,16 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  getSocCorpusBatchState,
   getSocCorpusExperimentConfiguration,
   getSocCorpusQuickState,
   getSocCorpusQuickHistory,
   runSocCorpusQuick,
+  retrySocCorpusBatch,
   updateSocCorpusConcurrency,
 } from "@/core/soc/api";
 import type {
+  SocCorpusBatchRetryKind,
   SocCorpusExperimentConfiguration,
   SocCorpusQuickState,
   SocCorpusRestartCommand,
@@ -45,6 +48,7 @@ import {
 } from "./soc-corpus-run-settings";
 
 const QUERY = ["soc-corpus-quick"] as const;
+const BATCH_QUERY = ["soc-corpus-batch"] as const;
 const CONFIGURATION_QUERY = [
   "soc-corpus-experiments",
   "configuration",
@@ -85,7 +89,7 @@ export function SocCorpusExperiments({
   onStateUpdated?: (state: SocCorpusQuickState) => void;
 }) {
   const cache = useQueryClient();
-  // Reload restores the server's saved batch options. Only explicit edits in
+  // New Host tasks start from deployment defaults. Only explicit edits in
   // this page override them, and drafts must not spill into the other batch.
   const [settingsByBatch, setSettingsByBatch] = useState<
     Partial<Record<SocCorpusBatch, SocAnalysisExecutionOptions>>
@@ -121,6 +125,12 @@ export function SocCorpusExperiments({
         : 10000,
     retry: false,
   });
+  const batchState = useQuery({
+    queryKey: [...BATCH_QUERY, batch],
+    queryFn: () => getSocCorpusBatchState(batch),
+    refetchInterval: 10000,
+    retry: false,
+  });
   const canConfigure =
     configuration.data?.can_configure !== false &&
     controls?.can_configure !== false;
@@ -151,16 +161,19 @@ export function SocCorpusExperiments({
   });
   const savedOptions =
     configuration.data?.saved_options ?? configuration.data?.defaults;
+  const initialOptions = canConfigure
+    ? configuration.data?.defaults
+    : savedOptions;
   const options =
-    savedOptions && !configuration.isPlaceholderData
+    initialOptions && !configuration.isPlaceholderData
       ? !canConfigure
-        ? savedOptions
+        ? initialOptions
         : controls
           ? availableCorpusRunSettings(
-              settingsByBatch[batch] ?? savedOptions,
+              settingsByBatch[batch] ?? initialOptions,
               controls,
             )
-          : savedOptions
+          : initialOptions
       : null;
   useEffect(() => {
     if (state.data) onStateUpdated?.(state.data);
@@ -201,11 +214,36 @@ export function SocCorpusExperiments({
     },
     onSuccess: async () => {
       await cache.invalidateQueries({ queryKey: QUERY });
+      await cache.invalidateQueries({ queryKey: BATCH_QUERY });
       await invalidateWorkbenchProgress(cache);
       await configuration.refetch();
     },
     onError: (error) => {
       toast.error(error.message);
+      void configuration.refetch();
+    },
+  });
+  const batchRetry = useMutation({
+    mutationFn: (request: {
+      batch: SocCorpusBatch;
+      kind: SocCorpusBatchRetryKind;
+      concurrency?: number;
+    }) =>
+      retrySocCorpusBatch(request.batch, {
+        kind: request.kind,
+        ...(request.concurrency === undefined
+          ? {}
+          : { concurrency: request.concurrency }),
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: QUERY }),
+        cache.invalidateQueries({ queryKey: BATCH_QUERY }),
+        invalidateWorkbenchProgress(cache),
+      ]);
+    },
+    onError: () => {
+      void batchState.refetch();
       void configuration.refetch();
     },
   });
@@ -229,6 +267,24 @@ export function SocCorpusExperiments({
     );
   }, [requestedAlert, options, onRequestHandled, submit]);
   const data = state.data;
+  const batchBusy = !!batchState.data?.running || !!batchState.data?.active;
+  const retryDisabled =
+    !configuration.data ||
+    !batchState.data ||
+    batchState.isPlaceholderData ||
+    !!batchState.error ||
+    batchBusy ||
+    mutation.isPending ||
+    batchRetry.isPending;
+  const submitBatchRetry = (kind: SocCorpusBatchRetryKind) =>
+    batchRetry.mutate({
+      batch,
+      kind,
+      ...(canConfigure && configuration.data
+        ? { concurrency: configuration.data.max_concurrency }
+        : {}),
+    });
+  const retryResult = batchRetry.variables?.batch === batch ? batchRetry : null;
   useEffect(() => {
     if (!data) return;
     const revision = `${batch}:${data.running}:${data.active}:${data.completed}:${data.failed}:${data.remaining}:${data.items.map((item) => `${item.job_id}:${item.status}`).join(",")}`;
@@ -242,6 +298,7 @@ export function SocCorpusExperiments({
     data.total > 0 &&
     data.remaining === 0 &&
     data.active === 0 &&
+    data.blocked_reason !== "memory_governance_changed" &&
     !data.running;
   return (
     <section aria-label="批次执行" className="border-b px-5 py-4 md:px-7">
@@ -328,7 +385,13 @@ export function SocCorpusExperiments({
       )}
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button
-          disabled={!options || mutation.isPending || !!state.error || finished}
+          disabled={
+            !options ||
+            mutation.isPending ||
+            batchRetry.isPending ||
+            !!state.error ||
+            finished
+          }
           onClick={() => submit({ action: data?.running ? "pause" : "start" })}
         >
           {finished
@@ -351,7 +414,9 @@ export function SocCorpusExperiments({
               can_configure: canConfigure,
             }}
             options={options}
-            disabled={mutation.isPending || !!state.error}
+            disabled={
+              mutation.isPending || batchRetry.isPending || !!state.error
+            }
             onRestarted={() =>
               setSettingsByBatch((previous) => {
                 if (batch === "learning") return {};
@@ -371,8 +436,22 @@ export function SocCorpusExperiments({
             </Link>
           </Button>
         )}
+        <Button
+          variant="outline"
+          disabled={retryDisabled || !batchState.data?.failed}
+          onClick={() => submitBatchRetry("failed")}
+        >
+          重试执行失败
+        </Button>
+        <Button
+          variant="outline"
+          disabled={retryDisabled || !batchState.data?.semantic_failed_count}
+          onClick={() => submitBatchRetry("semantic_failed")}
+        >
+          重试语义核对失败
+        </Button>
         <span className="text-muted-foreground text-xs">
-          开关仅用于新提交的任务；“继续”沿用各任务保存的设置，可能续跑多个历史轮次。失败“重试”留在原轮次，沿用原设置。定向复测请使用对应轮次的续跑命令。列表筛选只影响浏览。
+          开关仅用于新提交的任务；“继续”沿用各任务保存的设置。批量重试覆盖当前批次，不受列表筛选影响，使用已保存的最大并发。
         </span>
       </div>
       {data && (
@@ -382,12 +461,45 @@ export function SocCorpusExperiments({
           <span>剩余 {data.remaining}</span>
           <span>失败 {data.failed}</span>
           <span>待审核经验 {data.pending_candidates}</span>
+          {batchState.data && (
+            <span>
+              本批次语义核对失败 {batchState.data.semantic_failed_count}
+            </span>
+          )}
         </div>
       )}
       {data?.blocked_reason && (
         <p role="alert" className="mt-2 text-sm text-amber-800">
-          已停止：{data.blocked_reason}
-          。请根据停止原因处理；修复后需显式重新运行，“继续”不会解除本轮停止状态。
+          {data.blocked_reason === "memory_governance_changed"
+            ? "经验状态已更新。点击“继续”会自动接续剩余任务，已有结果保留并汇入本批次。"
+            : `已停止：${data.blocked_reason}。请处理停止原因后重新运行；如需更改运行设置，使用“重新配置并全部重跑”。`}
+        </p>
+      )}
+      {batchBusy && (
+        <p className="text-muted-foreground mt-2 text-xs">
+          重试前请先暂停本批次，并等待运行中的任务结束。
+        </p>
+      )}
+      {!!batchState.data?.memory_recovery_exhausted_count && (
+        <p role="alert" className="mt-2 text-sm text-amber-800">
+          {batchState.data.memory_recovery_exhausted_count}
+          条受影响告警已达重试上限，需要显式重新运行。其余未开始的告警仍可继续。
+        </p>
+      )}
+      {retryResult?.data && !retryResult.isPending && (
+        <p role="status" className="mt-2 text-sm">
+          已提交 {retryResult.data.retried} 条
+          {retryResult.variables?.kind === "failed"
+            ? "执行失败"
+            : "语义核对失败"}
+          重试。
+          {retryResult.data.not_retryable > 0 &&
+            `另有 ${retryResult.data.not_retryable} 条暂不能重试，请查看告警错误详情。`}
+        </p>
+      )}
+      {(batchState.error ?? retryResult?.error) && (
+        <p role="alert" className="mt-2 text-sm text-red-700">
+          {(batchState.error ?? retryResult?.error)?.message}
         </p>
       )}
       {(state.error ?? configuration.error) && (
@@ -442,6 +554,7 @@ function SocCorpusBatchRestart({
       await cache.cancelQueries({ queryKey: QUERY });
       await Promise.all([
         cache.invalidateQueries({ queryKey: QUERY }),
+        cache.invalidateQueries({ queryKey: BATCH_QUERY }),
         cache.invalidateQueries({ queryKey: CONFIGURATION_QUERY }),
         invalidateWorkbenchProgress(cache),
       ]);
@@ -470,7 +583,9 @@ function SocCorpusBatchRestart({
       ]);
       if (!current.data?.restart_token)
         throw new Error(`${batchLabel}状态尚未就绪，请刷新页面后重试`);
-      return saved.saved_options ?? saved.defaults;
+      return saved.can_configure === false || controls.can_configure === false
+        ? (saved.saved_options ?? saved.defaults)
+        : saved.defaults;
     },
     onSuccess: (saved) => {
       setDraft(completeRunOptions(saved));

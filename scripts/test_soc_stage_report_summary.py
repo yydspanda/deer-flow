@@ -96,6 +96,40 @@ def test_original_conclusion_metrics_count_reference_and_only_final_run_duration
     assert "DO_NOT_EXPORT" not in json.dumps(result)
 
 
+def fixture_batch_report():
+    report = fixture_report()
+    report["schema_version"] = "soc.corpus_batch_report.v1"
+    report["batch"] = "validation"
+    source = report.pop("round")
+    second = copy.deepcopy(source)
+    second["round_id"] = "ROUND-CONT"
+    second["memory_snapshot"] = []
+    report["source_rounds"] = [source, second]
+    for index, row in enumerate(report["rows"]):
+        row["source_round_id"] = source["round_id"] if index < 3 else second["round_id"]
+    return report
+
+
+def test_batch_summary_assembles_current_members_without_operator_merge():
+    report = fixture_batch_report()
+    result = tool.summarize_report(report)
+    assert result["scope"]["stage_conclusion_ready"] is True
+    assert result["scope"]["report_member_count"] == 4
+    assert result["metrics"]["all"]["final_run_duration"]["mean_seconds"] == 4
+    assert len(result["source_rounds"]) == 2
+    assert "NEVER_EXPORT" not in json.dumps(result)
+    assert "DO_NOT_EXPORT" not in json.dumps(result)
+
+
+def test_batch_summary_requires_row_provenance_and_validation_batch():
+    report = fixture_batch_report()
+    report["rows"][0]["source_round_id"] = "ROUND-UNKNOWN"
+    assert tool.summarize_report(report)["scope"]["stage_conclusion_ready"] is False
+    report = fixture_batch_report()
+    report["batch"] = "learning"
+    assert tool.summarize_report(report)["scope"]["stage_conclusion_ready"] is False
+
+
 def test_incomplete_report_produces_diagnostic_without_claiming_full_stage():
     report = fixture_report()
     report["rows"][0]["status"] = "failed"

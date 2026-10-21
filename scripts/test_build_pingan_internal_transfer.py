@@ -145,6 +145,12 @@ def test_handoff_requires_process_facts_and_projection_audit_regressions(
         "scripts/soc_bulk_review_learning.py",
         "scripts/test_soc_bulk_review_learning.py",
         "scripts/test_soc_bulk_review_incremental.py",
+        "scripts/test_soc_bulk_review_pending.py",
+        "backend/soc_agent/demo/corpus_batch_cli.py",
+        "backend/soc_agent/demo/corpus_batch_operations.py",
+        "backend/tests/test_soc_corpus_batch_cli.py",
+        "backend/tests/test_soc_corpus_batch_operations.py",
+        "backend/tests/test_soc_memory_core_review_gate.py",
         "docs/soc-corpus-rebalance.md",
         "docs/soc-learning-review-batch.md",
     ],
@@ -312,13 +318,14 @@ def test_transfer_runbook_covers_learning_retries_incremental_review_and_summary
     learning = runbook[positions[0] : positions[1]]
     assert "--kind failed" in learning
     assert "--kind semantic_failed" in learning
-    assert "--restore-full-scope" in learning
+    assert "--batch learning" in learning
+    assert "read -r -p '第一批完整轮次 ROUND-ID" not in learning
     assert "--watch" in learning
     assert "本次跳过" not in learning
     baseline = runbook[positions[3] : positions[4]]
     assert "soc_corpus_experiment.py export" in baseline
     accumulation = runbook[positions[4] : positions[5]]
-    assert "不会启动第二批" in accumulation
+    assert "不调用模型" in accumulation
     assert "--dry-run" in accumulation
     incremental = runbook[positions[5] : positions[6]]
     assert "页面审核" in incremental

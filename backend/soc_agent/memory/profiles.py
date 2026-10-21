@@ -47,6 +47,19 @@ _GENERIC_PATTERN_FACET_KEYS = (
     "behavior_fingerprint",
 )
 
+MISSING_REUSABLE_CORE_BEHAVIOR = "missing_reusable_core_behavior"
+MISSING_REUSABLE_CORE_BEHAVIOR_DETAIL = "研判已完成；缺少可复用的核心行为，保留告警样本，但不生成待审核经验。"
+
+
+def candidate_review_ineligibility(
+    profile: SocMemoryProfile,
+    applicability: SocMemoryApplicabilitySpec | None,
+) -> str | None:
+    """Apply an optional Profile admission gate without changing saved scopes."""
+
+    gate = getattr(profile, "candidate_review_ineligibility", None)
+    return gate(applicability) if callable(gate) else None
+
 
 @dataclass(frozen=True)
 class SocMemoryProfileIdentity:

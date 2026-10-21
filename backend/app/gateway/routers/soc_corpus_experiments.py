@@ -1,8 +1,6 @@
 """DEV batch controls: shared service authority, bounded reads, durable dispatch."""
 
 import asyncio
-import hashlib
-import json
 import logging
 from contextlib import asynccontextmanager, contextmanager
 from threading import Lock
@@ -19,6 +17,7 @@ from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import ACTIVE_PROCESSING_JOB_STATUSES, ProcessingJobStatus, SocMemoryCandidateReviewStage
 from soc_agent.contracts.corpus_experiments import (
     Batch,
+    CorpusBatchRetryCommand,
     CorpusCandidatePage,
     CorpusConcurrencyCommand,
     CorpusExperiment,
@@ -44,8 +43,8 @@ from soc_agent.core.memory_draft_jobs import DRAFT_WORKLOAD
 from soc_agent.core.memory_working_drafts import SocMemoryWorkingDraftService
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict, CorpusExperimentSchemaNotReady
 from soc_agent.db.jobs import ProcessingJobConflictError
-from soc_agent.demo.corpus_experiment_timing import item_timing, round_timing
-from soc_agent.demo.corpus_experiments import semantic_retry_key
+from soc_agent.demo.corpus_batch_operations import CorpusBatchOperations, result_row
+from soc_agent.demo.corpus_experiment_timing import round_timing
 from soc_agent.demo.corpus_pattern_continuation import SocCorpusPatternContinuationService
 from soc_agent.demo.corpus_rebalance import CorpusRebalanceService
 from soc_agent.demo.corpus_round_comparison import compare_round_item
@@ -86,7 +85,12 @@ async def experiment_lifespan(app):
         repository = get_or_create_soc_repository(request)
         store = repository.corpus_experiments()
         store.require_schema()
-        if store.list_rounds(state="running", limit=1) or store.has_manual_work() or repository.processing_jobs().list_workload_jobs(DRAFT_WORKLOAD, statuses=[ProcessingJobStatus.QUEUED, *ACTIVE_PROCESSING_JOB_STATUSES], limit=1):
+        if (
+            store.list_rounds(state="running", limit=1)
+            or store.list_memory_continuation_rounds(limit=1)
+            or store.has_manual_work()
+            or repository.processing_jobs().list_workload_jobs(DRAFT_WORKLOAD, statuses=[ProcessingJobStatus.QUEUED, *ACTIVE_PROCESSING_JOB_STATUSES], limit=1)
+        ):
             get_corpus_experiment_application(request).dispatcher.start()
 
     try:
@@ -137,6 +141,33 @@ def _round(application, round_id):
     result = application.service.store.get_round(round_id)
     if result is None:
         raise HTTPException(status_code=404, detail="该验证轮次不存在")
+    return result
+
+
+@router.get("/batches/{batch}")
+def batch_status(batch: Batch, application: ApplicationDep, include_sources: bool = False):
+    with _command_errors():
+        return CorpusBatchOperations(application.service, application.workbench.batch_plan).snapshot(batch, include_sources=include_sources)
+
+
+@router.get("/batches/{batch}/results")
+def batch_results(
+    batch: Batch,
+    application: ApplicationDep,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    report_token: str | None = None,
+):
+    with _command_errors():
+        return CorpusBatchOperations(application.service, application.workbench.batch_plan).results(batch, offset=offset, limit=limit, report_token=report_token)
+
+
+@router.post("/batches/{batch}/retry", status_code=202)
+def batch_retry(batch: Batch, body: CorpusBatchRetryCommand, request: Request, application: ApplicationDep):
+    with _command_errors():
+        result = CorpusBatchOperations(application.service, application.workbench.batch_plan).retry(batch, body, context=_admin(request))
+    if result["retried"]:
+        application.dispatcher.start()
     return result
 
 
@@ -443,48 +474,11 @@ def round_results(round_id: str, application: ApplicationDep, limit: Annotated[i
     rows = []
     for item in page.items:
         member = members[item.alert_id]
-        outcome = item.job.result_payload or {}
-        summary = outcome.get("summary", {})
-        rows.append(
-            {
-                "alert_id": item.alert_id,
-                "group_id": item.group_id,
-                "rule_code": member.rule_code,
-                "detection_key": member.detection_key,
-                "payload_hash": member.payload_hash,
-                "event_time": member.event_time,
-                "validation_tier": member.validation_tier,
-                "membership_reason": member.reason,
-                "status": item.job.status.value,
-                "run_id": item.job.run_id,
-                "job_id": item.job_id,
-                "attempt_count": item.job.attempt_count,
-                "job_timing": item_timing(
-                    round_,
-                    sequence_number=item.sequence_number,
-                    created_at=item.job.created_at,
-                    started_at=item.job.started_at,
-                    completed_at=item.job.completed_at,
-                ),
-                "candidate_id": outcome.get("candidate_id"),
-                "observation_id": outcome.get("observation_id"),
-                "pattern_reason": outcome.get("pattern_reason"),
-                "summary": summary,
-                "attempt_measurements": [
-                    measurement
-                    for key in [item.job.idempotency_key, *(semantic_retry_key(item.job.idempotency_key, generation) for generation in range(1, item.job.metadata.get("semantic_retry", {}).get("generation", 0) + 1))]
-                    for measurement in application.service.repository.journaled_run_measurements(
-                        alert_id=member.alert_id,
-                        input_hash=member.payload_hash,
-                        idempotency_key_hash=hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest(),
-                    )
-                ],
-                "snapshot_changed_during_run": outcome.get("snapshot_changed_during_run", False),
-                **({} if applicability_report else {"label": application.workbench.experiment_label(member, decision_available=summary.get("effective_verdict") is not None)}),
-                "error_code": item.job.error_code,
-                "error_message": item.job.error_message,
-            }
-        )
+        row = result_row(application.service, round_, member, item.job, item.sequence_number)
+        row.pop("source_round_id")
+        if not applicability_report:
+            row["label"] = application.workbench.experiment_label(member, decision_available=row["summary"].get("effective_verdict") is not None)
+        rows.append(row)
     result = {"total": page.total, "items": rows, "round_id": round_id, "source_identity": experiment.source_identity}
     if applicability_report:
         learning_total = application.service.store.list_members(experiment.experiment_id, selection=CorpusRoundSelection(batch="learning"), limit=1).total

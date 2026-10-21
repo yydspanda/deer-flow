@@ -25,12 +25,16 @@ const api = rs.hoisted(() => ({
   run: rs.fn(),
   configuration: rs.fn(),
   concurrency: rs.fn(),
+  batchState: rs.fn(),
+  batchRetry: rs.fn(),
 }));
 rs.mock("@/core/soc/api", () => ({
   getSocCorpusQuickState: api.state,
   runSocCorpusQuick: api.run,
   getSocCorpusExperimentConfiguration: api.configuration,
   updateSocCorpusConcurrency: api.concurrency,
+  getSocCorpusBatchState: api.batchState,
+  retrySocCorpusBatch: api.batchRetry,
 }));
 const options: SocAnalysisExecutionOptions = {
   normalization_review_mode: "apply",
@@ -50,6 +54,20 @@ beforeEach(() => {
   window.sessionStorage.clear();
   api.configuration.mockReset().mockResolvedValue({ defaults: options });
   api.concurrency.mockReset();
+  api.batchState.mockReset().mockResolvedValue({
+    batch: "learning",
+    experiment_id: "EXP-test",
+    total: 10,
+    completed: 8,
+    failed: 2,
+    active: 0,
+    remaining: 0,
+    running: false,
+    semantic_failed_count: 3,
+  });
+  api.batchRetry
+    .mockReset()
+    .mockResolvedValue({ retried: 2, not_retryable: 0 });
   api.run.mockReset().mockResolvedValue({ accepted: true });
   api.state.mockReset().mockResolvedValue({
     experiment_id: "EXP-test",
@@ -142,7 +160,11 @@ test("learning restart enables semantic review for the whole first batch and ref
   expect(dialog.getByText(/第一批成功、失败和未运行/)).toBeTruthy();
   expect(dialog.getByText(/重新积累并审核经验/)).toBeTruthy();
   expect(dialog.getByText(/第二批.*重新验证/)).toBeTruthy();
-  fireEvent.click(dialog.getByRole("switch", { name: "语义核对" }));
+  expect(
+    dialog
+      .getByRole("switch", { name: "语义核对" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
   const confirm = dialog.getByRole("button", { name: "全部重新运行" });
   await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
   invalidate.mockClear();
@@ -194,8 +216,8 @@ test("restarts all validation alerts with the current host draft and refreshes l
   const invalidate = rs.spyOn(client, "invalidateQueries");
   api.state.mockResolvedValue(restartState({ running: true }));
   api.configuration.mockResolvedValue({
-    defaults: { ...options, normalization_review_mode: "off" },
-    saved_options: options,
+    defaults: options,
+    saved_options: { ...options, normalization_review_mode: "off" },
     can_configure: true,
   });
   mount(
@@ -366,12 +388,13 @@ test.each([400, 403, 409, 422])(
       can_configure: status !== 403,
     });
     fireEvent.click(dialog.getByRole("button", { name: "刷新设置并重新确认" }));
+    const refreshedOptions = status === 403 ? saved : options;
     await waitFor(() =>
       expect(
         dialog
           .getByRole("switch", { name: "企业策略" })
           .getAttribute("aria-checked"),
-      ).toBe("true"),
+      ).toBe(String(refreshedOptions.tenant_policy_enabled)),
     );
     expect(api.run).toHaveBeenCalledTimes(1);
     fireEvent.click(dialog.getByRole("button", { name: "全部重新运行" }));
@@ -382,7 +405,7 @@ test.each([400, 403, 409, 422])(
         scope: "all",
         action: "restart_validation",
         restart_token: nextToken,
-        options: { ...saved, refresh_normalization: false },
+        options: { ...refreshedOptions, refresh_normalization: false },
       },
       `restart-validation-${nextToken}`,
     ]);
@@ -547,9 +570,7 @@ test.each(["configuration", "controls"])(
       screen.getByText(/开关仅用于新提交的任务；“继续”沿用各任务保存的设置/),
     ).toBeTruthy();
     expect(
-      screen.getByText(
-        /可能续跑多个历史轮次。失败“重试”留在原轮次，沿用原设置。定向复测请使用对应轮次的续跑命令/,
-      ),
+      screen.getByText(/批量重试覆盖当前批次，不受列表筛选影响/),
     ).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "最大并发" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存并发" })).toBeNull();
@@ -586,6 +607,179 @@ test("configuration refresh shares the acknowledged concurrency with another tab
   expect(api.concurrency).not.toHaveBeenCalled();
   expect(api.run).not.toHaveBeenCalled();
   client.clear();
+});
+
+test.each(["learning", "validation"] as const)(
+  "%s retries execution failures for the whole batch using saved concurrency and no round identifier",
+  async (batch) => {
+    api.configuration.mockResolvedValue({
+      defaults: options,
+      max_concurrency: 8,
+      concurrency_limit: 16,
+      can_configure: true,
+    });
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const invalidate = rs.spyOn(client, "invalidateQueries");
+    mount(
+      { batch, tier: "supplementary", alertIds: ["filtered-alert"], controls },
+      client,
+    );
+    const retry = await screen.findByRole("button", { name: "重试执行失败" });
+    await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("switch", { name: "企业策略" }));
+    fireEvent.click(retry);
+    await waitFor(() => expect(api.batchRetry).toHaveBeenCalledTimes(1));
+    expect(api.batchRetry).toHaveBeenCalledWith(batch, {
+      kind: "failed",
+      concurrency: 8,
+    });
+    expect(api.run).not.toHaveBeenCalled();
+    expect(api.batchState).toHaveBeenCalledWith(batch);
+    await screen.findByText("已提交 2 条执行失败重试。");
+    const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    expect(keys).toContainEqual(["soc-corpus-batch"]);
+    expect(keys).toContainEqual(["soc-corpus-quick"]);
+    expect(keys.some((key) => key?.includes("audit"))).toBe(false);
+    client.clear();
+  },
+);
+
+test("semantic retries use the saved capacity instead of an unsaved capacity draft", async () => {
+  api.configuration.mockResolvedValue({
+    defaults: options,
+    max_concurrency: 8,
+    concurrency_limit: 16,
+  });
+  mount({ batch: "validation", controls });
+  const selector = await screen.findByRole("combobox", { name: "最大并发" });
+  fireEvent.change(selector, { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("button", { name: "重试语义核对失败" }));
+  await waitFor(() => expect(api.batchRetry).toHaveBeenCalledTimes(1));
+  expect(api.batchRetry).toHaveBeenCalledWith("validation", {
+    kind: "semantic_failed",
+    concurrency: 8,
+  });
+  expect(api.concurrency).not.toHaveBeenCalled();
+});
+
+test.each([
+  { active: 1, running: false },
+  { active: 0, running: true },
+])(
+  "batch retries wait for all batch work, even when the filtered view is idle (%j)",
+  async (busy) => {
+    api.batchState.mockResolvedValue({
+      semantic_failed_count: 3,
+      failed: 2,
+      ...busy,
+    });
+    mount({ batch: "validation", tier: "main", controls });
+    const retry = await screen.findByRole("button", { name: "重试执行失败" });
+    await screen.findByText(/重试前请先暂停本批次，并等待运行中的任务结束/);
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "重试语义核对失败" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(retry);
+    expect(api.batchRetry).not.toHaveBeenCalled();
+  },
+);
+
+test("a rejected batch retry shows the error and never automatically replays", async () => {
+  api.batchRetry.mockRejectedValueOnce(
+    new Error("运行设置发生变化，请重新配置"),
+  );
+  mount({ controls });
+  const retry = await screen.findByRole("button", { name: "重试执行失败" });
+  await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(retry);
+  await screen.findByText("运行设置发生变化，请重新配置");
+  expect(api.batchRetry).toHaveBeenCalledTimes(1);
+  expect(api.run).not.toHaveBeenCalled();
+});
+
+test("a memory governance change offers batch continuation without a round command", async () => {
+  api.state.mockResolvedValue(
+    restartState({ blocked_reason: "memory_governance_changed" }),
+  );
+  mount({ controls });
+  await screen.findByText(/经验状态已更新。点击“继续”会自动接续剩余任务/);
+  expect(screen.queryByText(/“继续”不会解除/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "继续" }));
+  await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+  expect(api.run.mock.calls[0]![0]).toMatchObject({
+    batch: "learning",
+    action: "start",
+  });
+});
+
+test("governance recovery remains available when all saved results need server checks", async () => {
+  api.state.mockResolvedValue(
+    restartState({
+      completed: 10,
+      remaining: 0,
+      failed: 0,
+      blocked_reason: "memory_governance_changed",
+    }),
+  );
+  mount({ controls });
+  const resume = await screen.findByRole("button", { name: "继续" });
+  expect(resume.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(resume);
+  await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+});
+
+test("exhausted governance recovery is visible without blocking remaining batch work", async () => {
+  api.state.mockResolvedValue(
+    restartState({
+      completed: 5,
+      remaining: 3,
+      failed: 2,
+      blocked_reason: "memory_governance_changed",
+    }),
+  );
+  api.batchState.mockResolvedValue({
+    active: 0,
+    running: false,
+    failed: 2,
+    semantic_failed_count: 0,
+    memory_recovery_exhausted_count: 2,
+  });
+  mount({ controls });
+  await screen.findByText(
+    "2条受影响告警已达重试上限，需要显式重新运行。其余未开始的告警仍可继续。",
+  );
+  const resume = screen.getByRole("button", { name: "继续" });
+  expect(resume.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(resume);
+  await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+  expect(api.run.mock.calls[0]![0]).toMatchObject({
+    batch: "learning",
+    action: "start",
+  });
+});
+
+test("LAN retries use server concurrency without submitting a configuration change", async () => {
+  api.configuration.mockResolvedValue({
+    defaults: options,
+    saved_options: options,
+    can_configure: false,
+    max_concurrency: 2,
+    concurrency_limit: 16,
+  });
+  mount({ controls });
+  const retry = await screen.findByRole("button", { name: "重试执行失败" });
+  await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(retry);
+  await waitFor(() => expect(api.batchRetry).toHaveBeenCalledTimes(1));
+  expect(api.batchRetry).toHaveBeenCalledWith("learning", { kind: "failed" });
 });
 test("full learning starts in one click without group filters or preparation", async () => {
   mount();
@@ -798,14 +992,14 @@ test.each([true, undefined])(
 );
 
 test.each([false, true])(
-  "host restores saved batch options instead of defaults or old session preferences (stored: %s)",
+  "host initializes new tasks from defaults instead of historical options or old session preferences (stored: %s)",
   async (stored) => {
     const disabled = { ...options, normalization_review_mode: "off" as const };
     if (stored)
       window.sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(disabled));
     api.configuration.mockResolvedValue({
-      defaults: disabled,
-      saved_options: options,
+      defaults: options,
+      saved_options: disabled,
       can_configure: true,
     });
     mount({ controls });
@@ -817,21 +1011,73 @@ test.each([false, true])(
   },
 );
 
-test("host follows saved changes until editing and refresh discards only the unsubmitted draft", async () => {
+test.each(["learning", "validation"] as const)(
+  "%s starts with semantic review and policies off from server defaults despite retired browser preferences",
+  async (batch) => {
+    const previousDefaults = {
+      normalization_review_mode: "off",
+      refresh_normalization: true,
+      tenant_policy_enabled: true,
+      tenant_policy_advisor_enabled: true,
+      tenant_policy_signal_providers_enabled: true,
+    };
+    for (const key of [SETTINGS_KEY, "soc.corpus-validation.run-settings.v1"]) {
+      window.sessionStorage.setItem(key, JSON.stringify(previousDefaults));
+    }
+    api.configuration.mockResolvedValue({
+      defaults: { ...options, refresh_normalization: false },
+      saved_options: previousDefaults,
+      can_configure: true,
+    });
+    mount({ batch, controls });
+
+    expect(
+      (await screen.findByRole("switch", { name: "语义核对" })).getAttribute(
+        "aria-checked",
+      ),
+    ).toBe("true");
+    for (const name of ["企业策略", "安全软件路径策略", "LLM 策略建议"]) {
+      expect(
+        screen.getByRole("switch", { name }).getAttribute("aria-checked"),
+      ).toBe("false");
+    }
+    expect(
+      screen.getByRole<HTMLInputElement>("checkbox", {
+        name: "重新核对事实",
+      }).checked,
+    ).toBe(false);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: batch === "learning" ? "开始积累" : "开始验证",
+      }),
+    );
+    await waitFor(() => expect(api.run).toHaveBeenCalledTimes(1));
+    expect(api.run.mock.calls[0]![0]).toMatchObject({
+      batch,
+      action: "start",
+      options,
+    });
+    expect(api.run.mock.calls[0]![0].options.refresh_normalization).not.toBe(
+      true,
+    );
+  },
+);
+
+test("host follows deployment defaults until editing and reload discards only the unsubmitted draft", async () => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const disabled = { ...options, normalization_review_mode: "off" as const };
-  let savedOptions = options;
+  let defaults = options;
   api.configuration.mockImplementation(async () => ({
-    defaults: disabled,
-    saved_options: savedOptions,
+    defaults,
+    saved_options: disabled,
     can_configure: true,
   }));
   const view = mount({ controls }, client);
   const semantic = await screen.findByRole("switch", { name: "语义核对" });
   expect(semantic.getAttribute("aria-checked")).toBe("true");
-  savedOptions = disabled;
+  defaults = disabled;
   await act(async () => {
     await client.invalidateQueries({
       queryKey: ["soc-corpus-experiments", "configuration"],
@@ -873,7 +1119,7 @@ test("batch switches keep separate drafts and never submit placeholder configura
       return new Promise((resolve) => {
         resolveValidation = resolve;
       });
-    return { defaults: disabled, saved_options: options, can_configure: true };
+    return { defaults: options, saved_options: disabled, can_configure: true };
   });
   const content = (batch: SocCorpusBatch) => (
     <QueryClientProvider client={client}>
@@ -900,8 +1146,8 @@ test("batch switches keep separate drafts and never submit placeholder configura
   expect(api.run).not.toHaveBeenCalled();
   await act(async () =>
     resolveValidation({
-      defaults: options,
-      saved_options: disabled,
+      defaults: disabled,
+      saved_options: options,
       can_configure: true,
     }),
   );

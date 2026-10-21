@@ -284,7 +284,7 @@ def _write_csv(path, columns, rows):
 
 
 def _is_rebalanced(report: dict) -> bool:
-    return bool(report.get("experiment", {}).get("rebalance"))
+    return bool((report.get("experiment") or {}).get("rebalance"))
 
 
 def _uses_applicability_metrics(report: dict) -> bool:
@@ -292,7 +292,16 @@ def _uses_applicability_metrics(report: dict) -> bool:
 
 
 def _complete_validation_stage(report: dict) -> bool:
-    rows, scope, round_ = report["rows"], report.get("stage_scope", {}), report["round"]
+    rows, scope, round_ = report["rows"], report.get("stage_scope", {}), report.get("round", {})
+    if report.get("schema_version") == "soc.corpus_batch_report.v1":
+        sources = {source["round_id"] for source in report.get("source_rounds", [])}
+        return (
+            report.get("batch") == "validation"
+            and scope.get("stage_complete") is True
+            and scope.get("batch_total", 0) > 0
+            and len(rows) == len({row["alert_id"] for row in rows}) == scope["batch_total"]
+            and all(row["status"] == "completed" and row.get("snapshot_changed_during_run") is False and row.get("source_round_id") in sources for row in rows)
+        )
     selection = round_.get("selection") or {}
     return (
         scope.get("stage_complete") is True
@@ -313,7 +322,8 @@ def export_report(report: dict, output_dir: Path) -> None:
     if applicability:
         report = {**report, "rows": [{key: value for key, value in row.items() if key != "label"} for row in report["rows"]]}
         complete = _complete_validation_stage(report)
-        report.update(report_scope="stage" if complete else "round_diagnostic", stage_conclusion_allowed=complete)
+        diagnostic = "batch_diagnostic" if report.get("schema_version") == "soc.corpus_batch_report.v1" else "round_diagnostic"
+        report.update(report_scope="stage" if complete else diagnostic, stage_conclusion_allowed=complete)
     summarize = summarize_rebalance_results if applicability else summarize_results
     report = {**report, "metrics": summarize(report["rows"]), "breakdowns": result_breakdowns(report["rows"], rebalanced=applicability)}
     with tempfile.TemporaryDirectory(prefix=".corpus-report-", dir=output_dir.parent) as temporary:
@@ -344,6 +354,8 @@ def export_report(report: dict, output_dir: Path) -> None:
         )
         if applicability:
             columns = tuple(column for column in columns if column not in {"expected_handling", "scorable"})
+        if report.get("schema_version") == "soc.corpus_batch_report.v1":
+            columns = (*columns, "source_round_id")
         with (directory / "alerts.csv").open("x", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
             writer.writeheader()
@@ -362,7 +374,8 @@ def export_report(report: dict, output_dir: Path) -> None:
             (row for row in report["rows"] if row["status"] == "failed"),
         )
         (directory / "REPORT.md").write_text(render_report(report), encoding="utf-8")
-        manifest = {"schema_version": "soc.corpus_report_manifest.v1", "round_id": report["round"]["round_id"], "files": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in directory.iterdir()}}
+        identity = {"batch": report["batch"], "experiment_id": report["experiment_id"], "report_token": report["report_token"]} if report.get("schema_version") == "soc.corpus_batch_report.v1" else {"round_id": report["round"]["round_id"]}
+        manifest = {"schema_version": "soc.corpus_report_manifest.v1", **identity, "files": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in directory.iterdir()}}
         (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         for path in directory.iterdir():
             path.chmod(0o600)
@@ -442,7 +455,50 @@ def _render_applicability_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_batch_report(report: dict) -> str:
+    learning = report["batch"] == "learning"
+    rows = report["rows"]
+    eligible = [row for row in rows if row["status"] == "completed" and row.get("snapshot_changed_during_run") is False]
+    durations = [row.get("summary", {}).get("total_duration_ms") for row in eligible]
+    measured = [duration for duration in durations if type(duration) is int and duration >= 0]
+    sources = report.get("source_rounds", [])
+    settings = {json.dumps(source.get("options", {}), sort_keys=True, ensure_ascii=False) for source in sources}
+    lines = [
+        "# 第一批经验积累报告" if learning else "# 第二批经验复用验证报告",
+        "",
+        f"当前批次共 {len(rows)} 条；已完成且快照有效 {len(eligible)} 条。每条告警只取当前有效任务的最终结果，成功补跑自动纳入。",
+        "完整验证阶段结论：可形成。" if report.get("stage_conclusion_allowed") else "当前报告用于积累统计或进度诊断，尚不作为完整第二批阶段结论。",
+        "",
+        "第一批与第二批共享行为积累；重复研判同一告警不会重复增加独立样本数。忽略和转交均为系统建议。",
+        "",
+    ]
+    if not learning:
+        lines += ["| 粗分组 | 告警数 | 有效完成 | 建议忽略 | 忽略比例 |", "|---|---:|---:|---:|---:|"]
+        for tier, label in (("main", "粗分组：预估有适用历史经验"), ("supplementary", "粗分组：预估无历史经验")):
+            metric = report["metrics"][tier]
+            rate = metric["ignore_rate"]
+            formatted = f"{rate['rate']:.1%}" if rate["rate"] is not None else "未计量"
+            lines.append(f"| {label} | {metric['selected']} | {rate['denominator']} | {rate['numerator']} | {formatted} |")
+        lines += ["", "粗分组是抽样分类，实际经验使用以 Runtime 匹配结果为准。", ""]
+    if measured:
+        lines.append(f"平均单条研判耗时：{sum(measured) / len(measured) / 1000:.1f} 秒；已知耗时 {len(measured)} 条，缺失 {len(eligible) - len(measured)} 条。")
+    else:
+        lines.append("平均单条研判耗时：暂无可计量的最终结果。")
+    lines += [
+        "平均耗时只计最终有效 Run，不含被替换旧尝试和初始排队；report.json 另列当前结果任务的尝试计量，不代表所有历史任务的总成本。",
+        "",
+        f"本报告来自 {len(sources)} 个后台执行记录，包含 {len(settings)} 组运行设置。后台来源编号、设置和经验快照保存在 report.json，无需手工合并报告。",
+        "经验调整前后的结果各自保留实际使用依据；本批次汇总不是固定单一经验库下的因果对照。",
+        "",
+        "运行设置：" + ("；".join(sorted(settings)) if settings else "暂无运行记录"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render_report(report: dict) -> str:
+    if report.get("schema_version") == "soc.corpus_batch_report.v1":
+        return _render_batch_report(report)
     if _uses_applicability_metrics(report):
         return _render_applicability_report(report)
     lines = ["# 两批经验验证报告", "", f"轮次：`{report['round']['round_id']}`", "", "结果按本轮固定 Run 保存，不使用告警后来重跑的结果。历史忽略/转交标签用于处置对照，不等于安全真值。", ""]

@@ -31,6 +31,7 @@ PENDING = {"pending_review", "confirmed_candidate"}
 PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v2"
 LEGACY_PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v1"
 INCREMENTAL_PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v3"
+PENDING_PLAN_SCHEMA = "soc.dev_learning_bulk_review_plan.v4"
 REVIEW_POLICY = {"review_after_days": 180, "validity_days": 365}
 # The synchronous endpoint may use a model call plus one output repair. Keep
 # the client above the dedicated nginx route's 1800s response wait budget.
@@ -42,7 +43,7 @@ class BulkReviewError(RuntimeError):
 
 
 class ReviewScopeChanged(BulkReviewError):
-    """Stop further admissions when the frozen incremental scope is no longer idle."""
+    """Stop new admissions when a frozen review scope is no longer applicable."""
 
 
 class ApiError(BulkReviewError):
@@ -424,15 +425,25 @@ def _incremental_guard(
     )
     progress = client.get(f"{BASE}/rounds/{baseline['round_id']}")
     round_ = progress.get("round") or {}
+    # Reviewing pending candidates does not resume Runtime or reuse its old
+    # Memory snapshot. A governance-stopped source can still anchor the inventory
+    # after all work drains; every report/result/round fence below remains active.
+    governance_stopped = (
+        round_.get("state") == "blocked"
+        and round_.get("state_reason") == "memory_governance_changed"
+    )
     if (
         _round_identity(round_) != baseline["round_identity"]
         or round_.get("superseded_by_round_id")
-        or round_.get("state") not in {"paused", "completed"}
+        or (
+            round_.get("state") not in {"paused", "completed"}
+            and not governance_stopped
+        )
         or progress.get("active_count") != 0
         or progress.get("selected_count") != baseline["selected_count"]
     ):
         raise BulkReviewError(
-            "Validation source changed, is superseded, or has not paused and drained"
+            "Validation source changed, is superseded, or is not idle for review"
         )
     rounds, offset = [], 0
     while True:
@@ -573,6 +584,57 @@ def _inventory(client, experiment, *, review_stage="pending"):
     return {item["candidate_id"]: item for item in entries}
 
 
+def _pending_scope(client, expected=None):
+    """Resolve the current shared queue independently of execution progress."""
+    current = client.get(f"{BASE}/batches/learning")
+    if (
+        not isinstance(current, dict)
+        or current.get("schema_version") != "soc.corpus_batch_status.v1"
+        or current.get("batch") != "learning"
+        or "learning_generation" not in current
+    ):
+        raise BulkReviewError(
+            "Current pending review scope is unavailable; update the application"
+        )
+    scope = {
+        key: current.get(key)
+        for key in ("experiment_id", "plan_id", "learning_generation")
+    }
+    experiment, plan_id, generation = scope.values()
+    if (
+        not isinstance(experiment, str)
+        or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", experiment)
+        or not isinstance(plan_id, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", plan_id)
+        or (
+            generation is not None
+            and (
+                not isinstance(generation, str)
+                or not generation.strip()
+                or len(generation) > 256
+            )
+        )
+    ):
+        raise BulkReviewError("Current pending review scope identity is invalid")
+    details = client.get(f"{BASE}/experiments/{experiment}")
+    if (
+        not isinstance(details, dict)
+        or details.get("experiment_id") != experiment
+        or details.get("plan_id") != plan_id
+        or details.get("tenant_id") != "pingan"
+        or details.get("environment") != "dev-corpus-eval"
+        or details.get("fact_source_experiment_id") is not None
+    ):
+        raise BulkReviewError(
+            "Current experiment is outside the DEV pending review scope"
+        )
+    if expected is not None and expected != scope:
+        raise ReviewScopeChanged(
+            "Current review scope changed; create a new pending plan"
+        )
+    return scope
+
+
 def _scope_identity(candidate):
     if (
         candidate.get("schema_version") != "soc.memory_candidate.v1"
@@ -629,29 +691,44 @@ def default_applicability(candidate):
 def build_plan(
     client,
     output_dir,
-    expected_count,
+    expected_count=None,
     experiment_id=None,
     *,
     phase="initial",
     report_dir=None,
 ):
-    if not isinstance(expected_count, int) or expected_count <= 0:
+    if phase != "pending" and (type(expected_count) is not int or expected_count <= 0):
         raise BulkReviewError("Expected candidate count must be positive")
+    if (
+        phase == "pending"
+        and expected_count is not None
+        and (type(expected_count) is not int or expected_count < 0)
+    ):
+        raise BulkReviewError("Expected candidate count must be nonnegative")
     url = validate_url(client.url)
-    if phase not in {"initial", "incremental"} or (
+    if phase not in {"initial", "incremental", "pending"} or (
         (phase == "incremental") != (report_dir is not None)
     ):
         raise BulkReviewError(
             "Incremental review requires --report-dir; initial review must not use it"
         )
     baseline = None
+    pending_scope = None
+    if phase == "pending":
+        if experiment_id is not None:
+            raise BulkReviewError(
+                "Pending review selects the current batch; omit --experiment"
+            )
+        pending_scope = _pending_scope(client)
     if phase == "incremental":
         baseline = _incremental_report(report_dir)
         if experiment_id is not None and experiment_id != baseline["experiment_id"]:
             raise BulkReviewError("Report experiment does not match --experiment")
         experiment_id = baseline["experiment_id"]
     explicit = experiment_id is not None
-    if baseline:
+    if pending_scope:
+        learning = pending_scope
+    elif baseline:
         learning, baseline["round_fence"], baseline["round_inventory"] = (
             _incremental_guard(client, baseline, check_all_active=True)
         )
@@ -660,9 +737,10 @@ def build_plan(
         learning = _idle_learning(client, experiment_id, explicit=explicit)
     experiment = learning["experiment_id"]
     inventory = _inventory(client, experiment)
-    if (
-        len(inventory) != expected_count
-        or learning.get("pending_candidates") != expected_count
+    if expected_count is None:
+        expected_count = len(inventory)
+    if len(inventory) != expected_count or (
+        not pending_scope and learning.get("pending_candidates") != expected_count
     ):
         raise BulkReviewError("Pending candidate count does not match --expected-count")
     items = []
@@ -691,9 +769,16 @@ def build_plan(
                 "blocked_reason": blocked,
             }
         )
-    if canonical_hash(_inventory(client, experiment)) != canonical_hash(inventory):
+    final_inventory = _inventory(client, experiment)
+    if (
+        any(final_inventory.get(cid) != listed for cid, listed in inventory.items())
+        if pending_scope
+        else canonical_hash(final_inventory) != canonical_hash(inventory)
+    ):
         raise BulkReviewError("Candidate inventory changed before plan publication")
-    if baseline:
+    if pending_scope:
+        _pending_scope(client, pending_scope)
+    elif baseline:
         _incremental_guard(client, baseline, expected_plan_id=learning["plan_id"])
     else:
         _idle_learning(
@@ -705,7 +790,11 @@ def build_plan(
     directory = Path(output_dir).expanduser().absolute()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
     plan = {
-        "schema_version": INCREMENTAL_PLAN_SCHEMA if baseline else PLAN_SCHEMA,
+        "schema_version": PENDING_PLAN_SCHEMA
+        if pending_scope
+        else INCREMENTAL_PLAN_SCHEMA
+        if baseline
+        else PLAN_SCHEMA,
         "url": url,
         "experiment_id": experiment,
         "created_at": datetime.now(UTC).isoformat(),
@@ -714,6 +803,15 @@ def build_plan(
         "future_use": "exact_reuse",
         "review_policy": dict(REVIEW_POLICY),
         "items": items,
+        **(
+            {
+                "review_phase": "pending",
+                "experiment_selection": "current_batch",
+                "current_scope": pending_scope,
+            }
+            if pending_scope
+            else {}
+        ),
         **(
             {"review_phase": "incremental", "baseline_report": baseline}
             if baseline
@@ -734,6 +832,8 @@ def build_plan(
         f"Plan saved: {directory / 'plan.json'}; candidates={len(items)}, blocked={sum(bool(i['blocked_reason']) for i in items)}",
         flush=True,
     )
+    if not items:
+        print("没有待审核经验，本计划无需执行审核。", flush=True)
     return plan
 
 
@@ -797,6 +897,7 @@ def review_payload(
     validity_days=365,
     review_phase="initial",
     source_round_id=None,
+    learning_generation=None,
 ):
     lesson = validate_draft(candidate["candidate_id"], draft)
     now = now or datetime.now(UTC)
@@ -818,7 +919,9 @@ def review_payload(
     return {
         "decision": "confirm",
         "reason": (
-            "审核人按本次 DEV 增量批量审核指令统一选择误报，精确匹配时复用结论；保留页面默认的核心行为勾选条件。"
+            "审核人按本次 DEV 当前共享待审名单统一选择误报，精确匹配时复用结论；保留页面默认的核心行为勾选条件。"
+            if review_phase == "pending"
+            else "审核人按本次 DEV 增量批量审核指令统一选择误报，精确匹配时复用结论；保留页面默认的核心行为勾选条件。"
             if review_phase == "incremental"
             else "审核人按本次 DEV 第一批批量审核指令统一选择误报，精确匹配时复用结论；保留页面默认的核心行为勾选条件。"
         ),
@@ -833,7 +936,19 @@ def review_payload(
         "metadata": {
             "source": "operator_bulk_review",
             "experiment_id": experiment_id,
-            "batch": "validation" if review_phase == "incremental" else "learning",
+            **(
+                {
+                    "review_phase": "pending",
+                    "candidate_scope": "current_experiment_learning_generation",
+                    "learning_generation": learning_generation,
+                }
+                if review_phase == "pending"
+                else {
+                    "batch": "validation"
+                    if review_phase == "incremental"
+                    else "learning"
+                }
+            ),
             "individual_manual_review_claimed": False,
             **(
                 {"review_phase": "incremental", "source_round_id": source_round_id}
@@ -926,7 +1041,11 @@ def _plan_review_policy(plan):
     if plan.get("schema_version") == LEGACY_PLAN_SCHEMA:
         if "review_policy" not in plan:
             return {"review_after_days": 30, "validity_days": 60}
-    elif plan.get("schema_version") in {PLAN_SCHEMA, INCREMENTAL_PLAN_SCHEMA}:
+    elif plan.get("schema_version") in {
+        PLAN_SCHEMA,
+        INCREMENTAL_PLAN_SCHEMA,
+        PENDING_PLAN_SCHEMA,
+    }:
         policy = plan.get("review_policy")
         if policy == REVIEW_POLICY and all(
             type(value) is int for value in policy.values()
@@ -969,7 +1088,12 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
         plan = _load(path)
         if (
             plan.get("schema_version")
-            not in {LEGACY_PLAN_SCHEMA, PLAN_SCHEMA, INCREMENTAL_PLAN_SCHEMA}
+            not in {
+                LEGACY_PLAN_SCHEMA,
+                PLAN_SCHEMA,
+                INCREMENTAL_PLAN_SCHEMA,
+                PENDING_PLAN_SCHEMA,
+            }
             or plan.get("url") != validate_url(client.url)
             or plan.get("operator_verdict") != "false_positive"
             or plan.get("future_use") != "exact_reuse"
@@ -979,7 +1103,19 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
             )
         review_policy = _plan_review_policy(plan)
         incremental = plan["schema_version"] == INCREMENTAL_PLAN_SCHEMA
-        if incremental:
+        pending = plan["schema_version"] == PENDING_PLAN_SCHEMA
+        if pending:
+            current_scope = plan.get("current_scope")
+            if (
+                plan.get("review_phase") != "pending"
+                or not isinstance(current_scope, dict)
+                or set(current_scope)
+                != {"experiment_id", "plan_id", "learning_generation"}
+                or current_scope.get("experiment_id") != plan["experiment_id"]
+                or "baseline_report" in plan
+            ):
+                raise BulkReviewError("Pending plan scope is invalid")
+        elif incremental:
             baseline = plan.get("baseline_report")
             if (
                 plan.get("review_phase") != "incremental"
@@ -1002,8 +1138,10 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
         ):
             raise BulkReviewError("Legacy plans cannot enable incremental review")
         selection = plan.get("experiment_selection", "quick")
-        if selection not in {"quick", "explicit"}:
+        if selection not in {"quick", "explicit", "current_batch"}:
             raise BulkReviewError("Unknown experiment selection mode")
+        if (selection == "current_batch") != pending:
+            raise BulkReviewError("Current batch selection requires a pending plan")
         explicit = selection == "explicit"
         if incremental and not explicit:
             raise BulkReviewError("Incremental plans must bind an explicit experiment")
@@ -1018,7 +1156,14 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
         }
 
         def guard(*, check_all_active=False):
-            if incremental:
+            if pending:
+                try:
+                    _pending_scope(client, current_scope)
+                except ApiError:
+                    raise
+                except BulkReviewError as exc:
+                    raise ReviewScopeChanged(str(exc)) from exc
+            elif incremental:
                 try:
                     _incremental_guard(
                         client,
@@ -1036,7 +1181,8 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
         ids = [item.get("candidate_id") for item in plan.get("items", [])]
         if (
             len(ids) != plan.get("expected_count")
-            or not ids
+            or (not ids and not pending)
+            or type(plan.get("expected_count")) is not int
             or len(set(ids)) != len(ids)
         ):
             raise BulkReviewError("Plan candidate inventory is invalid")
@@ -1053,8 +1199,11 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                 != item["record_applicability"]
             ):
                 raise BulkReviewError("Plan changes the default review scope")
+        planned_items = {item["candidate_id"]: item for item in plan["items"]}
         guard(check_all_active=True)
-        if explicit and not set(ids).issubset(
+        if incremental:
+            _verify_report_results(client, baseline)
+        if (explicit or pending) and not set(ids).issubset(
             _inventory(client, plan["experiment_id"], review_stage="all")
         ):
             raise BulkReviewError("Plan candidates are outside the selected experiment")
@@ -1083,6 +1232,9 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
             pass
 
         def post(cid, saved, phase, path, payload, idempotency_key=None):
+            if pending:
+                guard()
+                _same_candidate(client, planned_items[cid])
             # The gate defines admission. Requests admitted before a fatal event
             # are in flight and must finish recording their actual outcome.
             with state_lock:
@@ -1126,7 +1278,9 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                             {
                                 "reviewer_verdict": "false_positive",
                                 "reviewer_context": (
-                                    "操作人指定本次 DEV 实验新增待审经验批量采用误报结论；这不是逐条人工复核记录，不得虚构业务授权或缺失证据。"
+                                    "操作人指定本次 DEV 实验当前共享待审名单批量采用误报结论；这不是逐条人工复核记录，不得虚构业务授权或缺失证据。"
+                                    if pending
+                                    else "操作人指定本次 DEV 实验新增待审经验批量采用误报结论；这不是逐条人工复核记录，不得虚构业务授权或缺失证据。"
                                     if incremental
                                     else "操作人指定本次 DEV 实验第一批经验批量采用误报结论；这不是逐条人工复核记录，不得虚构业务授权或缺失证据。"
                                 ),
@@ -1150,6 +1304,16 @@ def apply_plan(client, plan_path, retry_failed=False, concurrency=8):
                         saved["draft"],
                         plan["experiment_id"],
                         **review_policy,
+                        **(
+                            {
+                                "review_phase": "pending",
+                                "learning_generation": current_scope[
+                                    "learning_generation"
+                                ],
+                            }
+                            if pending
+                            else {}
+                        ),
                         **(
                             {
                                 "review_phase": "incremental",
@@ -1309,6 +1473,7 @@ def review_status(plan_path):
         LEGACY_PLAN_SCHEMA,
         PLAN_SCHEMA,
         INCREMENTAL_PLAN_SCHEMA,
+        PENDING_PLAN_SCHEMA,
     }:
         raise BulkReviewError("Unknown review plan schema")
     state_path = path.parent / "state.json"
@@ -1341,11 +1506,17 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser(
         "plan",
-        help="Read and freeze DEV pending candidates for initial or incremental review",
+        help="Read and freeze DEV candidates: current pending queue or legacy initial/incremental scope",
     )
     plan.add_argument("--output-dir", required=True)
-    plan.add_argument("--expected-count", required=True, type=int)
-    plan.add_argument("--phase", choices=("initial", "incremental"), default="initial")
+    plan.add_argument(
+        "--expected-count",
+        type=int,
+        help="Optional for pending; required for initial/incremental",
+    )
+    plan.add_argument(
+        "--phase", choices=("initial", "incremental", "pending"), default="initial"
+    )
     plan.add_argument(
         "--report-dir",
         help="Incremental mode: fixed validation export with report.json and manifest.json",

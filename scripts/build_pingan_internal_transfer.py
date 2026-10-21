@@ -295,6 +295,11 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/contracts/corpus_rebalance_commands.py",
     "backend/soc_agent/db/corpus_experiments.py",
     "backend/soc_agent/demo/corpus_batches.py",
+    "backend/soc_agent/demo/corpus_batch_cli.py",
+    "backend/soc_agent/demo/corpus_batch_operations.py",
+    "backend/tests/test_soc_corpus_batch_cli.py",
+    "backend/tests/test_soc_corpus_batch_operations.py",
+    "backend/tests/test_soc_memory_core_review_gate.py",
     "backend/soc_agent/demo/corpus_experiment_cli.py",
     "backend/soc_agent/demo/corpus_experiment_dispatcher.py",
     "backend/soc_agent/demo/corpus_capacity.py",
@@ -394,6 +399,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "scripts/soc_bulk_review_learning.py",
     "scripts/test_soc_bulk_review_learning.py",
     "scripts/test_soc_bulk_review_incremental.py",
+    "scripts/test_soc_bulk_review_pending.py",
     "docs/soc-corpus-rebalance.md",
     "docs/soc-learning-review-batch.md",
     "scripts/soc_validation_report_data.py",
@@ -1661,8 +1667,8 @@ BASH
         introduction = (
             "适用于已有部署，尤其是第一批已完成、正在审核经验或验证第二批的 Mac。\n"
             "请先保存正在编辑的审核草稿，暂停同事操作，记下第一批完成数量、待审核及已审核经验。\n"
-            "在服务仍运行时，将仍在运行的旧事实准备轮次及旧学习/验证轮次通过网页暂停或 CLI `pause` 持久化为 `paused`，\n"
-            "逐轮确认 `active_count=0`；只执行 Host `stop` 不会把轮次改为暂停，后续启动可能恢复领取旧任务。\n"
+            "在服务仍运行时，通过网页分别暂停第一批和第二批，并确认运行中均为0；\n"
+            "若另有高级事实准备任务也需暂停。只执行 Host `stop` 不会记录操作暂停，后续启动可能恢复领取旧任务。\n"
             "再按本篇停服、选择是否备份、替换代码、恢复语料、安装依赖和启动。整个流程保留数据库和原实验历史。\n"
             f"仅另外决定从零验证时才使用[完全初始化重新部署手册]({TRANSFER_REINITIALIZE_RUNBOOK_NAME})。"
         )
@@ -1696,7 +1702,7 @@ BASH
         database_recovery = "服务尚未启动；保留已有数据库和备份排查，查明原因后重试，不要通过清库解决启动失败"
         batch_start_instruction = (
             "保留数据升级跳过批次手册第 1.1 节重置。当前已是第一批9,364条、第二批5,917条时，\n"
-            "保留已经完成的第一批和已审核经验；若需接续已有结果，按第12节处理，再为第二批建立新轮次。\n"
+            "保留已经完成的第一批和已审核经验；若需接续已有结果，按第12节处理，再运行第二批。\n"
             "仅第一批尚未开始，或仍从旧2,997条名单切换时，才从网页第一批“开始积累”启动。"
         )
         batch_restart_instruction = (
@@ -2293,10 +2299,11 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 
 1. 第一批尚未开始时，网页第一批点击“开始积累”；第8节内完成执行失败、语义核对失败补跑，再按第9节审核经验。已有完成的第一批不重复执行。
 2. 第10节启动第二批，语义核对开启，其余三项策略关闭；第11节处理失败并保存首次报告。两批分别保存设置，点“继续”沿用已排队任务原配置。
-3. 第12节仅在需要时接续保存结果，不启动第二批；第13节页面审核新增经验，再重新配置第二批复测。
-4. 第14节导出新复测报告，生成精简统计并复制给外网总结。不同经验快照的两轮分别保留报告，不合并。
+3. 第12节仅在旧结果需要补记时执行，不启动第二批；第13节用脚本批量审核新增经验或页面审核，再重新配置第二批复测。
+4. 第14节按第二批导出报告，自动汇总当前结果与成功补跑，生成精简统计并复制给外网总结。首次验证和完整复测分别保存。
 
-第二批接续第一批核心行为积累，新候选待审核；本轮使用开始时冻结的已审核经验，验证期间不修改经验。
+日常操作按第一批/第二批，不需要查找任务编号。第二批接续第一批核心行为积累，新候选待审核；
+经验废止或恢复后，系统为剩余任务使用更新的经验快照接续，已完成结果保留实际依据。
 历史语料任务不查询/回写 ZEUS，不执行真实处置。只做两批验证时不执行附录A、B的真实集成验收。
 静态粗分组只用于名单，不运行全量语义事实预处理；实际经验按核心行为细分积累。
 第一批9,364条、第二批主要验证2,153条、补充3,764条，合计15,281条。

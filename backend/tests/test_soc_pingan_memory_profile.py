@@ -1165,7 +1165,11 @@ def test_pingan_profile_requires_the_reviewed_environment_for_retrieval() -> Non
     assert stg_result.skipped_not_applicable == 1
 
 
-def test_pingan_detection_only_candidate_is_rule_context_not_decision_authority() -> None:
+def test_legacy_pingan_detection_only_candidate_is_rule_context_not_decision_authority(monkeypatch) -> None:
+    from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
+
+    # Existing context-only records remain readable and cannot gain authority.
+    monkeypatch.setattr(PingAnSocMemoryProfile, "candidate_review_ineligibility", lambda self, applicability: None)
     repository = InMemoryMemoryPatternRepository()
     pattern_service = _service(repository)
     _observe(pattern_service, _run(1, techniques=[]), "batch:1")
@@ -1448,7 +1452,7 @@ def test_same_rule_code_and_behavior_with_different_names_form_separate_cohorts(
     assert len(repository.list_memory_candidates()) == 2
 
 
-def test_weak_only_behavior_creates_context_candidate_without_decision_authority() -> None:
+def test_weak_only_behavior_retains_observation_without_candidate() -> None:
     repository = InMemoryMemoryPatternRepository()
     service = _service(repository)
     weak = {
@@ -1460,16 +1464,10 @@ def test_weak_only_behavior_creates_context_candidate_without_decision_authority
     _observe(service, _run(1, **weak), "batch:1")
     aggregated = _observe(service, _run(2, **weak), "batch:2")
 
-    assert aggregated.candidate is not None
+    assert aggregated.candidate is None
     assert aggregated.observation.signature.facets["behavior_strength"] == ["weak_only"]
-    assert aggregated.candidate.decision_impact is SocMemoryDecisionImpact.REVIEW_HINT
-    assert aggregated.candidate.metadata["decision_scope"] == "rule_context_only"
-    assert aggregated.candidate.applicability is not None
-    assert set(aggregated.candidate.applicability.required_facets) == {
-        "detection_key",
-        "detection_signature",
-        "environment",
-    }
+    assert aggregated.cohort_quality.reason_codes == ["missing_reusable_core_behavior"]
+    assert repository.list_memory_candidates() == []
 
 
 def test_context_only_requires_a_shared_strong_behavior_component() -> None:

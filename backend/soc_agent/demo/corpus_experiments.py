@@ -9,7 +9,17 @@ from uuid import uuid4
 
 from soc_agent.contracts import ActorContext, ActorType, EntrySurface, ProcessingJobStatus, ServiceRequestContext, SocMemoryRecord, SocProcessingJobSubmission
 from soc_agent.contracts.analysis_options import SocAnalysisExecutionOptions
-from soc_agent.contracts.corpus_experiments import CorpusExecutionOutcome, CorpusExperiment, CorpusExperimentMember, CorpusMemorySnapshotEntry, CorpusRound, CorpusRoundCreateCommand, CorpusRoundRetryCommand, CorpusSemanticRetry
+from soc_agent.contracts.corpus_experiments import (
+    CorpusExecutionOutcome,
+    CorpusExperiment,
+    CorpusExperimentMember,
+    CorpusMemorySnapshotEntry,
+    CorpusRound,
+    CorpusRoundCreateCommand,
+    CorpusRoundRetryCommand,
+    CorpusSemanticRetry,
+    default_corpus_execution_options,
+)
 from soc_agent.contracts.memory_patterns import MemoryPatternAccumulationScope
 from soc_agent.db import SqlAlchemyAlertRepository
 from soc_agent.db.corpus_experiments import CorpusExperimentConflict
@@ -34,10 +44,15 @@ def semantic_retry_key(base_key: str, generation: int) -> str:
     return f"{base_key}:semantic:{generation}"
 
 
+def corpus_attempt_count(job) -> int:
+    """A Memory snapshot continuation is still the same bounded attempt budget."""
+    return job.attempt_count + int(job.metadata.get("inherited_corpus_attempt_count", 0))
+
+
 def _require_saved_options(store, experiment_id: str, batch: str, submitted: SocAnalysisExecutionOptions, defaults: SocAnalysisExecutionOptions | None) -> None:
     # Call only under the admission transaction's governance lock. Otherwise a
     # remote request can publish an older setting after the owner saves a new one.
-    saved = store.latest_run_options(experiment_id, batch) or defaults or SocAnalysisExecutionOptions()
+    saved = store.latest_run_options(experiment_id, batch) or defaults or default_corpus_execution_options()
     if submitted != saved:
         raise PermissionError("运行配置仅限部署本机修改；请刷新后沿用已保存配置运行。")
 
@@ -109,6 +124,7 @@ class SocCorpusExperimentService:
         current_plan_id: str | None = None,
         round_identity: str | None = None,
         learning_generation: str | None = None,
+        memory_continuation_depth: int = 0,
     ) -> CorpusRound:
         _require_admin(context)
         if command.concurrency > self._max_concurrency:
@@ -182,7 +198,7 @@ class SocCorpusExperimentService:
                 config_snapshot=config,
                 memory_snapshot=snapshot,
                 memory_mode=command.memory_mode,
-                governance_hash=store.governance_hash(experiment.tenant_id) if command.selection.batch == "validation" and command.memory_mode == "snapshot" else None,
+                governance_hash=store.governance_hash(experiment.tenant_id) if command.selection.batch == "validation" and (command.memory_mode == "snapshot" or memory_continuation_depth) else None,
                 parent_round_id=command.parent_round_id,
                 retest_provenance=command.retest_provenance,
                 execution_limit=command.execution_limit,
@@ -191,6 +207,7 @@ class SocCorpusExperimentService:
                 created_at=created_at,
                 learning_generation=learning_generation,
                 pattern_accumulation_scope=continuous_accumulation_scope(store, experiment.experiment_id, learning_generation) if command.purpose != "facts" else None,
+                memory_continuation_depth=memory_continuation_depth,
             )
             store.create_round(round_)
             offset = 0
@@ -207,6 +224,8 @@ class SocCorpusExperimentService:
                     metadata = {"round_id": round_.round_id, "batch": command.selection.batch, "config_hash": round_.config_hash, "no_external_actions": True}
                     if parent:
                         previous_job = parent_jobs.get(member.alert_id)
+                        if memory_continuation_depth and previous_job:
+                            metadata["inherited_corpus_attempt_count"] = corpus_attempt_count(previous_job)
                         previous_result = comparison_side(job_result_row(previous_job)) if previous_job else None
                         metadata["comparison_baseline"] = {"round_id": parent.round_id, "config_hash": parent.config_hash, "captured_at": round_.created_at.isoformat(), "result": previous_result}
                         if previous_result:
@@ -364,7 +383,7 @@ class SocCorpusExperimentService:
                 raise CorpusExecutionError(problem, block_round=True)
             if member is None:
                 raise CorpusExecutionError("fixed experiment member missing", block_round=True)
-            if job.attempt_count > 3:
+            if corpus_attempt_count(job) > 3:
                 raise CorpusExecutionError("recovery attempt budget exhausted")
             job = self.jobs.transition(job.job_id, worker_id=worker_id, expected_status=job.status, target_status=ProcessingJobStatus.ANALYZING, event_type="corpus_runtime_started")
             with self._heartbeat(job.job_id, worker_id):
@@ -451,7 +470,7 @@ class SocCorpusExperimentService:
                         if job.status != ProcessingJobStatus.COMPLETED or not semantic_failed(job):
                             continue
                         eligible = bool(job.run_id)
-                    if not eligible or job.attempt_count >= 3:
+                    if not eligible or corpus_attempt_count(job) >= 3:
                         skipped += 1
                         continue
                     if command.kind == "failed":
