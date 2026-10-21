@@ -488,7 +488,8 @@ def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
     assert "首次提交这份\n新请求" in runbook
     assert "`soc_database.status=ready`" in runbook
     assert "`soc_database.schema_revision=0033_pattern_revisions`" in runbook
-    assert "pingan-corpus-batch-runbook.md" in runbook
+    assert "docs/soc-corpus-operations-runbook.md" in runbook
+    assert "pingan-corpus-batch-runbook.md" not in runbook
     assert "开始积累" in runbook
     assert "第一批5条、同轮续跑50条" not in runbook
     assert "历史语料任务不查询/回写 ZEUS" in runbook
@@ -558,7 +559,7 @@ def test_transfer_runbook_resets_only_dev_after_preflight_before_first_start() -
     assert "status=already_empty" in section
     assert "backup_directory" in section
     assert "dev-reset-receipt.json" in section
-    assert "直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节" in runbook
+    assert "直接执行本篇第 8 节第一批运行" in runbook
     assert "未保存本机并发设置时，本次全新 SOC DEV 默认以 `16` 开始验证" in runbook
     assert "保存为 `2`，再恢复运行" not in runbook
     assert "已保存的较低并发设置仍保留" in runbook
@@ -641,7 +642,7 @@ def test_transfer_runbook_preserving_upgrade_has_no_reset_commands() -> None:
     assert "soc_pingan_macos_host_dev.py reset-dev-data" not in runbook
     assert "本次从零验证" not in runbook
     assert "需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置" not in runbook
-    assert "跳过批次手册第 1.1 节重置" in runbook
+    assert "保留数据升级不执行数据库重置" in runbook
     assert "旧实验的任务和历史结果不会自动算作新名单已完成" in runbook
     assert "configuration_changed" in section
     assert "原实验记录不会改写成新名单" in section

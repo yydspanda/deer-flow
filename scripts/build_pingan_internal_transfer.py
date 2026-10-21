@@ -1647,8 +1647,8 @@ BASH
 后续重启、继续积累或第二批验证都不要再次执行；进入批次操作手册时也跳过其中已完成的重置步骤。"""
         database_recovery = "服务尚未启动；保留已有数据库排查。查明原因后重试；需要重新开始本次 DEV 验证时，只使用第 6.1 节受限重置"
         batch_start_instruction = (
-            "已完成本手册第 6.1 节重置时，直接从批次手册第 2 节网页操作开始，跳过其第 1.1 节；\n"
-            "本轮从新的第一批开始，不恢复旧结果、候选或经验。仅尚未重置时才执行批次手册第 1.1 节，\n"
+            "已完成本手册第 6.1 节重置和第 7 节启动后，直接执行本篇第 8 节第一批运行；\n"
+            "本轮从新的第一批开始，不恢复旧结果、候选或经验。\n"
             "后续重启、续跑和第二批开始都不再次重置。"
         )
         batch_restart_instruction = (
@@ -1701,7 +1701,7 @@ BASH
 这个版本检查，也不需要重新建立任务。"""
         database_recovery = "服务尚未启动；保留已有数据库和备份排查，查明原因后重试，不要通过清库解决启动失败"
         batch_start_instruction = (
-            "保留数据升级跳过批次手册第 1.1 节重置。当前已是第一批9,364条、第二批5,917条时，\n"
+            "保留数据升级不执行数据库重置。第 7 节启动后按本篇第 8～14 节操作。当前已是第一批9,364条、第二批5,917条时，\n"
             "保留已经完成的第一批和已审核经验；若需接续已有结果，按第12节处理，再运行第二批。\n"
             "仅第一批尚未开始，或仍从旧2,997条名单切换时，才从网页第一批“开始积累”启动。"
         )
@@ -2293,7 +2293,7 @@ python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ## 7.1 Two-Batch Memory Evaluation / 两批经验验证
 
 模型 Smoke 通过后，在部署 Mac 打开 `http://localhost:2026/workspace/soc/corpus-validation`。
-完整网页操作见 `.notes/ai_soc/integrations/pingan-corpus-batch-runbook.md`；运行设置只能在部署 Mac 本机修改。
+完整操作直接按本篇第 8～14 节执行，项目内同版教程为 `docs/soc-corpus-operations-runbook.md`；运行设置只能在部署 Mac 本机修改。
 {batch_start_instruction}
 {batch_restart_instruction}
 

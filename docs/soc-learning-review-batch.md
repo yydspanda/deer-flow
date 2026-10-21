@@ -124,6 +124,8 @@ BASH
 
 ### 6.2 绑定固定报告的增量模式
 
+此高级模式仅接受旧固定轮次报告（`soc.corpus_round_report.v1`）。新版 `--batch` 导出的批次报告请使用第1节的 `--phase pending`，无需提供报告目录。
+
 要求第一批全部完成，报告对应完整第二批范围，来源非运行、未被替代，实验任务全部静止。
 来源只因`memory_governance_changed`停止时仍可用于审核，但不会恢复原任务或把报告改成整批完成。
 保留`report.json`和`manifest.json`，不能换成仅33条等局部补跑报告：
