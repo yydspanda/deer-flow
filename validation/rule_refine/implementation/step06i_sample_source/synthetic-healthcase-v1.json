@@ -1,0 +1,191 @@
+{
+  "rule": {
+    "company_code": "demo-company",
+    "topic": "demo-http",
+    "rule_code": "DEMO_RULE_REFINE_HTTP_HEALTH",
+    "rule_name": "人工演示：HTTP健康探测集中触发",
+    "rule_config_version": "synthetic-v1:sha256:dae8687947ebf9d145f50c2557859bd9fd277eca2a2b9a2fc245af13c15b21c3",
+    "source": {
+      "kind": "synthetic_fixture"
+    },
+    "configuration": {
+      "topic": "demo-http",
+      "expression": "A",
+      "A": {
+        "name": "path",
+        "operator": "contain",
+        "value": "/"
+      },
+      "description": "人工演示规则：HTTP路径包含斜线即触发；仅用于隔离链路测试。"
+    }
+  },
+  "rows": [
+    {
+      "id": "task-DEMO-healthcase-v1-0",
+      "app_code": "zeus",
+      "flow_id": "alert_agent",
+      "alert_id": "DEMO-healthcase-v1-0",
+      "alert_data": {
+        "alert": {
+          "alertId": "DEMO-healthcase-v1-0",
+          "hitLog": [
+            {
+              "topic": "demo-http",
+              "ruleCode": "DEMO_RULE_REFINE_HTTP_HEALTH",
+              "zeusRawLogs": [
+                {
+                  "host": "synthetic.invalid",
+                  "path": "/health",
+                  "method": "GET",
+                  "user_agent": "RuleRefineSyntheticProbe/1.0",
+                  "source_ip": "192.0.2.10",
+                  "scenario_note": "人工构造的周期健康探测；正常业务属性仍需运营确认。"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "agent_response": null
+    },
+    {
+      "id": "task-DEMO-healthcase-v1-1",
+      "app_code": "zeus",
+      "flow_id": "alert_agent",
+      "alert_id": "DEMO-healthcase-v1-1",
+      "alert_data": {
+        "alert": {
+          "alertId": "DEMO-healthcase-v1-1",
+          "hitLog": [
+            {
+              "topic": "demo-http",
+              "ruleCode": "DEMO_RULE_REFINE_HTTP_HEALTH",
+              "zeusRawLogs": [
+                {
+                  "host": "synthetic.invalid",
+                  "path": "/health",
+                  "method": "GET",
+                  "user_agent": "RuleRefineSyntheticProbe/1.0",
+                  "source_ip": "192.0.2.10",
+                  "scenario_note": "人工构造的周期健康探测；正常业务属性仍需运营确认。"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "agent_response": null
+    },
+    {
+      "id": "task-DEMO-healthcase-v1-2",
+      "app_code": "zeus",
+      "flow_id": "alert_agent",
+      "alert_id": "DEMO-healthcase-v1-2",
+      "alert_data": {
+        "alert": {
+          "alertId": "DEMO-healthcase-v1-2",
+          "hitLog": [
+            {
+              "topic": "demo-http",
+              "ruleCode": "DEMO_RULE_REFINE_HTTP_HEALTH",
+              "zeusRawLogs": [
+                {
+                  "host": "synthetic.invalid",
+                  "path": "/health",
+                  "method": "GET",
+                  "user_agent": "RuleRefineSyntheticProbe/1.0",
+                  "source_ip": "192.0.2.10",
+                  "scenario_note": "人工构造的周期健康探测；正常业务属性仍需运营确认。"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "agent_response": null
+    }
+  ],
+  "payloads": [
+    {
+      "app_code": "zeus",
+      "flow_id": "alert_agent",
+      "session_id": "session-DEMO-healthcase-v1-0",
+      "alert_id": "DEMO-healthcase-v1-0",
+      "alert_data": {
+        "alert": {
+          "alertId": "DEMO-healthcase-v1-0",
+          "hitLog": [
+            {
+              "topic": "demo-http",
+              "ruleCode": "DEMO_RULE_REFINE_HTTP_HEALTH",
+              "zeusRawLogs": [
+                {
+                  "host": "synthetic.invalid",
+                  "path": "/health",
+                  "method": "GET",
+                  "user_agent": "RuleRefineSyntheticProbe/1.0",
+                  "source_ip": "192.0.2.10",
+                  "scenario_note": "人工构造的周期健康探测；正常业务属性仍需运营确认。"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "app_code": "zeus",
+      "flow_id": "alert_agent",
+      "session_id": "session-DEMO-healthcase-v1-1",
+      "alert_id": "DEMO-healthcase-v1-1",
+      "alert_data": {
+        "alert": {
+          "alertId": "DEMO-healthcase-v1-1",
+          "hitLog": [
+            {
+              "topic": "demo-http",
+              "ruleCode": "DEMO_RULE_REFINE_HTTP_HEALTH",
+              "zeusRawLogs": [
+                {
+                  "host": "synthetic.invalid",
+                  "path": "/health",
+                  "method": "GET",
+                  "user_agent": "RuleRefineSyntheticProbe/1.0",
+                  "source_ip": "192.0.2.10",
+                  "scenario_note": "人工构造的周期健康探测；正常业务属性仍需运营确认。"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "app_code": "zeus",
+      "flow_id": "alert_agent",
+      "session_id": "session-DEMO-healthcase-v1-2",
+      "alert_id": "DEMO-healthcase-v1-2",
+      "alert_data": {
+        "alert": {
+          "alertId": "DEMO-healthcase-v1-2",
+          "hitLog": [
+            {
+              "topic": "demo-http",
+              "ruleCode": "DEMO_RULE_REFINE_HTTP_HEALTH",
+              "zeusRawLogs": [
+                {
+                  "host": "synthetic.invalid",
+                  "path": "/health",
+                  "method": "GET",
+                  "user_agent": "RuleRefineSyntheticProbe/1.0",
+                  "source_ip": "192.0.2.10",
+                  "scenario_note": "人工构造的周期健康探测；正常业务属性仍需运营确认。"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

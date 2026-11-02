@@ -1,0 +1,19 @@
+# 第6步I：确认可用样本来源
+
+6H开启后内网四次idle轮询通过。用户重新运行已安装check_local_task_source.py，仍为no_local_samples；requested_alerts/task_rows/distinct_alerts均0。该结果只说明当前LOCAL的zeus/alert_agent任务没有可查询样本，不代表配置表中911条规则已有告警，也不代表模型分析通过。
+
+下一步先只检查已有测试数据文件，不导入应用、不调用接口、不读取正文或反序列化PKL。完整粘贴CHECK-SAMPLE-FILES.sh并回传JSON。脚本只对三个候选路径stat，输出存在性、普通文件属性及字节数。
+
+路径依据来自原源码ZIP：util/root_config.py在LOCAL将NAS_DIR设为项目根/nas；test/test_zeus_alert.py引用nas/original/20250429预警全量数据.pkl及20250605预警全量数据.pkl。test/test_testcase_workflow_task.py另引用其他开发者项目下nas/data/apt_test.json，并将其内容作为alert_data；这里只检查当前用户项目下同名候选，不假定文件存在或结构已验证。上述数据文件不在源码ZIP内。
+
+如果JSON存在，优先做结构检查再选少量样本；只有PKL时先确认来源及受限读取方式，不直接pickle.load。若均不存在，使用用户现成告警请求JSON的内网路径，或另准备明确标记的人工演示材料。真实样本和人工材料验收分开，隔离回放不修改实时阈值、实时计数或业务任务表。
+
+原test_testcase_workflow_task.py是多线程批量POST压测，会改写外层告警ID；test_zeus_alert.py也会启动原研判。这里只借用其数据路径，不执行这些测试脚本。
+
+内网文件检查已回传：上述三个候选均exists=false。停止继续猜测路径；先准备人工材料验证功能链路，真实告警效果待取得实际样本后验证。
+
+当前交付PREPARE-SYNTHETIC.sh：构造固定人工规则和3条健康探测样本，主机synthetic.invalid、路径/health、GET、RuleRefineSyntheticProbe/1.0；使用已安装build_rule_materials/build_analysis_request检查材料可用。只保存到~/sec-rule-refine-data/synthetic-healthcase-v1.json，不写业务SQLite/Redis，不提交HTTP任务或调用模型，不修改实时阈值。预览信号时间固定且mode=demo，仅用于材料检查，并非实际触发记录。
+
+文件SHA256为503dd5b8d7636a6b99bf49b8d628cfe0f58705ea7aa802e4d7c208693bc2bbe2。通过0600临时文件、fsync和原子link发布；同内容重复执行复用，不同内容拒绝覆盖。输出sample_count=3、planned_submissions_with_repush=4，后者只是下一步计划，不能称为已接收计数。
+
+本地使用实际现有材料模块验证首次与重复执行通过，同名不同内容保留原件，权限0600，无临时文件残留；生成文件与下一步probe.synthetic_data('healthcase-v1')完全一致。用户回传ready及摘要后，再给实际Redis计数与一次真实模型请求的隔离串联命令。下一步probe主体和人工替身测试在step06j_synthetic_chain准备，尚未接真实客户端或交付内网运行。

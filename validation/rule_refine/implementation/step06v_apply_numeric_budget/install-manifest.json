@@ -1,0 +1,38 @@
+{
+  "my_workflows/zeus/rule_refine/condition_values.py": {
+    "old_sha256": null,
+    "new_sha256": "1f8b22d5ca588050f6f8050ad004cce8f5e0381337e73e334b2826c2a9bab6f8"
+  },
+  "my_workflows/zeus/rule_refine/filter_evaluation.py": {
+    "old_sha256": "e47ec1171bb6ca5948f5b15fc0a8eaa158782f1d3910dbcad08d262eb8a615fe",
+    "new_sha256": "37dff27456a68bf9d6fea880ea8a0cc2954a3a9a6a687aa6b5858308119ebcb3"
+  },
+  "my_workflows/zeus/rule_refine/materials.py": {
+    "old_sha256": "5d06b99874b667f8c9edd1d8a2e2840fa25c1f663eca55e20d24f967239f0e33",
+    "new_sha256": "ab33bbde94bd6c14d84f5bf7d69c6b2cd4868d5bbb847b140fa47da815c56b0a"
+  },
+  "my_workflows/zeus/rule_refine/analysis.py": {
+    "old_sha256": "c8e73780c98a0ae6e02611220965050be07e0dcb3b30b133d4419a03176f00e0",
+    "new_sha256": "129280b7ff2139d58786fbf7b823d629030ffd661673993ce99d0dc332d87449"
+  },
+  "test/rule_refine/test_numeric_values.py": {
+    "old_sha256": null,
+    "new_sha256": "2d21e4b778b50908f87dd919db16d436e17f52048dccd587b9d401c9a613f948"
+  },
+  "test/rule_refine/test_materials.py": {
+    "old_sha256": "3045b6ddccdbc53260887eb5b2efa8726e1553cc196eb0b5f1595102659c0e76",
+    "new_sha256": "3df58d13acb32b034745471d181a0a68fd5dea68ca69c23a39c255e7719ced66"
+  },
+  "test/rule_refine/test_filter_evaluation.py": {
+    "old_sha256": "dbf0e416955479c5e89cc6cf798418d9a98b5a040f048f900f8e9b71061bf81e",
+    "new_sha256": "abf0fb6c07ad07d7a8e27e73137ff724fd59657e0bf39e79de390a4815331542"
+  },
+  "test/rule_refine/test_analysis.py": {
+    "old_sha256": "fe9e13b15690b8947968e7f203f0f1af4c66828c79cd516514514c5a1ac65992",
+    "new_sha256": "4a7cabc97e25eb60e809d8a1cba574d8f53114f20cc90d0152cab122b324b4ed"
+  },
+  "test/rule_refine/test_proposal_check.py": {
+    "old_sha256": "97ad1061ffe1e77d8e6b1d90527529cf82062c305078ff1f72a371adc2da47b4",
+    "new_sha256": "1a2d81c7a7e845ba381f432e4e04b68e6feaf4d9cebd5bb9fea9e397dc4abb25"
+  }
+}
