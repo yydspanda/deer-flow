@@ -92,6 +92,95 @@ sensitive, gitignored evidence and must never become application imports.
 
 ## Evaluation Boundaries
 
+- Rule-refinement validation keeps a structurally readable proposal with unknown
+  filter fields as `needs_revision`, preserving its text and all field issues.
+  Only derived field names from the actually displayed logs enter the prompt catalog;
+  do not guess aliases or promote such a draft to a ready recommendation. Saved-answer
+  recovery makes no model calls and does not establish semantic correctness or reduction.
+  A frozen-evidence independent reassessment excludes previous model proposals and
+  answers from its request, preserves the original logs, and must not claim the original
+  two-phase review completed. Record requested JSON mode separately from verified
+  provider enforcement; a parseable answer does not establish semantic correctness.
+- `rule_refine/implementation/step07_surge_runtime/` ships the legacy LOCAL
+  background integration as an offline installer against reviewed 6W hashes. Keep
+  the previously delivered payloads unchanged. Runtime modules are copied into the
+  target app; they never import validation tooling. Historical comparisons use
+  original alert business timestamps and nearest 20 distinct prior alerts, not task
+  insertion times or previous LLM verdicts. DEV seeding writes only explicitly
+  synthetic, fixed-ID rows in the existing project SQLite; reruns verify content and
+  remain idempotent. Real model acceptance is a separate LIVE command. No program
+  filter evaluation or automatic rule application belongs in this path. Input
+  budget is operator-configurable; do not add an unsolicited output-token quota.
+- `rule_refine/implementation/step07b_real_csv_acceptance/` replays the real
+  surge CSV plus genuine available history through the installed legacy Runtime.
+  LOCAL source rows remain read-only; imports enter a disposable SQLite, not the
+  project task table. Preserve original IDs/business times, exclude synthetic
+  fixtures, and disclose historical gaps and source coverage. A counterfactual
+  rule removes the previously added exclusion only in memory; the removed clause
+  audit and expected answers must never enter model prompts. Offline transport
+  fixtures do not prove live recommendation quality or Celery dispatch.
+- `rule_refine/implementation/step07c_review_sampling_fix/` patches review
+  selection without raising context budgets or adding model calls. Find a whole
+  unseen alert that fits before filling with old citations; then interleave new
+  and cited originals. Preserve the full draft and explicitly mark citations
+  whose original logs are not displayed. Final references must still be grounded
+  in this request's visible logs. Frozen old selections/results and report-byte
+  recovery remain compatible; do not silently replay completed model work.
+- `rule_refine/implementation/step07d_exclusion_scope_fix/` changes the two AI
+  tasks without a topic/field-name denylist, mandatory condition count, or new
+  output schema. Generate concrete behavior exclusions from actual originals;
+  review only the candidate filter/status/references plus raw evidence, keeping
+  generation prose/confidence/extra explanations out of that review context.
+  Full answers remain saved. Prompted scope reasoning is not a programmatic
+  guarantee of semantic quality; report readiness accordingly. New report text
+  is gated by frozen request metadata so old completed/interrupted publications
+  remain byte-compatible. The combined installer/retest stops on install failure
+  and then uses the original 7B manual LIVE command, without automatic dispatch,
+  rule application, extra model requests, or whole-corpus filter execution.
+- `rule_refine/implementation/step07e_event_field_boundary/` separates visible
+  evidence from candidate condition fields using exact, reviewed source roles.
+  Known detection-result metadata stays in original logs for context but cannot
+  become a new exclusion predicate. Keep topic/path provenance; never infer roles
+  from name fragments or restrict candidates to fields already used by a rule.
+  Unclassified candidates are not verified pre-detection or engine-supported
+  fields. Preserve invalid drafts for the existing review stage; an unresolved
+  metadata condition remains manual review without deleting/rewriting clauses.
+  Freeze the usage contract in new requests and recompute it during validation;
+  old request/parser/report semantics remain byte-compatible on recovery. Do not
+  claim the named-field check proves semantic scope or detects every embedded
+  detector label in arbitrary strings. The original real-CSV LIVE tool still
+  controls the same two model requests and preserves prior results.
+- `rule_refine/implementation/step07f_repair_first_review/` keeps the reviewed
+  metadata boundary while clarifying repair-before-withdrawal. Do not force a
+  proposal or inject a case's expected filter; missing counterexamples constrain
+  claims, not automatically every advisory candidate. Its review-only tool verifies
+  a complete saved Runtime job and generation-to-review link, then reuses the exact
+  prior review evidence with a fresh prompt. Old review prose never enters the new
+  request. No re-sampling, DB recall, budget escalation, or generation request is
+  permitted; at most one new SDK request writes a separate report and preserves
+  raw output before validation. Current online configuration is not reverified by
+  this saved-evidence tool and must not be claimed. Preserve frozen E request and
+  D/E completed or interrupted report compatibility.
+- `rule_refine/implementation/context_input_probe/` is a standalone synthetic
+  capacity experiment, not a rule-refinement run. It reads the selected upstream
+  route as AST literals and, after LIVE confirmation, makes one direct HTTP POST
+  without importing the application, using business data, or changing configuration.
+  Disclose that local adapters/proxies are bypassed. Synthetic unit counts are not
+  measured tokens; acceptance above 262144 requires successful provider usage above
+  that value. Preserve explicit input/context errors separately from auth, transport,
+  or missing-usage outcomes. No automatic retries, size escalation, or output quota.
+  Never save authorization headers or credentials with diagnostic artifacts.
+  The separately requested `RUN-WITH-MAX-INPUT.sh` adds an actual top-level
+  max_input_tokens=1048576 to the same baseline request; keep the original probe
+  unchanged. Test the transmitted bytes, not just preview flags. Never remove a
+  rejected parameter and retry, or claim upstream enforcement from HTTP success.
+  `RUN-MULTITURN.sh` is a separate explicitly requested three-turn experiment.
+  Each request includes full prior originals and actual assistant replies, with
+  max_input_tokens=1048576 retained. New-message estimates are not full-request
+  counts; only one successful request's reported input above 512000 proves the
+  500K acceptance target. Never sum repeated-history usage as context capacity,
+  truncate/summarize history, fabricate a failed turn's reply, or continue after
+  failure. Preserve the earlier single-request probes and reports unchanged.
 - Label governance uses sealed manifests and independent analyst truth. Quality reports
   must separate parser/structure, retrieval, scenario/role, decision, automation, and
   human-label metrics.

@@ -10,7 +10,7 @@
 cat "$HOME/sec-rule-refine-data/historical-rule-review-v2-_wwm6uu1/REPORT.md"
 ```
 
-原回答和新报告已保存，当前无需重新执行下面的试跑命令。
+原回答和新报告已保存。用户后续已确认模型切为 `Pub_DeepSeek_V4_Flash`，预算仍为128KiB。新的覆盖复测请使用 [6Y历史分批工具](../step06y_historical_batches/README.md)，它扫描整个小样本文件并分批覆盖目标规则全部有效日志。本6X工具保留原单次抽样行为及证据，重复执行它仍可能只覆盖部分日志。
 
 模型路由核对：6F安装配置默认写入`DeepSeek_V32`，本工具读取`config/rule_refine.analysis.local.json`，不是自动选择DeepSeek官方最新版。上传源码包中该别名经本机4001 LiteLLM、8003内部适配器转入平安EAGW PRD；适配器移除请求体的model字段，由对应scene_id选择网关模型服务。因此不能单凭别名和返回`default`证明实际部署仍为V3.2，官方V3.2规格只用于区分token与字节单位，不能替代内网端点容量核对。此次只检查配置来源，没有更换模型或调用模型。
 

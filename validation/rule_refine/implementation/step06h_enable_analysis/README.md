@@ -17,3 +17,33 @@
 修正版内网反馈：configuration_check=passed，模型DeepSeek_V32，提供器csv_snapshot，911条规则，命名空间sec-know-rule-monitor-mac-zhangjianming627-v1；开关status=enabled、effective_on=next_background_tick、restart_required=false、automatic_apply=false、model_calls_this_command=0。配置保存通过；开启后的worker日志尚未回传，不据此认定后台依赖、真实材料或模型分析成功。
 
 后续内网日志已回传：2026-10-28 18:20:11、18:20:41、18:21:11、18:21:41四次tick成功，idle、processed=0、catalog_scopes=911、scanned=256、deferred=0、needs_attention=0，耗时0.3627/0.3576/0.4206/0.4012秒。已验证开启后的定时轮询、规则目录读取及Redis待办查询；当前无信号进入取样和模型调用，不代表完整业务链路验收。下一步复用`.venv/bin/python test/rule_refine/check_local_task_source.py`确认本机当前样本，用于准备隔离回放。
+
+## 切换规则分析模型
+
+用户已选择将规则分析路由切换为 `Pub_DeepSeek_V4_Flash`。打开 [SWITCH-TO-PUB-DEEPSEEK-V4.sh](SWITCH-TO-PUB-DEEPSEEK-V4.sh)，复制全文到内网新终端执行，保持原代理运行。
+
+脚本读取现有模型策略，并通过本机8003的`/health`确认运行中的适配器已加载目标别名；只修改`config/rule_refine.analysis.local.json`中的`model`，保留分析开关、保存目录及其他设置。原子保存，重复执行不重复修改；不调用模型或Redis，不修改全局研判模型、代理映射、容量配置或已有报告。
+
+预期输出为`status=updated`或`already_configured`，`model=Pub_DeepSeek_V4_Flash`，`restart_required=false`。后台下一次新调用及下次6X历史试跑读取新配置；已开始的调用保留原设置，已保存成功结果不会自动重跑。若`analysis_enabled=false`，切换模型不会擅自开启自动分析。
+
+上传源码包中该路由转入内网OpenAI兼容服务，发送的上游模型名称为`deepseek-v4-flash`；不能据此宣称它已升级为官网最新V4.1。配置切换和路由检查也不代表模型请求已经成功，仍以首次实际调用为准。当前128KiB等取样策略仍保留，后续容量与分批覆盖改进另行处理。
+
+本地已用临时配置和代理替身核对切换、重复执行、路由缺失时不写入、关闭状态保留四种情况；Bash语法通过，没有真实网络或模型调用。内网执行结果待回传。
+
+## 将运行配置纳入内网Git
+
+用户已确认模型配置发生改变，并要求同事能够获得运行配置。原3G安装脚本添加了`/config/rule_refine.local.json`忽略项，6F添加了`/config/rule_refine.analysis.local.json`；6W没有添加limits文件的忽略项。当前用户选择将三个规则功能JSON全部纳入内网Git。
+
+打开 [TRACK-RULE-CONFIGS.sh](TRACK-RULE-CONFIGS.sh)，复制全文到当前内网项目的终端执行。脚本仅移除这三个文件的精确忽略项，追加相应允许跟踪规则，然后暂存`.gitignore`及三个JSON；不改配置内容、不自动提交、不连接模型/Redis。原项目的`.env`、`private.py`、CSV、数据库、运行结果和虚拟环境等忽略项保持不变。已跟踪文件不再受旧安装器重复追加忽略项影响，所以不重写以前已交付的摘要快照。
+
+提交这四个文件可使用：
+
+```bash
+git commit --only -m "chore(rule-refine): track runtime configuration" -- \
+  .gitignore \
+  config/rule_refine.local.json \
+  config/rule_refine.analysis.local.json \
+  config/rule_refine.limits.local.json
+```
+
+同事首次启动前，把CSV放在其自己的`~/sec-rule-refine-data/rules.csv`；默认`csv_path`和`state_dir`均支持`~`。各自独立验证时，同事应在其监测JSON中将`namespace`改成自己的稳定值，避免共用本机用户的去重计数和待办；后台锁是本机文件锁，不能据此保证跨笔记本共用namespace时不重复分析。用户正在运行的namespace不变。先检查分析开关是否符合其本次测试意图，再按原项目启动服务。本次只分享现有LOCAL功能配置，不表示已支持PRD部署或改变模型容量策略。
