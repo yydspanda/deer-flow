@@ -1,0 +1,75 @@
+{
+  "schema": "sec_know.pub_queue_patch.v1",
+  "reviewed_zip_sha256": "ceb0ce9e2abfac9ee19e124bc57722c0c6e69fa48038a3e91b6776083bb6da71",
+  "files": {
+    "config/celery_config.py": {
+      "3a02e7492e2d59799eb87c71a4a4c67f956f40bbdaea2be53c4f69b546c41cef": "fc064163207f59032a7b63c26e49325fa054b5e87ab3152b7796175f9e78ae0f",
+      "64df22f908caf2533f0d6471a56c604bd88d6cce24890219e3f4ddb101670e7b": "fda1fd3474ed450f3ea53a400b150ed39bbbb99cf38c9a0a6dd6c0e8b139818f"
+    },
+    "config/celery_task.conf": {
+      "bfdc5f2615abe1576bfc682be4e9423e00ae207f76054470f229139d3bba54e1": "14decd99fcbd43534d8ff829c756a8bdabb8303db699b88d6e1efedc7fd17b2e"
+    },
+    "config/celery_task.detector.conf": {
+      "e41987cc7e8f3ceb33a62372bb92cb9894bb0ed74a1fc8f90a2c8f3c0e56c93e": "7085732edd6884369e65702cc998adff0da9471e944a3a64b94abbe8a9e22f66"
+    },
+    "config/model_limits.py": {
+      "dc56d7b2389bee8c8c5369567ee20ee64107d3da7f4ce9d2229954751a10ca92": "d598c5ccf8b40f4d03ff692c54ed712365d03bcb427c80324478c9114f94a65c"
+    },
+    "llm_service/litellm_proxy_config.local.yaml": {
+      "ae6dfcd0bb330b1b084580c1427049a8e0714d06694df3abc5f5b7b4a4bc4c50": "ac5c4aafef5b1337d04edfd810b5338cea215402f7c0f59ca6b0a31090c2cece"
+    },
+    "llm_service/litellm_proxy_config.prd.yaml": {
+      "8244c361dd372350101f165bf603f3335250945b3e9931b13d6fafa8e1b8f91f": "2de13d311924463a8195be1a0690e4bf23b30649fe36801616f84bd0bc22507d"
+    },
+    "llm_service/openai_completion.py": {
+      "8cee3c1082fd0158cb9fec0a7183b9b331a866bd46f29c2c5f9a6690b3b04205": "953c8d80e35619a0f74fa7539426d34f52bd342a132967a5960d6a05463bebbd"
+    },
+    "local_run.detector.sh": {
+      "d2dcf3f4ab1771db19cdaaf7fe0f5993e3271c30a0bc6f1d552bf6ad0ebc769f": "7325cb4f0d0fd2eb6ccf1a4b7f8d2c6ae21c09507a8270a6e570f2abd7137e2d"
+    },
+    "local_run.sh": {
+      "2bde4b5acacaf81eff23d30c89f5efde2df8ae234daeba59b67200dc4a470bb1": "0d4bccd8de9589ad21c125c9eb60c1345c112e348b337572c47675f66bad97c1"
+    },
+    "model/db/crud/workflow_task.py": {
+      "3c0d0c54dbecda7f1d58527155e702dc563353b47fcac08de98251ec5b3e13c5": "d09981b7a26fa36e2faa11df19b1dee0d7910638c61b8c09a98a27af21cef3e0"
+    },
+    "my_workflows/util/check_celery_queue.sh": {
+      "e05e5f3f8aad9b52c480e399de67a5bf1c8f831cdb20e9554cf500f2f8249811": "0270e8943ecfa51ddd69342cef5d0ddc8e6768d042e1c5f89e2c111417c17609"
+    },
+    "my_workflows/zeus/flows/alert_controller.py": {
+      "d09d2d4a8f7d0deb9b0b3c6daae9d55d189d7e12ccfcbc75763cff5cf5818fc0": "4b3383101ba30fbf05a0384348f47622d14c9ff8cc7000a7e83f118befb5fd1a"
+    },
+    "my_workflows/zeus/rule_refine/background_service.py": {
+      "26f46b594cf7bb85eac6edc5d66083a2cc929f0dda984dc128cca0c5c4616199": "bb1213ca5d4e312e00cb7a4e8f335d7b41f231c561e96eb50e2f49bc31ff9c32"
+    },
+    "run.sh": {
+      "125020a4f1bc5934d35bcdea1ed9648fbc78d87244c92519abe915f393d8a8d7": "4ef3bdca9b457140cf90268cba334f67991b0cb36e4317bc527112774050b8e7",
+      "b0ab3d6753a10fa994d72139072db98ac309b232df963ef394dacf68f7c792fd": "527336087adafc9b20f6c8a7711d5a3f70144df361c74d3757aa3d72a5f15a44"
+    },
+    "scripts/detector_worker.py": {
+      "f281e6399b148544b826371f06cc0b40e82299125e4dde9af2623f88dd4373ad": "df51cb16874592c9f4f703c9f1291fb917d950d40a9908f0bc004f414feb2fc1"
+    },
+    "service/io_models.py": {
+      "35c9e663a03e5e4872f412d877c27994db26edfba882abfd6024c6add08735f3": "0d6cae91344a1e0b354f4fcd57f2e892f9db50bb9b4f245e1504630589f67ac8"
+    },
+    "tasks/task.py": {
+      "b5b04f118e6ff051d73acde39b9f6366da24a488ee1fb130ba0646c8a47c1341": "6052576db8dcc2d75d5476def49fca6c2223b3b74b2fba04230fb4210d6a7333",
+      "4459e5d0c419d78cd38fe95442868e5e6aef3835c93cbbe88b8f5b78c5f2cd41": "37ee1317616b666aa3c945d86ee0ead43761bd4a3bde8be5e689fa43f97d00e2"
+    },
+    "test/rule_refine/test_background_service.py": {
+      "17d4cbf5022ae6c966fcfee4aa20b4953f50e9810a1ef47b53dc6070d54baf01": "15225f466126133f72f241902430c1644e1bcadc0f1285bb53c104e516bc5b39"
+    },
+    "test/test_all_models.py": {
+      "861a4a670dc904949f32bc8554e0015c68478b9ec8f9336ea8da048c88b6e54d": "ae56e6da80fad2a2e332dd3c13654bf29acd6565afaf79acbdb6a3146d6fe6e2"
+    },
+    "util/diagnose_model_state.py": {
+      "4f5cb369d9765575b0c3af81e7a937735aa5f8b51a90c9ebf69570a980f4775a": "facd1554f9336f8dbf35ab5bc547a9cbfc1fb17aa023b2c59f642a769bd60628"
+    },
+    "validation/cleanup_priority9_tasks.py": {
+      "470b93c5290315e89b87813b7bfe5163c9e42979a7707824f284f9f332428b05": "8bb46ddf747c7ece5a0874aa0506fa839b32ba588e94209f5f1caa73719d2893"
+    },
+    "validation/verify_stg_distribution.py": {
+      "f47a407954ecbae0528af7395a0b69a722a7f742b80d3c4ebb418a8ba1632c8d": "e5c605c6cba6ee194ff692d1cf4dbb7992d1892ed25e288ce04e2a60e1277e86"
+    }
+  }
+}

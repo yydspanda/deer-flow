@@ -15,6 +15,12 @@
 增量脚本，不自动提交规则或重启服务。旧报告原文保持不变，历史兼容与新输出校验分开。
 下方早期步骤保留为历史记录，不能作为覆盖新版的安装入口。
 
+**第8步已按用户要求手工合并告警队列，旧安装器已停用：[当前边界与历史记录](implementation/step08_pub_queue/README.md)。** PRD/LOCAL 告警统一使用 Pub，生产并发27；STG配置不动，保留原V32队列、容量和控制器中的Qwen38_27B转换，原优先级0走Pub的行为也保留。原共享worker配置保留，生产另用PRD专用配置；不把Qwen改接R队列。用户已回传生产Flower当前Pub worker在线、19成功/0失败，并确认部署成功；这些证据尚不证明27槽全部占满或逐条回调正确。保留第7G生产禁用设置。
+
+独立模型接口速度测试已回传：27个并发请求，每个输入5045 tokens、仅回复OK，26成功/1次HTTP502，成功请求平均3.109秒、批次4.453秒，客户端峰值27。见[测试说明](implementation/model_concurrency_probe/README.md)和[测试脚本](implementation/model_concurrency_probe/probe.py)。该测试不经过Celery，不能证明worker、共享槽或完整告警链路已达到27并发，也不是实际研判耗时。
+
+**第7G生产启动补丁已在内网安装：[安装记录](implementation/step07g_release_disable/README.md#内网安装结果已回传)。** 用户回传installed/1文件/摘要校验通过，`run.sh`安装后SHA为b0ab3d6753a10fa994d72139072db98ac309b232df963ef394dacf68f7c792fd，与交付补丁一致。启动处设置 `RULE_REFINE_MONITOR_ENABLED=0`，本地启动和JSON未改，未部署/重启/调用服务。无需重复执行 [DISABLE-FOR-RELEASE.sh](implementation/step07g_release_disable/DISABLE-FOR-RELEASE.sh)；将改后的run.sh随今晚代码发布，备份不提交或打包。生产进程关闭状态仍待发布后核验，不能仅凭PRD环境或文件名带local认定关闭。
+
 **多轮完整历史实测已回传：第一轮180039 tokens成功，第二轮360063 tokens因262144上限被拒绝。[记录](implementation/context_input_probe/MULTITURN.md)。** context-multiturn-qq4et5v8/probe两次均传max_input_tokens=1048576，完整保留前序原文与实际回复，无输出额度；客户端2POST/0重试，第二轮主备同错，第三轮未发。此限制针对本次携带历史的完整输入，不能理解为每条消息各有256K或会话生命周期累计上限。尚未到500K，未验证语义记忆质量，无需原样补测第三轮。[已执行脚本](implementation/context_input_probe/RUN-MULTITURN.sh)。
 
 **显式max_input_tokens=1048576对照已实测，仍被256K限制拒绝：[对照记录](implementation/context_input_probe/README.md)。** context-max-input-p1spxwrj/probe实际请求顶层已携带该整数，消息和路由与基线一致；新请求640245字节，去参hash仍为7d020...f7185。服务再次报告320029输入/262144上下文，主备同错、HTTP400、约3.245秒；客户端1POST/0重试，未去参重发。此次参数没有解除限制，是否被远端忽略、丢弃或未改变部署限额仍未知；交平台核对参数转发和主备配置，无需原样再测。[已执行脚本](implementation/context_input_probe/RUN-WITH-MAX-INPUT.sh)。

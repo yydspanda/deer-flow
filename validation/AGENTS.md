@@ -181,6 +181,45 @@ sensitive, gitignored evidence and must never become application imports.
   500K acceptance target. Never sum repeated-history usage as context capacity,
   truncate/summarize history, fabricate a failed turn's reply, or continue after
   failure. Preserve the earlier single-request probes and reports unchanged.
+- `rule_refine/implementation/step07g_release_disable/` prepares the legacy
+  deployment launcher for a release that excludes rule monitoring. Patch only the
+  reviewed `run.sh` by exporting `RULE_REFINE_MONITOR_ENABLED=0` before any child
+  process starts; preserve all other bytes and permissions. Keep original backup,
+  exact-source checks and idempotence; reject unknown source rather than replacing
+  the whole launcher. Do not run the launcher in tests: it contains existing live
+  task cleanup and service startup commands. Keep LOCAL launchers/configuration and
+  the previous delivered payloads unchanged. This establishes source-level inherited
+  defaults, not production process state or a guarantee against external launch
+  overrides; complete task-registration dependencies still belong in the release.
+- `rule_refine/implementation/step08_pub_queue/` is historical legacy queue work,
+  not DeerFlow Runtime. Its installer is withdrawn: do not recommend, rebuild, or
+  execute `INSTALL-PUB-QUEUE-27.sh`. The user switched to reviewed manual steps.
+  Its Shell, Python installer and builder entry points now exit immediately;
+  preserve that retirement guard and the unreachable historical payload.
+  Consolidate PRD/LOCAL automatic alerts on Pub with production capacity 27; preserve
+  STG configuration and its existing routing. STG ordinarily queues V32, retains
+  V32 capacity/bookkeeping, and uses the user's controller conversion to Qwen38_27B;
+  its original priority-zero Pub exception remains. Do not introduce a Qwen alias
+  on the R queue or change STG capacities (V32/My 6, Pub 15).
+  Keep shared `celery_task.conf` / `celery_task.detector.conf` for their existing
+  consumers; use separate PRD configurations for the consolidated Pub worker at 27.
+  Preserve LOCAL worker capacity 2, priority/circuit/pending bookkeeping, 6F task
+  registration, and any installed 7G production-disable marker. Inspect model
+  defaults as well as explicit task arguments; preserve the user's STG controller
+  branch. Never execute a legacy launcher or cleanup as an offline test.
+  User-returned evidence currently includes ten Python syntax checks, static checks
+  of four worker definitions, Mac/Flower startup, and manual inspection of
+  `get_selected_model`. These do not verify production alert assessment/callbacks
+  or effective model/Celery capacity. Keep backups and private evidence outside
+  publishable source; do not migrate or purge queue tasks as part of validation.
+- `rule_refine/implementation/model_concurrency_probe/` is the separate requested
+  model-interface speed probe; see its `README.md` and `probe.py`. The planned test
+  sends 27 concurrent requests with approximately 5000 input tokens each. Report
+  measured provider usage/timing separately from estimates and retain failures.
+  User-returned live evidence contains 26 successes and one HTTP 502 in a 27-request
+  batch (5045 input tokens, OK-only output); client in-flight peak was 27.
+  Direct model-interface results do not prove Celery worker/semaphore capacity,
+  workflow assessment, or callback delivery.
 - `rule_refine/implementation/step09_operator_contract/` upgrades the user's
   2026-11-05 deployed legacy source snapshot to the six new small-rule operators:
   `Eq`, `Ne`, `Contains`, `NotContains`, `StartsWith`, `EndsWith`. Update prompts,

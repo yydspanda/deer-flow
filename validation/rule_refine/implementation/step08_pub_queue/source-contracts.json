@@ -1,0 +1,31 @@
+{
+  "llm_service/litellm_proxy_config.prd.yaml": {
+    "path": "llm_service/litellm_proxy_config.prd.yaml",
+    "retired_region_sha256": {
+      "DeepSeek_V32": "b59d87b45b816211a5e8fd877aef0905297668642cae13df50f0ba17d63b1817",
+      "DeepSeek_V4_Flash_My": "fe9821e569acf78e47b62619e9fec9e8fffb5509bd5c36593e186c683761c314"
+    },
+    "schema": "sec_know.scoped_proxy_regions.v1",
+    "yaml_envelope_sha256": "eb037676170214dface1bc59b6f93bd94d7f948fb312c6a4f90ab0185455a6ea"
+  },
+  "llm_service/openai_completion.py": {
+    "path": "llm_service/openai_completion.py",
+    "retired_region_sha256": {
+      "DeepSeek_V32": "769f9d5919e9bb79ee7dd3ae51c5d1895029792236661bdf80e9eddfea2cd581",
+      "DeepSeek_V4_Flash_My": "e8e61d3514bc637580ab8975f7b061bb3d6bb11e61231b06d0c4a4a284b0d79e"
+    },
+    "schema": "sec_know.scoped_proxy_regions.v1"
+  },
+  "my_workflows/zeus/flows/alert_controller.py": {
+    "branch_ast_sha256": "c49ef9219d49b2f73114e3894772254ec8019245c9d465ccd54c5841e65a7fb6",
+    "default_ast_sha256": "01abce58f84184af8a4cdaa9f4423b4050c2925d74a590188f2898d4f4a1a341",
+    "path": "my_workflows/zeus/flows/alert_controller.py",
+    "rc_import_ast_sha256": "7f3795455c701e0a300c53e1199cfd7bb6a5d1122524dbd02133791d3c9c9b54",
+    "schema": "sec_know.scoped_python.v1"
+  },
+  "test/test_all_models.py": {
+    "path": "test/test_all_models.py",
+    "policy": "literal_models_lists_remove_retired_preserve_other_bytes_v1",
+    "schema": "sec_know.scoped_python.v1"
+  }
+}
