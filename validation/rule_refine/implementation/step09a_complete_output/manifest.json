@@ -1,0 +1,67 @@
+{
+  "baseline_zip_sha256": "2a523efcc64df8cf5750ff2721f3a5bfd7658b7c1ba898ca9bee0e53185b4406",
+  "source_baseline": "step09_inline_installed_sources",
+  "output_contract_version": "complete-advisory-json-v1",
+  "files": {
+    "my_workflows/zeus/rule_refine/surge_ai_review.py": {
+      "old_sha256": "dd9efb6589da85749ead0a5ce5cc063ef5f4f23ea5de0e727edae8f97e430319",
+      "new_sha256": "33b4dd639ac8b4441c9083a66b00ceb89174770ad67fffda57aa46693af400e1"
+    },
+    "my_workflows/zeus/rule_refine/surge_processor.py": {
+      "old_sha256": "79d9cce2d8393158d4771390ea84739e96b7e0a3edd4e50292c70830a6cfbf48",
+      "new_sha256": "0c67c5def5712685b7ef2c5a20a95f35f3683993ca9aa67a81bb3c101fdea1c1"
+    },
+    "test/rule_refine/test_surge_complete_output.py": {
+      "old_sha256": null,
+      "new_sha256": "1ff9cb1b20b172116dc459371a1478b5776f1ecfd8890a397d963c957e833a94"
+    },
+    "test/rule_refine/test_surge_exclusion_scope.py": {
+      "old_sha256": "c475bc38e8cff12eb1b01b4a07885fbf21b68c33ee9c466c04160f794acc998d",
+      "new_sha256": "3388db0183014f7cc7dfae2a6955f932aa6dcea55f9ed1cc2f843aa451761400"
+    },
+    "test/rule_refine/test_surge_incomplete_report.py": {
+      "old_sha256": null,
+      "new_sha256": "d436cb96d9b8dcf13d7356e7296dea36be58a9c2ee95e8fc0f6a3f3bfc04abfe"
+    },
+    "test/rule_refine/test_surge_operator_contract.py": {
+      "old_sha256": "721726d84335aab8368e6a9cad70951e470bdbc89d02cd1dbad27dd4132e92e4",
+      "new_sha256": "8d2974d88d79597d4762c9cd471b1c3be2c64b9de753acd956ffa1c778048a27"
+    },
+    "test/rule_refine/test_surge_repair_first.py": {
+      "old_sha256": "4712ee8f509c83cfd4ab5cf9ea944afb270a945b5ef9ab2931ce71f13475ff96",
+      "new_sha256": "97b61d2bd9ab782b7f7ffe095f9c04e876ec2612667b4203a01f398e4b4d2f72"
+    },
+    "test/rule_refine/test_surge_review_sampling.py": {
+      "old_sha256": "6d8db6008873f1f7ce468f03575359bca8982526eae66a2b1d55bc2a68998f10",
+      "new_sha256": "3fb47c36c49a95931c088e1dee79c47de453fd8584942d0596e1b5c013c64e7f"
+    }
+  },
+  "regression_test_files": [
+    "test/rule_refine/test_analysis.py",
+    "test/rule_refine/test_contracts.py",
+    "test/rule_refine/test_filter_evaluation.py",
+    "test/rule_refine/test_local_sink.py",
+    "test/rule_refine/test_numeric_values.py",
+    "test/rule_refine/test_operator_contract.py",
+    "test/rule_refine/test_proposal_check.py",
+    "test/rule_refine/test_saved_delivery.py",
+    "test/rule_refine/test_signal_processing.py",
+    "test/rule_refine/test_small_rule_operators.py",
+    "test/rule_refine/test_surge_behavior_processor.py",
+    "test/rule_refine/test_surge_complete_output.py",
+    "test/rule_refine/test_surge_event_fields.py",
+    "test/rule_refine/test_surge_event_processor.py",
+    "test/rule_refine/test_surge_exclusion_scope.py",
+    "test/rule_refine/test_surge_field_usage.py",
+    "test/rule_refine/test_surge_incomplete_report.py",
+    "test/rule_refine/test_surge_integration.py",
+    "test/rule_refine/test_surge_operator_contract.py",
+    "test/rule_refine/test_surge_processor.py",
+    "test/rule_refine/test_surge_repair_first.py",
+    "test/rule_refine/test_surge_review_repair.py",
+    "test/rule_refine/test_surge_review_sampling.py",
+    "test/rule_refine/test_surge_runtime.py"
+  ],
+  "command_sha256": "c035eca39c436eba18a52aa683fbc573f387619f9fb71e06366c6ae99ecec196",
+  "combined_command_sha256": "054bfd471856f3800d03752bcc512701192dc1832bc0714bf4aca194ebd7d603"
+}

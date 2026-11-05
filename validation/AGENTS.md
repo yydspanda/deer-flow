@@ -181,6 +181,32 @@ sensitive, gitignored evidence and must never become application imports.
   500K acceptance target. Never sum repeated-history usage as context capacity,
   truncate/summarize history, fabricate a failed turn's reply, or continue after
   failure. Preserve the earlier single-request probes and reports unchanged.
+- `rule_refine/implementation/step09_operator_contract/` upgrades the user's
+  2026-11-05 deployed legacy source snapshot to the six new small-rule operators:
+  `Eq`, `Ne`, `Contains`, `NotContains`, `StartsWith`, `EndsWith`. Update prompts,
+  schemas, comparison consumers, sync/async submission validation, and offline
+  fixtures together; do not merely normalize at the HTTP boundary. New replies
+  and submissions reject old spellings. Only version-bound saved-evidence reading
+  may use historical names, preserving raw bytes and report lineage; a fresh
+  review uses a copied canonical draft. Unsent frozen old prompts must not silently
+  run after upgrade. Negative comparisons never turn missing/null into matches.
+  The installer checks the updated ZIP's source hashes, runs isolated offline
+  regressions before backup/write, and retains rollback/idempotence. Never alter
+  queues, STG, monitor-disable settings, private credentials or deployed services
+  as part of this contract update. Keep old delivered installer payloads frozen.
+  The supplied API document still differs on flat terms versus `terms` nesting;
+  preserve the deployed client's flat payload and gateway signing, and distinguish
+  offline contract tests from live service/engine acceptance.
+- `rule_refine/implementation/step09a_complete_output/` builds on installed step09
+  sources. Put the candidate filter and references before prose and add a compact
+  output reminder after evidence within the same budgeted, hashed request. A stop
+  finish reason does not prove the required response fields exist. Keep missing
+  conditions/references blocked; never synthesize them from prose or add model calls.
+  New output-contract requests show structured errors and inert saved-answer excerpts
+  in failed reports; hide reasoning in the display and preserve the raw response.
+  Gate diagnostics by frozen request version so earlier artifacts remain compatible.
+  Combined install/retest must stop on install failure, use the same project root,
+  and require the existing LIVE input before up to two new SDK requests.
 - Label governance uses sealed manifests and independent analyst truth. Quality reports
   must separate parser/structure, retrieval, scenario/role, decision, automation, and
   human-label metrics.

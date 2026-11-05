@@ -6,6 +6,15 @@
 
 ## 当前实施入口
 
+**2026-11-05：第9步及[完整回答修复](implementation/step09a_complete_output/README.md#内网手工验收已回传)已完成内网手工验收。** 操作符安装288项/23文件、完整回答修复308项/8文件均回传成功。`surge-real-csv-runtime-qbiqd34t` 生成和复核均为proposal，实际2次SDK请求，最终条件使用进程名与命令内容的Contains组合，没有规则命中名称条件。生成26条当前、复核23新增+3复用，两阶段累计49条不同当前及共用11条历史；不是全量2205条验证。用户确认结果可以，停止重复调用。建议仅本地保存，未提交或应用规则。安装与重测命令保留供复现，不必为查看结果再次执行LIVE。
+
+**[第9步操作符统一更新](implementation/step09_operator_contract/README.md)。**
+用户更新了 `validation/sec_know_model.zip`，确认它是昨晚成功部署的生产包。
+本轮按新接口把生成/复核提示词、内部结构、比较器、提交客户端与测试统一为
+`Eq / Ne / Contains / NotContains / StartsWith / EndsWith`；提供先离线回归、再备份安装的
+增量脚本，不自动提交规则或重启服务。旧报告原文保持不变，历史兼容与新输出校验分开。
+下方早期步骤保留为历史记录，不能作为覆盖新版的安装入口。
+
 **多轮完整历史实测已回传：第一轮180039 tokens成功，第二轮360063 tokens因262144上限被拒绝。[记录](implementation/context_input_probe/MULTITURN.md)。** context-multiturn-qq4et5v8/probe两次均传max_input_tokens=1048576，完整保留前序原文与实际回复，无输出额度；客户端2POST/0重试，第二轮主备同错，第三轮未发。此限制针对本次携带历史的完整输入，不能理解为每条消息各有256K或会话生命周期累计上限。尚未到500K，未验证语义记忆质量，无需原样补测第三轮。[已执行脚本](implementation/context_input_probe/RUN-MULTITURN.sh)。
 
 **显式max_input_tokens=1048576对照已实测，仍被256K限制拒绝：[对照记录](implementation/context_input_probe/README.md)。** context-max-input-p1spxwrj/probe实际请求顶层已携带该整数，消息和路由与基线一致；新请求640245字节，去参hash仍为7d020...f7185。服务再次报告320029输入/262144上下文，主备同错、HTTP400、约3.245秒；客户端1POST/0重试，未去参重发。此次参数没有解除限制，是否被远端忽略、丢弃或未改变部署限额仍未知；交平台核对参数转发和主备配置，无需原样再测。[已执行脚本](implementation/context_input_probe/RUN-WITH-MAX-INPUT.sh)。

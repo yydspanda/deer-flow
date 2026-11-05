@@ -1,0 +1,125 @@
+{
+  "delivery_profile": "inline_without_frozen_history_fixture",
+  "local_and_full_package_only_tests": [
+    "test/rule_refine/test_legacy_completed_operator.py"
+  ],
+  "files": {
+    "my_workflows/zeus/flows/disposition_tools/small_rule_sync_client.py": {
+      "old_sha256": "e6904425dcb87cf31fb6c6c6ed19f1a41e1290d77f8710a8ee1a1d65aa12c034",
+      "new_sha256": "f1ffa9fb6bb435b5f3b0889bd9bff702ae34f4716a2fc2caef94988410c77cc8"
+    },
+    "my_workflows/zeus/rule_refine/analysis.py": {
+      "old_sha256": "81db3d7eded6f8302de57c00eaace5c2338ec0fbe79180a7ec9e4f5fb0d0c2e0",
+      "new_sha256": "5b912bc4ff75bc49ff00248267eb70f8d8eb456b3091ba700dab5ae4b53da009"
+    },
+    "my_workflows/zeus/rule_refine/condition_values.py": {
+      "old_sha256": "1f8b22d5ca588050f6f8050ad004cce8f5e0381337e73e334b2826c2a9bab6f8",
+      "new_sha256": "78483a7ee40750169a54a6ebccbbb0016671c4c292712cd11f23f306cb86dcf5"
+    },
+    "my_workflows/zeus/rule_refine/contracts.py": {
+      "old_sha256": "f1eec8826a3c26c4de80f139818cacb7d5ef37f89bbe1d5b6597b2b61141cea6",
+      "new_sha256": "986f5c0d1889bbb05288c035e12036542d453f1d7e1fd1b3567a10b6d812d64c"
+    },
+    "my_workflows/zeus/rule_refine/operators.py": {
+      "old_sha256": null,
+      "new_sha256": "79e582a18a3ac9f98a4a44692589d23de9cbbb0a100fda64089c09ca1b0e713e"
+    },
+    "my_workflows/zeus/rule_refine/surge_ai_review.py": {
+      "old_sha256": "c6922674f276b3bb49f55ed52b72ee6ed196cdb6fa56a1265d3aac8ccf0231b5",
+      "new_sha256": "dd9efb6589da85749ead0a5ce5cc063ef5f4f23ea5de0e727edae8f97e430319"
+    },
+    "my_workflows/zeus/rule_refine/surge_processor.py": {
+      "old_sha256": "f2af413ecdcec6d6faf29eae7d3ff365233488c5ed2ba4a358d327ccf2304b44",
+      "new_sha256": "79d9cce2d8393158d4771390ea84739e96b7e0a3edd4e50292c70830a6cfbf48"
+    },
+    "test/rule_refine/check_surge_review_repair.py": {
+      "old_sha256": "182116bd6d2ceaf6eff8c46a4328158cfeb11d3f3c6c220b698a0b5996a99e5e",
+      "new_sha256": "ad7ebb05ece678b81896bc5c80c47da94101ee67fd3e773976ee5d5a77ede5fa"
+    },
+    "test/rule_refine/test_analysis.py": {
+      "old_sha256": "a948898e4ad40b07f7df7d1822e487a0c32f07ff96de0eb5d1d7d12ac6ddd181",
+      "new_sha256": "cd0a67d7e06e585eeca7dd98ad3ff66ae4d2ac3eb49cdcd2676bbd4a28b1cf54"
+    },
+    "test/rule_refine/test_contracts.py": {
+      "old_sha256": "a6f0c4542e242d9a1814150d1633b8cabb17ca8f263d0a362c2bb325a54dfc0b",
+      "new_sha256": "673a79362945770097df9a14c62aa44fc77ada4ea48a107153290bb844b8bfb1"
+    },
+    "test/rule_refine/test_filter_evaluation.py": {
+      "old_sha256": "a545a654885035bdf2af462b78f60e686a8946fa7ba78d9286e30a5efaa4f69d",
+      "new_sha256": "3e2eda8183721d3d9388e634c3a774bf6f7f476e4c05f540fa9de6619ddfe07e"
+    },
+    "test/rule_refine/test_local_sink.py": {
+      "old_sha256": "72ddd516193a2c3ec83f8ba047a0970beac7ae59b3cc93f8657dd63d39a7f2dd",
+      "new_sha256": "5c70a984f82ab8723153afddabe96b98c0207e3e48b4d97f71a58696c4be6b46"
+    },
+    "test/rule_refine/test_numeric_values.py": {
+      "old_sha256": "2d21e4b778b50908f87dd919db16d436e17f52048dccd587b9d401c9a613f948",
+      "new_sha256": "2ba2fde2e996c15d54cbf3cecd22d2092684ce08f30bf6857dcb96867ee22f3c"
+    },
+    "test/rule_refine/test_operator_contract.py": {
+      "old_sha256": null,
+      "new_sha256": "979ff4ab8aba4ad26ed7861c6bec14e0a439a0fd1e867bac4b13b589c1e8ec1d"
+    },
+    "test/rule_refine/test_proposal_check.py": {
+      "old_sha256": "6bd1c0de1c5975814a00d09e9f00ef74a044f53fc088f897a24ebc00745c1b3f",
+      "new_sha256": "cec00ebdf05d0e3cb5b3158c6f7fca7577801ea070287e9ea062f1e083dbbf9c"
+    },
+    "test/rule_refine/test_small_rule_operators.py": {
+      "old_sha256": null,
+      "new_sha256": "d0991e03be1d83acafc867f0bfb4e745e38f539b37a614508189be0e92497cac"
+    },
+    "test/rule_refine/test_surge_behavior_processor.py": {
+      "old_sha256": "97d3d06d69b33db8b123103c304815d2a5fe638c0a1960fdc1071684489a69bb",
+      "new_sha256": "6ece11bb4bb780ef4eb2cff0b68a623761360de665fe1b415d77decf7923e3a4"
+    },
+    "test/rule_refine/test_surge_event_fields.py": {
+      "old_sha256": "b70f6af716b8897afb46df7a2f9d51499702fd6dd2ea66cab4cf5a5ee486de5e",
+      "new_sha256": "499bf6628f75f2ded79667a74ea2cf82829f447e76fa4585029e1c5f03325f88"
+    },
+    "test/rule_refine/test_surge_exclusion_scope.py": {
+      "old_sha256": "1694e73d3b74cbd1e9da44d5083782073873136c6b059ebf57cd5506b0e1fa23",
+      "new_sha256": "c475bc38e8cff12eb1b01b4a07885fbf21b68c33ee9c466c04160f794acc998d"
+    },
+    "test/rule_refine/test_surge_operator_contract.py": {
+      "old_sha256": null,
+      "new_sha256": "721726d84335aab8368e6a9cad70951e470bdbc89d02cd1dbad27dd4132e92e4"
+    },
+    "test/rule_refine/test_surge_processor.py": {
+      "old_sha256": "05b2ee3cfec717310add217c1a83ae3a24867bc6635159b44eda93d62a043990",
+      "new_sha256": "440ae7c71426b856dec84117fe136dd92ed13e9bc1d4db47348d44a8576fd1ef"
+    },
+    "test/rule_refine/test_surge_repair_first.py": {
+      "old_sha256": "122c60d535e1be2ffc8476891582d1cdf2c2d08edc1bc448d1f81934df35c7b9",
+      "new_sha256": "4712ee8f509c83cfd4ab5cf9ea944afb270a945b5ef9ab2931ce71f13475ff96"
+    },
+    "test/rule_refine/test_surge_review_sampling.py": {
+      "old_sha256": "ea81a2bc94453d538ab3d30414c51ef0c041feec4876dbcba91c3227d0990fc0",
+      "new_sha256": "6d8db6008873f1f7ce468f03575359bca8982526eae66a2b1d55bc2a68998f10"
+    }
+  },
+  "regression_test_files": [
+    "test/rule_refine/test_analysis.py",
+    "test/rule_refine/test_contracts.py",
+    "test/rule_refine/test_filter_evaluation.py",
+    "test/rule_refine/test_local_sink.py",
+    "test/rule_refine/test_numeric_values.py",
+    "test/rule_refine/test_operator_contract.py",
+    "test/rule_refine/test_proposal_check.py",
+    "test/rule_refine/test_saved_delivery.py",
+    "test/rule_refine/test_signal_processing.py",
+    "test/rule_refine/test_small_rule_operators.py",
+    "test/rule_refine/test_surge_behavior_processor.py",
+    "test/rule_refine/test_surge_event_fields.py",
+    "test/rule_refine/test_surge_event_processor.py",
+    "test/rule_refine/test_surge_exclusion_scope.py",
+    "test/rule_refine/test_surge_field_usage.py",
+    "test/rule_refine/test_surge_integration.py",
+    "test/rule_refine/test_surge_operator_contract.py",
+    "test/rule_refine/test_surge_processor.py",
+    "test/rule_refine/test_surge_repair_first.py",
+    "test/rule_refine/test_surge_review_repair.py",
+    "test/rule_refine/test_surge_review_sampling.py",
+    "test/rule_refine/test_surge_runtime.py"
+  ],
+  "command_sha256": "de864a93e498bbad1fb2b1443bc8e3bcbe669aa144cf8455211fd6358da22d04"
+}
