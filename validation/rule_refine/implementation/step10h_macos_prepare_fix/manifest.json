@@ -1,0 +1,12 @@
+{
+  "preparation_revision": "macos-canonical-temp-path-v1",
+  "source_baseline": "step10f_topic_receipt_array_installed_sources",
+  "command_sha256": "6bfb743a876fed4977bbcaafdf53ea665fd7be6a4e6ef0fb7838dfb63f99065d",
+  "original_command_sha256": "8f6eb9b3a5f136519ed4c1605bb8d0a095d31556015cf7cef7fbd14fdcaf8ed5",
+  "original_preparation_sha256": "1c6d4f5eff628ae1fe8721f640e42f4e2069f220b7b7b70fea6dbe4a8056f0b0",
+  "fixed_preparation_sha256": "fd90f7b012731d8450a35f435cec481f8b9d0ace77c783d7e7560090310b5f04",
+  "runtime_payload_identical_to_step10g": true,
+  "services_started": false,
+  "model_calls": 0,
+  "zeus_posts": 0
+}

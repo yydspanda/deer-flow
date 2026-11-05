@@ -1,0 +1,22 @@
+{
+  "source_baseline": "step10f_topic_receipt_array_installed_sources",
+  "command_sha256": "8f6eb9b3a5f136519ed4c1605bb8d0a095d31556015cf7cef7fbd14fdcaf8ed5",
+  "runtime_files": {
+    "my_workflows/zeus/rule_refine/topic_settings.py": {
+      "old_sha256": "2ac34858d55c1e7e05654a137d1ddf4bf97c21142de21bbcfbd6ac3146f147da",
+      "new_sha256": "c68dee9076c880ccb35ac1e72d0e1c074bc02c10dd7ed58fc53ccbcca66a143d"
+    },
+    "test/rule_refine/test_topic_prd_settings.py": {
+      "old_sha256": null,
+      "new_sha256": "36a4ac8642e885e48946b6132f95d7af12f505714643e51dde44b870a8214ecf"
+    }
+  },
+  "dynamic_release_files": [
+    "run.sh",
+    "config/rule_refine.topic.prd.json",
+    "config/rule_refine.rules.prd.snapshot"
+  ],
+  "services_started": false,
+  "model_calls": 0,
+  "zeus_posts": 0
+}

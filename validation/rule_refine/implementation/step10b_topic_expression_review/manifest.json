@@ -1,0 +1,65 @@
+{
+  "baseline_zip_sha256": "2a523efcc64df8cf5750ff2721f3a5bfd7658b7c1ba898ca9bee0e53185b4406",
+  "source_baseline": "step10a_topic_json_fix_installed_sources",
+  "topic_expression_contract_version": "topic-expression-review-v1",
+  "files": {
+    "my_workflows/zeus/rule_refine/surge_ai_review.py": {
+      "old_sha256": "33b4dd639ac8b4441c9083a66b00ceb89174770ad67fffda57aa46693af400e1",
+      "new_sha256": "86358cba57c5e507f7655f5169302cd78527953887e9c47c40080c189dcb8d34"
+    },
+    "my_workflows/zeus/rule_refine/topic_ai.py": {
+      "old_sha256": "d61daf2e8d4d4450a6f7c7e5e84d64349a14aa8ce9bf0d0b8340dd7f651721df",
+      "new_sha256": "5bc0622319a6eadeea9685548b6e8ae0ea75787d135496b940875a70af30cd95"
+    },
+    "my_workflows/zeus/rule_refine/topic_expression.py": {
+      "old_sha256": null,
+      "new_sha256": "595c9e8bc2e5b3616eb35eb86feabbe496ba980b768dd00084e02013aa243088"
+    },
+    "my_workflows/zeus/rule_refine/topic_processor.py": {
+      "old_sha256": "5dc36fcbc6b1a824b4273bf551589b0a50409fb1b44569bf87df18adda401e9d",
+      "new_sha256": "9c0af6bc6b3c3baa5712ccd06f2f1c6b1de3a9040a7d4e476c590d7fa6514a9e"
+    },
+    "test/rule_refine/test_topic_expression.py": {
+      "old_sha256": null,
+      "new_sha256": "79abe006d2db9f94bd422a4afa522e74f0c4720af0b41badddbb3ce12eab0547"
+    }
+  },
+  "regression_test_files": [
+    "test/rule_refine/test_analysis.py",
+    "test/rule_refine/test_contracts.py",
+    "test/rule_refine/test_filter_evaluation.py",
+    "test/rule_refine/test_local_sink.py",
+    "test/rule_refine/test_numeric_values.py",
+    "test/rule_refine/test_operator_contract.py",
+    "test/rule_refine/test_proposal_check.py",
+    "test/rule_refine/test_saved_delivery.py",
+    "test/rule_refine/test_signal_processing.py",
+    "test/rule_refine/test_small_rule_operators.py",
+    "test/rule_refine/test_surge_behavior_processor.py",
+    "test/rule_refine/test_surge_complete_output.py",
+    "test/rule_refine/test_surge_event_fields.py",
+    "test/rule_refine/test_surge_event_processor.py",
+    "test/rule_refine/test_surge_exclusion_scope.py",
+    "test/rule_refine/test_surge_field_usage.py",
+    "test/rule_refine/test_surge_incomplete_report.py",
+    "test/rule_refine/test_surge_integration.py",
+    "test/rule_refine/test_surge_operator_contract.py",
+    "test/rule_refine/test_surge_processor.py",
+    "test/rule_refine/test_surge_repair_first.py",
+    "test/rule_refine/test_surge_review_repair.py",
+    "test/rule_refine/test_surge_review_sampling.py",
+    "test/rule_refine/test_surge_runtime.py",
+    "test/rule_refine/test_topic_beat.py",
+    "test/rule_refine/test_topic_delivery.py",
+    "test/rule_refine/test_topic_expression.py",
+    "test/rule_refine/test_topic_history.py",
+    "test/rule_refine/test_topic_json.py",
+    "test/rule_refine/test_topic_processor.py",
+    "test/rule_refine/test_topic_resilience.py",
+    "test/rule_refine/test_topic_runtime.py"
+  ],
+  "command_sha256": "4327713e35e9ad25e55a2a00088d4e8ce0606769b1e07e5d1e10d23835e2501e",
+  "enable_command_sha256": "3482203be478347b64b2116e5b01901bfbd6334fa9f42dd77d8ed6d6e14b9c27",
+  "manual_command": "../step10_topic_filter/CHECK-TOPIC-REAL-CSV.sh",
+  "manual_command_sha256": "4666cc1a785452a5aa3bb0ca35399b7c94deae026394e018f131ceb12d0dc693"
+}

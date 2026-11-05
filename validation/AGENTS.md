@@ -246,6 +246,133 @@ sensitive, gitignored evidence and must never become application imports.
   Gate diagnostics by frozen request version so earlier artifacts remain compatible.
   Combined install/retest must stop on install failure, use the same project root,
   and require the existing LIVE input before up to two new SDK requests.
+- `rule_refine/implementation/step10_topic_filter/` adds an explicitly opted-in
+  legacy topic-ingress advisory path. It is not DeerFlow Runtime. A per-rule surge
+  still recalls current originals and the nearest 20 earlier same-rule alerts,
+  but the new AI generation/review must assess event removal before **all** rules
+  on that topic. Keep the original per-rule prompts, saved artifacts, and LOCAL
+  test flow compatible. Do not present same-rule evidence as all-topic coverage.
+  Preserve the reviewed detection-metadata field boundary; the separate topic
+  review records field-role reasoning and impact on other detectors. These checks
+  are not engine compatibility proof or a semantic safety guarantee.
+  Derive one executeType (0/1/2/3) from all recalled current alert envelopes;
+  mixed/missing/invalid values require review, never infer it from PRD/LOCAL or
+  widen it to -1. Submit a batch list with flat A/B terms through the existing
+  signed `syncSmallRule` client. The user authorized direct submission of reviewed
+  proposals and delegated activation to ZEUS; do not require or assert a default
+  disabled server state, and do not call a separate enable endpoint.
+  PRD/LOCAL opt in through `config/rule_refine.topic.json`; STG is unchanged.
+  PostgreSQL reads only original task columns in a read-only transaction, without
+  schema changes or prior model responses. Use `root_config.DATA_DIR` for compact
+  NAS records: references, bounded excerpts, final advice, hashes, and receipts,
+  not full cases/messages/model replies. Persist the submission marker before POST,
+  bind resumed candidates to their reviewed hashes, and do not automatically resend
+  an ambiguous request. Exact-payload deduplication is scoped to the shared NAS ledger;
+  it is not a server-side exactly-once guarantee.
+  Installation runs isolated regressions before backup/write and never enables
+  monitoring. The separate enable command changes the reviewed PRD launcher marker
+  only on explicit invocation and starts no service. The manual real-CSV command
+  requires LIVE before two new model requests and at most one client submission;
+  unlike older rule-advice tests, it can create an actual ZEUS small rule. Preserve
+  historical-replay/counterfactual provenance and share the target delivery ledger.
+- `rule_refine/implementation/step10a_topic_json_fix/` builds on frozen installed
+  Step10 after the first intranet topic generation rejected duplicate JSON keys.
+  Only identical JSON values under the same object key may be collapsed; compare
+  exact types, array order and numeric literals. Conflicting members reject the
+  entire answer, never choose first/last or reconstruct conditions from prose.
+  Preserve original fence/tail validation and all field/reference/topic checks.
+  Compact diagnostics retain bounded key paths/counts, hash unknown keys, and never
+  persist values or raw replies. The old failed answer was not saved, so its exact
+  duplicate location/conflict is unknown. Keep the original reply hash, no extra
+  model calls, no submission retry, and no rewriting completed/failed jobs. The
+  original manual CHECK uses the updated runtime; activation needs the new ENABLE
+  command because its source-hash manifest changes. Installer-only operation still
+  starts no services and leaves monitor settings, queues, and STG untouched.
+- `rule_refine/implementation/step10b_topic_expression_review/` handles topic
+  expression failures without a third model call. Explicitly constrain expression
+  grammar in the topic prompt. Only generation may opt into preserving an invalid
+  expression as an inert draft; every condition, reference and field-role check
+  must still pass before the existing independent review can attempt a correction.
+  Never guess operators, invent missing terms, delete conditions, or turn invalid
+  expressions into executable ones in code. Review, delivery and legacy callers
+  remain strict by default. Save bounded alias/position diagnostics, not condition
+  values or raw replies, and keep old failed jobs terminal. The observed intranet
+  error can mean either an undefined alias or a missing operator; without the old
+  raw reply its actual cause is unknown. Keep frozen Step10/10A deliveries intact.
+- `rule_refine/implementation/step10c_topic_condition_tree/` removes parallel
+  model-written aliases, expressions and field-role lists from new topic replies.
+  Each leaf binds its predicate to its own field-role judgment; explicit `all`/`any`
+  groups determine the boolean structure. A bounded compiler assigns flat aliases
+  and fully parenthesized expressions for the unchanged ZEUS payload, preserving
+  every leaf, literal and group. Never infer a missing group, drop/merge a leaf or
+  accept old flat replies under the new prompt. Repeated fields require consistent
+  roles and every occurrence's basis is checked. The review sees predicates/groups
+  only, excluding generation role judgments and prose. Compiled replies still pass
+  all original event-field/reference/topic and delivery checks; role judgments are
+  not engine availability or safety proof. Keep old TopicProcessor default behavior
+  for compatibility; production background and the **new** CHECK command explicitly
+  select `topic-condition-tree-v1`. Frozen old CHECK uses the old contract. Record
+  source-tree/compiled-filter hashes in compact records, no extra SDK calls or POSTs.
+  New ENABLE updates source hashes only. Offline truth-table/transport tests do not
+  prove that the live model reliably emits the new format; report that separately.
+- `rule_refine/implementation/step10d_topic_reply_diagnostic/` is a standalone
+  diagnostic after Step10C review returned 59 conflicting duplicate members.
+  Keep current prompts/sampling/strict parsing and frozen delivered files unchanged.
+  Capture final content before parsing, at most 64 KiB per phase, with original
+  byte count/hash and explicit truncation; never save separate reasoning or full
+  request messages. Raw final content can echo sensitive logs and stays internal.
+  Metadata uses nested allowlists. Override the entire delivery entry point before
+  ledger/submission handling; even valid reviews must not POST or touch shared
+  delivery state. LIVE permits at most two SDK calls, with failure stopping progress;
+  no automatic retry or service restart. Save in an isolated DATA_DIR diagnostic
+  directory with restrictive permissions. Old unsaved failures cannot be recovered;
+  a new run is not proof of the old cause or a production fix.
+- `rule_refine/implementation/step10e_topic_advisory/` implements the user's later
+  clarification: draft a small rule from surge commonalities for operations review,
+  typically two or three useful conditions, with a single sufficiently specific
+  condition allowed. Do not require proof of all-topic or future-event harmlessness,
+  invent a fixed minimum condition count, or import example fields/type scopes.
+  Only the tree AI prompt, trailing reminder and prompt version change; parser,
+  compiler, event-field boundary, operator spellings and submission remain intact.
+  Review original evidence and actual condition scope briefly; operational acceptance
+  belongs to ZEUS/operators. The combined command runs offline tests/backup/install
+  before the existing LIVE-gated real-CSV path; installation failure must prevent
+  that path. No automatic monitor enabling or restart. Frozen deliveries and prior
+  diagnosis results remain unchanged; old hash-pinned diagnostics reject new sources.
+- `rule_refine/implementation/step10f_topic_receipt_array/` accepts the batch
+  creation API's single-element ID list for the one-rule topic POST. Normalize
+  that sole element through the original scalar validator, retain code/success
+  checks, and keep the persisted receipt scalar. Never choose among multiple IDs
+  or infer old missing IDs. The observed Step10E response was code 200 / `[153]`,
+  but the old ledger discarded the list and stored null. Old unknown/job artifacts
+  stay immutable and prevent resends; success logs are external evidence, not an
+  ID recovered from saved NAS state. The user subsequently confirmed rule 153 is
+  visible in ZEUS STG; creation is verified by that report. The user subsequently
+  reported executing the receipt installation step; activation remains unreported.
+  The installer does not rerun generation or
+  POST. Any later historical reconciliation requires explicit evidence binding.
+- `rule_refine/implementation/step10g_production_prepare/` prepares the legacy
+  release on the intranet Mac before the user's ordinary full-project packaging.
+  Validate the existing rule-configuration catalog, not alert-test CSVs; copy its
+  original bytes to a project-relative `.snapshot` so the legacy `*.csv` ignore
+  rule cannot omit it. PRD selects a separate topic config; LOCAL remains unchanged
+  and STG does not enter this topic path. Only PRD enables the launcher monitor
+  block. Preserve every other launcher byte and never execute its live cleanup or
+  startup commands. Run isolated regressions before backups/writes, retain rollback
+  and idempotence, and fail on missing/conflicting catalogs or unknown source.
+  Never import private root_config for preparation or require a production NAS
+  mount on the Mac. NAS persistence still uses the existing PRD DATA_DIR at runtime.
+  Prepared source/configuration is not evidence of actual production triggering,
+  remote availability or the catalog's online freshness. Old enable scripts remain
+  frozen and are not the activation path after this release preparation.
+- `rule_refine/implementation/step10h_macos_prepare_fix/` fixes the preparation
+  tool's comparison of aliased macOS temporary paths. Canonicalize the temporary
+  inspection root before using both settings readers; do not remove configuration
+  checks or alter application payloads. Reproduce the old failure with a symlinked
+  TMPDIR, then test the exact command and its idempotent repeat with that alias.
+  Keep Step10G artifacts frozen. The reported failure occurred before release
+  writes; do not request model/ZEUS resubmission or change production business
+  settings to work around a local preparation bug.
 - Label governance uses sealed manifests and independent analyst truth. Quality reports
   must separate parser/structure, retrieval, scenario/role, decision, automation, and
   human-label metrics.

@@ -1,0 +1,106 @@
+{
+  "baseline_zip_sha256": "2a523efcc64df8cf5750ff2721f3a5bfd7658b7c1ba898ca9bee0e53185b4406",
+  "source_baseline": "step09a_complete_output_installed_sources",
+  "topic_contract_version": "topic-filter-delivery-v1",
+  "files": {
+    "config/celery_config.py": {
+      "old_sha256": "392e0d296b0540ffd56e14634ace76ca738faaef5d77208b52e02e95b35b4194",
+      "new_sha256": "1cad8997c858a8b94fe82184f29031fa942f18d44c111277ae16a425dfbc9b0c"
+    },
+    "my_workflows/zeus/rule_refine/background_service.py": {
+      "old_sha256": "13034e84c40667e1addcc8fe8686d3ec932c7e614c65c1870d5f85db8c0d5c4e",
+      "new_sha256": "8ced537d5aa0d50fc9ff04212b358b5e96392897c46cd1aa23e8e5e243a86f57"
+    },
+    "my_workflows/zeus/rule_refine/local_settings.py": {
+      "old_sha256": "8712f940df8f16195f706a4eb5a639b37487ab1aac26b6b7f8e93c58a67d515c",
+      "new_sha256": "52b572e86743abee6e74e4e912a0d790bb0dee2f847b92e55d996962e6b161ea"
+    },
+    "my_workflows/zeus/rule_refine/surge_sampling.py": {
+      "old_sha256": "21665f14a302e73bca2ad63bf14f7cb688cbee32efc3f453779a7ebd8df12f1a",
+      "new_sha256": "a0f0b4efdd949ff9e074d0a1e2716a1473afcccf245ea4d8e50c9b298871669a"
+    },
+    "my_workflows/zeus/rule_refine/topic_ai.py": {
+      "old_sha256": null,
+      "new_sha256": "bfc5148c949211d57a5d149242ff880bfcbedeee35458f317b8b46d0362eee3c"
+    },
+    "my_workflows/zeus/rule_refine/topic_background.py": {
+      "old_sha256": null,
+      "new_sha256": "a1ca26cb6d75264ec3329ff3721734e60025e2b54be69ab37b4b6b3fbff99074"
+    },
+    "my_workflows/zeus/rule_refine/topic_delivery.py": {
+      "old_sha256": null,
+      "new_sha256": "7bd3492b021a4ebb699f132238714a0c90de6e0bc62d07e9c6dcf32cac87c7e1"
+    },
+    "my_workflows/zeus/rule_refine/topic_history.py": {
+      "old_sha256": null,
+      "new_sha256": "20c5cb46aeba7a3c0235ac116e497f1bfcb7aa2aa5a7912891b0aca0c77f1743"
+    },
+    "my_workflows/zeus/rule_refine/topic_processor.py": {
+      "old_sha256": null,
+      "new_sha256": "b86844347ad00e695daf7b77c672594ad7caf3d44fbe9fe78aafde15ff86d85b"
+    },
+    "my_workflows/zeus/rule_refine/topic_settings.py": {
+      "old_sha256": null,
+      "new_sha256": "2ac34858d55c1e7e05654a137d1ddf4bf97c21142de21bbcfbd6ac3146f147da"
+    },
+    "test/rule_refine/test_topic_beat.py": {
+      "old_sha256": null,
+      "new_sha256": "786c47842f0b3e9dd8a06447c422baf3ff66e4dea76e7374d00f354c42b4938b"
+    },
+    "test/rule_refine/test_topic_delivery.py": {
+      "old_sha256": null,
+      "new_sha256": "df3b97f158db5b23fe4b37e9c2c25dc7773f668cb916cd0963f476fb8143ef60"
+    },
+    "test/rule_refine/test_topic_history.py": {
+      "old_sha256": null,
+      "new_sha256": "615e518bad5510f17d7f68e46b313eb01dc86c10415d420b0d13589e36bc0954"
+    },
+    "test/rule_refine/test_topic_processor.py": {
+      "old_sha256": null,
+      "new_sha256": "c445bc4e5cc7c2e48cc2758aae7b257cd2f51fb468c53a2908c58dfea9234325"
+    },
+    "test/rule_refine/test_topic_resilience.py": {
+      "old_sha256": null,
+      "new_sha256": "6dc49d110e9d1aba43d5c26a39f5c277e8b5146822b09554aa780a735e511e01"
+    },
+    "test/rule_refine/test_topic_runtime.py": {
+      "old_sha256": null,
+      "new_sha256": "48a6e35998ee861d9bc9fba18db27371a142e3f4f7d9c78779f3f3ce625e8477"
+    }
+  },
+  "regression_test_files": [
+    "test/rule_refine/test_analysis.py",
+    "test/rule_refine/test_contracts.py",
+    "test/rule_refine/test_filter_evaluation.py",
+    "test/rule_refine/test_local_sink.py",
+    "test/rule_refine/test_numeric_values.py",
+    "test/rule_refine/test_operator_contract.py",
+    "test/rule_refine/test_proposal_check.py",
+    "test/rule_refine/test_saved_delivery.py",
+    "test/rule_refine/test_signal_processing.py",
+    "test/rule_refine/test_small_rule_operators.py",
+    "test/rule_refine/test_surge_behavior_processor.py",
+    "test/rule_refine/test_surge_complete_output.py",
+    "test/rule_refine/test_surge_event_fields.py",
+    "test/rule_refine/test_surge_event_processor.py",
+    "test/rule_refine/test_surge_exclusion_scope.py",
+    "test/rule_refine/test_surge_field_usage.py",
+    "test/rule_refine/test_surge_incomplete_report.py",
+    "test/rule_refine/test_surge_integration.py",
+    "test/rule_refine/test_surge_operator_contract.py",
+    "test/rule_refine/test_surge_processor.py",
+    "test/rule_refine/test_surge_repair_first.py",
+    "test/rule_refine/test_surge_review_repair.py",
+    "test/rule_refine/test_surge_review_sampling.py",
+    "test/rule_refine/test_surge_runtime.py",
+    "test/rule_refine/test_topic_beat.py",
+    "test/rule_refine/test_topic_delivery.py",
+    "test/rule_refine/test_topic_history.py",
+    "test/rule_refine/test_topic_processor.py",
+    "test/rule_refine/test_topic_resilience.py",
+    "test/rule_refine/test_topic_runtime.py"
+  ],
+  "command_sha256": "6bcb006c689792258bdcfc56b3ffbb312d20a27d5f6c58f918f5099000fa4c70",
+  "enable_command_sha256": "fec7307ef4d78549fb1def5984aaf6bb8dde3ec2b136fe6db8804f2ea26d40b4",
+  "manual_command_sha256": "4666cc1a785452a5aa3bb0ca35399b7c94deae026394e018f131ceb12d0dc693"
+}

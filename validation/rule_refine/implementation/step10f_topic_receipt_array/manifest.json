@@ -1,0 +1,57 @@
+{
+  "source_baseline": "step10e_topic_advisory_installed_sources",
+  "topic_receipt_contract_version": "single-rule-batch-receipt-v1",
+  "files": {
+    "my_workflows/zeus/rule_refine/topic_delivery.py": {
+      "old_sha256": "7bd3492b021a4ebb699f132238714a0c90de6e0bc62d07e9c6dcf32cac87c7e1",
+      "new_sha256": "f040021be17f3f4afc69887711d02a990ac9e67df0ab8b8ea04331fbd93e64ec"
+    },
+    "test/rule_refine/test_topic_receipt_array.py": {
+      "old_sha256": null,
+      "new_sha256": "0eb1dd16da3df2bab7e1b05a07def2e0984ce1d77707fbf0c1a468bc510ae22c"
+    }
+  },
+  "regression_test_files": [
+    "test/rule_refine/test_analysis.py",
+    "test/rule_refine/test_contracts.py",
+    "test/rule_refine/test_filter_evaluation.py",
+    "test/rule_refine/test_local_sink.py",
+    "test/rule_refine/test_numeric_values.py",
+    "test/rule_refine/test_operator_contract.py",
+    "test/rule_refine/test_proposal_check.py",
+    "test/rule_refine/test_saved_delivery.py",
+    "test/rule_refine/test_signal_processing.py",
+    "test/rule_refine/test_small_rule_operators.py",
+    "test/rule_refine/test_surge_behavior_processor.py",
+    "test/rule_refine/test_surge_complete_output.py",
+    "test/rule_refine/test_surge_event_fields.py",
+    "test/rule_refine/test_surge_event_processor.py",
+    "test/rule_refine/test_surge_exclusion_scope.py",
+    "test/rule_refine/test_surge_field_usage.py",
+    "test/rule_refine/test_surge_incomplete_report.py",
+    "test/rule_refine/test_surge_integration.py",
+    "test/rule_refine/test_surge_operator_contract.py",
+    "test/rule_refine/test_surge_processor.py",
+    "test/rule_refine/test_surge_repair_first.py",
+    "test/rule_refine/test_surge_review_repair.py",
+    "test/rule_refine/test_surge_review_sampling.py",
+    "test/rule_refine/test_surge_runtime.py",
+    "test/rule_refine/test_topic_advisory.py",
+    "test/rule_refine/test_topic_beat.py",
+    "test/rule_refine/test_topic_delivery.py",
+    "test/rule_refine/test_topic_expression.py",
+    "test/rule_refine/test_topic_history.py",
+    "test/rule_refine/test_topic_json.py",
+    "test/rule_refine/test_topic_processor.py",
+    "test/rule_refine/test_topic_receipt_array.py",
+    "test/rule_refine/test_topic_resilience.py",
+    "test/rule_refine/test_topic_runtime.py",
+    "test/rule_refine/test_topic_tree_compiler.py",
+    "test/rule_refine/test_topic_tree_flow.py"
+  ],
+  "command_sha256": "19403e95deb2cfaefdc5d632e5aef145376772ac222e01e4a9fd9a240fa93a1c",
+  "enable_command_sha256": "81b76812b642d8e7a1fc1db39dd5c53c4c2494064ffecef73238e7fdcb053a33",
+  "replays_previous_job": false,
+  "model_calls": 0,
+  "zeus_posts": 0
+}

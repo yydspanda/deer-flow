@@ -1,0 +1,15 @@
+{
+  "check": "topic_reply_diagnostic_delivery",
+  "command_sha256": "1dfc22ff0bb99e4caede9b58eddbfbce9f0a6d2bc79f98062f7efb2c4b16c727",
+  "embedded_source_sha256": {
+    "surge_materials": "60642067a5e9a55de33f1793727806765b624c74d0f72997f2c5931ac851a1de",
+    "restricted_dataframe_pickle": "48eac91159bcfc85b98cfdbd8de68d010d0152b1e00f22dbc6a4068d933a9254",
+    "materials": "4f98b69e59b829af0916f2523a019d055da3210a677305d390591e16cc7bcdce",
+    "runner": "53fc43d0e3cf96a77c1d7d404c9486449fb62edfeb546a914e75b51dc368bfd6",
+    "topic_materials": "c8135912680751f444fa611c366a76e906e8bccb677f8c10021e956404bd983a",
+    "diagnostic_contract": "305ea1c5e30da7d6155fe215587bc3f7dbcf8bdc6a97e58967831c90a7eb0c6a"
+  },
+  "application_code_updated": false,
+  "max_sdk_requests": 2,
+  "max_zeus_posts": 0
+}
