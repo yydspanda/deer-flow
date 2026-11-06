@@ -102,6 +102,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 >
 > SOC Docker startup now builds the frontend before replacing it; normal page navigation
 > no longer waits for development compilation. Unchanged builds/dependencies are reused.
+> It also prepares a dedicated Gateway image with SQLite 3.51.3 and runs database
+> migrations inside that same runtime before starting services. A failed build or
+> migration stops startup; the existing database and selected authentication/demo mode are retained.
 > Use `./scripts/soc-memory-dev.sh build-frontend` to prepare without stopping services,
 > or `SOC_FRONTEND_MODE=dev ./scripts/soc-memory-dev.sh demo-start` for hot reload.
 > Backend DEV, Memory, authentication and provider settings are unchanged by this mode.

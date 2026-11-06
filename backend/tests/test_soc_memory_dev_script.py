@@ -11,7 +11,7 @@ def test_memory_dev_prebuild_precedes_start_and_keeps_optional_dev_warmup() -> N
     script = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert '"${COMPOSE[@]}" up --no-build' in script
-    assert '"${COMPOSE[@]}" build frontend gateway' in script
+    assert '"${BASE_COMPOSE[@]}" build frontend gateway' in script
     assert script.count("    ready_frontend\n") == 2
     assert "exec node scripts/soc-frontend.mjs build" in script
     assert "pnpm install --frozen-lockfile" in script

@@ -191,11 +191,25 @@ overwriting an existing archive. It must never unpickle data, package a business
 include credentials, or extract an untrusted archive during inspection. Reuse unchanged
 internal data by hash; source updates must not repeatedly transfer corpus payloads.
 
+The SOC Docker wrapper builds a dedicated Gateway image through
+`docker/Dockerfile.soc-memory-gateway`, layered on the generic upstream DEV image.
+Pin official SQLite 3.51.3 and verify both the release archive SHA-256 and `sqlite3.c`
+SHA3-256 before compiling; verify the Python runtime loads that exact version.
+Build the generic base through the base Compose configuration, then the SOC image
+separately so the overlay image tag cannot be overwritten by an unpatched base.
+`start` and `rebuild` run migrations in the Gateway service's image, mounted environment,
+dependency volumes, configured extras and SOC database URL. Synchronize the locked uv
+dependencies there and check the existing WAL compatibility gate before migration.
+Only successful image/frontend builds and migrations may proceed to Compose `up --no-build`.
+Existing database files and sidecars, backend DEV behavior and the selected ordinary/demo
+authentication mode remain intact; the database engine's SQLite version protection still applies.
+
 The SOC Docker wrapper defaults to a prebuilt frontend without changing backend DEV
 or authentication. `build-frontend` prepares an isolated `.soc-frontend` snapshot;
 publish its manifest only after successful compilation. Dependencies synchronize
-with the frozen lock only when their manifest changes or Next is missing. An unchanged
-restart must neither compile nor install. `SOC_FRONTEND_MODE=dev` restores hot reload.
+with the frozen lock only when their manifest changes or Next is missing. With unchanged
+frontend inputs, startup must neither recompile the frontend nor reinstall its dependencies.
+`SOC_FRONTEND_MODE=dev` restores hot reload.
 Readiness uses lightweight entry checks, not route compilation. The Mac Host wrapper
 uses the same build script before migrations or sidecar replacement. DEV defaults to
 prebuilt pages with explicit `--frontend-mode dev` rollback; STG rejects hot reload.

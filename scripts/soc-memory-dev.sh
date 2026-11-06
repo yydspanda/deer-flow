@@ -46,6 +46,11 @@ COMPOSE=(
     -f "$DOCKER_DIR/docker-compose-dev.yaml"
     -f "$DOCKER_DIR/docker-compose.soc-memory-dev.yaml"
 )
+BASE_COMPOSE=(
+    docker compose
+    -p deer-flow-dev
+    -f "$DOCKER_DIR/docker-compose-dev.yaml"
+)
 
 export SOC_DATABASE_URL="$DATABASE_URL"
 export SOC_DEV_MEMORY_CORPUS_PATH="$CORPUS_PATH"
@@ -104,13 +109,29 @@ require_docker() {
     fi
 }
 
+build_soc_gateway() {
+    # The base build must not include the overlay's image name: that would
+    # overwrite the derived SOC image with the unpatched upstream image.
+    if ! docker image inspect deer-flow-dev-gateway:latest >/dev/null 2>&1; then
+        "${BASE_COMPOSE[@]}" build gateway
+    fi
+    docker build --file "$DOCKER_DIR/Dockerfile.soc-memory-gateway" \
+        --tag deer-flow-soc-memory-gateway:sqlite-3.51.3 "$PROJECT_ROOT"
+}
+
 upgrade_database() {
     mkdir -p "$RUNTIME_DIR"
-    (
-        cd "$BACKEND_DIR"
-        .venv/bin/python -m soc_agent.cli db upgrade \
-            --database-url "$DATABASE_URL"
-    )
+    # Migrate with the same image, mounted venv, extras and database URL used by
+    # the Gateway. A host Python may embed an older SQLite that cannot write WAL.
+    "${COMPOSE[@]}" run --rm --no-deps gateway sh -ec '
+        extras="$(sh /usr/local/bin/dev-entrypoint.sh --print-extras)"
+        set -f
+        cd /app/backend
+        uv sync --locked --all-packages $extras
+        PYTHONPATH=. uv run --no-sync python -c "import sqlite3; from soc_agent.db.engine import _wal_reset_fixed; assert _wal_reset_fixed(sqlite3.sqlite_version_info), sqlite3.sqlite_version; print(\"SOC SQLite runtime:\", sqlite3.sqlite_version)"
+        PYTHONPATH=. exec uv run --no-sync python -m soc_agent.cli db upgrade \
+            --database-url "$SOC_DATABASE_URL"
+    '
 }
 
 wait_for_entrypoint() {
@@ -215,6 +236,7 @@ prepare_corpus_index() {
 start() {
     require_docker
     require_source
+    build_soc_gateway
     build_frontend
     upgrade_database
     "${COMPOSE[@]}" up --no-build -d --remove-orphans redis frontend gateway nginx
@@ -236,7 +258,8 @@ demo_start() {
 rebuild() {
     require_docker
     require_source
-    "${COMPOSE[@]}" build frontend gateway
+    "${BASE_COMPOSE[@]}" build frontend gateway
+    build_soc_gateway
     build_frontend
     upgrade_database
     "${COMPOSE[@]}" up --no-build -d --remove-orphans redis frontend gateway nginx

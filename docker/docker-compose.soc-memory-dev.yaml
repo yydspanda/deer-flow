@@ -25,7 +25,10 @@ services:
       WATCHPACK_POLLING: ${SOC_MEMORY_DEV_WATCHPACK_POLLING:-15000}
 
   gateway:
+    # Built separately on top of the upstream dev image by soc-memory-dev.sh.
+    image: deer-flow-soc-memory-gateway:sqlite-3.51.3
     environment:
+      UV_EXTRAS: "${UV_EXTRAS:-pingan-dev}"
       DEER_FLOW_AUTH_DISABLED: "${SOC_DEMO_AUTH_DISABLED:-0}"
       # watchfiles enables polling automatically under WSL. The SOC validation
       # stack uses native bind-mount events by default to avoid a permanently
