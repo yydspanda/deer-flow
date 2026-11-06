@@ -1,451 +1,225 @@
+## Support Bundle Runtime Home
+
+Thread manifests use a nonempty `DEER_FLOW_HOME` exclusively, resolving relative
+values from the checkout like the local launcher. Read root `.env` path settings
+without exporting secrets; dotenv overrides shell exports, including empty values.
+Expand unquoted leading tildes, preserving quoted literals. If python-dotenv is
+unavailable or `.env` cannot be read/decoded as UTF-8, retain shell/legacy lookup
+so troubleshooting remains usable. Read the complete file before applying any
+assignments so a decoding failure cannot partially override shell values.
+Resolve `$NAME`, `${NAME}` and `${NAME:-literal}` in unquoted/double-quoted
+values using a private environment with checkout `PWD` and earlier dotenv
+assignments. Single-quoted values and escaped dollars stay literal. Parse the
+file without sourcing it or executing command substitutions.
+When home is unset and `DEER_FLOW_PROJECT_ROOT` is configured, search the launcher's
+`backend/.deer-flow` first, then the standalone harness project root. Scan both
+legacy threads and user-scoped threads in that root. With no override, retain
+the two checkout layouts. Display an external home as `{DEER_FLOW_HOME}` rather
+than its absolute host path, and never include file contents in the manifest.
+Coverage lives in `backend/tests/test_support_bundle.py`.
+This lookup follows the local launcher's root `.env`; it does not discover
+`backend/.env` or `DEER_FLOW_ENV_FILE` used by standalone Gateway launches.
+For those launches, export the effective `DEER_FLOW_HOME` when collecting a bundle
+and ensure the checkout `.env` does not override it. Tests clear all three runtime
+path variables and compare storage defaults with the launcher's actual shell blocks.
+
+## Dependency and Label Checks
+
+`check_extension.py`: Gateway wheel asset validator; example CI:
+`extension-package-check.yml`. Tests: `backend/tests/test_extension_check_script.py`.
+
+`check.py`: UTF-8 replacement decoding; pnpm uses
+`PYTHONIOENCODING=utf-8:backslashreplace`. Preserve `make check` Unicode/exit
+status in any locale. Tests: `backend/tests/test_check_script.py`.
+
+`doctor.py`/`setup_wizard.py`: at `main` start, retain stdout encoding with
+`errors="replace"`; guard `reconfigure` for embedded/captured streams.
+Legacy-terminal/pipe tests: `backend/tests/test_setup_script_encoding.py`.
+
+`sync_labels.py`: guard stdout/stderr `reconfigure` at `main` start. Retain
+TTY encodings; intentionally force UTF-8 on redirects for CI logs. Both use
+`errors="backslashreplace"`; decode `gh` output as UTF-8 with replacement.
+Tests (stub `gh`/`yaml`, ASCII stdio): `backend/tests/test_sync_labels_script.py`.
+
+`check_label_declarations.py`: stdlib-only; reject unsupported expressions.
+Tests: `backend/tests/test_label_declarations.py`.
+
+## Manual Claude OAuth Export
+
+`export_claude_code_oauth.py` validates Keychain JSON as an object containing an
+object `claudeAiOauth` and a nonblank string `accessToken` before any export action.
+Malformed containers use the existing token-missing error without exposing their
+contents. The loader returns the full container together with the validated token;
+export actions use that token without repeating credential-shape assumptions or
+trimming its contents. Offline CLI coverage:
+`backend/tests/test_claude_keychain_export.py`.
+
 ## Service Startup Contracts
 
-`soc_stage_report_summary.py` is a standalone stdlib reader of one explicit exported
-`report.json`, not a live database or API reporter. Verify its report checksum when
-the manifest exists, reject duplicate members, and mark incomplete stages diagnostic.
-Accept fixed round, explicitly merged, and batch reports. Batch reports retain per-row
-source identities and source settings; validate provenance without inventing one round.
-Only emit allowlisted metadata and aggregates; no alert details, labels, Memory content
-or configuration snapshots. Match the operator conclusion's broad `memory_uses`
-definition (including reference), keep missing usage/duration unknown, and average
-only final Run durations, not all retry attempts. Retain both static coarse groups;
-policy-enabled outcomes cannot all be attributed to Memory. Never rewrite source
-reports; optional output must be a new private file. Test with synthetic reports.
-The operator handoff may carry this standalone file alongside an older application
-archive: hash it independently, retain the archive identity, and never imply that
-copying the statistics tool updates Runtime. Require it and its tests in future source
-inventories. `docs/soc-corpus-operations-runbook.md` owns generated chapters 8–14:
-first-batch retries precede review in chapter 8; first validation report precedes
-incremental review; `accumulate` only records saved results and never dispatches a
-batch. Routine status, retry, continuation, backfill and export use `--batch` without
-operator-supplied round IDs. `plan --phase pending` freezes the current shared candidate
-queue and rechecks experiment/plan/learning-generation plus candidate hashes during
-apply; new arrivals never expand that plan. Legacy initial/report-bound incremental
-modes retain their old validation contracts. Page review remains available.
-After additional review, fully rerun validation and save a separate batch report.
-Batch reports automatically assemble current per-member results, including continuations;
-retain the actual options/Memory provenance and never claim a single frozen snapshot
-when sources differ. Do not combine separate full validation passes or infer no
-experience from no use.
-Use the same chapter source in the delivered manual and future generated manuals;
-STG and real integration procedures are appendices, not intervening corpus steps.
+`serve.sh` reads `DEER_FLOW_GATEWAY_STARTUP_TIMEOUT` after root `.env` for
+local Gateway port readiness (positive integer seconds, default 30). Reject
+invalid values before cleanup/startup except `--stop`; keep frontend/nginx waits.
+Launcher/wait-loop tests (processes, readiness and time stubbed):
+`backend/tests/test_serve_gateway_startup_timeout.py`.
 
-`soc_pingan_validation_report.py` is a standalone stdlib read-only statistics tool,
-with sibling `soc_validation_report_data.py` and `soc_validation_report_render.py`.
-It may run outside the installed checkout; `--root` resolves only the target DEV DB
-and report location. Never import Runtime/configuration, run migrations, call a model,
-write business data, or package the DB. Open SQLite with `mode=ro` and `query_only`,
-page bounded SELECTs with closed cursors, cap each query, and reject an export when
-the same connection's `data_version` changes during collection. Do not use a long
-read transaction or `immutable=1` on a live database. Select a fixed full validation
-round by membership, not the last single-alert round or an old CLI receipt; reject
-unfinished work and preserve later runs separately. A saved learning generation binds
-the selected validation round's learning rows, candidates and later runs; legacy
-rounds retain the unversioned generation. Never count retired-generation candidates
-as current learning. Default selection rejects superseded rounds; an explicit
-`--round` may export their fixed history with a prominent historical-report notice.
-Candidate current/as-of states
-and missing historical proof must remain distinct. Group lineage is many-to-many;
-never turn rejected candidates into inferred business reasons or missing Memory into
-matching failures. Reports retain both tiers, denominators, unmeasured usage and
-sampling provenance. Formula-escape CSV cells, create private new output directories,
-and publish the hash manifest last. Synthetic tests must prove immutable source DB,
-scope/selection, drift rejection, aggregation and no-dependency standalone invocation.
-Optional `--exclude-failed` and `--exclude-semantic-failed` produce a separate effect
-report after full-round collection/validation. Filter fixed validation jobs by the
-union of the explicitly selected conditions (job failed / semantic review failed),
-never count overlaps twice and keep `partial` semantic reviews. Apply the same filter
-to every evaluation aggregate and review selection, retain first-batch sources and
-later followups, and preserve the original full scope identity. Record selected rules,
-original/excluded/included counts, reason counts and overlap in `evaluation_scope`,
-with `excluded_alerts.csv` included in the receipt. Never present the filtered scope
-as a full-batch success rate or overwrite an earlier report.
-An independently hashed tool directory is not an application release or updater;
-it never copies files into the installed checkout and requires no service deployment.
-Use one `VALIDATION-REPORT-TO-TRANSFER` directory for full and filtered report modes;
-current application releases already include the scripts, so standalone transfer is optional.
+Both launchers call `sandbox-mode.sh` via Bash; keep it Bash/awk-only.
+Dev passes `$PROJECT_ROOT/config.yaml`; prod passes `$DEER_FLOW_CONFIG_PATH`.
+For AIO, omitted/blank/empty-quoted/YAML-null URLs (including comments) select
+`aio`; preserve quoting so `"null"` and `"~"` remain nonempty strings.
+This is not a general YAML parser or URL validator; aliases, multiline values
+and environment expansion are out of scope. Offline helper and launcher tests:
+`backend/tests/test_docker_sandbox_mode_detection.py`.
 
-`soc_memory_snapshot_audit.py` applies those same boundaries to one fixed round and
-Memory. Export governance fields and source links, never logs, prose or secrets;
-post-freeze updates leave history unknown. Hash actual selector definitions without
-executing/reimplementing policy. Commands and evidence limits live in the report guide.
+The setup wizard offers Webz.io as a news-only `web_search` provider using
+`deerflow.community.webz.tools:web_search_tool` and `WEBZ_API_KEY`. Keep its
+entry aligned with the credential check in `doctor.py` and the example config.
+The adapter uses async HTTPS requests, offloads lazy config loading, and maps
+`source` to provider `domain`; explicit `published_from` overrides recency.
+Explicit `max_results` overrides the wizard's configured default; omission or
+null uses configuration or 5. Reject boolean/fractional configured counts before
+clamping to 1–100. `returned_results` is the normalized page size, not a match total.
+Skip malformed page entries with index-only warnings; retain valid neighbors.
+Reject malformed envelopes and nonempty pages with no valid entries, logging
+no provider payloads or credentials. Contract tests live in `backend/tests/test_webz_tools.py`.
 
-Host `reset-dev-data` is an explicit, DEV-only offline operation, never part of
-ordinary install/start/resume. Default is read-only preview; `--confirm RESET-SOC-DEV`
-archives only `soc_agent_dev.db` and its SQLite sidecars with a hash manifest before
-leaving the active path empty. Explicit `--no-backup` is an operator-selected destructive
-alternative, still requiring the same confirmation, DEV identity and maintenance guards.
-Preview and apply in that mode do not hash, copy or archive database contents; receipts
-declare `backup_enabled=false`, null backup directory and unavailable reset recovery.
-Never infer this choice from a fresh-install flag or prior project backup. Refuse listening services, orphan workers, open file
-handles, symlinks and hard links; share a maintenance lock with Host startup. Keep
-STG, authentication, source corpus, configuration and secrets untouched. Restore
-requires explicit confirmation, verifies the saved file set, and never overwrites
-a new database. Next ordinary Host start owns empty-schema initialization. Tests
-must use temporary checkouts/databases, not the running DEV database.
-
-`soc_pingan_reset_dev.sh` is a standalone convenience wrapper around that installed
-Host CLI, not an updater or a second database implementation. Default is preview;
-`--confirm RESET-SOC-DEV` validates DEV identity before stop, rechecks readiness,
-then delegates one reset. Validate JSON schema, target and status, retain a unique
-historical receipt, and atomically publish the latest successful receipt. Never
-auto-start or repeat reset after a startup failure. Keep the procedure in
-`docs/soc-dev-database-reset.md`; tests invoke only a fake installed Host checkout.
-Forward an explicit `--no-backup` consistently to preview and apply, and reject a Host
-response that does not confirm that choice. Older installations must upgrade before
-using this new Host option; changing the standalone wrapper does not update Host code.
-
-`soc_bulk_review_learning.py` is an explicit DEV operator HTTP client for a frozen
-candidate list. Operator-facing `--phase pending` uses v4 plans that derive and freeze
-the current batch experiment/plan/learning generation. It requires neither a fixed
-report nor completed/idle batches; every draft/review admission rechecks scope and
-candidate hash. New arrivals are outside the plan, not a reason to block it; a changed
-learning generation is. Empty pending plans are valid no-ops. Legacy default `initial`
-planning requires completed learning and untouched
-validation. Explicit `incremental` planning binds an exported validation report and
-its verified manifest to the same experiment and saved results; derive round and
-experiment identities from that report, never the latest UI round. Require completed
-learning, a non-running, non-superseded source validation round, and no active work
-in either batch or single-alert tasks. Preserve these guards during apply/resume;
-do not reinterpret an old initial plan as incremental. Plan reads are inert.
-Apply uses the existing lesson
-draft and review endpoints, authenticated identity and idempotent review payloads;
-never write SQL, invent business facts, relax applicability, replace conflicts or
-approve candidates added after the plan. Preserve default core selections and saved
-optional limits. Cache successful drafts; ambiguous model completion requires an
-explicit retry. Store private per-item receipts and leave second-batch start manual.
-`status --plan` is a local read-only view: no network, model call or review mutation.
-After incremental review, operators create a new validation round and frozen Memory
-snapshot; never resume the source snapshot as though it included newly approved Memory.
-Apply defaults to at most eight concurrent candidate pipelines (configurable 1..8),
-with bounded rolling dispatch and each candidate's draft-before-review ordering.
-Serialize local state/receipt checkpoints and isolate HTTP handlers; authentication
-failure or interruption stops new requests while already submitted work is drained
-and recorded. Concurrency must not alter frozen plan identity or review idempotency.
-New plans freeze a 180-day review interval and 365-day activation validity. Accept
-legacy v1 plans only with their implicit 30/60-day policy; validate the schema and
-policy together. Resume never rewrites the plan, its hash, cached review payloads,
-idempotency keys or completed records to adopt newer defaults.
-The synchronous lesson-draft POST has a 1810s client wait, exceeding its dedicated
-1800s nginx response budget (one model call plus one output repair and admission).
-Other request budgets stay unchanged. Non-JSON HTTP 504 is reported as a gateway
-timeout with unknown completion, never as a model refusal or permission to retry.
-Updating standalone tools does not patch the installed application or nginx.
-Explicit `--experiment` plans use that experiment's server status and freeze its
-plan ID; do not compare a successor against the canonical quick-workbench ID.
-Reject facts inventories and incomplete learning in either phase; reject an already-started
-validation batch in `initial`, and require the report-bound guards above in `incremental`.
-Pending candidates and resumed plan membership remain scoped to this explicit
-experiment; inherited confirmed records are not approved again. Legacy plans without
-the explicit-selection field retain their original quick-workbench behavior.
-Incremental review also accepts a full-scope source stopped specifically for
-`memory_governance_changed`, after all experiment work has drained. This is review
-admission only: preserve frozen report/result/inventory checks, reject superseded
-sources and every other blocked reason, and never resume or rewrite the stopped
-round. Pending candidates come from the whole current experiment/generation, including
-completed subset followups and any earlier pending work; the report is provenance,
-not a candidate-source filter or proof that all validation members completed.
-The handoff inventory must include the rebalance contracts/services, facts-only and
-successor experiment regressions, explicit-experiment bulk review tool/tests, and
-`docs/soc-corpus-rebalance.md` plus the review guide. Default Web execution uses
-static groups without a facts prepass; the semantic successor CLI remains opt-in.
-Source delivery preserves the DEV database and existing progress for the same plan;
-changed membership creates a separate plan and does not inherit old-plan progress.
-`soc_learning_candidate_audit.py` reads only persisted first-batch facts with SQLite
-read-only/query-only guards and drift detection; do not rebuild groups or compare
-operational labels. Keep both procedures in `docs/soc-learning-review-batch.md` and
-test only with temporary databases and fake HTTP clients.
-
-`soc_pingan_validation_database.py --experiment EXP-...` previews an explicit
-validation-only cleanup on a stopped Host DEV checkout; `--apply` requires the
-operator's decision to discard all second-batch attempts. It shares the existing
-maintenance lock, process/file checks and backup manifest with whole-DEV maintenance,
-but copies and verifies the complete SQLite family before a single transaction.
-`backend/scripts/soc_validation_reset_store.py` owns the fixed schema-0032 deletion
-allowlist and scalar/JSON provenance checks. It keeps first-batch records, experiment
-membership and governed Memory, rejects active/shared/unknown lineage, and never
-constructs services, migrates, changes journal mode or starts models. New work must
-be prepared through the existing round API with all first-batch options explicitly
-supplied, as documented in `docs/soc-validation-reset.md`. Ship both maintenance
-modules, their isolated tests and that procedure in the required handoff inventory.
-When historical learning options differ, `--learning-round` explicitly selects a
-same-experiment learning round with completed work and all five valid saved options;
-do not choose a majority/newest baseline or rewrite the other learning history.
-Carry the baseline through preview, backup receipt, reset and post-delete checks.
-The CLI always loads its own matching SQL module. A separately hashed standalone
-maintenance directory may run outside the checkout with `--root` identifying only
-the target DB/environment/lock; it is not an application updater and must not copy
-code over the target. Include the existing DEV database helper, source identity,
-per-file hashes and Python/schema requirements; all deletion/backup guards still apply.
-
-PingAn corpus transfer is separate from source/config releases. The bounded
-`build_pingan_corpus_transfer.py` reads the same frozen manifest/index as
-`soc_pingan_stage_internal_corpus.py`, packs only its four allowlisted artifacts in
-Downloads-compatible paths, verifies all hashes by streaming, then publishes without
-overwriting an existing archive. It must never unpickle data, package a business DB,
-include credentials, or extract an untrusted archive during inspection. Reuse unchanged
-internal data by hash; source updates must not repeatedly transfer corpus payloads.
-
-The SOC Docker wrapper defaults to a prebuilt frontend without changing backend DEV
-or authentication. `build-frontend` prepares an isolated `.soc-frontend` snapshot;
-publish its manifest only after successful compilation. Dependencies synchronize
-with the frozen lock only when their manifest changes or Next is missing. An unchanged
-restart must neither compile nor install. `SOC_FRONTEND_MODE=dev` restores hot reload.
-Readiness uses lightweight entry checks, not route compilation. The Mac Host wrapper
-uses the same build script before migrations or sidecar replacement. DEV defaults to
-prebuilt pages with explicit `--frontend-mode dev` rollback; STG rejects hot reload.
-Build and serve receive the same resolved auth/public configuration. The generic launcher
-accepts an operator-owned `--frontend-entry=PATH` and `--skip-env`; ordinary upstream
-startup remains unchanged. Keep all SOC build behavior outside `serve.sh`.
-The generic `--loopback-internal` option binds Gateway and the built-in frontend
-commands to `127.0.0.1`, pins Uvicorn forwarding trust to `127.0.0.1,::1`, and passes
-`DEERFLOW_FRONTEND_HOST=127.0.0.1` to an operator-owned frontend entry, which must honor
-that contract. PingAn Host DEV enables it together with
-`SOC_DEV_CORPUS_LOCAL_CONTROL_ONLY=true`; STG keeps DEV controls disabled. Nginx remains
-the LAN entry and appends the actual connecting address to `X-Forwarded-For`. Keep both
-internal listeners closed to LAN clients: Next's API rewrites cannot independently
-establish client identity. Host-local controls use `localhost:2026`; a hostname or a
-browser-supplied forwarding header is never authority. Generic and Docker launch defaults
-remain unchanged.
-Explicit demo startup also prepares the backend corpus index once via the bounded
-group endpoint and a one-item result page before reporting ready. Normal authentication is never bypassed for
-warmup; its first authorized visit still initializes the index. After a code-triggered
-Gateway reload, `SOC_DEMO_AUTH_DISABLED=1 ./scripts/soc-memory-dev.sh warm-index`
-repeats that preparation without changing a service or business record.
+Optional browser dependency detection reads the top-level `tools:` sequence
+without requiring `name` to be its first mapping key. Both indented and
+indentless lists are supported; nested option names and block-scalar text
+must not enable the browser extra. Keep the detector standard-library-only
+because it runs before dependency synchronization. Read UTF-8 config files
+with or without a leading BOM so the first section remains detectable.
+`detect_uv_extras.py` checks an existing `DEER_FLOW_CONFIG_PATH` first, then
+`DEER_FLOW_PROJECT_ROOT/config.yaml`, before the legacy checkout candidates.
+Keep this lookup standard-library-only; test shadowing checkout configs and
+the CLI under `python -S` in `backend/tests/test_detect_uv_extras.py`.
+For Discord and Buzz, detect the provider extra when either legacy
+`channels.<provider>.enabled` is true or both `channel_connections.enabled`
+and `channel_connections.<provider>.enabled` are true. Keep these gates aligned
+with `enabled_transport_providers()` in the channel service, including setup
+wizard output. The provider set includes only channel providers declared in
+`backend/pyproject.toml` under `[project.optional-dependencies]`; update it when
+a channel gains or loses an extra. Providers whose SDKs are core dependencies
+must not be added to this set. Nonempty `UV_EXTRAS` continues to override
+config-derived extras.
+`serve.sh`'s config-presence gate also accepts the project-root file when the
+checkout has no config. `tests/test_serve_config_presence.py` runs the full
+launcher through dependency detection with service operations stubbed.
+`setup-sandbox.sh` also strips the leading BOM and normalizes CRLF before selecting the image;
+keep its shell filter compatible with GNU and BSD sed.
+An Apple Container pull that succeeds on macOS must not fail the setup step
+just because Docker is absent. Keep the Docker pull when Docker is available,
+including after an Apple Container failure, and retain the final image-config
+note rather than exiting early on Apple Container success.
 
 The root `PORT` value configures Docker's published nginx ingress only; local
-orchestration pins Next.js to `3000`. Runtime commands launch from the already
+orchestration pins Next.js to `3000`. Local runs bind the Gateway and Next.js to
+`127.0.0.1`; `nginx-local-conf.sh` keeps nginx on loopback or, for a set
+`BIND_HOST` (strict IP/hostname check), renders `temp/nginx.local.conf`
+listening there. `serve.sh` resolves it before stopping anything, so a bad
+value cannot tear down a running stack. Keep `dev.mjs`'s all-interfaces default: the Docker dev frontend needs
+it. Runtime commands launch from the already
 synchronized environment with `uv run --no-sync`. Production Compose probes
 Gateway `/health`, and `deploy.sh` waits for all services before reporting
 success; failures print Compose status and recent Gateway logs.
 
-PingAn internal Apple Silicon DEV/STG uses
-`scripts/soc_pingan_macos_host_dev.py` as a tenant-specific wrapper around the
-same host launcher. `install` may use only the configured PingAn PyPI/NPM
-registries; `start` must retain `--skip-install`, disable Next.js telemetry, and
-use `LocalSandboxProvider`. `SOC_PINGAN_ENV` is the single host Runtime selector:
-`dev` enables the Memory/Corpus workbenches and uses `soc_agent_dev.db`; `stg`
-disables those DEV surfaces, rejects `--demo-no-auth`, and uses
-`soc_agent_stg.db`. DEV launches DeerFlow with `--dev`; STG launches it with
-`--prod` so HMR is not part of the staging process. Memory, tenant-policy, and
-automation scopes must be derived from that selector rather than configured
-independently. Reviewed tenant policy
-remains enabled and real external action execution remains disabled in both
-profiles. DEV must validate the canonical Memory corpus plus the merged
-corpus/index/payload store before starting; STG must not depend on those
-demonstration artifacts. The wrapper must not add Docker as a prerequisite,
-hard-code a developer home path, or create a second Gateway/frontend/nginx implementation.
-The PingAn profile and full-transfer validation keep `SOC_LLM_MAX_CONCURRENCY` and
-`SOC_PINGAN_MODEL_GATEWAY_MAX_CONCURRENCY` aligned at `16`; Host's missing-value fallback
-is also `16` and preserves explicit settings. Changing that deployment model ceiling
-requires the matching private profile and a full Host restart. Within the existing
-ceiling, the deployment Mac can save a corpus admission limit of 1..16 from run settings
-without restart or env edits. Preserve the database-adjacent `*.corpus-capacity.json`
-through normal data-directory upgrades; include `demo/corpus_capacity.py` and its tests
-in the handoff inventory. LAN users only read the value. The SQLite legacy Worker
-remains single-worker.
-All SOC database owners use `backend/soc_agent/db/engine.py` for a 30-second SQLite
-busy timeout on every connection. WAL requires the upstream WAL-reset fix: SQLite
-`3.51.3+`, or patched `3.44.x >= 3.44.6` / `3.50.x >= 3.50.7`. Older runtimes retain
-existing rollback journaling with a warning; opening an existing WAL database for
-writes fails with an upgrade instruction instead of silently changing journal mode.
-Check the SQLite embedded in `backend/.venv/bin/python`, not the `sqlite3` shell's
-version, before promising WAL on a delivered Host runtime. Result persistence retries
-only SQLite lock contention, at most three fresh transactions, without rerunning the
-model. Include that module and its engine/contention regression tests in the required
-handoff inventory. Existing databases adopt the connection policy on service restart;
-operators need no extra migration or PRAGMA command. Preserve the whole stopped data
-directory, including WAL sidecars, through the existing upgrade installer.
-Before starting any sidecar, `start` must resolve the absolute local SOC SQLite URL,
-run the SOC migration once, and pass that URL to the API/worker with their own
-auto-migration disabled. `0032_corpus_revision_index` adds only the covering Run revision
-index used by the corpus list; on a large existing database the first creation can take
-time. Keep it in the source inventory and generated Runbook's expected schema revision;
-operators wait for normal startup preparation, never issue ad-hoc index SQL.
-`status` reports the persisted `soc_alembic_version` without creating a missing database.
-It retains `schema_unavailable` for compatibility but includes `reason=database_busy`,
-`schema_read_failed` or `schema_version_empty`, plus the SQLite name/message for read
-errors. The standard-library read-only probe closes its connection and keeps its short
-wait; a busy probe does not prove a missing schema or lost data.
-A pristine SQLite initialization may clean its own partial
-artifacts and retry one transient `disk I/O error`; an existing database is never deleted
-or retried destructively. Generated Runbooks therefore must not require operators to
-source local profiles and repeat migration manually.
-After external corpus staging, `check` must also validate all runtime files,
-mode-`0600` local profiles, the project model-gateway references, isolated SQLite
-configuration, and the non-root nginx config. It must reject retired LiteLLM model
-references before dependency installation or migration.
+Both compose files mark `../.env` and `../frontend/.env` optional
+(`path`/`required: false`, Compose 2.24+), so `make up`, `make down` and
+`make prod-logs` on a fresh checkout neither abort nor create them; an
+unreadable `.env` still fails. Do not seed them from the examples in
+`deploy.sh` as `docker.sh start` does: `.env.example` holds placeholder API
+keys the production Gateway would receive, and `make config` skips files that
+exist. Pinned by `backend/tests/test_compose_default_bind_host.py` and
+`backend/tests/test_gateway_startup.py`.
 
-Host Runtime scope and remote Provider targets remain separate low-level settings, but
-the PingAn Host deployment profile governs the approved pairings together. The legacy
-profile preparers statically write protected ZEUS and Agent Platform profiles into the
-mode-`0600` ignored env and initially activate
-`Runtime DEV -> ZEUS PRD + Agent Platform PRD`. The governed switch atomically applies
-that mapping or `Runtime STG -> ZEUS STG + Agent Platform STG`; startup and preflight
-reject drift. The reviewed legacy source proves only the Agent Platform STG origin, not
-the STG `YHSYS` credential or ownership-workflow IDs, so STG must fail before mutation
-until that complete private profile exists. The switch must preserve model configuration,
-lifecycle/callback Provider modes, and action authority byte-for-byte. Lifecycle and
-callback still start in `fake` mode.
+`docker.sh start` runs Compose from `docker/` without `--env-file`, so
+dev-compose interpolation sees only the shell. `load_proxy_env_from_dotenv`
+exports the `.env` keys interpolation needs (proxy variables and
+`AUTH_TRUSTED_PROXIES`, whose `environment:` default would otherwise replace
+the `env_file` value); shell exports still win. Pinned by
+`backend/tests/test_compose_auth_trusted_proxies.py`.
 
-That wrapper also owns three sidecars through
-`scripts/soc_pingan_host_sidecars.py`: the loopback project model gateway on `4001`, the
-legacy ZEUS compatibility API on `8090`, and one durable compatibility worker. Internal
-DEV may bind authenticated `8090` to the trusted LAN to preserve the old upstream entry;
-`--local-only` must force it back to loopback, and `4001` must never leave loopback. Sidecar PID/state
-files are marker-checked before signaling, logs remain under the ignored Host DEV state
-directory, and `stop` includes disabled services so stale processes cannot survive a
-configuration change. Keep the model gateway single-process because its admission
-semaphore is process-local. The Host profile aligns the gateway and SOC Runtime at sixteen
-concurrent model calls; the SQLite compatibility Worker remains single-worker. The PingAn
-model profile must set `disable_streaming: true`: EAGW returns a complete response, while
-LangChain converts that response into one buffered chat chunk without disabling DeerFlow's
-Run/SSE event stream. The old `sec_know_model`, LiteLLM, Celery, and Redis startup scripts
-are reference material, not Host DEV dependencies.
-The Gateway and compatibility Worker must receive the same governed SOC Runtime settings,
-including tenant-policy profile, policy Skill, software-path catalog, environment scope,
-and model-admission limits. Keep those values in the shared start environment rather than
-only in the Gateway shell command. The Worker publishes a PID-bound readiness file only
-after constructing its database, Runtime, lifecycle, and callback dependencies; Host
-startup must fail if that signal is absent instead of reporting a short-lived Worker as
-running.
+`deploy.sh` never sources the repo-root `.env`; Compose reads it via
+`--env-file`, and shell exports outrank that file during interpolation (an
+exported-but-empty variable still wins). So `BETTER_AUTH_SECRET`,
+`DEER_FLOW_INTERNAL_AUTH_TOKEN` and `DEER_FLOW_CREDENTIALS_KEY` resolve shell →
+`.env` → persisted file under `DEER_FLOW_HOME` → freshly generated, and a
+`.env`-provided value is left
+unexported so Compose parses it itself. Whether `.env` provides one is
+Compose's answer, not a `KEY=VALUE` grep: Compose also accepts `KEY: VALUE`
+lines and interpolates `${VAR}` inside values, so the script renders a stub
+project whose only environment entry is `${KEY}` through
+`docker compose config` (same `--env-file`, stub on stdin, project directory
+`docker/`) and reads the value back; `""` means empty or unset and falls
+through to the persisted/generated secret. This works on every Compose v2
+(the README floor is 2.24; `config --environment` would need 2.28), and a
+failing probe stops the script rather than guessing. `read_dotenv_value`
+stays for the end-of-run summary only. Do not export a value the script read
+from `.env`: that shadows Compose's own dotenv parsing and re-creates the bug
+where `make up` replaced the operator's secret with a generated one.
+The credentials key (a Fernet key) persists as `.credentials_key`, the file the
+Gateway itself generates in that runtime home, via a noclobber (`O_EXCL`)
+create that reads a concurrent winner back.
+`backend/tests/test_deploy_dotenv_secrets.py` pins the order and the probe;
+its real-Compose cases run against the installed `docker` CLI and against any
+standalone binaries listed in `DEER_FLOW_TEST_COMPOSE_BINARIES`.
 
-`backend/scripts/soc_pingan_legacy_fake_acceptance.py` is the no-network
-composition check and must always report `simulated=true`. It constructs its own
-value-free protocol fixture and must not depend on `datas/legacy_demos`, PKL files, or
-private alert input. The separate
-`soc_pingan_prepare_legacy_live_request.py` accepts one approved pending alert ID,
-reads the complete payload from the hash-bound Workbench payload store, creates a
-fresh session, and atomically writes the private request at mode `0600`; operators
-must not copy/edit the tracked protocol example. `soc_pingan_set_legacy_provider_mode.py`
-must update lifecycle and callback together without printing the private env. The separate
-`soc_pingan_legacy_live_acceptance.py` accepts only a private mode-`0600`
-`*.local.json`, loopback compatibility API, explicit `--confirm-live`, and both
-provider modes set to `internal`. Its pass gate requires a fresh durable job,
-idempotent replay, real pending-alert lifecycle evidence, a Runtime run/model,
-and a delivered real callback attempt. Reports must contain hashes and state
-only, never request/result bodies or credentials.
-Run `soc_pingan_zeus_lifecycle_smoke.py` first against the same prepared request.
-It is read-only and must prove `provider_code=200`, `provider_status=1`, and
-`mocked=false` before a model-backed task is submitted. All ISEC providers must sign
-the exact serialized bytes later passed to HTTPX with `content=`; `json=` must not
-reserialize a signed body.
-For an unknown lifecycle business code, the separate
-`soc_pingan_zeus_lifecycle_response_probe.py` may print and save the complete response
-only after explicit live confirmation. It must reuse the Worker Provider, require the
-private prepared request, store only under an ignored mode-`0600` `*.local.json`, and
-must not weaken the bounded lifecycle smoke or become a normal telemetry path.
-The live command must receive the checkout-resolved absolute SOC database URL and
-must verify the SOC migration/evidence tables before its first network request. A
-failure after durable submission is recovered only with the same private request and
-explicit `--resume-existing`; do not prepare a new session or rerun completed Runtime
-and callback work. A resumed pass replaces the fresh-submission gate only, while all
-idempotency, lifecycle, Runtime, and real-callback gates remain mandatory.
-Do not resume a Job whose persisted provider/worker result itself failed, or after
-changing signing/provider/worker code. Keep that Job as audit evidence and create a fresh
-session only after the read-only lifecycle smoke passes. Local self-submission proves the
-component path; definitive compatibility still requires ZEUS-originated submission and
-old-page readback.
+Deployment commands check `DEER_FLOW_HOME` writability before setup and check
+persisted secret readability only when shell/Compose dotenv overrides are absent.
+Both failures identify the affected path and print the recursive ownership
+recovery hint for the runtime home. Existing secrets are only read, so a
+readable, read-only file is valid. `down` skips these checks and all secret
+resolution/generation so permission damage cannot prevent teardown. Coverage:
+`backend/tests/test_deploy_home_writability.py`.
 
-Final PingAn transfer packaging first runs the model-gateway and workflow
-legacy-profile preparers in the external preparation checkout. Both are static AST
-readers: they must not import or execute legacy packages. The generated
-`.env.soc-dev.local` and `.secrets/eagw-private-key.der` are mode `0600`, belong only
-in the private overlay, and must never enter the source archive or report. Build only
-from a clean commit and inspect both archives before replacing the previous
-`READY-TO-TRANSFER` contents.
+`doctor.py` checks the config file the Gateway would load, not a fixed
+`<checkout>/config.yaml`. It mirrors how `serve.sh` hands the two
+config-location variables to the Gateway: `.env` values for
+`DEER_FLOW_CONFIG_PATH` / `DEER_FLOW_PROJECT_ROOT` override the shell (other
+keys stay shell-first), an unquoted leading `~` in them expands as `source`
+does (a quoted one stays literal), and an unset or empty
+`DEER_FLOW_PROJECT_ROOT` becomes the checkout. It then asks the harness
+(`AppConfig.resolve_config_path`) instead of re-implementing its order. An
+override the Gateway would reject (`DEER_FLOW_CONFIG_PATH` missing,
+`DEER_FLOW_PROJECT_ROOT` not a directory) fails `config.yaml found` with the
+Gateway's error, and the config-dependent checks skip. Any failure to import
+the harness is reported, never raised: doctor diagnoses broken environments.
+Pinned by `backend/tests/test_doctor.py::TestMainConfigResolution`.
 
-The full transfer builder must run `soc_pingan_compatibility_gate.py` before packaging.
-It checks a fixed synthetic baseline generated by the previously delivered code, restoring
-historical Workbench records and verifying reviewed Memory reuse and scope rejection in
-temporary databases without model calls. Require every designated test and behavioral case
-to execute successfully; failure, skip/xfail, missing dependencies/files/results, zero tests,
-or timeout blocks delivery. There is no bypass flag. Bind the receipt to the source commit,
-all packaged-source fingerprints and baseline hash; reject source drift after verification.
-Stage and inspect replacement artifacts before publication, preserving the previous verified
-handoff if checks fail. This preparation gate neither touches business databases nor adds
-an operator step to internal Mac deployment.
+Doctor screens Browserless fetch/capture and Crawl4AI, Firecrawl, and fastCRW
+fetch backends with the runtime's `validate_delegated_backend_url`, before
+provider success shortcuts. Keep endpoint defaults, `CRW_API_URL` precedence,
+config environment resolution, and isolation acknowledgement coercion aligned
+with those tools. `allow_private_addresses` affects targets only. Doctor reports
+refused delegation with the deployment guide; it does not verify egress policies.
+Offline coverage lives in `backend/tests/test_doctor.py`.
 
-Generated transfer Runbook command blocks must be independently copyable. Any
-block that sources `.env.soc-dev.local` must first resolve the current checkout
-with `backend/scripts/soc_pingan_local_paths.py --shell` in that same block; do
-not rely on `TARGET_REPO`, `SOC_REPO_ROOT`, or shell exports left by an earlier
-Runbook step.
-Interactive `read` commands inside a `bash <<'MARKER'` block must read from
-`/dev/tty`; otherwise they consume the next line of the heredoc as user input
-and corrupt the remaining shell program.
-Generated Runbooks must present the normal first-run sequence as the primary
-path. Put status probes that exist only for interrupted-run recovery after that
-sequence, rather than implying a service can already be running before its first
-start step.
-Every full transfer generates two independently complete manuals:
-`PINGAN-INTERNAL-MAC-UPGRADE-RUNBOOK.md` preserves existing learning/review data and
-contains no executable reset commands; `PINGAN-INTERNAL-MAC-REINITIALIZE-RUNBOOK.md`
-stops the old Host, checks ports, offers a whole-checkout backup, delegates
-replacement to the installer, and places `reset-dev-data` preview and
-`--confirm RESET-SOC-DEV` after dependency installation/preflight, before the first
-Host start. Reinitialization resets SOC DEV only, with a separately selected backup; it does not uninstall Mac tools
-or erase accounts, STG or original corpus. The two manuals replace the old single
-`PINGAN-INTERNAL-MAC-RUNBOOK.md`; the full source/private handoff therefore contains
-six files. The report's `runbooks` mapping records both manuals and their SHA-256;
-keep `runbook` as the selected-default compatibility field. Upgrade is the default.
-The builder's `--initialize-soc-dev` flag selects the reinitialization manual and
-records `reset_soc_dev_requested=true`; it never runs reset or changes installer
-behavior, and both manuals are generated regardless of this flag.
-Fresh DEV defaults to 16 without a saved capacity setting. Reinitialization preserves
-saved lower limits; its manual directs operators to save 16 before the new validation.
-Startup-failure recovery and the batch-runbook handoff must retain the selected
-manual's choice rather than suggesting a reset. Ordinary redeploy still preserves data;
-restarting/resuming a batch must never repeat the reset. Preserve authentication,
-STG, raw corpus, configuration and secrets. Do not use whole-checkout deletion as
-an initialization shortcut. Before replacing an existing checkout, verify its four
-external Downloads corpus copies, stop Host, verify all five ports are free, and
-offer a private independent checkout backup outside the target. Default both backup
-choices to yes; explicit `soc_backup_project=no` skips compression and archive hashing,
-while `soc_backup_database=no` passes the Host's `--no-backup` only for reset. Ordinary
-upgrade never deletes the database. Skipping backup does not skip preflight, service
-stop, port checks or the installer's transaction recovery. Show explicit
-backup stage messages and explain that tar compression and shasum hashing can take
-a long time without further output. Installation follows only after the success
-marker `Verified stopped-checkout backup`, or the explicit operator skip marker.
-Neither choice removes earlier backups. A documentation-only split may update
-the manuals and their report hashes for an existing release without rebuilding or
-modifying its verified source/private archives or installer. Operators already
-upgrading continue at their unfinished step instead of restarting the procedure.
-The installer's temporary rollback is deleted on installation success and does not cover later
-build/start failures. Explain that the new private overlay replaces old private
-configuration and full replacement still requires project dependency installation,
-while existing Mac tools and unchanged corpus transfers can be reused.
-Clean installation must be delegated to the generated standalone
-`INSTALL-PINGAN-MAC.sh` and invoked with `bash`, never sourced. The installer
-resolves the transfer directory from its own `BASH_SOURCE`, verifies the exact
-archive hashes and staged checkout before stopping the old checkout, and keeps
-all `exit` behavior inside its child shell so a failed install cannot close the
-operator's interactive terminal. Do not put a bare `exit` in a Runbook command
-block.
-Do not instruct operators to replace JSON placeholders or edit generated private
-requests/config by hand when a bounded repository command can derive and validate them.
-Clean redeploy instructions must extract into staging first, invoke the old checkout's
-Host DEV `stop` command before deleting that checkout, and fail closed while any of
-`3000/8001/2026/4001/8090` is still listening. Never remove or move a running checkout:
-daemon processes can retain a deleted cwd and evade the replacement checkout's PID state.
-An existing checkout is also the owner of persistent Host DEV state. The generated installer
-must copy the explicit allowlist (`backend/.deer-flow/data`, JWT/user/agent/thread Memory and
-workspace state, managed integrations/subagents, retrieval state, and internal validation
-evidence) into the staged release before deleting its rollback checkout. It must preserve the
-whole SQLite data directory so each database travels with its `-wal`/`-shm`/`-journal` sidecars,
-while new private-overlay config and `pingan-context` remain release-owned. PID files, logs,
-generated skill views, caches, old transfer artifacts, and other ignored output must not leak
-across releases. Any restore failure rolls back the old checkout; routine redeploy must never
-delete or recreate an existing database.
+CLI credential JSON checks accept UTF-8 with or without a leading BOM, matching
+the runtime credential loader. Keep `_load_json_object` on `utf-8-sig`; malformed
+JSON and invalid encoding remain missing/invalid sources without exposing tokens.
+Public doctor/runtime agreement is pinned by
+`backend/tests/test_credential_file_encoding.py`.
 
-Large PingAn corpus artifacts are transferred separately, not embedded in either
-archive. The private overlay carries the matching corpus manifest/index, and
-`scripts/soc_pingan_stage_internal_corpus.py` must validate every source file under
-`$HOME/Downloads/source` or `$HOME/Downloads/corpus` before atomically placing it in
-the checkout at mode `0600`. Resolve the home directory at runtime; never hard-code a
-developer's `/Users/...` path. Missing or mismatched files fail closed before Host DEV
-check/install.
+Root `make install` runs pre-commit through uv, so uv's tool bin directory
+need not be on `PATH`.
+
+`config-upgrade.sh` upgrades the file the Gateway loads by asking the harness
+(`AppConfig.resolve_config_path`) rather than copying its lookup order. It
+defaults `DEER_FLOW_PROJECT_ROOT` to the checkout, as `serve.sh` does, so
+`<checkout>/config.yaml` wins over a legacy `backend/config.yaml`. A missing
+`DEER_FLOW_CONFIG_PATH` or invalid project root is an error, never a fallback.
+Only "no config anywhere" creates `<checkout>/config.yaml` from the example.
+`backend/tests/test_config_version.py::test_config_upgrade_*` pins this.
+
+## Multi-Instance Dev Harness
+
+`dev_multi_instance.{sh,py}` must keep the rendered config passing the real
+multi-instance gate and every endpoint/data root inside its state dir
+(`backend/tests/test_dev_multi_instance_script.py`).
+Unless `keep_channels` is requested, disable provider flags in both `channels`
+and `channel_connections`; UI credentials can otherwise connect a bot
+later. Preserve `channels.leader_lease` and connection metadata.
+`--out` is a file path for `render-config`, `secrets` and `nginx-conf`; a
+directory, or a file ancestor, is rejected before any write.
 
 ## Shell Script Invocation Contract
 
@@ -455,6 +229,34 @@ Git Bash wrapper. Shell scripts that invoke sibling repository scripts must
 likewise prefix the target with `bash`. This keeps documented `make` commands
 working when a source archive, `core.fileMode=false`, or a non-POSIX filesystem
 does not preserve executable bits.
+
+The Windows wrapper resolves `bash.exe` under the Git installation root, which
+is the parent of `cmd/`, `bin/`, or `mingw64/bin/` depending on the distribution:
+Git for Windows puts `git.exe` in `cmd/`, while PortableGit and GitHub Desktop
+put it in `mingw64/bin/`. Bash and sh stay at `<root>/bin` and `<root>/usr/bin`
+in both layouts. `backend/tests/support/shell.py` mirrors the same rule for the
+shell-script suites.
+
+`make clean` deletes `backend/.deer-flow` (database, users, threads, uploads,
+secrets), which both compose stacks mount into `deer-flow-gateway`. Its recipe
+runs `check-data-not-in-use.sh` before `make stop` (which would stop a live
+stack's sandboxes) and refuses while that container runs; an absent or
+unreachable Docker passes. `make stop` must still run before the delete: it
+stops `deer-flow-sandbox*` containers, whose thread mounts live in that tree.
+`cleanup-containers.sh` must verify an anchored `<prefix>-` name after Docker's
+substring `name=` filter, and use the same rule for Apple Container IDs. Parse
+Apple Container JSON without interpolating the prefix into Python source; bad
+entries must not hide later valid containers. Offline stub coverage lives in
+`backend/tests/test_cleanup_containers_script.py`.
+`RUNTIME_DATA_CONTENTS` feeds both the help line and the deletion notice.
+
+Host-side pnpm calls must go through `scripts/pnpm.py`. With native Windows
+Python (`os.name == "nt"`), it checks `pnpm.cmd` before the generic `pnpm`
+lookup, which uses `PATH`/`PATHEXT` and may select an `.exe` or `.bat` in the
+same or an earlier PATH directory. If neither is found, it falls back to
+Corepack, checking `corepack.cmd` before `corepack`. POSIX Python (including
+MSYS/Cygwin Python) keeps the generic name first for each tool; the gate is
+based on Python's `os.name`, not the invoking shell.
 
 ## Public Skill Review Waivers
 
@@ -678,12 +480,14 @@ Memory backend async boundary:
   `failure_policy.read: fail_closed`; other recall errors preserve the existing
   log-and-empty-context behavior.
 
-CI runs these regression tests for every pull request via [.github/workflows/backend-unit-tests.yml](../.github/workflows/backend-unit-tests.yml).
+CI: `.github/workflows/backend-unit-tests.yml` runs these tests on every PR.
 
-Agentic browser sessions are process-local. The Gateway startup safety gate rejects
-`GATEWAY_WORKERS > 1` when `browser_navigate` is configured, because ordinary
-uvicorn worker dispatch does not provide thread affinity for browser tools, REST
-navigation, and the Live WebSocket.
+Agentic browser sessions are process-local. Browser use is refused when the Gateway runs
+more than one worker process, because ordinary uvicorn worker dispatch does not provide
+thread affinity for browser tools, REST navigation, and the Live WebSocket. Keep
+`GATEWAY_WORKERS=1`, and on the launchers that pass uvicorn no `--workers`
+(`scripts/serve.sh`, `backend/Dockerfile`) keep `WEB_CONCURRENCY` unset or `1` too — that
+is where uvicorn takes the process count from.
 
 Browser Live screenshots remain JPEG bytes inside the harness and the Gateway's
 bounded, drop-oldest frame queue. WebSocket clients that request
@@ -692,35 +496,23 @@ The legacy no-parameter protocol still base64-encodes frames into JSON at the
 Gateway boundary for backward compatibility. Unknown `frame_format` values
 receive a JSON error and close code 1008.
 
-Quick corpus validation adds `backend/soc_agent/demo/corpus_quick_validation.py` to
-the required handoff source inventory. Generated operator instructions retain Web
-start/pause/continue/review: 9,364 learning, 2,153 main validation, 3,764 supplementary.
-Only 6,367 old main-validation members move to learning; old learning stays and the
-supplementary set is unchanged. No facts prepass or automatic progress inheritance
-across different plans. Upgrades already using the 9,364/5,917 split preserve learning
-results and reviewed Memory. Document optional saved-Run accumulation before preparing
-new validation, rather than instructing every upgrade to restart learning.
-Full fresh validation requires explicit operator reset, never installer-side clearing.
-Second-batch all/reuse/explore retains explicit all-alert
-restart with retained history (`docs/soc-validation-restart.md`). Include the restart
-regression in the required inventory. Do not direct routine reruns through offline
-deletion maintenance; legacy staged CLI commands
-remain optional. Host startup and source-plus-private-overlay delivery are unchanged;
-apply code updates with a frontend rebuild and service restart, preserving data.
-The round CLI `retry --round ... --kind failed|semantic_failed` reuses the frozen
-round and dispatches only selected failures; optional concurrency never replaces its
-saved business settings. The CLI reads and sends the round version once, without
-automatic HTTP retries. Document pause/drain before bulk retry and export
-the same complete round afterward. Semantic retry supports both learning and validation
-rounds saved with review mode `apply`; facts inventories are excluded, and partial
-or skipped checks are not failures. Snapshot drift still requires a new round. Keep
-`docs/soc-corpus-rebalance.md` as the operator source, and mark any updated handoff
-manual as pending when its source archive does not yet contain the new command.
-The required handoff inventory also includes PingAn's `corpus_validation.py` scope
-predicate. Both Web and CLI omit its selected detector from two-batch evaluation,
-while the transferred corpus and its hash/count verification remain unchanged.
+The support bundle's `extensions_config.json` reader accepts UTF-8 with or
+without a leading BOM, matching the runtime loader. Preserve redaction and
+avoid flagging a valid BOM-prefixed file as a syntax error in triage output.
 
-Corpus handoffs must include migration `0033_pattern_revisions`, saved-Run continuation,
-and continuous/same-round recovery regressions. The generated upgrade runbook embeds the
-maintained retry/continuation sections from `docs/soc-corpus-rebalance.md`; retain exact
-archive identity and distinguish documentation-only updates from rebuilt source archives.
+Support-bundle/doctor captures use UTF-8 with replacement, preserving exit codes,
+timeouts and redaction. Only copied support-bundle child env sets
+`PYTHONIOENCODING=utf-8:backslashreplace` for Unicode/surrogates; parent unchanged.
+Offline real-child tests: ASCII/GBK defaults, nonzero exits, surrogates,
+invalid bytes; no provider calls. Doctor covers both `_run` streams/pnpm capture.
+
+## Production dotenv selection
+
+`deploy.sh` resolves `DEER_FLOW_COMPOSE_ENV_FILE` from the checkout before
+creating state or probing secrets. Keep Compose interpolation, Gateway and
+provisioner env files, secret probes, and UV_EXTRAS discovery on that one path.
+Normalize host paths for Git Bash; quote path arguments rather than sourcing
+dotenv files. Unset/empty selection preserves the optional root .env default;
+explicit invalid files reject build/start before Docker. Stopping remains
+possible after the selected file is removed. Tests: `test_deploy_env_file.py`
+and the existing deployment/Compose suites.

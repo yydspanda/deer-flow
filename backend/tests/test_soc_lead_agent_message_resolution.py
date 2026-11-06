@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -237,3 +238,31 @@ async def test_rejects_route_queue_that_differs_from_thread_binding(
             message_id="assistant-1",
             queue_id="REV-2",
         )
+
+
+@pytest.mark.parametrize("shape", ["normalized", "wire", "constructor"])
+def test_strip_soc_provenance_keeps_content_and_caller_input_unchanged(shape: str) -> None:
+    kwargs = {"custom": "retained", SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY: {"context_hash": "forged"}}
+    if shape == "normalized":
+        message = AIMessage(id="message-1", content="answer", additional_kwargs=kwargs)
+    elif shape == "wire":
+        message = {"type": "ai", "id": "message-1", "content": "answer", "additional_kwargs": kwargs}
+    else:
+        message = {"lc": 1, "type": "constructor", "id": ["langchain", "schema", "messages", "AIMessage"], "kwargs": {"id": "message-1", "content": "answer", "additional_kwargs": kwargs}}
+    values = {"messages": [message], "title": "unchanged"}
+    original = deepcopy(values)
+
+    stripped = soc_lead_agent_messages.strip_soc_review_message_metadata(values)
+
+    assert values == original
+    assert stripped["title"] == "unchanged"
+    result = stripped["messages"][0]
+    if shape == "normalized":
+        assert result.content == "answer"
+        assert result.id == "message-1"
+        assert result.additional_kwargs == {"custom": "retained"}
+    else:
+        payload = result["kwargs"] if shape == "constructor" else result
+        assert payload["content"] == "answer"
+        assert payload["id"] == "message-1"
+        assert payload["additional_kwargs"] == {"custom": "retained"}

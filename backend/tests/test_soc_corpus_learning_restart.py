@@ -107,12 +107,14 @@ def test_learning_restart_rejects_stale_token_and_lan_option_override(tmp_path):
     quick.command(CorpusQuickCommand(batch="validation"), context=context())
     with pytest.raises(CorpusExperimentConflict, match="新.*提交"):
         quick.command(command, context=request)
-    command, request = restart(quick)
+    # With no saved learning round, LAN requests must preserve the corpus
+    # default (apply); explicitly switching review off is an override.
+    command, request = restart(quick, mode="off")
     with pytest.raises(PermissionError):
         quick.command(command, context=request, allow_options_override=False)
-    allowed, allowed_request = restart(quick, mode="off")
+    allowed, allowed_request = restart(quick)
     quick.command(allowed, context=allowed_request, allow_options_override=False)
-    assert svc.store.list_rounds()[-1].options.normalization_review_mode == "off"
+    assert svc.store.list_rounds()[-1].options.normalization_review_mode == "apply"
 
 
 def test_learning_restart_rollback_keeps_old_rounds_and_current_memory(tmp_path, monkeypatch):

@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 
 from deerflow.config.app_config import AppConfig
 from deerflow.config.stream_bridge_config import StreamBridgeConfig, get_stream_bridge_config
+from deerflow.utils.file_io import await_drained
 
 from .base import DEFAULT_HEARTBEAT_INTERVAL_SECONDS, StreamBridge
 
@@ -71,7 +72,7 @@ async def make_stream_bridge(app_config: AppConfig | None = None) -> AsyncIterat
         try:
             yield bridge
         finally:
-            await bridge.close()
+            await await_drained(bridge.close())
         return
 
     if config.type == "redis":
@@ -84,6 +85,12 @@ async def make_stream_bridge(app_config: AppConfig | None = None) -> AsyncIterat
             heartbeat_interval=config.heartbeat_interval_seconds,
             max_connections=config.max_connections,
             stream_ttl_seconds=config.stream_ttl_seconds,
+            legacy_end_scan_enabled=config.legacy_end_scan_enabled,
+            producer_lease_recovery_enabled=getattr(
+                config,
+                "producer_lease_recovery_enabled",
+                False,
+            ),
         )
         logger.info(
             "Stream bridge initialised: redis (queue_maxsize=%d, heartbeat_interval_seconds=%.1f, max_connections=%s, stream_ttl_seconds=%d)",
@@ -95,7 +102,7 @@ async def make_stream_bridge(app_config: AppConfig | None = None) -> AsyncIterat
         try:
             yield bridge
         finally:
-            await bridge.close()
+            await await_drained(bridge.close())
         return
 
     raise ValueError(f"Unknown stream bridge type: {config.type!r}")

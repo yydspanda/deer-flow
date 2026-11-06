@@ -49,7 +49,9 @@ def test_restart_replaces_success_failure_queued_and_blocked_work_preserving_his
     saved_learning = svc.store.get_round(learning.round_id)
     saved_learning_jobs = svc.store.list_round_items(learning.round_id)
     saved_memory = svc.repository.list_memory_records()
-    quick.command(CorpusQuickCommand(batch="validation"), context=context())
+    # The historical round intentionally uses off; the fresh corpus default is
+    # now apply, which would bypass the injected old-round failure below.
+    quick.command(CorpusQuickCommand(batch="validation", options=SocAnalysisExecutionOptions(normalization_review_mode="off")), context=context())
     old = svc.store.list_rounds()[-1]
     original = svc._execute
 
@@ -161,15 +163,15 @@ def test_restart_rejects_stale_token_without_stopping_a_new_submission(tmp_path)
 
 def test_restart_checks_saved_settings_and_requires_reviewed_memory(tmp_path):
     svc, quick, _, _ = setup(tmp_path, reviewed=False)
-    command, request = restart(quick)
+    command, request = restart(quick, mode="off")
     with pytest.raises(PermissionError, match="部署本机"):
         quick.command(command, context=request, allow_options_override=False)
     with pytest.raises(ValueError, match="审核经验"):
         quick.command(command, context=request)
     assert svc.store.list_rounds() == []
-    no_options = command.model_copy(update={"options": SocAnalysisExecutionOptions()})
+    saved_options = command.model_copy(update={"options": SocAnalysisExecutionOptions(normalization_review_mode="apply")})
     with pytest.raises(ValueError, match="审核经验"):
-        quick.command(no_options, context=request, allow_options_override=False)
+        quick.command(saved_options, context=request, allow_options_override=False)
 
 
 def test_restart_allows_lan_saved_options_and_uses_current_server_capacity(tmp_path):
@@ -281,7 +283,7 @@ def test_restart_api_uses_existing_authority_and_has_no_model_side_effect(tmp_pa
     assert first.status_code == 202, first.text
     assert first.json() == {"accepted": True}
     assert http.post(endpoint, json=body, headers=headers).status_code == 202
-    changed = http.post(endpoint, json={**body, "options": {"normalization_review_mode": "apply"}}, headers=headers)
+    changed = http.post(endpoint, json={**body, "options": {"normalization_review_mode": "off"}}, headers=headers)
     assert changed.status_code == 409
     assert isinstance(changed.json()["detail"], str)
     assert len(application.service.store.list_rounds()) == 1

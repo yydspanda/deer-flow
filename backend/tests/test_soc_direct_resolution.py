@@ -426,13 +426,18 @@ def test_direct_policy_uses_common_persistence_lineage_and_zero_call_metrics(ser
 @pytest.mark.parametrize("enabled", [True, False])
 def test_application_composition_owns_the_rollback_switch(monkeypatch, enabled):
     from soc_agent.application.analysis import build_soc_analysis_service
-    from soc_agent.llm import SocLLMSettings
+    from soc_agent.llm import SocAnalyzerMode, SocLLMSettings
 
+    def unexpected_config_read():
+        pytest.fail("stub composition must not load operator config.yaml")
+
+    monkeypatch.setattr("soc_agent.application.analysis.get_app_config", unexpected_config_read)
+    monkeypatch.setattr("soc_agent.llm.settings.get_app_config", unexpected_config_read)
     monkeypatch.setenv("SOC_DIRECT_RESOLUTION_ENABLED", str(enabled).lower())
     monkeypatch.setenv("SOC_NORMALIZATION_ASSIST_MODE", "off")
     monkeypatch.setenv("SOC_TENANT_POLICY_ENABLED", "false")
     monkeypatch.setenv("SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED", "false")
-    service = build_soc_analysis_service(settings=SocLLMSettings(mode="stub"), runtime_environment="dev")
+    service = build_soc_analysis_service(settings=SocLLMSettings(mode=SocAnalyzerMode.STUB), runtime_environment="dev")
     assert (service._runtime._direct_resolution is not None) is enabled
 
 

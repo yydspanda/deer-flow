@@ -76,11 +76,14 @@ def test_learning_review_validation_and_fixed_round_comparison(tmp_path, monkeyp
     svc = SocCorpusExperimentService(repository=repo, execute=executor, configuration_provider=lambda _: {"mocked": True})
 
     def run_batch(batch, *, memory_mode="snapshot"):
+        # This fixture intentionally exercises the deterministic analyzer. Fresh
+        # corpus production defaults use apply, which requires a real LLM client.
+        options = {"normalization_review_mode": "off"}
         if quick_entry:
-            CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id)).command(CorpusQuickCommand(batch=batch), context=context())
+            CorpusQuickValidation(svc, SimpleNamespace(plan_id=experiment().plan_id)).command(CorpusQuickCommand(batch=batch, options=options), context=context())
             round_ = svc.store.list_rounds()[-1]
         else:
-            round_ = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch=batch), memory_mode=memory_mode), context=context())
+            round_ = svc.create_round(CorpusRoundCreateCommand(experiment_id="EXP-test", selection=CorpusRoundSelection(batch=batch), memory_mode=memory_mode, options=options), context=context())
             svc.start(round_.round_id, context=context())
         while svc.execute_one(round_.round_id):
             pass

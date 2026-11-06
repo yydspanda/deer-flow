@@ -147,7 +147,9 @@ def test_changed_validation_options_do_not_split_the_same_behavior_accumulation(
             selection=CorpusRoundSelection(batch="validation", alert_ids=["4"]),
             memory_mode="none",
             purpose="full_flow",
-            options={"normalization_review_mode": "apply", "tenant_policy_enabled": True},
+            # Fresh corpus rounds now default to apply; choose a genuinely
+            # different semantic-review option for this configuration-drift test.
+            options={"normalization_review_mode": "off", "tenant_policy_enabled": True},
         ),
         context=context(),
     )

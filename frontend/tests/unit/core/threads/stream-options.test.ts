@@ -1,6 +1,8 @@
 import { afterEach, expect, test, rs } from "@rstest/core";
 
-async function captureThreadStreamOptions() {
+import { resolveSocAgentReview } from "@/core/soc/agent-review";
+
+async function captureThreadStreamOptions(assistantId?: string) {
   let capturedOptions: Record<string, unknown> | undefined;
 
   rs.resetModules();
@@ -27,7 +29,10 @@ async function captureThreadStreamOptions() {
       isLoading: false,
     }),
     useMutation: rs.fn(),
-    useQuery: rs.fn(),
+    useQuery: () => ({
+      data: [],
+      refetch: rs.fn(),
+    }),
     useQueryClient: () => ({
       invalidateQueries: rs.fn(),
       setQueriesData: rs.fn(),
@@ -70,6 +75,7 @@ async function captureThreadStreamOptions() {
       context: {
         mode: "flash",
       },
+      assistantId,
       isMock: true,
     } as never);
     return null;
@@ -96,4 +102,20 @@ test("does not subscribe to unsupported LangGraph events mode", async () => {
   expect(options).not.toHaveProperty("onLangChainEvent");
   expect(options).toHaveProperty("onUpdateEvent");
   expect(options).toHaveProperty("onCustomEvent");
+});
+
+test("forwards the custom-agent assistant identity to the stream", async () => {
+  const options = await captureThreadStreamOptions("researcher");
+
+  expect(options).toHaveProperty("assistantId", "researcher");
+});
+
+test("SOC review uses the lead_agent graph required by Gateway review admission", async () => {
+  const { transportAssistantId } = resolveSocAgentReview(
+    "soc-triage",
+    {},
+    "REV-1",
+  );
+  const options = await captureThreadStreamOptions(transportAssistantId);
+  expect(options).toHaveProperty("assistantId", "lead_agent");
 });

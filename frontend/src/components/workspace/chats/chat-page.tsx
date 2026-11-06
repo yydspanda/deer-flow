@@ -8,7 +8,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { type PromptInputMessage } from "@/components/ai-elements/prompt-input";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
 import { BrowserTrigger } from "@/components/workspace/browser-view";
 import { ContextUsageBadge } from "@/components/workspace/context-usage-badge";
@@ -18,26 +17,41 @@ import {
   InputBox,
   type InputBoxSubmitOptions,
 } from "@/components/workspace/input-box";
+import { KnowledgeScopeSelector } from "@/components/workspace/knowledge-scope-selector";
 import {
   MessageList,
   MESSAGE_LIST_DEFAULT_PADDING_BOTTOM,
 } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
+import { HumanInputCard } from "@/components/workspace/messages/human-input-card";
 import {
   SidecarProvider,
   SidecarTrigger,
 } from "@/components/workspace/sidecar";
 import { ThreadArchiveStatus } from "@/components/workspace/thread-archive-status";
 import { ThreadBackgroundTasks } from "@/components/workspace/thread-background-tasks";
-import { ThreadScheduledTasksLink } from "@/components/workspace/thread-scheduled-tasks-link";
+import { ThreadExtensionActions } from "@/components/workspace/thread-extension-actions";
+import { ThreadScheduledTasksButton } from "@/components/workspace/thread-scheduled-tasks-button";
 import { ThreadSubagentBatches } from "@/components/workspace/thread-subagent-batches";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
 import { useActiveGoal } from "@/components/workspace/use-active-goal";
 import { Welcome } from "@/components/workspace/welcome";
-import { useBrowserControlEnabled } from "@/core/features";
+import { WorkspaceSidebarTrigger } from "@/components/workspace/workspace-sidebar-trigger";
+import { useAuth } from "@/core/auth/AuthProvider";
+import { hasPermission, PERMISSIONS } from "@/core/auth/permissions";
+import {
+  useBrowserControlEnabled,
+  useKnowledgeBaseEnabled,
+} from "@/core/features";
 import { useI18n } from "@/core/i18n/hooks";
+import {
+  ALL_KNOWLEDGE_SCOPE,
+  buildKnowledgeScopeSnapshot,
+  KNOWLEDGE_SCOPE_KEY,
+  type KnowledgeScopeSelection,
+} from "@/core/knowledge";
 import {
   buildHumanInputResponseText,
   hasOpenHumanInputRequest,
@@ -45,10 +59,16 @@ import {
   type HumanInputResponse,
 } from "@/core/messages/human-input";
 import { isHiddenFromUIMessage } from "@/core/messages/utils";
+import { modelTaskInput } from "@/core/models/control";
 import { useModels } from "@/core/models/hooks";
+import { useModelControl } from "@/core/models/use-model-control";
+import { notificationBody } from "@/core/notification/body";
 import { useNotification } from "@/core/notification/hooks";
 import { useProject } from "@/core/projects";
+import { useThreadScheduledTaskEvents } from "@/core/scheduled-tasks/events";
+import { useScheduleToolResultRefresh } from "@/core/scheduled-tasks/hooks";
 import { useLocalSettings, useThreadSettings } from "@/core/settings";
+import { resolveThreadContext, selectThreadModel } from "@/core/settings/store";
 import { createThread } from "@/core/threads/api";
 import {
   useBranchThread,
@@ -67,10 +87,14 @@ import { cn } from "@/lib/utils";
 
 import { ChatBox } from "./chat-box";
 import { useSpecificChatMode } from "./use-chat-mode";
+import { useMarkOpenThreadRead } from "./use-mark-open-thread-read";
 import { useThreadChat } from "./use-thread-chat";
 
 export default function ChatPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const { user } = useAuth();
+  const canStopStreaming = hasPermission(user, PERMISSIONS.RUNS_CANCEL);
+  const canCreateRuns = hasPermission(user, PERMISSIONS.RUNS_CREATE);
   const router = useRouter();
   const searchParams = useSearchParams();
   const { threadId, setThreadId, isNewThread, setIsNewThread, isMock } =
@@ -92,6 +116,13 @@ export default function ChatPage() {
   const [isWelcomeMode, setIsWelcomeMode] = useState(isNewThread);
   const queryClient = useQueryClient();
   const [settings, setSettings] = useThreadSettings(threadId);
+  const modelControl = useModelControl(
+    `${user?.id ?? "anonymous"}:${threadId}`,
+    locale,
+  );
+  const prepareModelControl = modelControl.prepare;
+  const [modelChoiceSummary, setModelChoiceSummary] = useState("");
+  useEffect(() => setModelChoiceSummary(""), [threadId, user?.id]);
   const [localSettings, setLocalSettings] = useLocalSettings();
   const { enabled: browserControlEnabled } = useBrowserControlEnabled();
   const { tokenUsageEnabled } = useModels();
@@ -102,6 +133,17 @@ export default function ChatPage() {
   const threadMetadata = useThreadMetadata(threadId, {
     enabled: !isNewThread && !isMock,
     isMock,
+  });
+  // A saved thread that exists on the server is being read while open:
+  // clears its unread dot (sidebar and chats list) on every device.
+  const markThreadRead = useMarkOpenThreadRead(threadId, {
+    enabled: !isNewThread && !isMock && threadMetadata.data != null,
+  });
+  // Lifecycle lines of schedules created in this chat ("Paused by agent",
+  // "Finished"); they stay after the task is deleted.
+  const scheduledTaskEvents = useThreadScheduledTaskEvents(threadId, {
+    isNewThread,
+    enabled: !isMock,
   });
   const branchThread = useBranchThread();
   const backendTokenUsage = threadTokenUsageToTokenUsage(threadTokenUsage.data);
@@ -122,6 +164,41 @@ export default function ChatPage() {
   }, [isNewThread]);
 
   const { showNotification } = useNotification();
+  const { scopeSelectionEnabled } = useKnowledgeBaseEnabled();
+  const selectorVisible =
+    scopeSelectionEnabled && env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true";
+  const [knowledgeScope, setKnowledgeScope] =
+    useState<KnowledgeScopeSelection | null>(null);
+  const previousConversationRef = useRef({ threadId, isNewThread });
+
+  useEffect(() => {
+    setKnowledgeScope((current) => {
+      if (!selectorVisible) return null;
+      return current ?? ALL_KNOWLEDGE_SCOPE;
+    });
+  }, [selectorVisible]);
+
+  useEffect(() => {
+    const previous = previousConversationRef.current;
+    if (
+      previous.threadId !== threadId ||
+      previous.isNewThread !== isNewThread
+    ) {
+      const isNewThreadRouteReplacement = previous.isNewThread && !isNewThread;
+      if (!isNewThreadRouteReplacement) {
+        setKnowledgeScope(selectorVisible ? ALL_KNOWLEDGE_SCOPE : null);
+      }
+    }
+    previousConversationRef.current = { threadId, isNewThread };
+  }, [isNewThread, selectorVisible, threadId]);
+
+  const currentKnowledgeScopeSnapshot = useMemo(
+    () =>
+      selectorVisible && knowledgeScope
+        ? buildKnowledgeScopeSnapshot(knowledgeScope)
+        : null,
+    [knowledgeScope, selectorVisible],
+  );
 
   const {
     thread,
@@ -151,24 +228,23 @@ export default function ChatPage() {
       setIsNewThread(false);
     },
     onFinish: (state) => {
+      // A run in this thread ended (a send, or a joined scheduled run) while
+      // it is open: it has been read.
+      markThreadRead();
       if (document.hidden || !document.hasFocus()) {
-        let body = "Conversation finished";
         const lastMessage = state.messages.at(-1);
-        if (lastMessage) {
-          const textContent = textOfMessage(lastMessage);
-          if (textContent) {
-            body =
-              textContent.length > 200
-                ? textContent.substring(0, 200) + "..."
-                : textContent;
-          }
-        }
-        showNotification(state.title, { body });
+        showNotification(state.title, {
+          body: notificationBody(
+            lastMessage ? textOfMessage(lastMessage) : null,
+          ),
+        });
       }
     },
   });
 
   const hasThreadMessages = thread.messages.length > 0;
+  // A schedule_task result refreshes the header button and cards at once.
+  useScheduleToolResultRefresh(isMock ? null : threadId, thread.messages);
 
   useEffect(() => {
     if (
@@ -211,7 +287,13 @@ export default function ChatPage() {
       return;
     }
     try {
-      await createThread(threadId, projectParam);
+      const created = await createThread(threadId, projectParam);
+      // Keep confirmed membership available while the first metadata read is pending
+      // or fails after the composer materializes this new project thread.
+      queryClient.setQueryData(
+        ["thread", "metadata", threadId, false],
+        created,
+      );
       void queryClient.invalidateQueries({
         queryKey: INFINITE_THREADS_QUERY_KEY_PREFIX,
       });
@@ -244,6 +326,28 @@ export default function ChatPage() {
   const handleSubmit = useCallback(
     async (message: PromptInputMessage, options?: InputBoxSubmitOptions) => {
       const submissionEpoch = submissionEpochRef.current;
+      setModelChoiceSummary("");
+      const choice = await prepareModelControl(message.text);
+      const modelInput = modelTaskInput(message.text, choice);
+      if (submissionEpochRef.current !== submissionEpoch)
+        throw new Error("thread-submission-stale");
+      const runModelContext: Record<string, unknown> = {};
+      if (choice?.model_name) {
+        if (choice.scope === "task") {
+          if (settings.context.mode !== "ultra") {
+            toast.error(
+              locale.startsWith("zh")
+                ? "当前未启用子任务，请先启用 Ultra 模式。"
+                : "Subtasks are disabled. Enable Ultra mode first.",
+            );
+            throw new Error("subtasks-disabled");
+          }
+          runModelContext.subagent_model_name = choice.model_name;
+        } else {
+          runModelContext.model_name = choice.model_name;
+          runModelContext.model_selection_requested = choice.model_name;
+        }
+      }
       await ensureProjectThread();
       // Conversation switched (or the page unmounted) while the project
       // pre-create was pending: drop the submission. Reject silently — the
@@ -252,13 +356,115 @@ export default function ChatPage() {
       if (submissionEpochRef.current !== submissionEpoch) {
         throw new Error("thread-submission-stale");
       }
-      const sendPromise = sendMessage(threadId, message, undefined, options);
+      if (
+        choice?.scope === "conversation" &&
+        !modelInput.text &&
+        message.files.length === 0 &&
+        isNewThread &&
+        !projectParam
+      ) {
+        await createThread(threadId);
+        if (submissionEpochRef.current !== submissionEpoch)
+          throw new Error("thread-submission-stale");
+      }
+      if (choice?.model_name) {
+        if (choice.scope === "conversation")
+          try {
+            selectThreadModel(threadId, choice.model_name);
+          } catch (error) {
+            toast.error(
+              locale.startsWith("zh")
+                ? "无法在浏览器保存本对话的默认模型，请检查存储权限。"
+                : "Unable to save this conversation's default model. Check browser storage permissions.",
+            );
+            throw error;
+          }
+        const label =
+          choice.candidates.find((item) => item.name === choice.model_name)
+            ?.label ?? choice.model_name;
+        const scopeLabel = locale.startsWith("zh")
+          ? ({
+              task: "本次子任务",
+              turn: "仅本次主任务",
+              conversation: "本对话默认模型",
+            } as const)
+          : ({
+              task: "This subtask",
+              turn: "This turn only",
+              conversation: "Conversation default",
+            } as const);
+        setModelChoiceSummary(`${scopeLabel[choice.scope!]} · ${label}`);
+      } else setModelChoiceSummary("");
+      const scopedOptions = currentKnowledgeScopeSnapshot
+        ? {
+            ...options,
+            additionalKwargs: {
+              ...options?.additionalKwargs,
+              [KNOWLEDGE_SCOPE_KEY]: currentKnowledgeScopeSnapshot,
+            },
+          }
+        : options;
+      if (
+        choice?.scope === "turn" &&
+        !modelInput.text &&
+        message.files.length === 0
+      ) {
+        toast.info(
+          locale.startsWith("zh")
+            ? "请补充这次需要处理的任务。"
+            : "Please include the task to run with this model.",
+        );
+        throw new Error("model-task-missing");
+      }
+      if (
+        choice?.scope === "conversation" &&
+        !modelInput.text &&
+        message.files.length === 0
+      ) {
+        if (isNewThread) {
+          history.replaceState(null, "", `/workspace/chats/${threadId}`);
+          setThreadId(threadId);
+          setIsNewThread(false);
+        }
+        options?.onSent?.();
+        toast.success(
+          locale.startsWith("zh")
+            ? "已设置本对话的默认模型。"
+            : "Conversation default model saved.",
+        );
+        return;
+      }
+      const executionOptions = {
+        ...scopedOptions,
+        additionalKwargs: {
+          ...scopedOptions?.additionalKwargs,
+          ...modelInput.additionalKwargs,
+        },
+      };
+      const sendPromise = sendMessage(
+        threadId,
+        { ...message, text: modelInput.text },
+        runModelContext,
+        executionOptions,
+      );
       if (message.files.length > 0) {
         return sendPromise;
       }
       void sendPromise;
     },
-    [sendMessage, threadId, ensureProjectThread],
+    [
+      currentKnowledgeScopeSnapshot,
+      sendMessage,
+      threadId,
+      ensureProjectThread,
+      prepareModelControl,
+      settings.context.mode,
+      locale,
+      isNewThread,
+      projectParam,
+      setThreadId,
+      setIsNewThread,
+    ],
   );
   const handleSubmitHumanInput = useCallback(
     async (request: HumanInputRequest, response: HumanInputResponse) => {
@@ -274,6 +480,9 @@ export default function ChatPage() {
           additionalKwargs: {
             hide_from_ui: true,
             human_input_response: response,
+            ...(currentKnowledgeScopeSnapshot
+              ? { [KNOWLEDGE_SCOPE_KEY]: currentKnowledgeScopeSnapshot }
+              : {}),
           },
           onSent: () => {
             sent = true;
@@ -282,7 +491,7 @@ export default function ChatPage() {
       );
       return sent;
     },
-    [sendMessage, threadId],
+    [currentKnowledgeScopeSnapshot, sendMessage, threadId],
   );
   const handleStop = useCallback(async () => {
     await thread.stop();
@@ -294,8 +503,15 @@ export default function ChatPage() {
   );
   const handleEditAndRegenerate = useCallback(
     (messageId: string, replacementText: string) =>
-      editAndRegenerateMessage(threadId, messageId, replacementText),
-    [editAndRegenerateMessage, threadId],
+      editAndRegenerateMessage(
+        threadId,
+        messageId,
+        replacementText,
+        currentKnowledgeScopeSnapshot
+          ? { [KNOWLEDGE_SCOPE_KEY]: currentKnowledgeScopeSnapshot }
+          : undefined,
+      ),
+    [currentKnowledgeScopeSnapshot, editAndRegenerateMessage, threadId],
   );
   const handleBranchTurn = useCallback(
     async (messageId: string, messageIds: string[]) => {
@@ -329,9 +545,11 @@ export default function ChatPage() {
     : "off";
   const hasTodos = (thread.values.todos?.length ?? 0) > 0;
   const browserEnabled = !isNewThread && !isMock && browserControlEnabled;
-  const { activeGoal, hasGoal, setLocalGoal } = useActiveGoal(
+  const { activeGoal, hasGoal, goalOutcome, setLocalGoal } = useActiveGoal(
     threadId,
     thread.values.goal,
+    thread.values.goal_outcome,
+    thread.messages,
   );
   const hasOpenHumanInputCard = useMemo(
     () =>
@@ -349,6 +567,15 @@ export default function ChatPage() {
     !isNewThread && !isMock && threadMetadata.data
       ? projectIdOfThread(threadMetadata.data)
       : null;
+  // A goal blocks edit-and-rerun server-side; show the pencil locked.
+  const editBase =
+    !isNewThread &&
+    !isMock &&
+    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" &&
+    !isUploading &&
+    !thread.isLoading &&
+    !branchThread.isPending &&
+    !hasOpenHumanInputCard;
 
   return (
     <ThreadContext.Provider value={{ thread, isMock }}>
@@ -367,7 +594,7 @@ export default function ChatPage() {
                   : "bg-background/80 z-30 shadow-xs backdrop-blur",
               )}
             >
-              {!isMock && <SidebarTrigger className="md:hidden" />}
+              {!isMock && <WorkspaceSidebarTrigger className="md:hidden" />}
               <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium">
                 <ThreadTitle
                   threadId={threadId}
@@ -398,7 +625,7 @@ export default function ChatPage() {
                     <ThreadSubagentBatches threadId={threadId} />
                   )}
                 {!isNewThread && !isMock && (
-                  <ThreadScheduledTasksLink threadId={threadId} />
+                  <ThreadScheduledTasksButton threadId={threadId} />
                 )}
                 {tokenUsageEnabled ? (
                   <TokenUsageIndicator
@@ -419,6 +646,7 @@ export default function ChatPage() {
                 <SidecarTrigger />
                 {browserEnabled && <BrowserTrigger />}
                 <ExportTrigger threadId={threadId} />
+                <ThreadExtensionActions threadId={threadId} />
                 <ArtifactTrigger />
               </div>
             </header>
@@ -432,6 +660,7 @@ export default function ChatPage() {
                   testId="main-message-list"
                   threadId={threadId}
                   thread={thread}
+                  scheduledTaskEvents={scheduledTaskEvents.data}
                   enableConversationOutline
                   paddingBottom={MESSAGE_LIST_DEFAULT_PADDING_BOTTOM}
                   hasMoreHistory={hasMoreHistory}
@@ -446,16 +675,8 @@ export default function ChatPage() {
                     !thread.isLoading
                   }
                   onRegenerateMessage={handleRegenerate}
-                  canEdit={
-                    !isNewThread &&
-                    !isMock &&
-                    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" &&
-                    !isUploading &&
-                    !thread.isLoading &&
-                    !branchThread.isPending &&
-                    !hasGoal &&
-                    !hasOpenHumanInputCard
-                  }
+                  canEdit={editBase && !hasGoal}
+                  editLockedByGoal={editBase && hasGoal}
                   onEditAndRegenerateMessage={handleEditAndRegenerate}
                   onSubmitHumanInput={
                     isMock || env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"
@@ -489,7 +710,7 @@ export default function ChatPage() {
                       : "max-w-(--container-width-md)",
                   )}
                 >
-                  {(hasGoal || hasTodos) && (
+                  {(hasGoal || goalOutcome !== null || hasTodos) && (
                     <div
                       className={cn(
                         "right-0 left-0 z-0",
@@ -502,7 +723,12 @@ export default function ChatPage() {
                           isWelcomeMode ? "absolute" : "relative",
                         )}
                       >
-                        {activeGoal && <GoalStatus goal={activeGoal} />}
+                        <GoalStatus
+                          goal={activeGoal}
+                          outcome={goalOutcome}
+                          isRunning={thread.isLoading}
+                          hasOpenHumanInputCard={hasOpenHumanInputCard}
+                        />
                         {hasTodos && (
                           <TodoList
                             className="bg-background/5"
@@ -513,6 +739,22 @@ export default function ChatPage() {
                       </div>
                     </div>
                   )}
+                  {modelControl.request && (
+                    <div className="mb-3" data-testid="model-selection-card">
+                      <HumanInputCard
+                        request={modelControl.request}
+                        onSubmit={(response) => modelControl.choose(response)}
+                      />
+                    </div>
+                  )}
+                  {modelChoiceSummary && (
+                    <p
+                      className="text-muted-foreground mb-2 text-sm"
+                      data-testid="model-selection-applied"
+                    >
+                      {modelChoiceSummary}
+                    </p>
+                  )}
                   {mountedRef.current ? (
                     <InputBox
                       className={cn(
@@ -521,7 +763,18 @@ export default function ChatPage() {
                       )}
                       isWelcomeMode={isWelcomeMode}
                       threadId={threadId}
+                      projectId={projectParam ?? affiliatedProjectId}
                       draftThreadId={isNewThread ? "new" : threadId}
+                      knowledgeScopeControl={
+                        selectorVisible && knowledgeScope ? (
+                          <KnowledgeScopeSelector
+                            agentName="lead_agent"
+                            disabled={thread.isLoading || isUploading}
+                            selection={knowledgeScope}
+                            onChange={setKnowledgeScope}
+                          />
+                        ) : undefined
+                      }
                       autoFocus={isWelcomeMode}
                       status={
                         thread.error
@@ -540,15 +793,30 @@ export default function ChatPage() {
                         isMock ||
                         env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
                         isUploading ||
+                        modelControl.busy ||
                         (!isNewThread && isHistoryLoading)
                       }
-                      onContextChange={(context) =>
-                        setSettings("context", context)
-                      }
+                      onContextChange={(context, options) => {
+                        if (options?.automatic)
+                          resolveThreadContext(threadId, context);
+                        else setSettings("context", context);
+                      }}
                       onGoalChange={setLocalGoal}
                       onPrepareThread={ensureProjectThread}
+                      onReferenceFileAttached={() => {
+                        if (!isNewThread) return;
+                        history.replaceState(
+                          null,
+                          "",
+                          `/workspace/chats/${threadId}`,
+                        );
+                        setThreadId(threadId);
+                        setIsNewThread(false);
+                      }}
                       onSubmit={handleSubmit}
                       onStop={handleStop}
+                      canStopStreaming={canStopStreaming}
+                      canCreateRuns={canCreateRuns}
                     />
                   ) : (
                     <div

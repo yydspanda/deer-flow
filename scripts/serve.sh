@@ -34,18 +34,6 @@ set -e
 REPO_ROOT="$(builtin cd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd -P)"
 cd "$REPO_ROOT"
 
-# ── Load .env ────────────────────────────────────────────────────────────────
-
-LOAD_ENV=true
-for arg in "$@"; do
-    if [ "$arg" = "--skip-env" ]; then LOAD_ENV=false; fi
-done
-if $LOAD_ENV && [ -f "$REPO_ROOT/.env" ]; then
-    set -a
-    source "$REPO_ROOT/.env"
-    set +a
-fi
-
 _pick_python() {
     local candidate
     for candidate in python3 python py; do
@@ -64,6 +52,27 @@ _pick_python() {
     done
     return 1
 }
+
+# ── Load .env ────────────────────────────────────────────────────────────────
+
+# .env is data, not a script: sourcing it turned `$$` into this shell's PID, ran
+# backticks and `$(...)`, and ran the second word of an unquoted value with a
+# space as a command. dotenv_exports.py parses it like python-dotenv, keeping the
+# launcher's `$NAME` / `${NAME:-default}` / leading `~` expansion and its
+# precedence over inherited variables, and prints shell-quoted exports.
+LOAD_ENV=true
+for arg in "$@"; do
+    if [ "$arg" = "--skip-env" ]; then LOAD_ENV=false; fi
+done
+if $LOAD_ENV && [ -f "$REPO_ROOT/.env" ]; then
+    if ! DOTENV_PYTHON="$(_pick_python)"; then
+        echo "✗ Python 3 is required to read .env." >&2
+        exit 1
+    fi
+    DOTENV_EXPORTS="$("$DOTENV_PYTHON" "$REPO_ROOT/scripts/dotenv_exports.py" "$REPO_ROOT/.env")" || exit 1
+    eval "$DOTENV_EXPORTS"
+    unset DOTENV_PYTHON DOTENV_EXPORTS
+fi
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -89,7 +98,7 @@ for arg in "$@"; do
         --restart) ACTION="restart" ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: $0 [--dev|--prod] [--daemon] [--skip-install] [--skip-frontend-build] [--frontend-entry=PATH] [--loopback-internal] [--stop|--restart]"
+            echo "Usage: $0 [--dev|--prod] [--daemon] [--skip-install] [--skip-env] [--skip-frontend-build] [--frontend-entry=PATH] [--loopback-internal] [--stop|--restart]"
             exit 1
             ;;
     esac
@@ -110,7 +119,7 @@ DEERFLOW_ROOTS="$(
     {
         printf '%s\n' "$REPO_ROOT"
         git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null |
-            awk '/^worktree /{print $2}'
+            awk '/^worktree /{sub(/^worktree /, ""); print}'  # whole line: paths are unquoted and may contain spaces
     } | awk 'NF && !seen[$0]++ {print length($0)"\t"$0}' | sort -rn | sed 's/^[0-9]*\t//'
 )"
 
@@ -278,6 +287,9 @@ stop_all() {
     _kill_repo_processes "next dev"
     _kill_repo_processes "next start"
     _kill_repo_processes "next-server"
+    # -s quit finds the master through the config's pid directive. A BIND_HOST
+    # copy rendered by nginx-local-conf.sh keeps the same one, and the tracked
+    # config also works for --stop, which skips rendering.
     nginx -e "$REPO_ROOT/logs/nginx-error.log" -c "$REPO_ROOT/docker/nginx/nginx.local.conf" -p "$REPO_ROOT" -s quit 2>/dev/null || true
     sleep 1
     _kill_repo_nginx
@@ -308,6 +320,18 @@ if [ "$ACTION" != "stop" ] && [ -z "$DEERFLOW_FRONTEND_ENTRY" ] && ! $DEV_MODE &
         echo "  Run 'make start' once (full build), or: cd frontend && pnpm run build"
         exit 1
     fi
+fi
+
+# Resolve the nginx config before any stop_all too: an invalid BIND_HOST must
+# not tear down a running stack. Gateway and frontend always bind loopback;
+# nginx is the only entry point, as in the Docker stack.
+if [ "$ACTION" != "stop" ]; then
+    GATEWAY_STARTUP_TIMEOUT="${DEER_FLOW_GATEWAY_STARTUP_TIMEOUT-30}"
+    if [[ ! "$GATEWAY_STARTUP_TIMEOUT" =~ ^[0-9]+$ ]] || ! [ "$GATEWAY_STARTUP_TIMEOUT" -gt 0 ] 2>/dev/null; then
+        echo "✗ DEER_FLOW_GATEWAY_STARTUP_TIMEOUT must be a positive integer (seconds)." >&2
+        exit 1
+    fi
+    NGINX_CONF="$(bash "$REPO_ROOT/scripts/nginx-local-conf.sh")" || exit 1
 fi
 
 # ── Action routing ───────────────────────────────────────────────────────────
@@ -345,18 +369,12 @@ DEERFLOW_PNPM_RUNNER="$REPO_ROOT/scripts/pnpm.py"
 export DEERFLOW_PNPM_PYTHON DEERFLOW_PNPM_RUNNER
 
 # Internal listener bindings
-GATEWAY_BIND_HOST=0.0.0.0
-GATEWAY_PROXY_FLAGS=""
-FRONTEND_BIND_ARGS=""
-if $LOOPBACK_INTERNAL; then
-    GATEWAY_BIND_HOST=127.0.0.1
-    # Pin trust even if the operator environment has FORWARDED_ALLOW_IPS=*.
-    # nginx appends the real connection address to the forwarded chain.
-    GATEWAY_PROXY_FLAGS="--forwarded-allow-ips=127.0.0.1,::1"
-    FRONTEND_BIND_ARGS=" --hostname 127.0.0.1"
-    # An operator-owned frontend entry must honor this binding contract too.
-    export DEERFLOW_FRONTEND_HOST=127.0.0.1
-fi
+# v2.2 keeps nginx as the sole public listener. --loopback-internal remains an
+# accepted compatibility flag for the independently owned SOC host launcher.
+GATEWAY_BIND_HOST=127.0.0.1
+GATEWAY_PROXY_FLAGS="--forwarded-allow-ips=127.0.0.1,::1"
+FRONTEND_BIND_ARGS=" --hostname 127.0.0.1"
+export DEERFLOW_FRONTEND_HOST=127.0.0.1
 
 # Frontend command
 if [ -n "$DEERFLOW_FRONTEND_ENTRY" ]; then
@@ -413,6 +431,7 @@ fi
 
 if ! { \
         [ -n "$DEER_FLOW_CONFIG_PATH" ] && [ -f "$DEER_FLOW_CONFIG_PATH" ] || \
+        [ -f "$DEER_FLOW_PROJECT_ROOT/config.yaml" ] || \
         [ -f backend/config.yaml ] || \
         [ -f config.yaml ]; \
     }; then
@@ -519,6 +538,10 @@ run_service() {
         local logfile="logs/$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-').log"
         echo "✗ $name failed to start."
         [ -f "$logfile" ] && tail -20 "$logfile"
+        if [ "$name" = "Gateway" ]; then
+            echo "  Check logs/gateway.log for startup errors. If Gateway is still initializing,"
+            echo "  increase DEER_FLOW_GATEWAY_STARTUP_TIMEOUT (seconds; current: $GATEWAY_STARTUP_TIMEOUT)."
+        fi
         cleanup 1
     }
     echo "✓ $name started on localhost:$port"
@@ -532,7 +555,7 @@ mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp
 # 1. Gateway API
 run_service "Gateway" \
     "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host $GATEWAY_BIND_HOST --port 8001 $GATEWAY_PROXY_FLAGS $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
-    8001 30
+    8001 "$GATEWAY_STARTUP_TIMEOUT"
 
 # 2. Frontend
 run_service "Frontend" \
@@ -541,7 +564,7 @@ run_service "Frontend" \
 
 # 3. Nginx
 run_service "Nginx" \
-    "nginx -e '$REPO_ROOT/logs/nginx-error.log' -g 'daemon off;' -c '$REPO_ROOT/docker/nginx/nginx.local.conf' -p '$REPO_ROOT' > logs/nginx.log 2>&1" \
+    "nginx -e '$REPO_ROOT/logs/nginx-error.log' -g 'daemon off;' -c '$NGINX_CONF' -p '$REPO_ROOT' > logs/nginx.log 2>&1" \
     2026 10
 
 # ── Ready ────────────────────────────────────────────────────────────────────
@@ -552,6 +575,10 @@ echo "  ✓ DeerFlow is running!  [$MODE_LABEL]"
 echo "=========================================="
 echo ""
 echo "  🌐 http://localhost:2026"
+if [ "${BIND_HOST:-127.0.0.1}" != "127.0.0.1" ]; then
+    echo "  ⚠ Nginx also accepts connections on BIND_HOST=$BIND_HOST."
+    echo "    Complete first-run setup at /setup before other machines can reach it."
+fi
 echo ""
 echo "  Routing: Frontend → Nginx → Gateway"
 echo "  API:     /api/langgraph/*  →  Gateway agent runtime"

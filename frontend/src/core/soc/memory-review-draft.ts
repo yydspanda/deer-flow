@@ -19,7 +19,7 @@ const draftSchema = z.object({
       "needs_review",
     ])
     .nullable(),
-  promotedFacetValues: z.record(z.array(z.string())),
+  promotedFacetValues: z.record(z.string(), z.array(z.string())),
   selectedBehaviorComponents: z.array(z.string()).nullable(),
   lessonDetectionScenario: z.string(),
   lessonObservedEvent: z.string(),

@@ -49,11 +49,11 @@ export GATEWAY_BIND_HOST GATEWAY_PROXY_FLAGS FRONTEND_CMD
 """
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True, env={"PATH": "/usr/bin:/bin", "FORWARDED_ALLOW_IPS": "*"})
     plan = json.loads(result.stdout)
-    assert plan["GATEWAY_BIND_HOST"] == ("127.0.0.1" if loopback else "0.0.0.0")
-    assert plan["GATEWAY_PROXY_FLAGS"] == ("--forwarded-allow-ips=127.0.0.1,::1" if loopback else "")
-    assert plan["DEERFLOW_FRONTEND_HOST"] == ("127.0.0.1" if loopback else None)
+    assert plan["GATEWAY_BIND_HOST"] == "127.0.0.1"
+    assert plan["GATEWAY_PROXY_FLAGS"] == "--forwarded-allow-ips=127.0.0.1,::1"
+    assert plan["DEERFLOW_FRONTEND_HOST"] == "127.0.0.1"
     if mode != "custom":
-        assert ("--hostname 127.0.0.1" in plan["FRONTEND_CMD"]) is loopback
+        assert "--hostname 127.0.0.1" in plan["FRONTEND_CMD"]
     assert "--host $GATEWAY_BIND_HOST" in source
     assert "$GATEWAY_PROXY_FLAGS" in source[source.index("# 1. Gateway API") :]
 

@@ -47,6 +47,7 @@ import { useArtifactContent } from "@/core/artifacts/hooks";
 import {
   getArtifactViewState,
   getTabularDelimiter,
+  parseWriteFileArtifact,
 } from "@/core/artifacts/preview";
 import { urlOfArtifact } from "@/core/artifacts/utils";
 import {
@@ -61,6 +62,7 @@ import { installSkill, SkillRequestError } from "@/core/skills/api";
 import {
   canBrowserPreviewFile,
   checkCodeFile,
+  getFileExtension,
   getFileName,
 } from "@/core/utils/files";
 import { env } from "@/env";
@@ -105,13 +107,15 @@ export function ArtifactFileDetail({
   const isWriteFile = useMemo(() => {
     return filepathFromProps.startsWith("write-file:");
   }, [filepathFromProps]);
-  const filepath = useMemo(() => {
-    if (isWriteFile) {
-      const url = new URL(filepathFromProps);
-      return decodeURIComponent(url.pathname);
-    }
-    return filepathFromProps;
-  }, [filepathFromProps, isWriteFile]);
+  // `write-file:` URLs come from messages and from the panel's persisted
+  // selection, so parse them through the guarded helper instead of `new URL`
+  // + `decodeURIComponent` directly: a malformed value must degrade to the
+  // raw string, not throw during render.
+  const parsedWriteFile = useMemo(
+    () => (isWriteFile ? parseWriteFileArtifact(filepathFromProps) : undefined),
+    [filepathFromProps, isWriteFile],
+  );
+  const filepath = parsedWriteFile?.path ?? filepathFromProps;
   // Keep these local because ChatBox replaces context artifacts with thread state.
   const [openedPresentedFilepaths, setOpenedPresentedFilepaths] = useState<
     string[]
@@ -154,7 +158,8 @@ export function ArtifactFileDetail({
     if (isWriteFile) {
       const codeResult = checkCodeFile(filepath);
       // Non-code browser-previewable files (PDF, images, audio, video)
-      // should render in the sandboxed iframe, not the code editor.
+      // should render in the inline iframe (unsandboxed for PDF), not the
+      // code editor.
       if (!codeResult.isCodeFile && canBrowserPreviewFile(filepath)) {
         return codeResult;
       }
@@ -176,11 +181,7 @@ export function ArtifactFileDetail({
   const isSupportPreview =
     language === "html" || language === "markdown" || isTabular;
   const toolResult = (() => {
-    if (!isWriteFile) {
-      return undefined;
-    }
-    const url = new URL(filepathFromProps);
-    const toolCallId = url.searchParams.get("tool_call_id");
+    const toolCallId = parsedWriteFile?.toolCallId;
     if (!toolCallId) {
       return undefined;
     }
@@ -225,19 +226,31 @@ export function ArtifactFileDetail({
     (draft) => draft.draftContent !== draft.baselineContent,
   );
   const isEditing = editingPath === filepath;
-  const canEdit = canEditOpenedArtifact({
-    filepath,
-    isCodeFile,
-    isWriteFile,
-    isSkillFile,
-    isMock: Boolean(isMock),
-    hasRevision: typeof sha256 === "string" && sha256.length === 64,
-    isStaticWebsite: env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
-  });
+  const canEdit =
+    content !== undefined &&
+    !truncated &&
+    !isLoading &&
+    !error &&
+    canEditOpenedArtifact({
+      filepath,
+      isCodeFile,
+      isWriteFile,
+      isSkillFile,
+      isMock: Boolean(isMock),
+      hasRevision: typeof sha256 === "string" && sha256.length === 64,
+      isStaticWebsite: env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
+    });
   const editorContent = isDirty ? activeDraft.draftContent : visibleContent;
 
   useEffect(() => {
-    if (content === undefined || sha256 === undefined || isWriteFile) {
+    // A byte-range preview can carry the same full-file ETag as the complete
+    // response. Only complete content can establish an editing baseline.
+    if (
+      content === undefined ||
+      sha256 === undefined ||
+      isWriteFile ||
+      truncated
+    ) {
       return;
     }
     setDrafts((current) => {
@@ -248,7 +261,7 @@ export function ArtifactFileDetail({
       }
       return { ...current, [filepath]: next };
     });
-  }, [content, filepath, isWriteFile, setDrafts, sha256]);
+  }, [content, filepath, isWriteFile, setDrafts, sha256, truncated]);
 
   const [viewMode, setViewMode] = useState<"code" | "preview">(
     artifactViewState.initialViewMode,
@@ -266,8 +279,14 @@ export function ArtifactFileDetail({
   }, [isDirty, t.artifactEditing.discardChanges]);
 
   const discardDraft = useCallback(() => {
-    const latestContent = content ?? activeDraft.baselineContent;
-    const latestSha256 = sha256 ?? activeDraft.baselineSha256;
+    const hasCompleteContent =
+      !truncated && content !== undefined && sha256 !== undefined;
+    const latestContent = hasCompleteContent
+      ? content
+      : activeDraft.baselineContent;
+    const latestSha256 = hasCompleteContent
+      ? sha256
+      : activeDraft.baselineSha256;
     setDrafts((current) => ({
       ...current,
       [filepath]: {
@@ -279,7 +298,15 @@ export function ArtifactFileDetail({
       },
     }));
     setEditingPath(null);
-  }, [activeDraft, content, filepath, setDrafts, setEditingPath, sha256]);
+  }, [
+    activeDraft,
+    content,
+    filepath,
+    setDrafts,
+    setEditingPath,
+    sha256,
+    truncated,
+  ]);
 
   const handleSave = useCallback(async () => {
     if (
@@ -293,24 +320,33 @@ export function ArtifactFileDetail({
       return;
     }
 
+    const submittedDraftContent = activeDraft.draftContent;
+    const submittedBaselineSha256 = activeDraft.baselineSha256;
     setIsSaving(true);
     try {
       const result = await updateArtifactContent({
         threadId,
         filepath,
-        content: activeDraft.draftContent,
-        expectedSha256: activeDraft.baselineSha256,
+        content: submittedDraftContent,
+        expectedSha256: submittedBaselineSha256,
       });
-      const savedContent = activeDraft.draftContent;
       setDrafts((current) => ({
         ...current,
-        [filepath]: {
-          filepath,
-          baselineContent: savedContent,
-          baselineSha256: result.sha256,
-          draftContent: savedContent,
-          conflict: false,
-        },
+        [filepath]: (() => {
+          const currentDraft = current[filepath] ?? activeDraft;
+          const changedSinceSubmit =
+            currentDraft.draftContent !== submittedDraftContent ||
+            currentDraft.baselineSha256 !== submittedBaselineSha256;
+          return {
+            ...currentDraft,
+            baselineContent: submittedDraftContent,
+            baselineSha256: result.sha256,
+            draftContent: changedSinceSubmit
+              ? currentDraft.draftContent
+              : submittedDraftContent,
+            conflict: false,
+          };
+        })(),
       }));
       queryClient.setQueryData(
         ["artifact", filepathFromProps, threadId, isMock, fullContentRequested],
@@ -320,7 +356,7 @@ export function ArtifactFileDetail({
             | undefined,
         ) => ({
           ...current,
-          content: savedContent,
+          content: submittedDraftContent,
           sha256: result.sha256,
         }),
       );
@@ -485,47 +521,49 @@ export function ArtifactFileDetail({
               />
             )}
             {canEdit && isEditing && (
-              <>
-                <ArtifactAction
-                  className={cn(
-                    isDirty && !activeDraft.conflict && "text-primary",
-                  )}
-                  icon={isSaving ? LoaderIcon : SaveIcon}
-                  label={t.common.save}
-                  tooltip={
-                    thread.isLoading
-                      ? t.artifactEditing.runInProgress
-                      : activeDraft.conflict
-                        ? t.artifactEditing.conflict
-                        : t.common.save
+              <ArtifactAction
+                className={cn(
+                  isDirty && !activeDraft.conflict && "text-primary",
+                )}
+                icon={isSaving ? LoaderIcon : SaveIcon}
+                label={t.common.save}
+                tooltip={
+                  thread.isLoading
+                    ? t.artifactEditing.runInProgress
+                    : activeDraft.conflict
+                      ? t.artifactEditing.conflict
+                      : t.common.save
+                }
+                disabled={
+                  !isDirty ||
+                  isSaving ||
+                  thread.isLoading ||
+                  activeDraft.conflict
+                }
+                onClick={() => void handleSave()}
+              />
+            )}
+            {isEditing && (
+              <ArtifactAction
+                icon={PencilOffIcon}
+                label={t.artifactEditing.exit}
+                tooltip={t.artifactEditing.exit}
+                disabled={isSaving}
+                onClick={() => setEditingPath(null)}
+              />
+            )}
+            {canEdit && isEditing && (
+              <ArtifactAction
+                icon={RotateCcwIcon}
+                label={t.artifactEditing.discard}
+                tooltip={t.artifactEditing.discard}
+                disabled={isSaving}
+                onClick={() => {
+                  if (confirmDiscard()) {
+                    discardDraft();
                   }
-                  disabled={
-                    !isDirty ||
-                    isSaving ||
-                    thread.isLoading ||
-                    activeDraft.conflict
-                  }
-                  onClick={() => void handleSave()}
-                />
-                <ArtifactAction
-                  icon={PencilOffIcon}
-                  label={t.artifactEditing.exit}
-                  tooltip={t.artifactEditing.exit}
-                  disabled={isSaving}
-                  onClick={() => setEditingPath(null)}
-                />
-                <ArtifactAction
-                  icon={RotateCcwIcon}
-                  label={t.artifactEditing.discard}
-                  tooltip={t.artifactEditing.discard}
-                  disabled={isSaving}
-                  onClick={() => {
-                    if (confirmDiscard()) {
-                      discardDraft();
-                    }
-                  }}
-                />
-              </>
+                }}
+              />
             )}
             {!isEditing &&
               !isWriteFile &&
@@ -668,6 +706,7 @@ export function ArtifactFileDetail({
                 content={editorContent}
                 language={language ?? "text"}
                 scrollKey={`${threadId}:${filepathFromProps}`}
+                artifact={{ filepath, threadId, isMock }}
                 url={url}
                 truncated={truncated}
                 active={effectiveViewMode === "preview" && !isLoading}
@@ -708,8 +747,19 @@ export function ArtifactFileDetail({
           {!isCodeFile && canPreviewInBrowser && (
             <iframe
               className="size-full"
-              sandbox=""
+              // PDFs render WITHOUT the sandbox attribute: Chromium blocks
+              // its built-in PDF viewer inside ``sandbox=""``. This is safe
+              // because the endpoint declares ``application/pdf`` and sends
+              // ``X-Content-Type-Options: nosniff``, so the bytes cannot be
+              // reinterpreted as active markup, and the PDFium viewer
+              // exposes no same-origin script surface. Active content
+              // (HTML/XML family) never reaches this branch — the backend
+              // serves it as an attachment.
+              sandbox={getFileExtension(filepath) === "pdf" ? undefined : ""}
               src={urlOfArtifact({ filepath, threadId, isMock })}
+              // Accessible name for the frame (WCAG frame titles); the PDF
+              // branch must not be located by a bare ``iframe:not([title])``.
+              title={getFileName(filepath)}
             />
           )}
           {!isCodeFile && !canPreviewInBrowser && (

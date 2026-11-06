@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import Request
+from langchain_core.messages import BaseMessage
 from pydantic import ValidationError
 
 from app.gateway.deps import get_thread_store
@@ -132,6 +133,49 @@ async def resolve_soc_lead_agent_message(
     )
 
 
+def strip_soc_review_message_metadata(values: dict[str, Any]) -> dict[str, Any]:
+    """Remove model-output provenance from client-authored state updates.
+
+    SOC middleware writes this marker directly through the graph. The generic
+    thread-state API must not let a thread owner forge the same marker on an
+    arbitrary assistant message and then cross the Lead Agent acceptance
+    boundary with it.
+    """
+    messages = values.get("messages")
+    if not isinstance(messages, list):
+        return values
+
+    sanitized_messages: list[Any] = []
+    for message in messages:
+        if isinstance(message, BaseMessage):
+            additional_kwargs = dict(message.additional_kwargs)
+            additional_kwargs.pop(SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY, None)
+            sanitized_messages.append(message.model_copy(update={"additional_kwargs": additional_kwargs}))
+            continue
+        if not isinstance(message, dict):
+            sanitized_messages.append(message)
+            continue
+        sanitized = dict(message)
+        _strip_reserved_additional_kwargs(sanitized)
+        constructor_kwargs = sanitized.get("kwargs")
+        if isinstance(constructor_kwargs, dict):
+            sanitized_constructor_kwargs = dict(constructor_kwargs)
+            _strip_reserved_additional_kwargs(sanitized_constructor_kwargs)
+            sanitized["kwargs"] = sanitized_constructor_kwargs
+        sanitized_messages.append(sanitized)
+
+    return {**values, "messages": sanitized_messages}
+
+
+def _strip_reserved_additional_kwargs(payload: dict[str, Any]) -> None:
+    additional_kwargs = payload.get("additional_kwargs")
+    if not isinstance(additional_kwargs, dict):
+        return
+    sanitized = dict(additional_kwargs)
+    sanitized.pop(SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY, None)
+    payload["additional_kwargs"] = sanitized
+
+
 def _thread_review_binding(metadata: Any) -> SocLeadAgentReviewThreadBinding:
     payload = metadata.get(SOC_LEAD_AGENT_REVIEW_THREAD_BINDING_METADATA_KEY) if isinstance(metadata, dict) else None
     if payload is None:
@@ -206,4 +250,5 @@ __all__ = [
     "SocLeadAgentMessageResolutionError",
     "SocLeadAgentMessageUnavailableError",
     "resolve_soc_lead_agent_message",
+    "strip_soc_review_message_metadata",
 ]

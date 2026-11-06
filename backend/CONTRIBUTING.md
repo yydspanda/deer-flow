@@ -299,19 +299,25 @@ class MyMiddleware(AgentMiddleware[AgentState]):
 Lifecycle hooks can return a dictionary of state updates, which LangChain merges
 into the agent state, or `None` when they only observe state.
 
-2. Register the zero-argument middleware class in `config.yaml`:
+2. Register the middleware class in `config.yaml`. A class path uses the
+   zero-argument constructor; `{class, kwargs}` passes constructor arguments.
+   `kwargs` values must be JSON types (object, array, string, number, boolean,
+   or null); YAML dates and timestamps are coerced to ISO strings so they match JSON:
 
 ```yaml
 extensions:
   middlewares:
     - deerflow.agents.middlewares.my_middleware:MyMiddleware
+    - class: deerflow.agents.middlewares.my_middleware:MyMiddleware
+      kwargs:
+        max_tool_calls: 5
 ```
 
 Configured middleware runs after the built-in middleware and optional loop/token
 guards. On the lead-agent pipeline, it runs before the terminal-response,
 model-length, safety, and clarification tail; subagents have no
-terminal-response, model-length, or clarification stage, so configured middleware is
-followed by the optional safety guard, `DurableContextMiddleware`, optional
+terminal-response or clarification stage, so configured middleware is followed
+by the model-length guard, the optional safety guard, `DurableContextMiddleware`, optional
 `SummarizationMiddleware`, then `SubagentDateContextMiddleware` and
 `SystemMessageCoalescingMiddleware`. Treat middleware class paths as trusted
 operator configuration because loading one executes Python code.

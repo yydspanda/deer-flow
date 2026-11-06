@@ -425,9 +425,15 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
             "profile_version",
             "feature_schema_version",
             "occurrence_key",
+            "is_current",
+            "superseded_by_observation_id",
         }.issubset(memory_pattern_columns)
-        memory_pattern_constraints = {constraint["name"] for constraint in inspect(engine).get_unique_constraints("soc_memory_pattern_observations")}
-        assert "uq_soc_memory_pattern_aggregation_occurrence" in memory_pattern_constraints
+        memory_pattern_indexes = {index["name"]: index for index in inspect(engine).get_indexes("soc_memory_pattern_observations")}
+        for suffix, column in (("source", "source_id"), ("occurrence", "occurrence_key")):
+            index = memory_pattern_indexes[f"uq_soc_memory_pattern_current_{suffix}"]
+            assert index["unique"]
+            assert index["column_names"] == ["aggregation_key", column]
+            assert str(index["dialect_options"]["sqlite_where"]) == "is_current = 1"
         analysis_run_columns = {column["name"] for column in inspect(engine).get_columns("soc_analysis_runs")}
         assert {
             "analysis_verdict",

@@ -16,7 +16,10 @@ segment boundary to the reverse patterns and missed the masking patterns, and
 #4053 had to add the same boundary to the other copy. This module holds the
 rule once so a third copy cannot silently disagree.
 
-The two sites are *not* identical, and the difference is deliberate — see
+Both sites match separator-agnostically: ``sandbox.tools`` derives its bases
+from ``_path_variants``, and ``LocalSandbox``'s forward resolution spells
+resolved paths with forward slashes in commands and file content, so the
+reverse direction has to accept both spellings of the same host path — see
 ``separator_agnostic``.
 """
 
@@ -38,13 +41,39 @@ from collections.abc import Callable
 # fail the lookahead and be emitted as the raw host path.
 _SEGMENT_BOUNDARY = r"(?=/|$|[^\w./-])"
 
+# The mirror rule on the left: a base must start a path, not continue one.
+# Without it ``/mnt/user-data`` matches inside the artifact URL
+# ``.../artifacts/mnt/user-data/outputs/x.html`` or a relative
+# ``backup/mnt/user-data``, and a mount at ``/data`` inside ``/var/data``.
+# ``/`` is deliberately allowed so ``file:///mnt/user-data`` still maps; ``.``
+# and ``~`` reject ``./`` and ``~/`` relative spellings. Forward-resolution
+# patterns (container → host) in ``LocalSandbox`` and ``sandbox.tools`` share
+# this rule, so it is public.
+#
+# Known false negative: a value attached directly to a short option
+# (``curl -o/data/x``, ``ssh -i/data/key``, ``gcc -I/data/inc``) follows a
+# letter, so it is left virtual instead of being translated. Spell those with a
+# space (``-o /data/x``) or ``=``. Rejecting embedded roots matters more: the
+# alternative rewrites unrelated paths and URLs.
+#
+# The scanner and the regex lookbehind derive from one character class so
+# ``replace_output_path_matches`` and ``build_output_mask_pattern`` cannot drift.
+_PATH_START_BLOCKERS = re.compile(r"[\w.~-]")
+PATH_START_BOUNDARY = rf"(?<!{_PATH_START_BLOCKERS.pattern})"
+
 # The path tail following the base. ``[/\\]`` keeps Windows-separated paths
 # matching; the negated class stops at whitespace and shell punctuation so a
 # path embedded in a larger line is not over-consumed.
-_PATH_TAIL = r"(?:[/\\][^\s\"';&|<>()]*)?"
+#
+# ``:`` ends the tail as well. Scanning resumes after a match, so a tail that
+# ran on through a ``:``-joined list ($PATH, $PYTHONPATH) carried every later
+# entry under the same base to the model unmasked. ``;``, the Windows list
+# separator, already ended it. A ``:`` inside one path (``grep -n`` output,
+# a file name) only shortens the match; the rest is copied through verbatim.
+_PATH_TAIL = r"(?:[/\\][^\s\"';&|<>():]*)?"
 
 _SEGMENT_BOUNDARY_CHAR = re.compile(r"[^\w./-]")
-_PATH_TAIL_TERMINATORS = frozenset("\"';&|<>()")
+_PATH_TAIL_TERMINATORS = frozenset("\"';&|<>():")
 
 
 def normalize_mask_tail(tail: str) -> str:
@@ -66,21 +95,21 @@ def build_output_mask_pattern(base: str, *, separator_agnostic: bool = False) ->
         base: Host path root to match (already resolved by the caller).
         separator_agnostic: Accept either separator *inside* the base, so a
             base captured with ``\\`` still matches output that spells the same
-            path with ``/``. ``sandbox.tools`` needs this because it derives its
-            bases from ``_path_variants`` (which yields Windows-style spellings)
-            and matches them against output whose separators it does not
-            control. ``LocalSandbox`` does not: its bases come from filesystem
-            resolution on the running platform, and relaxing them would widen
-            what it masks.
+            path with ``/``. Both call sites need this: ``sandbox.tools``
+            derives its bases from ``_path_variants`` (which yields
+            Windows-style spellings) and matches them against output whose
+            separators it does not control, and ``LocalSandbox``'s forward
+            resolution emits forward-slash spellings on Windows even though its
+            bases are resolved with native separators.
 
     Returns:
-        A compiled pattern matching ``base`` at a segment boundary, plus an
-        optional path tail.
+        A compiled pattern matching ``base`` where it starts a path and ends
+        at a segment boundary, plus an optional path tail.
     """
     escaped = re.escape(base)
     if separator_agnostic:
         escaped = escaped.replace(r"\\", r"[/\\]")
-    return re.compile(escaped + _SEGMENT_BOUNDARY + _PATH_TAIL)
+    return re.compile(PATH_START_BOUNDARY + escaped + _SEGMENT_BOUNDARY + _PATH_TAIL)
 
 
 def replace_output_path_matches(
@@ -110,6 +139,9 @@ def replace_output_path_matches(
         match_start = searchable_output.find(searchable_base, search_from)
         if match_start < 0:
             break
+        if match_start > 0 and _PATH_START_BLOCKERS.fullmatch(searchable_output[match_start - 1]):
+            search_from = match_start + 1
+            continue
 
         base_end = match_start + len(searchable_base)
         match_end = base_end

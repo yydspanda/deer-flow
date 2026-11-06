@@ -124,3 +124,21 @@ it("keeps current edits usable and reports unavailable browser storage", () => {
   expect(result.current.drafts["MC-A"]).toMatchObject(patch);
   expect(result.current.storageFailed).toBe(true);
 });
+
+it("discards stored facet values that are not arrays of strings", () => {
+  const first = renderHook(() => useMemoryReviewDrafts(candidates));
+  act(() => first.result.current.change(candidate, patch));
+  const key = window.sessionStorage.key(0)!;
+  const saved = JSON.parse(window.sessionStorage.getItem(key)!);
+  first.unmount();
+  window.sessionStorage.setItem(
+    key,
+    JSON.stringify({
+      ...saved,
+      draft: { ...saved.draft, promotedFacetValues: { role_entity: [17] } },
+    }),
+  );
+  const { result } = renderHook(() => useMemoryReviewDrafts(candidates));
+  expect(result.current.drafts).toEqual({});
+  expect(window.sessionStorage.length).toBe(0);
+});

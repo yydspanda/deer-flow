@@ -29,9 +29,13 @@ import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX
+from deerflow.sandbox.download import DEFAULT_DOWNLOAD_LIMIT as _MAX_DOWNLOAD_SIZE
+from deerflow.sandbox.download import download_limit, read_download_stream
+from deerflow.sandbox.read_file_contract import split_file_lines
 from deerflow.sandbox.remote_list_dir import parse_remote_list_dir_output, remote_list_dir_command
+from deerflow.sandbox.remote_search import parse_remote_search_output, remote_search_command
 from deerflow.sandbox.sandbox import Sandbox, _validate_extra_env
-from deerflow.sandbox.search import GrepMatch, path_matches, should_ignore_path, truncate_line
+from deerflow.sandbox.search import GrepMatch, path_matches, should_ignore_path_under_root, truncate_line
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -43,7 +47,6 @@ T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
-_MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 # Tenki sandboxes run as the unprivileged ``tenki`` user (HOME=/home/tenki) and
 # ``/mnt`` is root-owned, so DeerFlow's ``/mnt/user-data`` virtual prefix is not
 # writable directly. Like ``community/e2b_sandbox``, file ops are remapped under
@@ -130,24 +133,25 @@ class TenkiSandbox(Sandbox):
     def close(self) -> None:
         """Terminate the underlying Tenki session (idempotent).
 
-        The microVM is terminated *first*; the adapter is only marked closed once
-        the session is actually gone, so a failed termination stays retryable
-        instead of silently leaking a running (billed) sandbox. A terminal
-        session error means it is already gone, which counts as closed; anything
-        else is raised so the caller can retry or alert.
+        Mark closed only after the termination RPC is accepted or the service
+        confirms the session is already gone. This does not wait for physical
+        VM termination. Ambiguous transport failures stay retryable instead of
+        silently abandoning a possibly running (billed) sandbox.
+        Holding the adapter lock across the RPC serializes close attempts;
+        other operations checking this lock wait for that network call too.
         """
         with self._lock:
             if self._closed:
                 return
-            sandbox = self._sandbox
-        try:
-            sandbox.close()
-        except Exception as e:
-            if not self._is_terminal_failure(e):
-                logger.error("Error terminating Tenki sandbox %s: %s", self.id, e)
-                raise
-            logger.info("Tenki sandbox %s was already gone at close: %s", self.id, e)
-        with self._lock:
+            try:
+                self._sandbox.close()
+            except Exception as e:
+                # A broken transport can make an operational handle unusable
+                # without confirming that the termination RPC was accepted.
+                if type(e).__name__ not in {"SessionTerminatedError", "SessionNotFoundError"}:
+                    logger.error("Error terminating Tenki sandbox %s: %s", self.id, e)
+                    raise
+                logger.info("Tenki sandbox %s was already gone at close: %s", self.id, e)
             self._closed = True
 
     # ── bridge helpers ──────────────────────────────────────────────────
@@ -273,6 +277,9 @@ class TenkiSandbox(Sandbox):
             output = f"{stdout}\n{stderr}"
         else:
             output = stdout or stderr
+        if result.timed_out:
+            message = "Error: command timed out\nExit Code: 124"
+            return f"{output}\n{message}" if output else message
         if result.exit_code not in (0, None):
             # Mirror LocalSandbox: preserve a nonzero exit in the output text
             # even when the command produced output (see e2b_sandbox).
@@ -281,13 +288,27 @@ class TenkiSandbox(Sandbox):
 
     # ── file operations ─────────────────────────────────────────────────
 
-    def read_file(self, path: str) -> str:
+    def read_file(
+        self,
+        path: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> str:
         resolved = self._resolve_path(path)
         try:
-            return self._fs_op(lambda fs: fs.read_text(resolved))
+            content = self._fs_op(lambda fs: fs.read_text(resolved))
         except Exception as e:
             logger.error("read_file %s failed: %s", resolved, e)
             return f"Error: {e}"
+        if start_line is None and end_line is None:
+            return content
+        lines = split_file_lines(content or "")
+        # Clamp like LocalSandbox.read_file: a negative start would otherwise
+        # wrap around through Python's negative-index slicing instead of
+        # reading from the first line.
+        start = max(start_line or 1, 1)
+        end = max(end_line, 0) if end_line is not None else len(lines)
+        return "\n".join(lines[start - 1 : end])
 
     def write_file(self, path: str, content: str, append: bool = False) -> None:
         self._write_bytes(self._resolve_path(path), content.encode("utf-8"), append=append)
@@ -318,7 +339,8 @@ class TenkiSandbox(Sandbox):
                     raise
             self._fs_op(lambda fs: fs.write_stream(resolved, _frames(data)))
 
-    def download_file(self, path: str) -> bytes:
+    def download_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        limit = download_limit(max_bytes, _MAX_DOWNLOAD_SIZE)
         normalized = self._guard_traversal(path)
         stripped = normalized.lstrip("/")
         allowed = VIRTUAL_PATH_PREFIX.lstrip("/")
@@ -342,14 +364,8 @@ class TenkiSandbox(Sandbox):
         #
         # The cap is enforced on bytes actually received, so a file that grows
         # mid-transfer still can't exceed it (a stat-then-read check could).
-        chunks: list[bytes] = []
-        total = 0
         try:
-            for chunk in fs.read_stream(resolved):
-                total += len(chunk)
-                if total > _MAX_DOWNLOAD_SIZE:
-                    raise OSError(errno.EFBIG, f"File exceeds maximum download size of {_MAX_DOWNLOAD_SIZE} bytes", path)
-                chunks.append(chunk)
+            return read_download_stream(fs.read_stream(resolved), limit, path)
         except OSError as e:
             # Our own EFBIG size-cap is not a session death — let it pass through
             # without evicting. Every other OSError is a real transport failure:
@@ -365,7 +381,6 @@ class TenkiSandbox(Sandbox):
         except Exception as e:
             self._note_failure(e)
             raise OSError(f"cannot read '{path}' from sandbox: {e}") from e
-        return b"".join(chunks)
 
     def list_dir(self, path: str, max_depth: int = 2) -> list[str]:
         resolved = self._resolve_path(path)
@@ -389,25 +404,34 @@ class TenkiSandbox(Sandbox):
         types = ("f", "d") if include_dirs else ("f",)
         type_expr = " -o ".join(f"-type {t}" for t in types)
         hard_limit = max(max_results * 4, max_results + 50)
-        r = self._sh(f"find {shlex.quote(resolved)} \\( {type_expr} \\) -print 2>/dev/null | head -{hard_limit}")
+        # -H follows a symlinked search root, as list_dir does.
+        search = f"find -H {shlex.quote(resolved)} \\( {type_expr} \\) -print 2>/dev/null"
+        r = self._sh(remote_search_command(search, resolved, limit=hard_limit))
+        # A missing root or a failed find must not read as "no files matched" (#5376).
+        output = parse_remote_search_output(r.stdout_text, resolved, tool="find", limit=hard_limit)
 
         matches: list[str] = []
         root = resolved.rstrip("/") or "/"
         root_prefix = root if root == "/" else f"{root}/"
-        for entry in (r.stdout_text or "").splitlines():
+        # Records are LF-delimited; other splitlines() boundaries can be path characters.
+        for entry in output.text.split("\n"):
             # Do NOT strip: trailing whitespace can be part of the filename.
             if not entry or (entry != root and not entry.startswith(root_prefix)):
                 continue
-            if should_ignore_path(entry):
+            if should_ignore_path_under_root(entry, root):
                 continue
             rel_path = entry[len(root) :].lstrip("/")
             if not rel_path:
                 continue
             if path_matches(pattern, rel_path):
                 matches.append(self._virtual_path(entry))
-                if len(matches) >= max_results:
-                    return matches, True
-        return matches, False
+                # Look one match past the cap before deciding: returning on the
+                # max-th match cannot tell a search that held exactly
+                # ``max_results`` from one that held more, so an exhausted tree
+                # was reported as truncated.
+                if len(matches) > max_results:
+                    return matches[:max_results], True
+        return matches, output.truncated
 
     def grep(
         self,
@@ -437,14 +461,17 @@ class TenkiSandbox(Sandbox):
             flags.append("-i")
         flags.append("-F" if literal else "-E")
         total_cap = max(max_results * 4, max_results + 50)
-        cmd = "grep " + " ".join(flags) + f" -e {shlex.quote(pattern)} {shlex.quote(resolved)} 2>/dev/null | head -{total_cap}"
-        r = self._sh(cmd)
+        search = "grep " + " ".join(flags) + f" -e {shlex.quote(pattern)} {shlex.quote(resolved)} 2>/dev/null"
+        r = self._sh(remote_search_command(search, resolved, limit=total_cap))
+        # A missing root, a missing grep or an unreadable tree must not read as "no matches" (#5376).
+        output = parse_remote_search_output(r.stdout_text, resolved, tool="grep", limit=total_cap)
 
         root = resolved.rstrip("/") or "/"
         root_prefix = root if root == "/" else f"{root}/"
         matches: list[GrepMatch] = []
-        truncated = False
-        for raw in (r.stdout_text or "").splitlines():
+        truncated = output.truncated
+        # Keep non-LF separators inside filenames and matched text intact.
+        for raw in output.text.split("\n"):
             try:
                 file_path, line_no_str, line_text = raw.split(":", 2)
             except ValueError:
@@ -453,7 +480,7 @@ class TenkiSandbox(Sandbox):
                 line_number = int(line_no_str)
             except ValueError:
                 continue
-            if should_ignore_path(file_path):
+            if should_ignore_path_under_root(file_path, root):
                 continue
             if glob is not None:
                 # Match the caller's real directory scope: a pattern like
@@ -465,9 +492,9 @@ class TenkiSandbox(Sandbox):
                 if not path_matches(glob, rel_path):
                     continue
             matches.append(GrepMatch(path=self._virtual_path(file_path), line_number=line_number, line=truncate_line(line_text)))
-            if len(matches) >= max_results:
-                truncated = True
-                break
+            # Same one-match-past-the-cap rule as glob() above.
+            if len(matches) > max_results:
+                return matches[:max_results], True
         return matches, truncated
 
 

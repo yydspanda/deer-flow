@@ -1,10 +1,10 @@
 "use client";
 
 import {
-  ActivityIcon,
   BotIcon,
   CalendarClock,
   MessagesSquare,
+  BlocksIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -20,6 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { SocNavigationItem } from "@/components/workspace/soc/soc-navigation-item";
 import { useAgentsApiEnabled } from "@/core/agents";
 import { useI18n } from "@/core/i18n/hooks";
 
@@ -96,18 +97,19 @@ export function WorkspaceNavChatList() {
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/soc")}
+            isActive={pathname.startsWith("/workspace/capabilities")}
             asChild
           >
             <Link
               className="text-muted-foreground"
-              href="/workspace/soc/operations"
+              href="/workspace/capabilities"
             >
-              <ActivityIcon />
-              <span>{t.sidebar.socOperations}</span>
+              <BlocksIcon />
+              <span>{t.capabilities.title}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        <SocNavigationItem />
       </SidebarMenu>
     </SidebarGroup>
   );

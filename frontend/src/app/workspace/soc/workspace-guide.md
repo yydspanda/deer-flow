@@ -1,0 +1,632 @@
+# SOC Workspace Frontend Guide
+
+SOC pages are thin operational clients for server-owned contracts. Read the root,
+`frontend/AGENTS.md`, and `frontend/src/AGENTS.md` first. All SOC HTTP calls belong in
+`src/core/soc`; React must not query persistence, parse vendor payloads, calculate
+Runtime decisions, construct Memory, or infer action authority.
+
+Memory review keeps fixed scope read-only and all core behaviors visible as individual
+checkboxes (new draft: all checked; revision: restore saved selection). Submit the same
+`selected_behavior_components` to lesson drafting, governance preview and the reviewed
+applicability. Do not compute hashes or match scores in React. At least one core behavior
+remains selected; clearing a behavior is an explicit scope change, not an exclusion.
+Additional conditions gate direct reuse only. Reference copy must explain that a model
+can adopt a reviewed lesson, while the program does not directly copy its historical verdict.
+Typed HTTP observations render their fixed request/response behavior and Server product
+codes in Chinese through `SocMemoryScope`. Each server-owned `http_observation:` component
+is one checkbox for one HTTP transaction; do not split its request, response, or banner
+into independently matchable conditions. Translate labels only, preserve complete tokens
+in drafting/preview/review commands, and leave evidence in the existing audit view. Never
+derive core behaviors from free text, IPs, timestamps, or identifiers in the browser.
+
+New explicit Memory confirmation/activation forms propose 180 days until review and
+365 days of activation through `core/soc/memory-review-validity.ts`. Reopening or
+restoring an existing record remains capped by its saved `valid_until`; shorten the
+proposed review interval when less than 180 days remain. Expired records never gain a
+fresh lifetime from form defaults. Preserve current user edits and saved governance
+dates; these defaults do not migrate previously confirmed experience.
+
+## API And Navigation
+
+- SOC additions to the generic custom-Agent chat stay in `core/soc/agent-review.ts`
+  and `components/workspace/soc/soc-agent-review-actions.tsx`. The shared page only
+  passes review context, preserves the queue hint across chat navigation, and mounts
+  the review actions. Stored server binding wins over a URL hint; only `soc-triage`
+  receives that hint. Submitting a candidate still requires an explicit reason and
+  the existing server validation; it never directly approves Memory. The sidebar's
+  `SocNavigationItem` coexists with the upstream Capability Center. Keep SOC keys out
+  of generic thread types, whose context already supports extension fields.
+  SOC review uses `lead_agent` as its transport assistant ID so Gateway review
+  admission can inject the bound evidence; context retains `agent_name: soc-triage`.
+  Other custom Agents retain the upstream transport identity (`agent_name`).
+
+- Daily two-batch controls use the server batch projection and quick commands; internal
+  experiment/round records remain technical provenance rather than operator inputs.
+  Preparing membership or a round does not start inference. CLI-created rounds remain
+  available through the technical API. Keep all four run switches visible above the
+  batch controls as `新任务运行设置`.
+  New rounds submit those selections, masked by server capabilities; policy enabled
+  means `full_flow`, disabled means `memory`. Do not overwrite selections through a
+  second purpose preset. Use separate batch/session preferences, default to the server's
+  memory-evaluation settings, and display immutable `本轮已保存设置` for existing rounds.
+  Sample scopes are `验证经验复用` (first-batch peers exist, not a guaranteed Memory hit)
+  and `其他告警测试` (1-5 peers or unusable time, separate metrics). The default static
+  plan expands learning to about 80% within existing learning/main-validation groups,
+  keeps at least one holdout, and preserves all supplementary membership. Counts and
+  exact membership remain server-owned; runtime core-behavior Memory grouping is separate.
+  Preserve API scope
+  values; these are display terms, not a change to membership or evaluation denominators.
+  Keep static sample browsing separate from the selected round's saved results.
+  Round/audit queries include the fixed Run ID; do not silently select a later rerun.
+  Linked retest rounds expose an on-demand, paginated before/after tab. Render server
+  comparison status, actual Memory versions/use, timing and unknown usage; failures
+  are not unchanged conclusions. Only explicit result inspection fetches full audit.
+  Preparing a retest preserves old results and still does not start model execution.
+  Preserve scope and round selection when returning from candidate governance.
+  Round lists use the lightweight `/experiments/{id}/rounds` projection, filtered by
+  batch before pagination, not full configuration or Memory snapshots for every row.
+  The old untracked process endpoint must not be used once experiments are prepared.
+  Show server-owned round timing and current-budget ETA only when available. Runtime
+  wall time, operator pause, queue wait and model duration are different measures;
+  never infer an ETA or convert unknown measurements into zero on the client.
+  Blocked notices retain the server reason; do not assume every stop means changed
+  settings or Memory. For `memory_governance_changed`, offer Continue: the backend
+  automatically creates the necessary continuation and folds results into the batch.
+  React never clears or modifies an internal round's blocked state.
+
+- Corpus list requests set `include_group_catalog=false&include_rehearsal=false`. Keep
+  the selected group in that lightweight response; open the group picker to fetch
+  `/dev/corpus-workbench/groups` with server search and bounded pagination. Do not
+  reset a selected group merely because a partial directory does not contain it.
+  Directory counts describe static corpus membership, not current processing state.
+  SOC Docker acceptance uses `scripts/soc-memory-dev.sh` prebuilt mode; opt in to
+  `SOC_FRONTEND_MODE=dev` for source hot reload. This does not change backend DEV,
+  authentication or provider targets. Read-only navigation measurement is in
+  `tests/e2e-real-backend/soc-navigation-performance.mjs`.
+- Fixed recommended rehearsal panels are retired; preserve the existing group picker,
+  group presentation, alert-to-group navigation and return-to-filter flow. Do not remove
+  samples or group browsing along with the old guide. Normalization inspection remains
+  directly addressable at `/workspace/soc/normalization`, not in routine operator navigation.
+
+- Completion notices report execution; the experience band owns the learning action.
+  Never duplicate Candidate/Memory links in completion banners. Review copy distinguishes
+  automatic same-behavior learning from manual promotion using the saved source. Both
+  require review and activation; shared links mean one review, not one task per alert.
+- Labels and destinations follow server `SocMemoryLearningView`, resolving the current
+  candidate/revision rather than stale per-run candidates. Manual/automatic learning share
+  review; reference/exact/paused/expired use stays separate from confirmation. Show closed
+  learning reasons even without a Candidate link; omit unavailable navigation buttons.
+  A successful promotion's server-returned learning view must remain usable if the
+  subsequent list refresh fails. Cancel older in-flight reads before updating only the
+  matching alert/Run's cached learning state; never apply a receipt to another rerun or
+  invent governance state. Review completion invalidates lightweight corpus lists and
+  alert learning views so returning within the navigation cache window shows fresh state.
+  These learning updates must not invalidate immutable full-audit bundles.
+- Corpus `后续运行设置` is a per-run snapshot, not global configuration. The four switches cover
+  semantic review, enterprise policy and its safe-path/advisor children. Store the local selection
+  in session storage, mask unavailable capabilities and submit it with each process request.
+  Requests carrying settings must declare `Content-Type: application/json`; keep bodyless
+  calls compatible with deployment defaults. Pin the header in both API and browser tests.
+  Turning the parent off also turns children off. The trace's `本次运行配置` reads only saved
+  execution options; toggling controls must not relabel historical or in-flight results. Provider
+  modes and real external execution remain read-only. No new client-owned decision or authority.
+  Place each switch immediately before its associated clickable label, with wider spacing between
+  options. Never distribute a label and switch to opposite ends of a column; this makes switches
+  appear to belong to the next option on wide screens. Preserve the pairing at responsive widths.
+  A separate default-off `重新核对事实` checkbox sends `refresh_normalization=true`; it is
+  disabled and cleared while semantic review is off/unavailable. Otherwise identical inputs
+  reuse compatible saved facts, but current Memory and policy still run. Show the frozen refresh
+  option and server-owned reuse explanation in the trace; never imply a cached final verdict.
+
+- Candidate governance comparison is server-owned. Show the old business conclusion,
+  scope relation/differences and an explicit replacement selection in the existing review
+  page. Selection alone does not mutate Memory. Submit predecessor ID/version with the
+  existing confirm command; no second mandatory reason. Clear a stale selection after
+  scope/version changes and show server conflicts, never silently pick the newest Memory.
+
+- Use `/api/soc/*`, typed success bodies, `X-SOC-API-Version: 1`, and RFC Problem Details
+  mapped to `SocApiError`. Authenticated Gateway identity is authoritative; actor headers
+  are attribution only.
+- State-changing calls send stable idempotency keys and invalidate the owning query
+  namespace after success. Do not optimistically mutate governed state.
+  Approval mutations retain their key for the same actor and command after an
+  unacknowledged response; changed inputs use another key, and an acknowledged
+  result releases it. Keep keys and execution grants in component memory only.
+  The approval inbox retains the acknowledged request and grant independently of
+  its pending-list filter until the operator explicitly selects another request.
+  Background refresh must not discard its payload edits or execution result.
+- Corpus round results use the settled progress revision in their query identity.
+  A running-to-settled transition must fetch results after that snapshot, fence
+  older in-flight reads, and keep retrying a failed final fetch before polling stops.
+- All `/workspace/soc/*` pages use `SocWorkspaceHeader` for stable second-level
+  navigation. The persistent SOC layout exposes an immediate, non-blocking top progress
+  indicator for internal route clicks; target pages then take over with route/local
+  loading shells. Page headers contain only local actions such as refresh/filter. Heavy
+  SOC workspaces use route-level lazy shells so development compilation never looks like
+  an ignored click.
+- Keep operational hierarchy explicit: each page or bounded workflow section has at most
+  one filled primary command; navigation/view selectors remain segmented, read-only state
+  remains a Badge, refresh/search utilities use familiar icon controls, and destructive
+  governance actions are visually separated from confirmation. Pending Memory Candidate
+  rows and links use the primary "审核并决定" treatment; terminal records use the
+  secondary "查看治理记录" treatment.
+- Operational routes are ownership-specific: every Runtime result is listed under
+  `/alerts`; the rare unresolved-fact task is under `/review/alerts`; Memory candidates
+  are governed under `/review/memory-candidates[/candidate_id]`; high-risk actions are
+  authorized under `/approvals`; quality samples remain under `/review/samples`. A
+  candidate or approval deep link must not fabricate an alert queue item.
+- Enable queries only for the active surface. List pages do not preload the first detail
+  or attach all related analyses to navigation; detail and source observations are
+  bounded, explicit requests.
+
+## Alert Results And Human Intervention
+
+- Render additive server `memory_matching_facts` as **系统匹配说明**, separately from the model's
+  **模型研判依据** in the existing outcome panel. Do not infer matching from the model's prose or
+  implement a browser matcher. Empty legacy comparisons do not prove exact reuse. Keep original
+  model reasoning visible/auditable; these notes neither change the outcome nor create a task.
+
+- Render server `processing_path=tenant_policy|memory` as direct handling with an explicit
+  "主模型未调用" explanation. These completed runs have no model result or confidence;
+  skipped Base means "未生成判断", never 0% or a failed run. Memory use `direct_reused`
+  means adoption, not a before/after model comparison. Old model runs keep their existing
+  projection; do not synthesize a direct source in React.
+
+- `/alerts` is the primary **告警研判** workspace and is keyed by `run_id`. It lists every
+  persisted Runtime result, including usable, degraded, failed, and corrected runs. A
+  `ReviewQueueItem` is optional and must never be required to open the alert result.
+- Present model uncertainty and evidence gaps as visible advisory information on the
+  result. Do not turn `unknown`, low confidence, missing enrichment, provider failure, or
+  a suggested manual check into analyst work. Only the server-owned `required` attention
+  classification may link to `/review/alerts`.
+- Use the server-owned `SocCaseOutcomeView.recommended_handling` as the one primary
+  handling conclusion: **忽略 / 转交**, followed by its reason and necessary next steps.
+  Security verdict, confidence, disposition and progress remain distinct data but belong
+  in default-collapsed details, not competing headline cards. Failed/unusable results must
+  show an explicit exception, never a fabricated ignore or completed handoff.
+  Explain whether a gap is advisory, limits only a dependent capability, or blocks the
+  decision. Base/Memory/Tenant/Effective lineage belongs in collapsed technical audit;
+  never render those stages as four peer conclusions or derive closure state in React.
+  Render the server's `tenant_policy_handoff_pending` reason as a policy-selected handoff,
+  with `handling_reason` beside the handling conclusion. Never label that requirement as missing facts
+  or imply that the handoff has already executed.
+  Render `tenant_policy_review_pending` as `待按建议排查`. When no concrete
+  disposition exists, display the server's `recommended_handling` as a recommendation,
+  not `处置未明确`; keep `handling_recommendation` visible even when policy was applied.
+  Show same-call `conclusion_support` as resolved business questions and future reassessment
+  triggers, not new mandatory tasks. Keep non-blocking supplementary information and unused
+  targeting guards in expandable records. Actual current blockers remain prominent. Do not
+  invent resolved questions for saved runs without this field. In the corpus workbench,
+  show frozen run Memory separately from cohort-owned Memory; retrieval is not adoption,
+  and record/revision links use `memory_id`, never a version-qualified source reference.
+- Progress text comes from the server-owned
+  `progress_label/progress_detail`; React supplies only aggregate styles and neutral fallbacks.
+  Keep normal progress in details; show current material blockers and execution failures
+  beside the main conclusion. Lists and filters use `SocAlertResult.recommended_handling`,
+  not the immutable Base verdict. The audit table includes every stage's disposition,
+  review requirement and suggested action, not just verdict/confidence. Applied policy means
+  applied to a decision, not executed externally; original summaries remain expandable.
+- The result page owns two explicit optional commands: correct this run and promote this
+  run into the governed Memory Candidate flow. Correction preserves decision lineage;
+  promotion creates at most a pending Candidate and does not review it inline.
+- `/review/alerts` is the rare **需人工介入** inbox. It resolves only critical current-fact
+  conflicts that Runtime could not adjudicate. Put the conflict, current conclusion,
+  evidence gaps, manual checks, and final analyst judgment on one focused surface. The
+  correction mutation records the judgment and closes the task; do not require a second
+  close command.
+- Memory Candidate governance and action approval are separate jobs. Never embed their
+  forms in a human-intervention task. Link back to the run result, Candidate page, or
+  `/approvals` when cross-workflow navigation is useful. Keep raw contracts and full
+  technical artifacts collapsed behind an explicit audit control.
+- Structured disposition capture is separate from ReviewQueue close. Require the
+  server-owned proposal/queue state plus explicit operational disposition, review lane,
+  and reason; send append-only revisions with supersession lineage.
+- Sample review opens only server-returned manifest items and reuses the existing capture
+  command. It never creates a second write path or enables auto-close.
+- Investigation addenda are read-only projections. Display execution status, evidence
+  coverage, and attention flags but do not infer a new verdict/provider quality/action
+  permission. Preserve `shadow_only`, `decision_impact=none`, and
+  `new_conclusion_produced=false` labels.
+- A ReviewQueue-bound Lead Agent thread carries only `queue_id` as an identity hint. The
+  Gateway owns immutable queue binding, context hash, actor, run, and alert lineage. The
+  browser cannot reuse a bound thread for a different queue.
+
+## Memory Governance
+
+- One Memory Center owns three route-backed views: confirmed experiences at `/memory`
+  (`/memory/records` remains a compatible alias), review and its history at
+  `/review/memory-candidates`, and accumulation at `/memory/patterns`. Use shared
+  `SocMemoryNavigation` with owning-tab highlighting on details/revisions. Do not expose
+  a second "inventory/ledger center" to analysts. Each view loads only its own list;
+  entering the default view must not fetch Pattern detail or candidate review data.
+  Keep explicit back links to confirmed experiences or review records; preserve old deep links.
+
+- A record with `revision_pending=true` links to its existing pending Candidate from
+  both the record and revision pages; never show a second creation form. Resolve via
+  the server-side `revision_of_memory_id` candidate filter, not a latest-N browser scan.
+  Missing, failed or ambiguous lookup exposes recovery, never enables another revision.
+
+- Candidate inventory defaults to pending review with four server-filtered stages:
+  pending (including `confirmed_candidate`), confirmed, closed (rejected, superseded,
+  expired, deprecated), and all. Pass `review_stage=all` explicitly; omitting `status`
+  retains the legacy API's pending-only default. Filter before the global result limit,
+  never client-filter a latest-N list. Keep terminal details visible on individual rows.
+- Confirmed Candidate detail puts `修改经验`, record detail, and the shared deprecation
+  action before historical content. Opening revision is read-only; existing pending
+  revision links to its Candidate instead of offering another creation form. A failed
+  record lookup shows retry, never a destructive-only fallback. No inline overwrite of
+  a confirmed Lesson or editable terminal history.
+- Candidate detail always shows proposed content and evidence lineage. Only editable
+  states show the review workflow. Confirmed candidates show the persisted six-part
+  Business Lesson from the related Memory record.
+- Candidate review keeps the decision command bar visually separate from proposal,
+  matching scope, Business Lesson, and audit evidence. AI drafting is the primary next
+  step only after a verdict is selected; final confirmation becomes primary only after a
+  valid Lesson exists. Reject/deprecate actions use destructive styling and low-frequency
+  expiry remains tertiary.
+- Reviewer-selected alert verdict is separate from candidate governance. `confirm`
+  persists reviewed Memory; `reject` abandons the candidate. Only a successful server
+  `reopen` response unlocks an eligible rejected candidate.
+- `AI generate Memory` is available only after the reviewer selects the technical
+  verdict. Optional business context is separate. A verdict change invalidates the
+  browser draft.
+- Generated Lessons open directly as editable fields for both new and revision candidates;
+  preview is optional and returning to editing preserves every draft value. Regeneration
+  requires explicit overwrite confirmation, keeps the current draft until success, and
+  disables editing, verdict/scope changes and confirmation while generation is in flight.
+  Optional business facts remain human input; never fill them from the selected verdict.
+  Applicability is server-derived. The browser may select a nonempty subset of verified core
+  behaviors and add known optional values as direct-reuse limits; it submits the complete
+  reviewed contract. It cannot change fixed scope, persist a Memory automatically, enable
+  retrieval, or infer directive eligibility. Removing a core behavior widens only that reviewed
+  direct-use requirement and must pass the same governance/confirmation checks.
+- Unsubmitted review forms are cached in tab-scoped session storage for up to 24 hours,
+  keyed by authenticated user, tenant, candidate and its server revision. Restore verdict,
+  business facts, edited/generated Lesson and matching/use choices on refresh or return;
+  restoration never calls the LLM or submits a review. Clear after successful governance,
+  terminal state or candidate revision changes. Invalid/unavailable browser storage must
+  not break editing; show a failure warning if refresh recovery is unavailable. This is
+  not a shared server draft, and does not survive closing the tab or changing browsers.
+  Focused candidate detail additionally offers explicit shared draft save/read commands.
+  The server working copy is versioned and never activates Memory. Load it automatically
+  only when there are no local edits; otherwise require explicit replacement confirmation.
+  Keep the version the editor actually loaded, not the newest background query version.
+  Save acknowledgement may update that base version but must preserve edits typed in flight.
+  Source changes require explicit rechecking; show the old shared text rather than deleting
+  it. Do not mount one shared-draft query for every inventory row.
+- Candidate applicability controls must distinguish server-locked required facets from
+  reviewer-selectable core behavior and optional narrowing. Extra selections go into `reuse_conditions`,
+  not required/optional/context facet groups; clearing removes only unsaved extra limits. Arbitrary
+  facet keys or values require a tenant Memory Profile change, not a browser input.
+- Candidate and record details share `SocMemoryScope`. Only server-verified `scope_view`
+  may explain fingerprint contents or classify redundant narrowing options. Do not hash,
+  parse tenant detection identities, or infer applicability in React. Keep raw contracts
+  and original Lesson applicability prose in collapsed audit; unknown projections retain
+  explicit unresolved fingerprint labels. Show business rule/behavior rows once, with every verified
+  core component visible; only raw hashes and technical metadata collapse. Unselected extra limits are offered under an add control
+  only while reviewing, not in read-only detail. Remove only verified
+  redundant values, never an entire mixed group. Review sends `promoted_facet_values` to
+  drafting/preview and the same narrowed `record_applicability` to confirmation. Multiple
+  selected extra values within one semantic group remain OR; source and destination are separate AND
+  groups even when stored under role_entity. Limits affect direct verdict reuse only, not otherwise
+  eligible reference recall. Saved v1 shared scope limits retain their meaning and are marked.
+  Similarity/core/strong/weak aliases stay internal. Never mutate scope on read or invent values.
+- Entity reuse limits load only after `添加适用范围限制`, with dimension/search and ten
+  values per page. Show source counts and current-source priority; never render the full
+  cohort entity union. The coverage preview is server-owned. `为部分告警建立细分经验`
+  preserves its parent and creates a pending, source-backed scope through the shared
+  service, including after automatic recurrence thresholds. No automatic approval.
+  Record scope-boundary restoration is a separate explicit, versioned, audited action;
+  pausing a specific Memory must not make the UI promise broad automatic reuse.
+- Retrieval activation sends current record version, reason, idempotency key, and
+  validity/review settings. Refresh server state after mutation. Render context-only
+  matches separately from applicable decision directives.
+- Candidate confirmation must present retrieval and decision use as separate concepts:
+  retrieval controls whether a record can be found, while the explicit future-match
+  choice controls whether an exact typed match may participate in the effective verdict.
+  Default the latter to “仅供研判参考”; explain that the model may adopt the lesson in its judgment,
+  but the program does not directly copy its verdict. Never imply that enabling retrieval grants a directive.
+- Manual run promotion calls the governed `/api/soc/memory/runs/{run_id}/promote`
+  mutation after an explicit confirmation. The optional note only highlights material
+  for the later reviewer; it is not an admission or authority field. The mutation creates
+  a pending candidate only; the browser must not present it as confirmed Memory, imply
+  that the current verdict changed, or ask for final verdict/business facts before the
+  Candidate review page.
+- A run that actually consumed a confirmed Memory exposes `纠正此 Memory` beside that
+  `M-*` context. The correction page sends the current record version, source run,
+  typed issue, and substantive reason to the governed revision-candidate mutation. It
+  must explain that old retrieval is suspended immediately, current/historical verdicts
+  are not rewritten, and the existing Candidate review flow owns the replacement
+  Business Lesson and applicability. React must never edit a confirmed record in place.
+  The Memory record detail may also start an `operator_direct` revision without a source
+  use. It must identify that provenance explicitly and never fabricate a run/use pair.
+  Ordinary rejection leaves the predecessor disabled and must not expose generic `reopen`.
+  Revision review links directly to the predecessor and offers explicit cancel-and-restore,
+  including restore from the latest already-rejected revision. Show the original use mode
+  and renewed activation/review dates before confirmation; send one review command with
+  `restore_predecessor` and the displayed expected version. Navigate to the old record only
+  on confirmed restoration. Do not change lessons, matching scope, directives or historical runs.
+- The accumulation view is list-first and consumes only the server lineage read model. One row is
+  one stable Pattern across windows; observations, distinct sources, window count,
+  frozen candidate snapshot, and later reinforcement remain separate values.
+- Render Pattern lifecycle and future-alert use as separate, icon-labelled states; do not
+  collapse them into one compound status or force them into rigid table columns that make
+  the Pattern name unreadable. Lifecycle/use filters must be evaluated by the server over
+  the complete result set before pagination. A pending Candidate may be opened from its
+  Pattern detail or the batch review inbox, but both links must address the same
+  server-owned Candidate and must not create parallel review state.
+- Keep Pattern inventory and confirmed Memory record inventory distinct. `/memory`
+  manages Pattern lineages; `/memory/records` searches actual `MEM-*` records by IDs,
+  lesson text, source lineage, and facets. Record detail owns Business Lesson,
+  applicability, retrieval activation, usage history, read-only match diagnostics, and
+  versioned revision entry. A confirmed Candidate/alert action must link to this record
+  detail rather than presenting a terminal Candidate as still awaiting review.
+
+## DEV Validation Surfaces
+
+- DEV Memory/corpus pages orchestrate server-owned cohorts and official services. React
+  may search, filter, paginate, select, and invoke one alert; it must not load PKL files,
+  derive fingerprints, decide readiness, construct Patterns, approve candidates, or
+  calculate Base/Memory/Tenant/Effective decisions.
+- Corpus execution mode, ordering metadata, rerun eligibility, and label comparison are
+  server-owned. Render alerts by the canonical display sequence returned by the API; do
+  not reorder them by readiness, ID, or vendor export position. In
+  `interactive_exploration`, any non-running alert may be selected and a completed alert
+  exposes an explicit rerun command; show that reruns create a new Runtime Run, reuse the
+  same source Pattern observation, and are not valid time-causal evaluation. Strict
+  chronological evaluation remains a separate batch/eval path. Historical disposition
+  labels stay hidden per alert until a Runtime decision exists, and are displayed as
+  operational outcomes rather than independent detection truth.
+- Corpus filter continuity may be retained in tab-scoped browser storage, but selected
+  alert detail is page-local and must not be restored or auto-opened on navigation. The
+  run-status dropdown replaces the unprocessed-only switch and defaults to all. Migrate
+  explicit version-2 unprocessed preferences to not-run, ignoring the older implicit
+  default. Preserve the status across reload and group navigation. The
+  list query is server-filtered and paginated; React must not fetch the complete corpus
+  and repeat those filters locally. When a processed alert creates a
+  Pattern Candidate, keep the current page visible and render a persistent review link;
+  the prominent safety band must only project server-returned Effective Decision fields.
+- Alert-to-group navigation uses the server's `group_id`, clears conflicting alert/search/
+  status filters to show the complete group, and offers return to the prior filter/page.
+  Group search uses only the supplied group catalog (including singletons and missing
+  fingerprints); keep rendered options bounded without truncating the searchable catalog.
+  Navigation must not start analysis or open an alert's execution detail implicitly.
+- The corpus execution monitor polls only the selected active alert's lightweight
+  execution endpoint. Render the server projection of persisted Runtime steps, provider
+  journal, durations, bounded counts, decision, and Pattern write; do not estimate phase
+  progress in React or expose raw evidence, prompts, model responses, or secrets.
+- Keep pending state per alert, never lock the corpus table for one mutation. Poll the
+  server's lightweight `/activity` so different alerts can run concurrently while duplicate
+  clicks across sessions stay disabled. Header counts include all active corpus claims,
+  including durable jobs outside the visible page/status filter; the denominator is the
+  concurrency limit, not an expected active count. Poll quickly while active, back off at idle.
+  `202 Accepted` acknowledges a claim, not a final analysis. Keep the alert visibly running,
+  use `/activity` and `/execution` for progress, and refetch the authoritative page when
+  the claim disappears. A fresh terminal trace also triggers one final page refresh if
+  activity polling missed the claim. Compare the pre-submit Run ID so an old completed Run
+  cannot finish a rerun. A missing row or failed final read must not retain a local spinner.
+  For externally started runs, retry failed final reads while that alert/run stays selected;
+  show its terminal status with a loading-error notice. Failed refetches may retain stale
+  data and never satisfy refresh deduplication. Cancel retries on selection/run changes or unmount.
+  Treat `analysis_complete` as terminal after durable activity clears; label it `研判已完成`.
+  Validation requires no Pattern observation; its absence never implies a running write.
+  Only server phase status `running` animates; show skipped/failed explanations alongside
+  the saved analysis without a spinner. A cached running row may have a null or prior Run ID.
+  After activity clears, cancel older in-flight execution reads and explicitly reread execution
+  before using a terminal trace. A different cached Run ID never completes a final refresh
+  that still reads running. Durable failure before a Run exists may return `failed` with a
+  null Run ID; accept it under the same post-activity fresh-read fence without persisting a
+  Run-based deduplication key, since later attempts may also fail before saving a Run.
+  Keep explicitly focused results through processing-driven readiness/comparison changes;
+  user filter changes clear that temporary focus.
+- Full-chain corpus auditing is a separate explicit request, never part of live polling.
+  Both batches expose **重新配置并全部重跑**, editing the existing five run settings
+  only for Host-authorized users; LAN callers use saved settings. Read all-scope activity
+  before confirmation even when the visible scope is restricted. Submit explicit all
+  scope and the server restart token; preserve body/key across uncertain network retries
+  and require a refreshed confirmation on conflict. All old outcomes rerun, latest queued
+  tasks show unrun, and old fixed-run history remains accessible. Invalidate lightweight
+  list/execution/configuration and quick queries on acceptance, never audit bundles.
+  First-batch restart uses `restart_learning` and requires server `restart_active=0`
+  across both batches before confirmation. Explain that it starts fresh accumulation,
+  leaves prior results and experience in history, requires new experience review, and
+  resets the second batch for validation using the new experience. Never clear the
+  database or infer generation membership in React. Clear both local settings drafts
+  after learning restart and key restart dialogs by batch so uncertain retries cannot
+  cross batches; second-batch restart continues preserving current learning experience.
+  Batch progress and quick-command invalidation target only lightweight workbench
+  state/activity/execution keys; pinned audit bundles remain cached even as unrelated jobs finish.
+  The `soc_admin`-only DEV audit bundle may show complete persisted raw alert data,
+  canonical normalization, bounded model context/output, validation, Decision, and
+  Pattern/Memory artifacts for demonstrations and engineering review. Render only the
+  ordered server artifacts, keep the DEV/MOCK warning visible, and support JSON
+  copy/download without deriving or re-running business logic in React. The bounded
+  analysis artifact defaults to the server-returned model-visible projection and keeps
+  the frozen Runtime request in a separate explicit view. Large JSON uses a lazily loaded,
+  read-only viewer with syntax highlighting, line numbers, folding, search, wrapping and
+  formatted/compact modes; do not render an unbounded full-document `<pre>`.
+- The user-facing corpus route is the **告警研判演练** workspace. Keep the stable
+  `/corpus-validation` route for compatibility, but do not expose “语料验证” as the
+  primary analyst concept.
+- Historical recommended rehearsal manifests remain API compatibility data only. The
+  page uses learning/validation batches and the existing group browser, not fixed demo
+  stories. Candidate inventory and detail links preserve the experiment query scope.
+- Rehearsal metadata may only set existing filters and selected alert. It must not run an
+  alert, seed Candidate/Memory state, predict a verdict, or hide a server-reported
+  missing/regrouped target. Full behavior-group selectors keep the stable Group ID and
+  add a canonical behavior summary so repeated vendor rule names remain distinguishable.
+- Running an alert must keep the analyst at the initiating row. Show inline/live status
+  and expose an explicit **查看结果** command after completion; never auto-scroll to the
+  lower execution trace.
+- Keep environment, isolated SQLite, model/reasoning, role verifier, mock/off providers,
+  tenant policy, and action-execution labels visible so screenshots cannot be mistaken
+  for STG/production evidence. If the explicit PingAn DEV launcher enables all tenant
+  policy layers, show deterministic/advisor/software-path status from the server safety
+  contract; never infer it from client configuration, and continue to show external
+  actions as disabled.
+- A Memory record is not permanently classified as exact or context-only. Show whether
+  it owns a reviewed Decision Directive; exact applicability may use that Directive,
+  while a partial retrieval of the same record remains context-only. Record and revision
+  pages must state this distinction.
+- Keep implementation vocabulary out of primary analyst surfaces. For one alert, render
+  Memory use as `未使用历史经验`, `仅作研判参考`, or `已复用审核结论`. Render record
+  availability as `已开放给新告警` or `暂停用于新告警`; disabled retrieval means the
+  record is not used at all, not context-only. Internal tenant Profile IDs, profile/schema
+  versions and current-versus-saved version numbers do not belong in normal record,
+  match-test, review or accumulation detail. Show server-owned business state and
+  actionable compatibility explanations instead; hide healthy/current state from primary
+  lists. Preserve Profile/Directive/retrieval/context-only details and the original
+  profile/schema fields in explicit technical audit payloads. Actual Memory record revision
+  numbers remain visible and continue to fence mutations; they are not Profile versions.
+- Memory Center must keep lifecycle and future use separate. Lifecycle says only whether
+  samples are accumulating, a candidate awaits review, or an experience has been persisted.
+  Future use says `尚未开放`, `仅供研判参考`, or `精确匹配可复用结论`; an exact-capable
+  record may still be context-only for a partial match. Pattern inventory is ordered by
+  latest observed sample, while confirmed-record inventory is ordered by latest update;
+  show those sort rules in the UI.
+- Record and revision surfaces must make the future-use mode a visually primary state,
+  especially `仅供研判参考`. Candidate confirmation may open retrieval immediately with
+  a server-audited reason; any empty reason input shown afterward belongs only to the next
+  pause/reopen transition and must be labeled that way.
+- Keep pause/reopen controls collapsed behind an explicit `管理使用状态` command so they
+  do not look like unfinished confirmation fields. Deprecation is the terminal
+  `废止这条经验` action: require an explicit reason and confirmation, and keep it distinct
+  from temporary retrieval pause. Make the source-Candidate review a visible command on
+  the Memory record page rather than a low-emphasis audit link. Label this navigation
+  `经验确认记录` / `查看确认记录`; it opens the saved confirmation context, not a new
+  review task. Keep Candidate IDs and storage terminology in technical audit only.
+- Record detail and revision pages share `SocMemoryDeprecationAction`, which submits
+  `decision=deprecate` to the existing source-Candidate review API. Cancellation makes no
+  mutation; a failure preserves the dialog and reason. Success refreshes server-owned
+  state and returns revision callers to record detail. Deprecated records display their
+  reason and cannot offer revision, activation, or future-use capability controls.
+  A pending revision must be resolved first on these record-level entry points; do not
+  silently discard a pending candidate or create a second governance workflow.
+- In DEV Runtime traces, name the first phase `来源适配与标准化 / Adapter & Normalize`:
+  the active tenant/vendor Adapter parses and projects source data into the canonical SOC
+  contract; the label must not imply generic field cleanup only or hard-code PingAn.
+- The optional semantic-review phase follows Adapter normalization. Keep the server-owned
+  phase status and full request/result in the existing JSON audit viewer; do not add a separate
+  before/after comparison component. Completed reviews show a checkmark and the server's adopted count; notes and coverage
+  limits remain expandable. Raw `partial` is preserved in JSON and does not by itself mean
+  execution failed. Failed/skipped reviews retain their unavailable state and explanation.
+  Shadow proposals are observation-only,
+  failed review means the Adapter path continues. Early policy-only runs retain a gray skipped
+  semantic phase and audit entry with a server-owned skip reason, never a fabricated review result.
+  Unrelated legacy runs without a saved review keep their existing phase list.
+  Direct handling displays matched enterprise rule/disposition or the reused Memory separately;
+  the result-card source summary and trace use the same enterprise-rule terminology, with
+  ignore/transfer wording taken from server `recommended_handling`, never a fixed transfer label.
+  no unknown verdict/partial-evidence metrics masquerade as a failed model judgment.
+  Viewing the audit never invokes a model or applies changes.
+  Apply results feed the standard alert and downstream Memory conditions; render the server's
+  saved effect, not the current rollout flag over historical runs. Semantic matching components
+  (detected file, detector subject, process relation) have Chinese labels; preserve raw typed
+  values and the existing per-behavior checkboxes. Do not display arbitrary metadata as required
+  behavior merely because a model extracted it.
+- Fixed GalaxyLab remains a DEV-only validation route and must not be linked from Memory
+  Center or global operational navigation. Memory Center contains only production-facing
+  Pattern, Candidate, Memory, and Profile governance. Pattern counts are absolute
+  observation/distinct-source values, not progress fractions.
+- Dynamic routes are warmed only by the SOC development script. Do not patch browser
+  `performance`, change normal DeerFlow dev commands, or add business-page error
+  suppression for a development bundler issue.
+
+## Operations
+
+- `/workspace/soc/operations` is a read-only consumer of
+  `soc.operations_snapshot.v1`. It may refresh the passive endpoint and translate
+  server-owned availability values.
+- Effectiveness formulas and relationships come from the server read model. The primary
+  drill-down is `Rule Code -> 同类行为 -> Memory`; use canonical detection identity when
+  no Rule Code exists. Keep Pattern/Profile terminology in technical audit views.
+- Keep the operations summary decision-oriented: show processed volume and render unavailable
+  metric values as `--`. Do not add a statistics-explanation banner or expose
+  conclusion-maintenance and verification-coverage terminology in the primary UI. Group the eight
+  server metrics under triage quality, automation safety, transfer quality, and workload reduction;
+  exact coverage, availability, and denominators remain available through the API and technical
+  audit.
+- Show `context-only` as “仅供研判参考” and directive use as “直接复用结论”. Only the
+  latter may display attributable accuracy. Show final-outcome coverage and denominators,
+  and never infer Memory value from retrieval count alone.
+- Do not actively probe Kafka, recompute aggregates, infer overall health, or turn
+  `not_measured` into healthy zero. Label SQLite and fixture/Playwright evidence as
+  local/test, separate from deployed Gateway, production telemetry, and SLO proof.
+- Candidate and Memory technical IDs are secondary audit identifiers, never the primary
+  completion message. A completed run must link directly to the pending Candidate review
+  or confirmed Memory record. When Tenant Policy changes the operational action without
+  changing the technical verdict, show the model verdict, base action, policy reason, and
+  final action as separate steps; do not compress them into an unexplained slash pair.
+
+## Quick batch validation
+
+The corpus page uses `/quick-validation` to start the full learning batch, pause/continue,
+review scoped experience, and validate all/reuse/explore (default all). Keep group/search
+filters out of commands. Single alerts submit directly with per-alert progress; paused
+bulk work stays paused. Unblocked failed rows submit `retry` with the displayed job
+and attempt, preserving its round/settings. A row or batch `blocked_reason` instead
+requires explicit `rerun` for individual rows; its button must say `重新运行`, and
+completed reruns remain new tasks. Batch-level Memory governance recovery instead uses
+Continue and the server-owned continuation. Counts use latest-per-alert
+batch projection, including manual tasks across internal rounds. Preserve `experiment`
+and `return_batch` through candidate list/detail navigation. Running settings apply to
+new jobs; do not expose experiment, round, budget or comparison controls.
+
+Both batches expose `重试执行失败` and `重试语义核对失败` without a round selector.
+Read `/batches/{batch}` for complete-batch activity, failure counts and semantic failures;
+retry buttons must not infer idleness from a filtered quick view. POST only the retry
+kind and the saved maximum concurrency to `/batches/{batch}/retry`, omitting concurrency
+for callers who cannot configure it. An unsaved concurrency draft and new-task switch
+draft never affect retries. Require idle batch state and render server rejection without
+automatically replaying the command. Refresh batch/quick progress and lightweight
+workbench queries after acceptance; never invalidate immutable audit bundles. Batch retry
+scope is the entire selected batch, independent of list filters.
+Render a positive server `memory_recovery_exhausted_count` as an explicit-rerun
+notice. Do not turn that notice into a blanket batch disable: remaining unstarted
+members can still continue, and the backend owns recovery attempt limits.
+
+The deployment-wide maximum concurrency is a separate server-owned setting shared by
+both batches. Expose the 1..`concurrency_limit` selector and explicit save inside run
+settings only when the configuration response advertises that limit. POST only
+`max_concurrency` to `/experiments/concurrency`; acknowledge changes after success,
+never persist them in browser run-switch preferences. Host-local permission owns the
+edit; LAN visitors see the saved value and retain run/pause commands. Poll configuration
+every 10 seconds and on focus, including the Host, to synchronize other tabs. After a
+save, fence older configuration reads, project the acknowledged capacity across batch
+caches and refresh configuration/activity only, without refetching lists or audits.
+Explain that reducing concurrency waits for active tasks; it never interrupts them.
+During that drain the header may correctly show `8/2`; retain the actual active count
+and explain that started tasks finish before scheduling follows the new maximum.
+
+Host DEV can restrict run-setting edits to the deployment Mac. Honor the server's
+`can_configure=false` by disabling all switches, fact refresh and reset, while keeping
+start, pause, single-alert run and rerun available. Read-only batch commands use `saved_options`
+from the batch-scoped configuration read, ignoring browser preferences; the legacy
+single-alert surface uses `run_controls.defaults`. Refresh read-only batch settings
+every 10 seconds, on window focus and after a command failure without automatically
+replaying the command. Missing permission fields retain older deployment behavior.
+The backend enforces this boundary; never derive authority from the browser hostname.
+The Host initializes new tasks in either batch from server deployment `defaults`, rather
+than restoring options from a historical round. These defaults enable semantic review (`apply`),
+leave fact refresh off, and disable enterprise policy, software-path policy and LLM policy
+advice. Keep these defaults server-owned; do not override saved task settings or infer
+historical settings from the current defaults. Keep only explicit unsubmitted edits in
+component state keyed by batch; switching batches must not copy a draft or another
+batch's configuration. Full page refresh restores deployment defaults for the Host
+and saved options for LAN callers; retired session-storage preferences never override them.
+Background configuration reads preserve an explicit Host draft; LAN commands always follow
+the current server settings. Label visible switches `新任务运行设置`: they apply to newly
+submitted jobs, not options already frozen in queued or completed jobs. Keep the persistent
+note beside batch commands: Continue uses each job's saved settings, and batch retries
+ignore list filters. Operators do not need to find or enter internal execution IDs.
+
+Running corpus details display a neutral waiting message and suppress stale outcome cards
+until the server reports a terminal state. Missing intermediate analysis must not appear
+as a failed conclusion; actual terminal failures remain visible.
+Execution polling also follows a server-reported running trace without a local submit
+or legacy activity claim; matching terminal Run IDs trigger a final list refresh.
+
+Run status is a server-side list filter (all/success/running/failed/not-run), applied
+before count and pagination, independent of batch execution scope. Success means a
+finished analysis, not an ignored alert or reviewed Memory. Batch progress changes
+refresh lists even when the selected status currently has no visible rows.
