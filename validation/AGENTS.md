@@ -373,6 +373,13 @@ sensitive, gitignored evidence and must never become application imports.
   Keep Step10G artifacts frozen. The reported failure occurred before release
   writes; do not request model/ZEUS resubmission or change production business
   settings to work around a local preparation bug.
+- `rule_refine/implementation/step10i_poll_interval/` changes only the LOCAL/PRD
+  legacy topic tick interval from 30 to 120 seconds and its isolated test expectation.
+  Preserve expiry=25, queue/model capacity, STG, surge thresholds, and other schedule
+  bytes. Validate the registration AST and run staged offline tests before backup/write;
+  keep rollback and idempotence. Do not rewrite frozen older deliveries or start services.
+  Celery Beat must reload the configuration through ordinary deployment; worker-only
+  restart is insufficient. Installer success is not proof of a live 120-second cadence.
 - Label governance uses sealed manifests and independent analyst truth. Quality reports
   must separate parser/structure, retrieval, scenario/role, decision, automation, and
   human-label metrics.
