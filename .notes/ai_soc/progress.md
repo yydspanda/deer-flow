@@ -3,8 +3,8 @@
 ## Current Pointer / 当前指针
 - **Current Stage:** `PI`
 - **In Progress Task:** `PI-01`
-- **Current Objective:** `PI-01H / D12-B` 真实内网集成验收继续保持未关闭。按用户最新选择，默认页面沿用原静态粗分组，仅将原主验证中的6367条移入学习：第一批9364、主验证2153、补充3764。取消全量事实预处理，语义核对随正常研判执行，实际经验仍按核心行为细分；支持数、审核门槛和并发上限16不变。完整阶段报告聚焦经验适用与建议分流，不比较原始处置标签。
-- **Next Gate:** 按第一批/第二批操作的工作流已提交至`dcd013b7`：状态、失败/语义补跑、接续、报告自动按当前成员汇总；后台保留来源任务与快照，操作者无需输入round ID。经验治理变化受控自动接续，显式暂停和累计尝试预算保留；缺少可复用核心行为的PingAn观察不进入待审核，主动提炼同样校验。共享待审名单支持无需报告的pending批量审核。本轮按授权推送、本地部署并重新交付，修正生成教程的旧入口；最终包身份和兼容验证以绑定提交的transfer-report为准，内网部署与真实效果仍待操作员验证。模型/代码/语料配置漂移仍需显式重新运行；callback/Provider真实验收保持未关闭。
+- **Current Objective:** 按用户确认完成TraceAgent共同开发架子：同仓库、共享uv、独立Trace接口和SOC交接边界。现有Runtime初判和有效后续建议保持原样；本轮不启用自动调查。`PI-01H / D12-B`真实内网集成验收及经验质量门禁继续保持未关闭。
+- **Next Gate:** Trace同事按接入手册迁入真实引擎、适配共同依赖并通过接口/持久化测试；之后再接SOC按需派发、后台跟踪和ZEUS分阶段回填。当前模拟联调不代表真实日志查询、生产调查或回调已可用。
 - **Roadmap:** [`delivery-roadmap.md`](delivery-roadmap.md)
 - **Last Updated:** `2026-11-06`
 ## Current Constraints / 当前约束
@@ -17,6 +17,14 @@
 | Upstream baseline | `v2.2.0@58fc5bd5b8e6ea46538e9481ba06ca2a46e14e2a`；2026-11-06 按用户选择合并稳定版，暂不引入 `main` 的 2.3.0-dev；main 漂移检查和阈值不变，兼容决策见本轮记录 |
 
 ## Recent Completion Records / 近期完成记录
+### 2026-11-06 — Add shared TraceAgent development scaffold
+- **Task:** `PI-01`
+- **Status:** `Done`
+- **Outcome:** 新增 `soc-trace-agent` workspace包、共享HTTP契约、默认不可用的独立API外壳、SOC只读交接材料与显式启用的单次请求客户端。统一backend uv锁只增加本地包；Mac安装清单与可选进程入口同步。初判Prompt不变，不新增找缺口模型调用；task身份显式绑定，问题由调用方选择，已解决旧问题不复活。开发分工、依赖冲突、真实引擎待迁入项见[同事手册](../../docs/soc-trace-agent-development.md)。
+- **Verification:** 102项Trace契约/客户端/交接/ASGI联调/启动检查、71项Mac安装/启停、前后各344项blocking-I/O通过；共享锁安装验证保留全部现有第三方版本与来源。独立复核补齐Mac本地包安装及重复JSON字段/非有限值拒绝。全量回归暴露的指南登记和可选Makefile导入问题已修复，相关22项及配置升级28项重跑通过。全量前后均运行但未全绿、未完整结束：前置与包创建并行，不能视为纯净基线；后置的调度顺序及超时两项失败经隔离重跑均通过，未修改其源码。Ruff、格式、进度和指南检查通过；不以局部通过冒充全仓通过。
+- **Boundary:** 真实Trace引擎、Celery/日志工具、持久调度、自动触发、页面及ZEUS回调未接入；无真实调查、内网发布或服务重启。默认客户端关闭，API返回degraded/503。离线替身只在测试内，不关闭PI-01H/D12-B或其他真实集成门禁。
+- **Handoff follow-up:** 新人手册按个人环境安装、离线测试、独立启动、合成接口请求和引擎迁入五步展开，明确不依赖SOC启动及未接引擎时的not_ready/503预期；独立复核移除会要求SOC私有运行资料的Host check步骤。14段Shell及Python入口示例语法、本地链接通过；102项专项复跑及全后端format通过。按用户授权提交并推送个人origin，未操作upstream。
+
 ### 2026-11-06 — Integrate upstream v2.2.0 and isolate SOC hooks
 - **Task:** `UP-SYNC`
 - **Status:** `Done`
@@ -101,11 +109,4 @@
 - **Outcome:** 内网 `54c7f40f` 启动/schema0031与模型 smoke 均通过，9.95 GiB DELETE库的工作台仍间歇60秒超时。隔离复现 SQLite 为读取位于大JSON之后的 updated_at 而跨溢出页；0032仅新增六列覆盖索引，保持修订hash、旧列表投影、Run和Memory语义。Host正常启动自动创建索引；状态探针保留既有status并展示锁/其他读取错误，慢列表记录activity/index/page耗时。
 - **Verification:** 索引与列表8项、工作台/数据库迁移43项、SQLite连接/争用36项、Host/数据保留/交付128项共215项通过。TDD先复现索引缺失及探针吞错；0031重复升级保留全部测试业务行；两条实际Run相关SQL均使用覆盖索引。隔离1000×256KiB基准该查询约79～87ms降至2.6～2.8ms，不能外推内网整页速度。独立审阅、Ruff及进度治理通过。
 - **Delivery boundary:** 沿用已授权提交推送及保留数据完整交付；打包前重新执行绑定提交的62项旧记录/经验强制检查，结果以transfer-report为准。未连接或修改内网数据库，不代表实际大库页面稳定性验收完成；无手工清库、WAL切换或Memory迁移。
-### 2026-09-22 — Host-owned adjustable corpus concurrency
-- **Task:** `PI-03E`
-- **Status:** `Done`
-- **Outcome:** 用户确认内网已成功暂停后，按要求在运行设置中开放部署本机保存 1～8 并发；局域网同事只读并沿用设置。两批、手动任务与后台草稿共享容量，调低排空已开始任务后补位，调高领取原队列；小型配置文件与 SOC DB 同目录原子保存，不写业务库、不改轮次行为配置或 Memory，重启及保留数据升级可恢复。页面说明降低并发时暂时出现的 8/2，不把已有任务中断或重复执行。
-- **SQLite compatibility:** 内网 Python SQLite 3.45.3 的 DELETE 模式继续保留；只有含官方 WAL-reset 修复的 SQLite 才启用 WAL，旧版遇到已有 WAL 明确要求先升级，不在线转模式。30秒等待和仅结果持久化的有界重试保持，不重调模型。
-- **Verification:** 受影响批次/工作台/权限回归136项（含新配置单测34项与8→2→8集成8项）、旧入口/草稿边界3项、SQLite连接与争用36项、旧记录/经验兼容62项、Host启动与数据保留77项、交付清单及Runbook53项全部通过。DELETE模式8任务/页面读写/暂停场景另连续5次通过；前端63项、ESLint/TypeScript、真实Chromium交互通过。Ruff格式/静态检查与进度治理通过。
-- **Boundary:** 以上为隔离数据和模拟模型证据，不代表内网长期容量验收；实现验收时未打包、提交或部署，未操作业务数据库；用户随后授权先提交推送，再重建保留数据交付，最终回执另存于交付目录。SQLite仍可能等待外部长事务，不承诺任意争用均不会超时。
 更早记录见[归档索引](../archive/ai_soc/progress/README.md)及[2026-09月度归档](../archive/ai_soc/progress/2026-09.md)。

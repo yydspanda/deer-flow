@@ -18,6 +18,10 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 
 > [!NOTE]
 > Fork maintenance follows the [upstream integration boundaries](.notes/ai_soc/architecture/upstream-v2.2.0-integration.md): SOC behavior stays in its own modules, with tested framework connections.
+> TraceAgent's [shared development scaffold](docs/soc-trace-agent-development.md)
+> provides a workspace package, SOC HTTP client and offline contract tests under the
+> backend's shared uv lock. The real investigation engine is not yet imported;
+> automatic dispatch remains off. Start with `make soc-trace-test` after dependency sync.
 > This fork's SOC branch adds a governed `soc-triage` profile and ReviewQueue workspace. Opening Lead
 > Agent chat from a queue binds that chat thread to one queue item; every turn receives a fresh,
 > server-built bounded investigation context. The model cannot switch the binding, approve actions,

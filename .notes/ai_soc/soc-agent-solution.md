@@ -2679,6 +2679,20 @@ mutating the original run.
 
 ---
 
+### 11.5 TraceAgent integration scaffold (2026-11-06)
+
+Trace is a separately executed investigation provider, not a second DeerFlow Lead
+Agent. The `soc-trace-agent` workspace package and SOC HTTP adapter share typed
+contracts under one backend uv lock. The current delivery is a default-disabled
+development shell and offline contract tests; the real engine, durable dispatch,
+callback integration and automatic trigger policy are not connected. See the
+[developer handoff](../../docs/soc-trace-agent-development.md) and the supplied
+[three-party contract](../../validation/trace_agent/ZEUS-AI研判-TraceAgent三方交互流程与接口约定.md).
+Handoff consumes existing effective outcomes and explicitly selected questions;
+it does not change initial-analysis prompts or generate investigative wish lists.
+Initial results and transfer remain independent from investigation. Existing
+governed enrichment and Lead Agent paths keep their ownership and authority.
+
 ## 12. Security and Permission Model / 安全与权限模型
 
 | Level / 等级 | Meaning / 含义 | SOC Agent behavior / 行为 |

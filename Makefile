@@ -244,3 +244,6 @@ down:
 # Follow production container logs (stack started by `make up`)
 prod-logs:
 	@$(RUN_SHELL_SCRIPT) ./scripts/docker.sh logs --prod
+
+# Optional SOC integration commands live outside the upstream orchestration.
+-include scripts/soc-trace.mk

@@ -2760,6 +2760,17 @@ kafka_consumer_lag
 
 ## 十九、扩展点与插件边界
 
+TraceAgent scaffold is an independently executed investigation provider with a
+shared `trace_agent.contracts` workspace package and opt-in SOC HTTP adapter.
+No Trace SDK/worker is imported by Gateway or the generic harness. The shell
+returns degraded/503 without an explicitly supplied engine; simulated engines
+exist only in tests. Handoff copies original facts and current effective outcome,
+with caller-selected questions and explicit task/alert/tenant/environment binding.
+It neither invents gaps nor registers automatic dispatch, persistence or ZEUS
+callbacks. The three-party protocol and coworker responsibilities are linked in
+`docs/soc-trace-agent-development.md`; actual scheduling and result adoption must
+later cross shared SOC services rather than mutate the initial AnalysisRun.
+
 长期要服务 SOC、防御工程、威胁狩猎、IR、WAF/F5、攻击模拟，所以扩展点要提前固定，但不要过早做动态插件系统。
 
 ### 稳定扩展点

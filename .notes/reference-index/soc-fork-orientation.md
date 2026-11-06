@@ -12,6 +12,10 @@ guides that own it:
 - SOC Web workspace: `frontend/src/app/workspace/soc/AGENTS.md`
 - Offline/local validation: `validation/AGENTS.md`
 
+TraceAgent's default-disabled integration scaffold uses the shared backend uv
+workspace. See `docs/soc-trace-agent-development.md` for the independent package,
+SOC adapter and coworker handoff; it does not replace the DeerFlow Lead Agent.
+
 The authoritative design, execution ledger, and engineering contracts are
 `.notes/ai_soc/soc-agent-solution.md`, `.notes/ai_soc/progress.md`,
 `.notes/ai_soc/delivery-roadmap.md`, and

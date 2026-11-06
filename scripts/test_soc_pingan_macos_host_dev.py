@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -275,6 +276,44 @@ def test_install_plan_uses_frozen_hash_export_and_internal_mirror(
     assert all(command[:2] != ["uv", "lock"] for _, command in commands)
     assert all(command[:2] != ["uv", "sync"] for _, command in commands)
     assert all("docker" not in part.lower() for part in flattened)
+
+
+def test_install_plan_reinstalls_every_workspace_member_after_hash_sync(
+    tmp_path: Path,
+) -> None:
+    backend = Path(__file__).resolve().parents[1] / "backend"
+    workspace = tomllib.loads((backend / "pyproject.toml").read_text(encoding="utf-8"))[
+        "tool"
+    ]["uv"]["workspace"]["members"]
+    commands = build_install_commands(
+        root=tmp_path, python_executable="/opt/python3.12"
+    )
+    sync_index = next(
+        index
+        for index, (_, command) in enumerate(commands)
+        if command[:3] == ["uv", "pip", "sync"]
+    )
+    local_index, (_, local_install) = next(
+        (index, entry)
+        for index, entry in enumerate(commands)
+        if entry[1][:3] == ["uv", "pip", "install"]
+    )
+    installed_members = {
+        local_install[index + 1]
+        for index, argument in enumerate(local_install)
+        if argument == "--editable"
+    }
+
+    # Hash export deliberately excludes workspace sources; all must be restored
+    # into the same environment before optional source entrypoints can import them.
+    assert installed_members == {
+        str(tmp_path / "backend" / member) for member in workspace
+    }
+    assert local_index > sync_index
+    assert "--no-deps" in local_install
+    assert local_install[local_install.index("--python") + 1] == str(
+        tmp_path / "backend/.venv/bin/python"
+    )
 
 
 def test_locked_requirements_accepts_pinned_hashes(tmp_path: Path) -> None:

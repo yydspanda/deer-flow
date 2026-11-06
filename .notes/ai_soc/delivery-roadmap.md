@@ -142,6 +142,12 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 ### 6.1 PI-01 Execution Order / 真实能力与调查主线
 
+2026-11-06 Trace integration is limited to the shared-uv package, HTTP contract,
+opt-in API shell, read-only SOC handoff and offline tests described in the
+[developer handoff](../../docs/soc-trace-agent-development.md). The coworker-owned
+real engine, dependency adaptation, durable scheduling and ZEUS integration are
+subsequent work; this scaffold does not close any real Provider or callback gate.
+
 真实 Provider “可以被 MCP/Action 调到”不等于告警消费链已经使用它。`PI-01D1/D2/D3` 后，
 `SocEnrichmentPlanner`、`soc.enrichment_composition.v1`、严格 Registry 绑定和 durable workflow 已能
 按 tenant 精确规划并执行 typed read-only action。Kafka daemon 与内网 PKL 批跑只有在显式传入

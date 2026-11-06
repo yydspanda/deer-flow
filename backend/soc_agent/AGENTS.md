@@ -150,6 +150,12 @@ Memory and PingAn work also follow their own nearest `AGENTS.md`.
 
 ## Agent, Skill, And Action Boundaries
 
+- Trace integration is a default-disabled external investigation adapter in
+  `integrations/trace_agent/`; shared API types live in the `soc-trace-agent`
+  workspace package. Follow [the developer handoff](../../docs/soc-trace-agent-development.md).
+  The scaffold has no dispatcher, ZEUS callback or real engine. Preserve effective
+  outcome provenance; never regenerate gaps or treat all manual checks as tool work.
+
 - SOC Lead Agent reuses DeerFlow's `lead_agent`, middleware, Skill, MCP, and subagent
   mechanisms. `backend/soc_agent/lead_agent.py` is an adapter/configuration boundary, not
   a second agent framework.

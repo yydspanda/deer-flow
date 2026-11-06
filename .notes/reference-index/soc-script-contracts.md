@@ -305,7 +305,7 @@ until that complete private profile exists. The switch must preserve model confi
 lifecycle/callback Provider modes, and action authority byte-for-byte. Lifecycle and
 callback still start in `fake` mode.
 
-That wrapper also owns three sidecars through
+That wrapper normally owns three sidecars through
 `scripts/soc_pingan_host_sidecars.py`: the loopback project model gateway on `4001`, the
 legacy ZEUS compatibility API on `8090`, and one durable compatibility worker. Internal
 DEV may bind authenticated `8090` to the trusted LAN to preserve the old upstream entry;
@@ -319,6 +319,12 @@ model profile must set `disable_streaming: true`: EAGW returns a complete respon
 LangChain converts that response into one buffered chat chunk without disabling DeerFlow's
 Run/SSE event stream. The old `sec_know_model`, LiteLLM, Celery, and Redis startup scripts
 are reference material, not Host DEV dependencies.
+An optional fourth Trace API process uses the same backend environment through
+`backend/scripts/soc_trace_agent.py`, only with `SOC_TRACE_ENABLED=true`; its
+port defaults to loopback 8300. Health must explicitly report `status=ok`.
+The default unconnected engine reports degraded, so enabling it cannot silently
+pass Host readiness. Stop/status include it even after disabling the flag.
+This scaffold adds no Trace worker, real engine or automatic SOC dispatch.
 The Gateway and compatibility Worker must receive the same governed SOC Runtime settings,
 including tenant-policy profile, policy Skill, software-path catalog, environment scope,
 and model-admission limits. Keep those values in the shared start environment rather than

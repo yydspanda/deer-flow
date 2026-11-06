@@ -222,6 +222,8 @@ def build_install_commands(
                 str(backend / "packages" / "extension-api"),
                 "--editable",
                 str(backend / "packages" / "harness"),
+                "--editable",
+                str(backend / "packages" / "trace-agent"),
             ],
         ),
         (

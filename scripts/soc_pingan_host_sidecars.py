@@ -27,6 +27,7 @@ class HostDevSidecarSpec:
     health_url: str | None = None
     readiness_env_var: str | None = None
     startup_timeout_seconds: float = 30.0
+    expected_health_status: str | None = None
 
 
 def build_pingan_sidecar_specs(
@@ -85,6 +86,27 @@ def build_pingan_sidecar_specs(
                     readiness_env_var="SOC_PINGAN_LEGACY_WORKER_READY_FILE",
                     startup_timeout_seconds=5.0,
                 ),
+            )
+        )
+    # Trace is an independent, optional process. This switch starts its API;
+    # it does not enable SOC investigation dispatch or install a real engine.
+    if include_disabled or _env_bool(environment, "SOC_TRACE_ENABLED", False):
+        trace_port = _env_port(environment, "TRACE_AGENT_PORT", 8300)
+        specs.append(
+            HostDevSidecarSpec(
+                name="trace-agent",
+                command=(
+                    str(python),
+                    str(root / "backend" / "scripts" / "soc_trace_agent.py"),
+                    "serve",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(trace_port),
+                ),
+                process_marker="soc_trace_agent.py",
+                health_url=f"http://127.0.0.1:{trace_port}/health",
+                expected_health_status="ok",
             )
         )
     return tuple(specs)
@@ -257,8 +279,15 @@ def _wait_until_ready(
         try:
             with urllib.request.urlopen(spec.health_url, timeout=1.0) as response:
                 if response.status == 200:
-                    return
-        except (OSError, urllib.error.URLError):
+                    if spec.expected_health_status is None:
+                        return
+                    body = json.loads(response.read(65537))
+                    if (
+                        isinstance(body, dict)
+                        and body.get("status") == spec.expected_health_status
+                    ):
+                        return
+        except (OSError, urllib.error.URLError, ValueError):
             pass
         time.sleep(0.1)
     raise HostDevSidecarError(f"{spec.name} did not become healthy before timeout")

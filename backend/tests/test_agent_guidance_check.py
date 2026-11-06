@@ -14,6 +14,7 @@ EXPECTED_GUIDANCE_PATHS = {
     "backend/AGENTS.md",
     "backend/soc_agent/AGENTS.md",
     "backend/soc_agent/integrations/pingan/AGENTS.md",
+    "backend/soc_agent/integrations/trace_agent/AGENTS.md",
     "backend/soc_agent/memory/AGENTS.md",
     "backend/tests/AGENTS.md",
     "frontend/AGENTS.md",
